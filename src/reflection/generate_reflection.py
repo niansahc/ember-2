@@ -3,7 +3,7 @@ from src.memory.service import MemoryService
 memory_service = MemoryService()
 
 
-def generate_reflection(memory_type: str = "journal", limit: int = 5, store: bool = True):
+def generate_reflection(memory_type="journal", limit=50, store=True, cadence="daily"):
     memories = memory_service.read(memory_type=memory_type, limit=limit)
 
     if not memories:
@@ -28,7 +28,11 @@ def generate_reflection(memory_type: str = "journal", limit: int = 5, store: boo
         memory_service.write(
             text=summary,
             memory_type="reflection",
-            source="reflection_engine"
-        )
+            source="reflection_engine",
+            tags=["reflection"],
+            metadata={"cadence": cadence}
+
+
+    )
 
     return reflection

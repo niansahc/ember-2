@@ -48,10 +48,10 @@ Tasks:
 - [ ] Create project root folder
 - [ ] Create full folder structure
 - [ ] Create GitHub repository
-- [ ] Write README
-- [ ] Write requirements document
-- [ ] Write architecture document
-- [ ] Save system prompt configuration
+- [x] Write README
+- [x] Write requirements document
+- [x] Write architecture document
+- [x] Save system prompt configuration
 - [ ] Create static override folder for Open WebUI
 - [ ] Replace default Open WebUI branding
 - [ ] Configure splash screen logo
@@ -71,11 +71,11 @@ Goal: define Ember-2 personality and interaction behavior.
 
 Tasks:
 
-- [ ] Finalize system prompt
+- [x] Finalize system prompt
 - [ ] Create `ember_role.md`
 - [ ] Create `interaction_preferences.md`
 - [ ] Create `user_profile.md`
-- [ ] Add example conversations for tone shaping
+- [x] Add example conversations for tone shaping
 - [ ] Test prompt behavior across different tasks
 
 Deliverable:

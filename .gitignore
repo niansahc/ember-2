@@ -20,3 +20,6 @@ __pycache__/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Private Vault
+../private_vault/

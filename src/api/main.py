@@ -21,7 +21,7 @@ def root():
 
 @app.post("/write-memory")
 def write_memory_endpoint(request: MemoryRequest):
-    memory_service.write(request.text, request.memory_type)
+    memory_service.write(request.text, request.memory_type, metadata={})
     return {"status": "memory written"}
 
 @app.get("/read-memories")

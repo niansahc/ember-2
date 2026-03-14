@@ -271,11 +271,321 @@ Together these form a personal AI environment rather than a stateless chatbot.
 
 ---
 
-# Current Status
+# Current
 
 Phase: **Foundation**
 
 Next milestone:
 
 Build the **memory vault and RAG retrieval system**.
+
+
+## Pattern Analysis
+
+**Goal:** Enable Ember-2 to identify recurring themes, habits, concerns, and decision patterns across stored memory.
+
+**Purpose**
+
+Pattern analysis allows Ember-2 to move beyond simple recall. Instead of only retrieving stored facts, the system can synthesize recurring signals across journals, conversation summaries, and project notes.
+
+**Potential Uses**
+
+- Detect recurring themes in journal entries  
+- Identify repeated blockers or stressors  
+- Recognize productive workflows or helpful routines  
+- Surface common decision-making patterns  
+- Highlight ideas or concerns that repeatedly appear  
+
+**Example Prompts**
+
+- “What themes have shown up repeatedly in my recent journal entries?”  
+- “What kinds of problems tend to drain my energy?”  
+- “What patterns do you notice in how I approach projects?”  
+- “What topics have I revisited multiple times over the last month?”  
+
+**Implementation Notes**
+
+- Pattern analysis should operate on curated memory rather than raw conversation logs  
+- Journal entries and summaries should follow consistent templates  
+- Reflection prompts should run periodically rather than continuously  
+- Outputs should be interpreted as insights rather than definitive conclusions  
+
+**Tasks**
+
+- [ ] Create reflection prompt for recurring themes  
+- [ ] Create reflection prompt for repeated blockers  
+- [ ] Create reflection prompt for decision patterns  
+- [ ] Test pattern analysis across journal entries  
+- [ ] Test pattern analysis across conversation summaries  
+- [ ] Implement periodic pattern summary generation  
+
+
+---
+
+## Timeline Memory
+
+**Goal:** Allow Ember-2 to reconstruct and reason about sequences of events over time.
+
+**Purpose**
+
+Timeline memory helps Ember-2 understand **how events relate chronologically**, which allows it to track progress, identify turning points, and reconstruct project development.
+
+**Potential Uses**
+
+- Track project evolution  
+- Trace changes in goals or interests  
+- Reconstruct major system milestones  
+- Review progress across phases  
+- Understand how decisions developed over time  
+
+**Example Prompts**
+
+- “What happened in the Ember-2 project over the last two weeks?”  
+- “When did I first set up local hosting?”  
+- “What were the major architectural decisions for Ember-2?”  
+- “Show me the timeline of the system’s development.”  
+
+**Implementation Notes**
+
+- All memory artifacts should include a date  
+- Journal entries should preserve chronological order  
+- Major system events should be recorded in the project log  
+- Conversation summaries should include timestamps  
+
+**Recommended Timeline Sources**
+
+- Cathedral log  
+- Project milestone notes  
+- Dated conversation summaries  
+- Journal entries  
+
+**Tasks**
+
+- [ ] Standardize date format across memory documents  
+- [ ] Create timeline prompt for project milestones  
+- [ ] Create timeline prompt for decision tracking  
+- [ ] Test timeline reconstruction from conversation summaries  
+- [ ] Test timeline reconstruction from journal entries  
+- [ ] Create a milestone log for Ember-2 development  
+
+
+---
+
+## Long-Term Reflections
+
+**Goal:** Enable Ember-2 to generate higher-level reflections from accumulated memory over weeks and months.
+
+**Purpose**
+
+Long-term reflections allow Ember-2 to synthesize meaning across time. Instead of responding only to immediate prompts, the system can identify trends, shifts in thinking, and broader narratives.
+
+**Potential Uses**
+
+- Monthly reflection summaries  
+- Project retrospectives  
+- Changes in focus or motivation  
+- Recurring identity themes  
+- Long-term creative patterns  
+
+**Example Prompts**
+
+- “What changed in my thinking this month?”  
+- “What themes have defined the last six weeks?”  
+- “What progress has the Ember-2 project made over time?”  
+- “What have I been circling around without resolving?”  
+- “What insights emerge from my recent reflections?”  
+
+**Implementation Notes**
+
+- Long-term reflections should use curated memory sources  
+- Reflections should synthesize ideas rather than merely summarize  
+- Monthly cadence is typically more useful than daily reflections  
+- Meaningful reflections can be stored as new memory artifacts  
+
+**Suggested Outputs**
+
+- Monthly reflection notes  
+- Project retrospectives  
+- Quarterly system evolution summaries  
+- Thematic analysis across journal entries  
+
+**Tasks**
+
+- [ ] Create monthly reflection template  
+- [ ] Create project retrospective template  
+- [ ] Define reflection cadence  
+- [ ] Test monthly reflection prompts  
+- [ ] Store useful reflections back into the memory vault  
+- [ ] Create an Ember monthly summary artifact  
+
+
+---
+
+## Reflective Intelligence Roadmap
+
+**Goal:** Transform Ember-2 from a memory-enabled assistant into a system capable of interpreting patterns and meaning across time.
+
+This capability is built from three interconnected systems:
+
+1. **Pattern Analysis**  
+   Identifying recurring themes, behaviors, and signals across memory.
+
+2. **Timeline Memory**  
+   Organizing events and decisions in chronological context.
+
+3. **Long-Term Reflection**  
+   Synthesizing meaning across extended periods.
+
+**Design Principle**
+
+Ember-2 should not simply remember more information.  
+It should become better at helping interpret what that information means.
+
+**Tasks**
+
+- [ ] Define reflection workflows  
+- [ ] Define pattern analysis prompts  
+- [ ] Define timeline reconstruction prompts  
+- [ ] Define monthly reflection prompts  
+- [ ] Evaluate reflection usefulness and accuracy  
+- [ ] Store validated reflections in the memory vault
+
+**Deliverable**
+
+A reflection layer that converts stored memory into insight.
+
+## Memory Hygiene & Memory Decay
+
+**Goal:** Maintain a high-quality memory vault by preventing clutter, outdated context, and redundant information from degrading retrieval quality.
+
+**Purpose**
+
+Over time, accumulated memory can become noisy. Without maintenance, retrieval systems may surface outdated, irrelevant, or redundant information. Memory hygiene ensures Ember-2’s knowledge base remains useful and coherent.
+
+This system treats memory as **curated knowledge**, not permanent storage of everything.
+
+---
+
+### Core Principles
+
+**Selective Storage**
+
+Only meaningful interactions should be promoted into long-term memory.
+
+Examples of useful memory artifacts:
+
+- important insights
+- decisions
+- recurring themes
+- project milestones
+- long-term reflections
+
+Examples of things that should **not** become memory:
+
+- casual conversation
+- temporary questions
+- routine daily chatter
+- low-signal brainstorming
+
+---
+
+**Memory Review**
+
+Memory should be reviewed periodically to ensure it remains relevant.
+
+Recommended cadence:
+
+- light review monthly
+- deeper review quarterly
+
+Review questions:
+
+- Is this memory still useful?
+- Is this duplicated elsewhere?
+- Has this idea evolved since it was written?
+- Should this memory be summarized into a higher-level insight?
+
+---
+
+**Memory Consolidation**
+
+When multiple related entries exist, they should be merged into a stronger summary.
+
+Example:
+
+Five separate notes about a recurring issue can become:
+
+> "Recurring friction occurs when project planning lacks defined milestones."
+
+Consolidated memory improves retrieval accuracy and reduces noise.
+
+---
+
+**Memory Aging**
+
+Older memories may gradually lose relevance.
+
+Possible actions for aging memory:
+
+- archive
+- summarize
+- merge
+- delete
+
+This prevents the vault from growing endlessly.
+
+---
+
+### Memory Lifecycle
+
+The lifecycle of a memory artifact follows this progression:
+
+Conversation │ ▼ Candidate Memory │ ▼ User Review │ ▼ Stored in Memory Vault │ ▼ Periodic Review │ ▼ Consolidate / Archive / Delete
+
+This lifecycle ensures that stored knowledge remains meaningful over time.
+
+---
+
+### Memory Categories and Expected Lifetimes
+
+| Memory Type | Expected Lifetime |
+|--------------|------------------|
+| Profile | long-term |
+| Projects | medium to long-term |
+| Conversation Summaries | medium |
+| Journal Entries | long-term |
+| Current Context | short-term |
+| Reference Documents | varies |
+
+---
+
+### Archive Strategy
+
+Older or inactive memory can be moved to an archive folder.
+
+Example:
+ember2-memory │ ├ profile ├ current_context ├ projects ├ journal ├ conversation_summaries ├ reference └ archive
+Archived memory remains accessible but is not prioritized during retrieval.
+
+---
+
+### Tasks
+
+- [ ] Define memory promotion criteria
+- [ ] Define monthly memory review workflow
+- [ ] Define consolidation process
+- [ ] Create archive folder
+- [ ] Implement archival tagging system
+- [ ] Define deletion policy
+- [ ] Test retrieval quality after pruning memory
+
+---
+
+### Design Principle
+
+Ember-2 should maintain **a small, high-quality memory vault** rather than a massive unfiltered archive.
+
+The goal is not maximum storage.
+
+The goal is **maximum clarity**.
 

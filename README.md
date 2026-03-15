@@ -23,6 +23,19 @@ The system is built in phases to keep progress achievable and enjoyable.
 
 ---
 
+# Current
+
+Phase: **Reflection Engine**
+
+Current milestone:
+**Stable append-only memory vault with semantic retrieval and reflection system.**
+
+Next milestone:
+**Implement the Context Builder so Ember-2 can reason using stored memory.**
+
+
+---
+
 # System Overview
 
 Core components include:
@@ -37,6 +50,70 @@ Core components include:
 
 ---
 
+# Memory Schema
+
+All Ember-2 memories are stores as structured JSON objects inside the private vault.
+
+Example memory: 
+
+{
+  "timestamp": "2026-03-14T19-50-54",
+  "type": "reflection",
+  "text": "Reflection over 10 journal memories...",
+  "source": "reflection_engine",
+  "tags": ["reflection"],
+  "metadata": {
+    "cadence": "weekly"
+  }
+}
+
+Fields
+
+timestamp
+ISO-style timestamp used for chronological ordering.
+
+type
+Memory category (journal, reflection, project, etc.).
+
+text
+Primary memory content.
+
+source
+System component that created the memory.
+
+Examples:
+   api
+   reflection_engine
+   future tools
+   
+tags
+Optional classification labels used for filtering or grouping.
+
+Example:
+   tags: ["reflection"]
+
+
+metadata
+Optional structured metadata used for system logic.
+
+Example:
+
+Daily reflection
+
+metadata:
+  cadence: daily
+
+
+Weekly reflection
+
+metadata:
+  cadence: weekly
+
+
+Metadata allows Ember-2 to support structured behaviors without modifying the core memory schema.
+
+---
+
 # Development Roadmap
 
 ## Phase 1 — Foundation (Hearth)
@@ -45,9 +122,9 @@ Goal: establish stable infrastructure and project structure.
 
 Tasks:
 
-- [ ] Create project root folder
-- [ ] Create full folder structure
-- [ ] Create GitHub repository
+- [x] Create project root folder
+- [x ] Create full folder structure
+- [x] Create GitHub repository
 - [x] Write README
 - [x] Write requirements document
 - [x] Write architecture document
@@ -90,16 +167,25 @@ Goal: create the structured memory vault.
 
 Tasks:
 
-- [ ] Create memory vault folder structure
+- [x] Create memory vault folder structure
+- [x] Implement append-only JSON memory storage
+- [x] Implement MemoryService write interface
+- [x] Implement vector embedding generation
+- [x] Implement vector index storage
+- [x] Implement semantic search retrieval
+- [x] Implement keyword search retrieval
+- [x] Implement chronological recall
+- [x] Add metadata support to memory schema
+- [x] Add tag support to memory schema
 - [ ] Create profile memory files
 - [ ] Create working context file
 - [ ] Create project status file
 - [ ] Create journal template
 - [ ] Create conversation summary template
 - [ ] Create reference document folder
-- [ ] Populate initial memory files
-- [ ] Upload memory files into Open WebUI knowledge base
-- [ ] Verify RAG retrieval
+- [ ] Populate initial curated memory
+- [ ] Integrate vault into Open WebUI knowledge base
+
 
 Deliverable:
 
@@ -126,19 +212,42 @@ Ember-2 can recall relevant knowledge during conversation.
 
 ---
 
+## Phase 4.5 — Context Builder (Bridge)
+
+Goal: allow Ember-2 to reason using stored memory.
+
+Tasks:
+
+- [ ] Implement context builder module
+- [ ] Retrieve relevant memories using semantic search
+- [ ] Retrieve recent reflections
+- [ ] Assemble structured context block
+- [ ] Pass context into LLM prompts
+- [ ] Test context recall during conversations
+- [ ] Document context construction rules
+
+Deliverable:
+
+Ember-2 can reason using stored memory and reflections.
+
+---
+
 ## Phase 5 — Reflection Engine (Mirror)
 
 Goal: allow Ember-2 to accumulate insight over time.
 
 Tasks:
 
-- [ ] Create reflection workflow
-- [ ] Generate conversation summaries
-- [ ] Store summaries in memory vault
-- [ ] Create journal entry process
-- [ ] Test reflection prompts
-- [ ] Test pattern detection prompts
-- [ ] Document reflection workflow
+- [x] Implement reflection engine
+- [x] Implement reflection memory storage
+- [x] Implement daily reflection runner
+- [x] Implement weekly reflection runner
+- [x] Add reflection metadata (cadence)
+- [x] Add reflection tagging
+- [ ] Create reflection prompt templates
+- [ ] Implement pattern detection prompts
+- [ ] Document reflection workflows
+
 
 Deliverable:
 
@@ -234,10 +343,15 @@ Possible enhancements:
 - creative generation workflows
 - dashboard for system state
 - long-term knowledge graph
+- context builder for memory-aware reasoning
+- reflection ranking and importance scoring
+- memory graph visualization
+- semantic clustering of journal entries
+- automated project retrospectives
+- decision tracking and reasoning history
 
 ---
 
-# Repository Structure
 # Repository Structure
 
 ```
@@ -270,15 +384,6 @@ Summaries and journals create long-term insight.
 Together these form a personal AI environment rather than a stateless chatbot.
 
 ---
-
-# Current
-
-Phase: **Foundation**
-
-Next milestone:
-
-Build the **memory vault and RAG retrieval system**.
-
 
 ## Pattern Analysis
 
@@ -588,4 +693,13 @@ Ember-2 should maintain **a small, high-quality memory vault** rather than a mas
 The goal is not maximum storage.
 
 The goal is **maximum clarity**.
+
+Ember-2 follows an **append-only memory architecture.**
+
+Memories are never overwritten or modified.
+
+New understanding is recorded as new memory artifacts.
+
+This approach **preserves a chronological knowledge history and enables reflection, pattern detection, and timeline reconstruction.**
+
 

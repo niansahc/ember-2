@@ -26,7 +26,7 @@ def semantic_search(query: str, limit: int = 5):
 
     results = []
 
-    for index_file in embeddings_dir.glob("*_index.json"):
+    for index_file in embeddings_dir.glob("journal_index.json"):
 
         index_data = vector_index.load_index(index_file)
 

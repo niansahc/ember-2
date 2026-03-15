@@ -25,8 +25,10 @@ def chat(request: ChatRequest) -> ChatResponse:
     context_packet = context_service.build_context(request.message)
     reply = llm_adapter.generate_response(context_packet)
 
+    conversation_memory = f"User asked: {request.message}. Ember responded: {reply}"
+
     memory_service.write(
-        text=f"User: {request.message}\nEmber: {reply}",
+        text=conversation_memory,
         memory_type="conversation",
         source="chat",
         tags=["conversation"],

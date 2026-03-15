@@ -1,8 +1,6 @@
 # Ember memory (never commit)
-memory/
-vault/
-journal/
-reflections/
+private_vault/**
+
 
 # Local AI artifacts
 models/

@@ -37,6 +37,9 @@ class ContextRetriever:
             user_message, memory_type="reflection", limit=3
         )
 
+        if not results:
+            results = self.memory_service.read(memory_type="reflection", limit=1)
+
         items: list[ContextItem] = []
 
         for r in results:

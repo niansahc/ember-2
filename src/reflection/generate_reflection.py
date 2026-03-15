@@ -16,7 +16,7 @@ def generate_reflection(memory_type="journal", limit=50, store=True, cadence="da
     texts = [memory.get("text", "") for memory in memories]
     combined_text = " ".join(texts)
 
-    summary = f"Reflection over {len(memories)} {memory_type} memories: {combined_text[:500]}"
+    summary = f"Recent themes from {memory_type} memories: {combined_text[:500]}"
 
     reflection = {
         "summary": summary,

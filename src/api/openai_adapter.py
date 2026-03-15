@@ -1,9 +1,3 @@
-EMBER_MODEL_ID = "ember-2"
-
-SUPPORTED_MODELS = [EMBER_MODEL_ID]
-
-MEMORY_PREVIEW_LENGTH = 300
-
 import time
 import uuid
 from typing import List, Optional, Literal
@@ -15,11 +9,19 @@ from src.memory.service import MemoryService
 from src.context.service import ContextService
 from src.llm.adapter import LLMAdapter
 
-# This exists as the acceptable API format for WebUI
+
+EMBER_MODEL_ID = "ember-2"
+   
+SUPPORTED_MODELS = [EMBER_MODEL_ID]
+
+MEMORY_PREVIEW_LENGTH = 300
+
+model=EMBER_MODEL_ID
+# This exists as the acceptable API format for Web
 
 router = APIRouter()
 
-#
+
 memory_service = MemoryService()
 context_service = ContextService()
 llm_adapter = LLMAdapter()

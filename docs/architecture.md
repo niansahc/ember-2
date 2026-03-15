@@ -328,61 +328,7 @@ Recommended context structure:
 4 user query
 Reflections should be prioritized over raw memories when constructing context.
 
----
 
-# Planned Future Layers
-
-Several modules are planned but not yet implemented.
-
-## Perception Layer
-
-Connectors for external data sources.
-
-Examples:
-
-email
-calendar
-documents
-files
-
-# Planning Layer
-
-Tracks structured decision-making.
-
-Examples:
-
-projects
-tasks
-goals
-decision history
-
-## Action Layer
-
-Provides limited automation capabilities.
-
-Examples:
-
-email drafting
-calendar suggestions
-reminders
-automation proposals
-
-The LLM may suggest actions, but execution is handled by rule-based systems.
-
-## Design Philosophy
-
-The architecture should remain simple.
-
-Core system components:
-
-filesystem memory
-vector embeddings
-reflection jobs
-context builder
-
-Complexity should only be introduced when a clear capability requires it.
-
----
 
 ### Development Status
 

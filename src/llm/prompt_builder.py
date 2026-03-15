@@ -20,13 +20,13 @@ class PromptBuilder:
 
         if context_packet.memory_items:
             memory_lines = "\n".join(
-                f"- {item.content}" for item in context_packet.memory_items
+                f"- {item.content}" for item in context_packet.memory_items[:5]
             )
             sections.append(f"Retrieved memories:\n{memory_lines}")
 
         if context_packet.reflection_items:
             reflection_lines = "\n".join(
-                f"- {item.content}" for item in context_packet.reflection_items
+                f"- {item.content}" for item in context_packet.reflection_items[:3]
             )
             sections.append(f"Retrieved reflections:\n{reflection_lines}")
 

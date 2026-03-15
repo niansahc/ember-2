@@ -1,3 +1,9 @@
+EMBER_MODEL_ID = "ember-2"
+
+SUPPORTED_MODELS = [EMBER_MODEL_ID]
+
+MEMORY_PREVIEW_LENGTH = 300
+
 import time
 import uuid
 from typing import List, Optional, Literal
@@ -57,11 +63,12 @@ def list_models():
         "object": "list",
         "data": [
             {
-                "id": "ember-2",
+                "id": model,
                 "object": "model",
                 "created": int(time.time()),
                 "owned_by": "ember",
             }
+            for model in SUPPORTED_MODELS
         ],
     }
 

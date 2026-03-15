@@ -9,10 +9,12 @@ from src.memory.service import MemoryService
 from src.reflection.generate_reflection import generate_reflection
 from src.retrieval.semantic_search import semantic_search
 from src.api.openai_adapter import router as openai_adapter_router
+from src.api.routes.ingest import router as ingest_router
 
 app = FastAPI()
 app.include_router(chat_router)
 app.include_router(openai_adapter_router)
+app.include_router(ingest_router)
 memory_service = MemoryService()
 context_service = ContextService()
 
@@ -71,3 +73,4 @@ def reflect_endpoint(memory_type: str = "journal", limit: int = 5):
 def debug_context_endpoint(message: str):
     context_packet = context_service.build_context(message)
     return clean_context_packet(asdict(context_packet))
+#

@@ -1,11 +1,13 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from src.memory.service import MemoryService
 from src.context.service import ContextService
 from src.llm.adapter import LLMAdapter
 
 router = APIRouter()
 
+memory_service = MemoryService()
 context_service = ContextService()
 llm_adapter = LLMAdapter()
 
@@ -22,4 +24,12 @@ class ChatResponse(BaseModel):
 def chat(request: ChatRequest) -> ChatResponse:
     context_packet = context_service.build_context(request.message)
     reply = llm_adapter.generate_response(context_packet)
+
+    memory_service.write(
+        text=f"User: {request.message}\nEmber: {reply}",
+        memory_type="conversation",
+        source="chat",
+        tags=["conversation"],
+    )
+
     return ChatResponse(response=reply)

@@ -15,7 +15,7 @@ from src.memory.service import MemoryService
 from src.context.service import ContextService
 from src.llm.adapter import LLMAdapter
 
-
+# This exists as the acceptable API format for WebUI
 
 router = APIRouter()
 

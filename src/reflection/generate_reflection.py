@@ -13,11 +13,20 @@ def generate_reflection(memory_type="journal", limit=50, store=True, cadence="da
             "source_type": memory_type,
         }
 
-    texts = [memory.get("text", "") for memory in memories]
-    combined_text = " ".join(texts)
+    texts = [memory.get("text", "").strip() for memory in memories]
 
-    summary = f"Recent themes from {memory_type} memories: {combined_text[:500]}"
+    unique_texts = []
+    seen = set()
 
+    for text in texts:
+            key = text.lower()
+            if key and key not in seen:
+                unique_texts.append(text)
+                seen.add(key)
+
+    combined_text = " | ".join(unique_texts[:5])
+
+    summary = f"Recent themes: {combined_text[:500]}"
     reflection = {
         "summary": summary,
         "memory_count": len(memories),

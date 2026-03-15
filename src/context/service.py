@@ -20,6 +20,18 @@ class ContextService:
         ranked_memory, ranked_reflections = self.ranker.rank(
             memory_items, reflection_items
         )
+
+        # deduplicate memory items by content
+        seen = set()
+        deduped_memory = []
+
+        for item in ranked_memory:
+            key = item.content.strip()
+            if key not in seen:
+                seen.add(key)
+                deduped_memory.append(item)
+
+        ranked_memory = deduped_memory
         return self.formatter.format(
             user_message=user_message,
             memory_items=ranked_memory,

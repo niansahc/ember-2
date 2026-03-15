@@ -33,9 +33,14 @@ class ContextService:
                 deduped_memory.append(item)
                 seen.add(key)
 
+        conversation_memories = [m for m in deduped_memory if m.item_type == "conversation"]
+        journal_memories = [m for m in deduped_memory if m.item_type != "conversation"]
+
+        selected_memory = conversation_memories[:2] + journal_memories[:1]        
+
         return self.formatter.format(
             user_message=user_message,
-            memory_items=deduped_memory[:3],
+            memory_items=selected_memory,
             reflection_items=ranked_reflections,
         )
     

@@ -1,11 +1,13 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from src.api.chat import router as chat_router
 from src.memory.service import MemoryService
 from src.retrieval.semantic_search import semantic_search
 from src.reflection.generate_reflection import generate_reflection
 
 app = FastAPI()
+app.include_router(chat_router)
 memory_service = MemoryService()
 
 

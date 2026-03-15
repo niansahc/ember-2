@@ -11,16 +11,19 @@ def search_memories(query: str, memory_type: str = "journal", limit: int = 5):
 
     files = storage.list_memory_files(memory_dir)
 
-    results = []
+    query_words = set(query.lower().split())
+    scored_results = []
 
     for file_path in files:
         memory = storage.read_json(file_path)
-        text = memory.get("text", "")
+        text = memory.get("text", "").lower()
+        text_words = set(text.split())
 
-        if query.lower() in text.lower():
-            results.append(memory)
+        overlap = len(query_words.intersection(text_words))
 
-        if len(results) >= limit:
-            break
+        if overlap > 0:
+            scored_results.append((overlap, memory))
 
-    return results
+    scored_results.sort(key=lambda x: x[0], reverse=True)
+
+    return [memory for _, memory in scored_results[:limit]]

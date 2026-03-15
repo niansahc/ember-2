@@ -1,5 +1,6 @@
 from src.context.models import ContextItem
 from src.memory.service import MemoryService
+from src.memory.search_conversation import search_conversation_memories
 
 
 class ContextRetriever:
@@ -56,5 +57,33 @@ class ContextRetriever:
 
     def retrieve(self, user_message: str) -> tuple[list[ContextItem], list[ContextItem]]:
         memory_items = self.get_memory_items(user_message)
+        conversation_items = self.get_conversation_items(user_message)
         reflection_items = self.get_reflection_items(user_message)
+
+        memory_items.extend(conversation_items)
+
         return memory_items, reflection_items
+    
+    def get_conversation_items(self, user_message: str) -> list[ContextItem]:
+
+        results = search_conversation_memories(user_message, top_k=3)
+
+        items: list[ContextItem] = []
+
+        for result in results:
+            memory = result.get("memory", {})
+
+            items.append(
+                ContextItem(
+                    id=memory.get("timestamp", ""),
+                    content=memory.get("text", ""),
+                    source="conversation",
+                    item_type="conversation",
+                    score=result.get("score", 0.0),
+                    timestamp=memory.get("timestamp"),
+                    tags=memory.get("tags", []),
+                    metadata=memory,
+                )
+            )
+
+        return items

@@ -1,4 +1,18 @@
 from src.ingest.models import NormalizedDocument
+from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
+
+
+def list_drive_files(creds, query):
+    service = build("drive", "v3", credentials=creds)
+
+    results = service.files().list(
+        q=query,
+        fields="files(id,name,mimeType)",
+        pageSize=100
+    ).execute()
+
+    return results.get("files", [])
 
 def parse_gdrive_files(files):
     docs = []

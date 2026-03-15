@@ -8,7 +8,7 @@ from src.llm.system_prompt import load_system_prompt
 class LLMAdapter:
     def __init__(
         self,
-        model: str = "qwen3:8b",
+        model: str = "phi3:mini",
         prompt_builder: PromptBuilder | None = None,
     ):
         self.model = model

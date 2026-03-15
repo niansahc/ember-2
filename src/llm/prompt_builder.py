@@ -9,13 +9,12 @@ class PromptBuilder:
         sections: list[str] = []
 
         sections.append(
-            "Use the retrieved context below as your primary grounding source. "
-            "Answer in plain, direct language. "
-            "Be concrete, concise, and observational. "
-            "Prefer describing patterns actually visible in the retrieved context over interpretation. "
-            "Do not invent details that are not supported by the context. "
-            "Do not ask follow-up questions. "
-            "If the context is thin or repetitive, say so plainly."
+            """Assistant:
+        Respond directly to the user as Ember.
+        Use retrieved context only if it is relevant.
+        Speak naturally and conversationally.
+        Do not describe how Ember would respond.
+        Just respond."""
         )
 
         if context_packet.memory_items:

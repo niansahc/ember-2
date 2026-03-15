@@ -16,7 +16,7 @@ class ContextService:
         self.formatter = formatter or ContextFormatter()
 
     def build_context(self, user_message: str) -> ContextPacket:
-        memory_items, reflection_items = self.retriever.retrieve(user_message, limit=3)
+        memory_items, reflection_items = self.retriever.retrieve(user_message)
 
         ranked_memory, ranked_reflections = self.ranker.rank(
             memory_items, reflection_items
@@ -36,12 +36,12 @@ class ContextService:
         conversation_memories = [m for m in deduped_memory if m.item_type == "conversation"]
         journal_memories = [m for m in deduped_memory if m.item_type != "conversation"]
 
-        selected_memory = conversation_memories[:1]
-        selected_reflections = []
+        selected_memory = conversation_memories[:2] + journal_memories[:2]
+        selected_reflections = ranked_reflections[:2]
 
         return self.formatter.format(
             user_message=user_message,
-        memory_items=selected_memory,
-        reflection_items=selected_reflections,
+            memory_items=selected_memory,
+            reflection_items=selected_reflections,
         )
     

@@ -25,13 +25,13 @@ The system is built in phases to keep progress achievable and enjoyable.
 
 # Current
 
-Phase: **Reflection Engine**
+Phase: **Context Builder (Implemented)/Retrieval Integration**
 
 Current milestone:
-**Stable append-only memory vault with semantic retrieval and reflection system.**
+**Multi-source memory retrieval, prompt grounding, and conversation memory integration are operational**
 
 Next milestone:
-**Implement the Context Builder so Ember-2 can reason using stored memory.**
+**Improve retrieval quality with memory importance, clustering, and reflection input refinement**
 
 
 ---
@@ -199,11 +199,11 @@ Goal: integrate memory retrieval into everyday conversations.
 
 Tasks:
 
-- [ ] Test RAG retrieval across documents
+- [x] Test RAG retrieval across documents
 - [ ] Tune chunk sizes
 - [ ] Test multi-document retrieval
 - [ ] Validate prompt injection behavior
-- [ ] Test memory recall during conversations
+- [x] Test memory recall during conversations
 - [ ] Document retrieval workflow
 
 Deliverable:
@@ -218,12 +218,12 @@ Goal: allow Ember-2 to reason using stored memory.
 
 Tasks:
 
-- [ ] Implement context builder module
-- [ ] Retrieve relevant memories using semantic search
-- [ ] Retrieve recent reflections
-- [ ] Assemble structured context block
-- [ ] Pass context into LLM prompts
-- [ ] Test context recall during conversations
+- [x] Implement context builder module
+- [x] Retrieve relevant memories using semantic search
+- [x] Retrieve recent reflections
+- [x] Assemble structured context block
+- [x] Pass context into LLM prompts
+- [x] Test context recall during conversations
 - [ ] Document context construction rules
 
 Deliverable:
@@ -246,6 +246,7 @@ Tasks:
 - [x] Add reflection tagging
 - [ ] Create reflection prompt templates
 - [ ] Implement pattern detection prompts
+- [ ] Expand reflection inputs to include conversation memories
 - [ ] Document reflection workflows
 
 

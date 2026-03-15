@@ -33,6 +33,27 @@ Current milestone:
 Next milestone:
 **Improve retrieval quality with memory importance, clustering, and reflection input refinement**
 
+## Architecture Status
+
+Current phase: Context Builder / Retrieval Integration
+
+Implemented:
+- memory storage
+- vector embeddings
+- semantic retrieval for journal memory
+- semantic retrieval for conversation memory
+- reflection memory retrieval
+- context retrieval and ranking
+- prompt grounding
+- duplicate memory prevention
+- normalized memory fields
+- conversation memory truncation
+
+Next:
+- memory importance scoring
+- reflection input expansion
+- clustering and dedup refinement
+- retrieval quality tuning
 
 ---
 

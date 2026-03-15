@@ -17,23 +17,25 @@ class ContextService:
 
     def build_context(self, user_message: str) -> ContextPacket:
         memory_items, reflection_items = self.retriever.retrieve(user_message)
+
         ranked_memory, ranked_reflections = self.ranker.rank(
             memory_items, reflection_items
         )
 
-        # deduplicate memory items by content
+        # simple deduplication by normalized text
         seen = set()
         deduped_memory = []
 
         for item in ranked_memory:
-            key = item.content.strip()
-            if key not in seen:
-                seen.add(key)
-                deduped_memory.append(item)
+            key = item.metadata.get("normalized_text", item.content.lower().strip())
 
-        ranked_memory = deduped_memory
+            if key not in seen:
+                deduped_memory.append(item)
+                seen.add(key)
+
         return self.formatter.format(
             user_message=user_message,
-            memory_items=ranked_memory,
+            memory_items=deduped_memory[:3],
             reflection_items=ranked_reflections,
         )
+    

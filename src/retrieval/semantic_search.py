@@ -1,5 +1,3 @@
-import numpy as np
-
 from src.core.config import get_private_vault_path
 from src.retrieval.embed_memory import embed_text
 from src.retrieval.vector_index import VectorIndex
@@ -8,14 +6,11 @@ from src.retrieval.vector_index import VectorIndex
 vector_index = VectorIndex()
 
 
-def cosine_similarity(a, b):
-    a = np.array(a)
-    b = np.array(b)
-
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-
 def semantic_search(query: str, limit: int = 5):
+    """
+    Search all memory indexes for semantically similar chunks.
+    """
+
     vault = get_private_vault_path()
     embeddings_dir = vault / "embeddings"
 
@@ -26,19 +21,21 @@ def semantic_search(query: str, limit: int = 5):
 
     results = []
 
-    for index_file in embeddings_dir.glob("journal_index.json"):
+    for index_file in embeddings_dir.glob("*_index.json"):
 
-        index_data = vector_index.load_index(index_file)
+        memory_type = index_file.stem.replace("_index", "")
 
-        for item in index_data:
+        index_results = vector_index.search(
+            vault_path=vault,
+            memory_type=memory_type,
+            query_embedding=query_embedding,
+            top_k=limit
+        )
 
-            similarity = cosine_similarity(query_embedding, item["embedding"])
+        for r in index_results:
+            r["memory_type"] = memory_type
+            results.append(r)
 
-            results.append({
-                "similarity": float(similarity),
-                "memory": item
-            })
-
-    results.sort(key=lambda x: x["similarity"], reverse=True)
+    results.sort(key=lambda x: x["score"], reverse=True)
 
     return results[:limit]

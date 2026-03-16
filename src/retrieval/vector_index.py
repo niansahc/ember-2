@@ -13,7 +13,6 @@ class VectorIndex:
     def load_index(self, index_path: Path) -> list:
         if not index_path.exists():
             return []
-
         with open(index_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
@@ -21,7 +20,25 @@ class VectorIndex:
         with open(index_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
-    def search(self, vault_path: Path, memory_type: str, query_embedding, top_k: int = 5) -> list:
+    def load_chunk_preview(self, file_path: str, max_chars: int = 300) -> str:
+        path = Path(file_path)
+        if not path.exists():
+            return ""
+
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        content = data.get("content", "")
+        return content[:max_chars]
+
+    def search(
+        self,
+        vault_path: Path,
+        memory_type: str,
+        query_embedding,
+        top_k: int = 5,
+        min_score: float | None = None,
+    ) -> list:
         index_path = self.get_index_path(vault_path, memory_type)
         data = self.load_index(index_path)
         results = []
@@ -41,9 +58,13 @@ class VectorIndex:
 
             score = np.dot(query_embedding, embedding) / (query_norm * embedding_norm)
 
+            if min_score is not None and score < min_score:
+                continue
+
             results.append({
                 "path": item["file_path"],
                 "score": float(score),
+                "preview": self.load_chunk_preview(item["file_path"]),
             })
 
         results.sort(key=lambda x: x["score"], reverse=True)

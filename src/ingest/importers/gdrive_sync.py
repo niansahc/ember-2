@@ -38,6 +38,7 @@ def sync_gdrive_folder(folder_id, vault_path):
         file_name = f["name"]
         mime_type = f["mimeType"]
         modified_time = f.get("modifiedTime") or ""
+        parents = f.get("parents", [])
 
         prior = sync_index.get(file_id)
         if prior and prior.get("modified_time") == modified_time:
@@ -46,7 +47,19 @@ def sync_gdrive_folder(folder_id, vault_path):
 
         try:
             local_path = download_drive_file(file_id, mime_type, file_name, download_dir)
-            docs = load_file(local_path)
+
+            docs = load_file(
+                local_path,
+                source="google_drive",
+                doc_id=file_id,
+                extra_metadata={
+                    "mimeType": mime_type,
+                    "modifiedTime": modified_time,
+                    "parents": parents,
+                    "original_file_name": file_name,
+                },
+            )
+
             chunks = run_ingestion_pipeline(docs)
             write_chunks_to_vault(chunks, vault_path)
 

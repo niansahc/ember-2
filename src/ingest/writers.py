@@ -15,6 +15,32 @@ def write_chunks_to_vault(chunks, vault_path):
     index_path = vector_index.get_index_path(Path(vault_path), "ingested")
     index_data = vector_index.load_index(index_path)
 
+    incoming_doc_keys = {(chunk.source, chunk.doc_id) for chunk in chunks}
+
+    paths_to_remove = set()
+
+    for chunk_file in memory_dir.glob("*.json"):
+        try:
+            with open(chunk_file, "r", encoding="utf-8") as f:
+                existing_chunk = json.load(f)
+
+            existing_key = (
+                existing_chunk.get("source"),
+                existing_chunk.get("doc_id"),
+            )
+
+            if existing_key in incoming_doc_keys:
+                paths_to_remove.add(str(chunk_file))
+                chunk_file.unlink()
+
+        except Exception:
+            continue
+
+    index_data = [
+        item for item in index_data
+        if item.get("file_path") not in paths_to_remove
+    ]
+
     existing_paths = {item["file_path"] for item in index_data}
 
     for chunk in chunks:

@@ -15,17 +15,24 @@ def write_chunks_to_vault(chunks, vault_path):
     index_path = vector_index.get_index_path(Path(vault_path), "ingested")
     index_data = vector_index.load_index(index_path)
 
+    existing_paths = {item["file_path"] for item in index_data}
+
     for chunk in chunks:
         file_path = memory_dir / f"{chunk.chunk_id}.json"
 
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(chunk.__dict__, f, indent=2)
 
+        if str(file_path) in existing_paths:
+            continue
+
         embedding = embed_text(chunk.content)
 
         index_data.append({
             "file_path": str(file_path),
-            "embedding": embedding
+            "embedding": embedding,
         })
+
+        existing_paths.add(str(file_path))
 
     vector_index.save_index(index_path, index_data)

@@ -3,7 +3,11 @@ from fastapi import APIRouter
 from src.core.config import get_private_vault_path
 from src.ingest.importers.chatgpt import load_chatgpt_export
 from src.ingest.importers.files import load_file
-from src.ingest.importers.gdrive import list_drive_files, parse_gdrive_files
+from src.ingest.importers.gdrive import (
+    list_drive_files,
+    parse_gdrive_files,
+    get_drive_file,
+)
 from src.ingest.importers.gdrive_download import download_drive_file
 from src.ingest.pipeline import run_ingestion_pipeline
 from src.ingest.writers import write_chunks_to_vault
@@ -77,9 +81,13 @@ def ingest_gdrive_list(query: str = "trashed=false"):
 # Google Drive File Ingestion
 # -----------------------------
 @router.post("/ingest/gdrive/file")
-def ingest_gdrive_file(file_id: str, mime_type: str, file_name: str):
+def ingest_gdrive_file(file_id: str):
     vault_path = get_private_vault_path()
     download_dir = f"{vault_path}/imports/gdrive"
+
+    metadata = get_drive_file(file_id)
+    file_name = metadata["name"]
+    mime_type = metadata["mimeType"]
 
     try:
         local_path = download_drive_file(file_id, mime_type, file_name, download_dir)
@@ -100,8 +108,6 @@ def ingest_gdrive_file(file_id: str, mime_type: str, file_name: str):
             "file_name": file_name,
             "reason": str(e),
         }
-
-
 # -----------------------------
 # Google Drive File Sync
 # -----------------------------

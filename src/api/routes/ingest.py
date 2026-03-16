@@ -64,7 +64,9 @@ def ingest_gdrive_list(query: str = "trashed=false"):
             {
                 "id": doc.doc_id,
                 "title": doc.title,
-                "mime_type": doc.metadata.get("mimeType")
+                "mime_type": doc.metadata.get("mimeType"),
+                "modified_time": doc.metadata.get("modifiedTime"),
+                "parents": doc.metadata.get("parents", []),
             }
             for doc in docs
         ]
@@ -98,11 +100,11 @@ def ingest_gdrive_file(file_id: str, mime_type: str, file_name: str):
             "file_name": file_name,
             "reason": str(e),
         }
-    
+
+
 # -----------------------------
 # Google Drive File Sync
 # -----------------------------
-
 @router.post("/ingest/gdrive/folder")
 def ingest_gdrive_folder(folder_id: str):
     vault_path = get_private_vault_path()

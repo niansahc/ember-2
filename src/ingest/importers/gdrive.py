@@ -10,7 +10,7 @@ def list_drive_files(query):
 
     results = service.files().list(
         q=query,
-        fields="files(id,name,mimeType,createdTime)",
+        fields="files(id,name,mimeType,createdTime,modifiedTime,parents)",
         pageSize=100,
     ).execute()
 
@@ -28,7 +28,11 @@ def parse_gdrive_files(files):
                 title=f["name"],
                 created_at=f.get("createdTime"),
                 content="",
-                metadata={"mimeType": f["mimeType"]},
+                metadata={
+                    "mimeType": f["mimeType"],
+                    "modifiedTime": f.get("modifiedTime"),
+                    "parents": f.get("parents", []),
+                },
             )
         )
 

@@ -20,16 +20,19 @@ class VectorIndex:
         with open(index_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
-    def load_chunk_preview(self, file_path: str, max_chars: int = 300) -> str:
+    def load_chunk(self, file_path: str):
         path = Path(file_path)
+
         if not path.exists():
-            return ""
+            return {"content": "", "metadata": {}}
 
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        content = data.get("content", "")
-        return content[:max_chars]
+        return {
+            "content": data.get("content", ""),
+            "metadata": data.get("metadata", {})
+        }
 
     def search(
         self,
@@ -61,10 +64,13 @@ class VectorIndex:
             if min_score is not None and score < min_score:
                 continue
 
+            chunk = self.load_chunk(item["file_path"])
+
             results.append({
                 "path": item["file_path"],
                 "score": float(score),
-                "preview": self.load_chunk_preview(item["file_path"]),
+                "content": chunk["content"],
+                "metadata": chunk["metadata"],
             })
 
         results.sort(key=lambda x: x["score"], reverse=True)

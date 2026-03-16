@@ -37,7 +37,7 @@ def sync_gdrive_folder(folder_id, vault_path):
         file_id = f["id"]
         file_name = f["name"]
         mime_type = f["mimeType"]
-        modified_time = f.get("createdTime") or ""
+        modified_time = f.get("modifiedTime") or ""
 
         prior = sync_index.get(file_id)
         if prior and prior.get("modified_time") == modified_time:

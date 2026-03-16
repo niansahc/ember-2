@@ -17,6 +17,18 @@ def list_drive_files(query):
     return results.get("files", [])
 
 
+def get_drive_file(file_id):
+    creds = get_drive_credentials()
+    service = build("drive", "v3", credentials=creds)
+
+    result = service.files().get(
+        fileId=file_id,
+        fields="id,name,mimeType,createdTime,modifiedTime,parents"
+    ).execute()
+
+    return result
+
+
 def parse_gdrive_files(files):
     docs = []
 

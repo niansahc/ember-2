@@ -76,24 +76,25 @@ def ingest_gdrive_list(query: str = "trashed=false"):
 # -----------------------------
 @router.post("/ingest/gdrive/file")
 def ingest_gdrive_file(file_id: str, mime_type: str, file_name: str):
-
     vault_path = get_private_vault_path()
     download_dir = f"{vault_path}/imports/gdrive"
 
-    local_path = download_drive_file(
-        file_id,
-        mime_type,
-        file_name,
-        download_dir
-    )
+    try:
+        local_path = download_drive_file(file_id, mime_type, file_name, download_dir)
+        docs = load_file(local_path)
+        chunks = run_ingestion_pipeline(docs)
+        write_chunks_to_vault(chunks, vault_path)
 
-    docs = load_file(local_path)
-    chunks = run_ingestion_pipeline(docs)
+        return {
+            "status": "ingested",
+            "file_downloaded": file_name,
+            "documents_loaded": len(docs),
+            "chunks_created": len(chunks),
+        }
 
-    write_chunks_to_vault(chunks, vault_path)
-
-    return {
-        "file_downloaded": file_name,
-        "documents_loaded": len(docs),
-        "chunks_created": len(chunks)
-    }
+    except ValueError as e:
+        return {
+            "status": "skipped",
+            "file_name": file_name,
+            "reason": str(e),
+        }

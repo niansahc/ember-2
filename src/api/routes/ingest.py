@@ -91,7 +91,19 @@ def ingest_gdrive_file(file_id: str):
 
     try:
         local_path = download_drive_file(file_id, mime_type, file_name, download_dir)
-        docs = load_file(local_path)
+
+        docs = load_file(
+            local_path,
+            source="google_drive",
+            doc_id=file_id,
+            extra_metadata={
+                "mimeType": mime_type,
+                "modifiedTime": metadata.get("modifiedTime"),
+                "parents": metadata.get("parents", []),
+                "original_file_name": file_name,
+            },
+        )
+
         chunks = run_ingestion_pipeline(docs)
         write_chunks_to_vault(chunks, vault_path)
 

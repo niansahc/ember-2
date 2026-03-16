@@ -1,10 +1,9 @@
-from src.memory.write_memory import write_memory
 from src.memory.read_memory import read_memories
 from src.memory.search_memory import search_memories
-from src.memory.read_memory import read_memories
+from src.memory.write_memory import write_memory
+
 
 class MemoryService:
-
     def write(
         self,
         text: str,
@@ -13,9 +12,7 @@ class MemoryService:
         tags=None,
         metadata: dict | None = None,
     ):
-
         existing = read_memories(memory_type, limit=10)
-
         normalized = text.strip().lower()
 
         for mem in existing:
@@ -23,7 +20,6 @@ class MemoryService:
                 return {"status": "duplicate_skipped"}
 
         return write_memory(text, memory_type, source, tags, metadata)
-
 
     def read(self, memory_type: str = "journal", limit: int = 5):
         return read_memories(memory_type, limit)

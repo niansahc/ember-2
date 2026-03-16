@@ -5,9 +5,9 @@ from src.ingest.importers.chatgpt import load_chatgpt_export
 from src.ingest.importers.files import load_file
 from src.ingest.importers.gdrive import list_drive_files, parse_gdrive_files
 from src.ingest.importers.gdrive_download import download_drive_file
-
 from src.ingest.pipeline import run_ingestion_pipeline
 from src.ingest.writers import write_chunks_to_vault
+from src.ingest.importers.gdrive_sync import sync_gdrive_folder
 
 
 router = APIRouter()
@@ -98,3 +98,13 @@ def ingest_gdrive_file(file_id: str, mime_type: str, file_name: str):
             "file_name": file_name,
             "reason": str(e),
         }
+    
+# -----------------------------
+# Google Drive File Sync
+# -----------------------------
+
+@router.post("/ingest/gdrive/folder")
+def ingest_gdrive_folder(folder_id: str):
+    vault_path = get_private_vault_path()
+    results = sync_gdrive_folder(folder_id, vault_path)
+    return {"results": results}

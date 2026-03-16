@@ -21,7 +21,7 @@ def write_chunks_to_vault(chunks, vault_path):
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(chunk.__dict__, f, indent=2)
 
-        embedding = embed_text(chunk.text)
+        embedding = embed_text(chunk.content)
 
         index_data.append({
             "file_path": str(file_path),

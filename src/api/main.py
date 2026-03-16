@@ -60,9 +60,8 @@ def search_memories_endpoint(query: str, memory_type: str = "journal", limit: in
 
 
 @app.get("/semantic-search")
-def semantic_search_endpoint(query: str, limit: int = 5):
-    return {"results": semantic_search(query, limit)}
-
+def semantic_search_endpoint(query: str, limit: int = 5, memory_type: str | None = None):
+    return {"results": semantic_search(query, limit, memory_type)}
 
 @app.post("/reflect")
 def reflect_endpoint(memory_type: str = "journal", limit: int = 5):

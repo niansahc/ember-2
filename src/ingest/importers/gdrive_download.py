@@ -16,13 +16,34 @@ EXPORT_MAP = {
 
 SKIP_MIME_TYPES = {
     "application/vnd.google-apps.folder",
+
+    # images
     "image/jpeg",
     "image/png",
     "image/gif",
     "image/webp",
     "image/svg+xml",
+
+    # archives
     "application/zip",
     "application/x-zip-compressed",
+
+    # audio
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/ogg",
+    "audio/aac",
+    "audio/flac",
+
+    # video
+    "video/mp4",
+    "video/mpeg",
+    "video/quicktime",
+    "video/x-msvideo",
+    "video/webm",
+    "video/x-matroska"
 }
 
 

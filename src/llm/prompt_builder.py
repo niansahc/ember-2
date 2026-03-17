@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from src.context.models import ContextPacket
 
 
@@ -9,40 +10,31 @@ class PromptBuilder:
         self.system_prompt = prompt_path.read_text(encoding="utf-8")
 
     def build_prompt(self, context_packet: ContextPacket) -> str:
+        sections: list[str] = []
+
         if context_packet.memory_items:
-            memory_lines = [item.content for item in context_packet.memory_items[:8]]
-            memory_section = "\n\n".join(memory_lines)
+            memory_lines = []
+            for item in context_packet.memory_items[:8]:
+                memory_lines.append(
+                    f"[{item.item_type} | score={item.score:.3f}]\n{item.content}"
+                )
+            sections.append("Retrieved context:\n" + "\n\n".join(memory_lines))
         else:
-            memory_section = "NO MEMORY FOUND"
+            sections.append("Retrieved context:\nNone relevant.")
 
-        return f"""
-You are Ember.
+        if context_packet.reflection_items:
+            reflection_lines = []
+            for item in context_packet.reflection_items[:3]:
+                reflection_lines.append(f"[reflection]\n{item.content}")
+            sections.append("Retrieved reflections:\n" + "\n\n".join(reflection_lines))
+        else:
+            sections.append("Retrieved reflections:\nNone relevant.")
 
-You must ONLY use the user's memory below.
+        sections.append(
+            "Instructions:\nUse retrieved context when it is relevant and specific. "
+            "Ground claims in the retrieved material. If context is weak or missing, say so plainly."
+        )
 
-RULES:
-- Do NOT invent patterns.
-- Do NOT generalize from outside knowledge.
-- If something is not explicitly in memory, do not claim it.
-- First extract exact details from memory.
-- Then describe patterns ONLY if they clearly repeat.
+        sections.append(f"User message:\n{context_packet.user_message}")
 
-STEP 1: Extract facts (quote or paraphrase what actually happened)
-STEP 2: Identify patterns (only if repeated evidence exists)
-STEP 3: Answer the user
-
---- MEMORY ---
-{memory_section}
-
---- USER QUESTION ---
-{context_packet.user_message}
-
---- RESPONSE FORMAT ---
-Facts:
-- ...
-
-Patterns:
-- ...
-
-Answer:
-"""
+        return "\n\n".join(sections)

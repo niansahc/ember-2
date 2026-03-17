@@ -25,18 +25,40 @@ class ContextService:
         )
 
         query_terms = self._extract_query_terms(user_message)
+        normalized_user_message = self._normalize_text(user_message)
 
         relevant_memory = [
-            item for item in ranked_memory if self._relevance_hits(item, query_terms) > 0
+            item
+            for item in ranked_memory
+            if self._relevance_hits(item, query_terms) > 0
         ]
 
         if not relevant_memory:
             relevant_memory = ranked_memory
 
-        deduped_memory = self._deduplicate(relevant_memory)
+        filtered_memory = [
+            item
+            for item in relevant_memory
+            if not self._is_echo_or_meta_memory(item, normalized_user_message)
+        ]
+
+        if not filtered_memory:
+            filtered_memory = [
+                item
+                for item in ranked_memory
+                if not self._is_echo_or_meta_memory(item, normalized_user_message)
+            ]
+
+        if not filtered_memory:
+            filtered_memory = ranked_memory
+
+        deduped_memory = self._deduplicate(filtered_memory)
 
         selected_memory = self._select_diverse_memory(deduped_memory, limit=6)
         selected_reflections = self._deduplicate(ranked_reflections)[:2]
+
+        for m in selected_memory:
+            print(f"[CTX] {m.item_type}: {m.content[:120]}")
 
         return self.formatter.format(
             user_message=user_message,
@@ -71,12 +93,49 @@ class ContextService:
             "would",
             "could",
             "should",
+            "noticed",
+            "patterns",
+            "experience",
         }
         return [term for term in terms if term not in stopwords]
 
     def _relevance_hits(self, item, query_terms: list[str]) -> int:
         content = item.content.lower()
         return sum(1 for term in query_terms if term in content)
+
+    def _is_echo_or_meta_memory(self, item, normalized_user_message: str) -> bool:
+        content = self._normalize_text(item.content)
+
+        if not content:
+            return True
+
+        meta_markers = (
+            "user asked:",
+            "ember responded:",
+            "assistant responded:",
+            "assistant said:",
+            "question:",
+            "answer:",
+        )
+
+        if any(marker in content for marker in meta_markers):
+            return True
+
+        if content.startswith("user asked:"):
+            return True
+
+        if normalized_user_message and normalized_user_message in content:
+            return True
+
+        similarity = self._jaccard_similarity(
+            self._tokenize(content),
+            self._tokenize(normalized_user_message),
+        )
+
+        if similarity > 0.55:
+            return True
+
+        return False
 
     def _deduplicate(self, items: list) -> list:
         seen = set()
@@ -95,13 +154,9 @@ class ContextService:
             return []
 
         grouped_items = {
-            "conversation": [item for item in items if item.item_type == "conversation"],
-            "ingested": [item for item in items if item.item_type == "ingested"],
-            "other": [
-                item
-                for item in items
-                if item.item_type not in {"conversation", "ingested"}
-            ],
+            "conversation": [i for i in items if i.item_type == "conversation"],
+            "ingested": [i for i in items if i.item_type == "ingested"],
+            "other": [i for i in items if i.item_type not in {"conversation", "ingested"}],
         }
 
         selected = []
@@ -114,7 +169,7 @@ class ContextService:
                     grouped_items[group_name], selected
                 )
 
-                if candidate is not None:
+                if candidate:
                     selected.append(candidate)
                     grouped_items[group_name].remove(candidate)
                     made_progress = True
@@ -132,7 +187,7 @@ class ContextService:
 
             while len(selected) < limit and remaining:
                 candidate = self._best_diverse_candidate(remaining, selected)
-                if candidate is None:
+                if not candidate:
                     break
                 selected.append(candidate)
                 remaining.remove(candidate)
@@ -160,6 +215,9 @@ class ContextService:
     def _diversity_score(self, candidate, selected: list) -> float:
         relevance = 1.0
 
+        if len(candidate.content) < 80:
+            relevance -= 0.1
+
         candidate_tokens = self._tokenize(candidate.content)
         candidate_type = getattr(candidate, "item_type", "unknown")
 
@@ -174,7 +232,7 @@ class ContextService:
             if getattr(existing, "item_type", "unknown") == candidate_type:
                 same_type_penalty += 0.08
 
-        return relevance - (max_similarity * 0.6) - same_type_penalty
+        return relevance - (max_similarity * 0.8) - same_type_penalty
 
     def _tokenize(self, text: str) -> set[str]:
         return set(re.findall(r"\b[a-z0-9]{3,}\b", text.lower()))

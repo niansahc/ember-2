@@ -20,6 +20,8 @@ def semantic_search(
 
     query_embedding = embed_text(query)
     query_lower = query.lower().strip()
+    query_terms = [t for t in query_lower.split() if t]
+
     results = []
 
     if memory_type:
@@ -42,9 +44,15 @@ def semantic_search(
         for r in index_results:
             content = r.get("content", "").lower()
 
+            # Exact phrase boost
             if query_lower and query_lower in content:
                 r["score"] += 0.10
 
+            # Term hit boost (hybrid-lite)
+            term_hits = sum(1 for term in query_terms if term in content)
+            r["score"] += 0.05 * term_hits
+
+            # Prefer conversation memory slightly
             if mem_type == "conversation":
                 r["score"] += 0.05
 

@@ -40,6 +40,7 @@ class ContextService:
             item
             for item in relevant_memory
             if not self._is_echo_or_meta_memory(item, normalized_user_message)
+            and not self._is_low_value_memory(item)
         ]
 
         if not filtered_memory:
@@ -47,6 +48,7 @@ class ContextService:
                 item
                 for item in ranked_memory
                 if not self._is_echo_or_meta_memory(item, normalized_user_message)
+                and not self._is_low_value_memory(item)
             ]
 
         if not filtered_memory:
@@ -96,6 +98,11 @@ class ContextService:
             "noticed",
             "patterns",
             "experience",
+            "been",
+            "working",
+            "recently",
+            "lately",
+            "building",
         }
         return [term for term in terms if term not in stopwords]
 
@@ -121,9 +128,6 @@ class ContextService:
         if any(marker in content for marker in meta_markers):
             return True
 
-        if content.startswith("user asked:"):
-            return True
-
         if normalized_user_message and normalized_user_message in content:
             return True
 
@@ -132,7 +136,31 @@ class ContextService:
             self._tokenize(normalized_user_message),
         )
 
-        if similarity > 0.55:
+        return similarity > 0.55
+
+    def _is_low_value_memory(self, item) -> bool:
+        content = self._normalize_text(item.content)
+        metadata = getattr(item, "metadata", {}) or {}
+
+        if len(content) < 40:
+            return True
+
+        low_value_exact = (
+            "user: yes, tell me all the things you see",
+            "user: what have i been working on today?",
+        )
+        if content in low_value_exact:
+            return True
+
+        low_value_markers = (
+            "as an ai, i don't have personal experiences or memories",
+            "tell me all the things you see",
+            "do you think i am doing okay or struggling",
+        )
+        if any(marker in content for marker in low_value_markers):
+            return True
+
+        if metadata.get("content_kind") == "question" and len(content) < 120:
             return True
 
         return False
@@ -213,26 +241,46 @@ class ContextService:
         return best_item
 
     def _diversity_score(self, candidate, selected: list) -> float:
-        relevance = 1.0
+        relevance = float(getattr(candidate, "score", 0.0))
 
         if len(candidate.content) < 80:
-            relevance -= 0.1
+            relevance -= 0.08
 
         candidate_tokens = self._tokenize(candidate.content)
         candidate_type = getattr(candidate, "item_type", "unknown")
+        candidate_metadata = getattr(candidate, "metadata", {}) or {}
+        candidate_doc_id = candidate_metadata.get("doc_id")
+        candidate_title = candidate_metadata.get("title")
 
         max_similarity = 0.0
         same_type_penalty = 0.0
+        same_doc_penalty = 0.0
+        same_title_penalty = 0.0
 
         for existing in selected:
             existing_tokens = self._tokenize(existing.content)
             similarity = self._jaccard_similarity(candidate_tokens, existing_tokens)
             max_similarity = max(max_similarity, similarity)
 
-            if getattr(existing, "item_type", "unknown") == candidate_type:
-                same_type_penalty += 0.08
+            existing_type = getattr(existing, "item_type", "unknown")
+            existing_metadata = getattr(existing, "metadata", {}) or {}
 
-        return relevance - (max_similarity * 0.8) - same_type_penalty
+            if existing_type == candidate_type:
+                same_type_penalty += 0.05
+
+            if candidate_doc_id and existing_metadata.get("doc_id") == candidate_doc_id:
+                same_doc_penalty += 0.22
+
+            if candidate_title and existing_metadata.get("title") == candidate_title:
+                same_title_penalty += 0.08
+
+        return (
+            relevance
+            - (max_similarity * 0.70)
+            - same_type_penalty
+            - same_doc_penalty
+            - same_title_penalty
+        )
 
     def _tokenize(self, text: str) -> set[str]:
         return set(re.findall(r"\b[a-z0-9]{3,}\b", text.lower()))

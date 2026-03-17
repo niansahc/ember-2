@@ -188,32 +188,32 @@ class ContextRanker:
         return any(marker in content for marker in markers)
 
     def _looks_like_active_work(self, content: str, metadata: dict) -> bool:
-    title = str(metadata.get("title", "")).lower()
+        title = str(metadata.get("title", "")).lower()
 
-    markers = (
-        "working on",
-        "trying to",
-        "focused on",
-        "making progress",
-        "next step",
-        "next steps",
-        "plan",
-        "planning",
-        "started",
-        "finished",
-        "need to",
-        "figuring out",
-        "stuck",
-        "blocked",
-        "updating",
-        "changing",
-        "organizing",
-        "building",
-        "improving",
-        "fixing",
-    )
+        markers = (
+            "working on",
+            "trying to",
+            "focused on",
+            "making progress",
+            "next step",
+            "next steps",
+            "plan",
+            "planning",
+            "started",
+            "finished",
+            "need to",
+            "figuring out",
+            "stuck",
+            "blocked",
+            "updating",
+            "changing",
+            "organizing",
+            "building",
+            "improving",
+            "fixing",
+        )
 
-    return any(marker in content for marker in markers) or any(
+        return any(marker in content for marker in markers) or any(
         marker in title for marker in markers
     )
 

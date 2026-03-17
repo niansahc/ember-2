@@ -26,7 +26,6 @@ def chat(request: ChatRequest) -> ChatResponse:
     reply = llm_adapter.generate_response(context_packet)
 
     max_len = 300
-
     user_part = request.message[:max_len]
     reply_part = reply[:max_len]
 

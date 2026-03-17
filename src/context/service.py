@@ -2,6 +2,7 @@ import re
 
 from src.context.formatter import ContextFormatter
 from src.context.models import ContextPacket
+from src.context.policies import classify_query
 from src.context.ranker import ContextRanker
 from src.context.retriever import ContextRetriever
 
@@ -18,7 +19,12 @@ class ContextService:
         self.formatter = formatter or ContextFormatter()
 
     def build_context(self, user_message: str) -> ContextPacket:
+        policy = classify_query(user_message)
+
         memory_items, reflection_items = self.retriever.retrieve(user_message)
+
+        memory_items = self.ranker.apply_policy(memory_items, policy)
+        reflection_items = self.ranker.apply_policy(reflection_items, policy)
 
         ranked_memory, ranked_reflections = self.ranker.rank(
             memory_items, reflection_items
@@ -55,9 +61,20 @@ class ContextService:
             filtered_memory = ranked_memory
 
         deduped_memory = self._deduplicate(filtered_memory)
+        deduped_reflections = self._deduplicate(ranked_reflections)
 
-        selected_memory = self._select_diverse_memory(deduped_memory, limit=6)
-        selected_reflections = self._deduplicate(ranked_reflections)[:2]
+        memory_limit = self._memory_limit_for_policy(policy.name)
+        reflection_limit = self._reflection_limit_for_policy(policy.name)
+
+        if policy.diversity:
+            selected_memory = self._select_diverse_memory(
+                deduped_memory,
+                limit=memory_limit,
+            )
+        else:
+            selected_memory = deduped_memory[:memory_limit]
+
+        selected_reflections = deduped_reflections[:reflection_limit]
 
         for m in selected_memory:
             print(f"[CTX] {m.item_type}: {m.content[:120]}")
@@ -67,6 +84,32 @@ class ContextService:
             memory_items=selected_memory,
             reflection_items=selected_reflections,
         )
+
+    def _memory_limit_for_policy(self, policy_name: str) -> int:
+        if policy_name == "reflective":
+            return 4
+        if policy_name == "recent_activity":
+            return 6
+        if policy_name == "recent":
+            return 5
+        if policy_name == "activity":
+            return 6
+        if policy_name == "factual_recall":
+            return 6
+        return 6
+
+    def _reflection_limit_for_policy(self, policy_name: str) -> int:
+        if policy_name == "reflective":
+            return 3
+        if policy_name == "recent_activity":
+            return 2
+        if policy_name == "recent":
+            return 2
+        if policy_name == "activity":
+            return 1
+        if policy_name == "factual_recall":
+            return 1
+        return 2
 
     def _extract_query_terms(self, user_message: str) -> list[str]:
         terms = re.findall(r"\b[a-z0-9]{3,}\b", user_message.lower())
@@ -95,14 +138,7 @@ class ContextService:
             "would",
             "could",
             "should",
-            "noticed",
-            "patterns",
-            "experience",
             "been",
-            "working",
-            "recently",
-            "lately",
-            "building",
         }
         return [term for term in terms if term not in stopwords]
 
@@ -156,6 +192,9 @@ class ContextService:
             "as an ai, i don't have personal experiences or memories",
             "tell me all the things you see",
             "do you think i am doing okay or struggling",
+            "shorter responses",
+            "shorter messages please",
+            "that's a long response again",
         )
         if any(marker in content for marker in low_value_markers):
             return True

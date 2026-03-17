@@ -87,30 +87,28 @@ def _should_skip_chatgpt_message(text: str) -> bool:
     if len(text) < 30:
         return True
 
-    trivial_lines = (
-        "user: can we change the title of this chat?",
-        "user: change the title of this chat",
-        "user: rename this chat",
-        "assistant: sure",
-        "assistant: of course",
-        "assistant: yes",
-    )
-    if text in trivial_lines:
+    if _looks_like_trivial_chat_control(text):
         return True
 
     if _looks_like_json_payload(text):
         return True
 
-    if _looks_like_tool_trace(text):
+    if _looks_like_asset_pointer_payload(text):
         return True
 
-    if _looks_like_chat_control(text):
+    if _looks_like_tool_trace(text):
         return True
 
     if _looks_like_prompt_scaffolding(text):
         return True
 
     if _looks_like_low_value_assistant_filler(text):
+        return True
+
+    if _looks_like_shell_or_runtime_output(text):
+        return True
+
+    if _looks_like_mixed_user_assistant_artifact(text):
         return True
 
     return False
@@ -157,8 +155,30 @@ def _looks_like_json_payload(text: str) -> bool:
         '"reflection_items":',
         '"conversation_id":',
         '"chunk_id":',
+        '"asset_pointer":',
+        '"content_type":',
+        '"image_asset_pointer"',
+        '"metadata": {',
+        '"size_bytes":',
+        '"width":',
+        '"height":',
     )
     return any(marker in text for marker in json_markers)
+
+
+def _looks_like_asset_pointer_payload(text: str) -> bool:
+    markers = (
+        "sediment://file_",
+        "asset_pointer",
+        "image_asset_pointer",
+        "watermarked_asset_pointer",
+        "container_pixel_height",
+        "container_pixel_width",
+        "size_bytes",
+        '"width":',
+        '"height":',
+    )
+    return any(marker in text for marker in markers)
 
 
 def _looks_like_tool_trace(text: str) -> bool:
@@ -174,11 +194,12 @@ def _looks_like_tool_trace(text: str) -> bool:
     return any(marker in text for marker in markers)
 
 
-def _looks_like_chat_control(text: str) -> bool:
+def _looks_like_trivial_chat_control(text: str) -> bool:
     markers = (
         "change the title of this chat",
         "rename this chat",
         "title of this chat",
+        "can we change the title of this chat",
     )
     return any(marker in text for marker in markers)
 
@@ -210,6 +231,43 @@ def _looks_like_low_value_assistant_filler(text: str) -> bool:
         "this would help refine",
     )
     return any(marker in text for marker in filler_markers)
+
+
+def _looks_like_shell_or_runtime_output(text: str) -> bool:
+    markers = (
+        "(.venv)",
+        "ps c:\\",
+        "uvicorn ",
+        "info:",
+        "traceback",
+        "file \"c:\\",
+        "line ",
+        "application startup complete",
+        "started server process",
+        "started reloader process",
+        "waiting for application startup",
+        "press ctrl+c to quit",
+        "loading weights:",
+        "bertmodel load report",
+        "embeddings.position_ids",
+        "warning:",
+        "http/1.1",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _looks_like_mixed_user_assistant_artifact(text: str) -> bool:
+    if not text.startswith("user:"):
+        return False
+
+    artifact_markers = (
+        "\nassistant:",
+        " as an ai, i don't have personal experiences or memories.",
+        "\ni understand you're",
+        "\nlet's dive into",
+        "\ni'm here to support you",
+    )
+    return any(marker in text for marker in artifact_markers)
 
 
 def _looks_like_question(text: str) -> bool:
@@ -259,6 +317,7 @@ def _looks_like_experience_or_status(text: str) -> bool:
         "noticed",
         "experiencing",
         "having",
+        "trying",
     )
     return any(marker in text for marker in markers)
 

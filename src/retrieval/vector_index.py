@@ -1,8 +1,6 @@
 import json
 from pathlib import Path
 
-import numpy as np
-
 
 class VectorIndex:
     def get_index_path(self, vault_path: Path, memory_type: str) -> Path:
@@ -13,65 +11,73 @@ class VectorIndex:
     def load_index(self, index_path: Path) -> list:
         if not index_path.exists():
             return []
-        with open(index_path, "r", encoding="utf-8") as f:
-            return json.load(f)
 
-    def save_index(self, index_path: Path, data: list) -> None:
+        try:
+            with open(index_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if isinstance(data, list):
+                return data
+
+            return []
+
+        except (json.JSONDecodeError, OSError):
+            return []
+
+    def save_index(self, index_path: Path, index_data: list) -> None:
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+
         with open(index_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-
-    def load_chunk(self, file_path: str):
-        path = Path(file_path)
-
-        if not path.exists():
-            return {"content": "", "metadata": {}}
-
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        return {
-            "content": data.get("content", ""),
-            "metadata": data.get("metadata", {})
-        }
+            json.dump(index_data, f, ensure_ascii=False, indent=2)
 
     def search(
         self,
         vault_path: Path,
         memory_type: str,
-        query_embedding,
+        query_embedding: list[float],
         top_k: int = 5,
         min_score: float | None = None,
-    ) -> list:
+    ) -> list[dict]:
         index_path = self.get_index_path(vault_path, memory_type)
-        data = self.load_index(index_path)
-        results = []
+        index_data = self.load_index(index_path)
 
-        query_embedding = np.array(query_embedding)
-        query_norm = np.linalg.norm(query_embedding)
-
-        if query_norm == 0:
+        if not index_data:
             return []
 
-        for item in data:
-            embedding = np.array(item["embedding"])
-            embedding_norm = np.linalg.norm(embedding)
+        scored_results = []
 
-            if embedding_norm == 0:
+        for item in index_data:
+            embedding = item.get("embedding")
+
+            if not embedding:
                 continue
 
-            score = np.dot(query_embedding, embedding) / (query_norm * embedding_norm)
+            score = self.cosine_similarity(query_embedding, embedding)
 
             if min_score is not None and score < min_score:
                 continue
 
-            chunk = self.load_chunk(item["file_path"])
+            scored_results.append(
+                {
+                    "score": score,
+                    "path": item.get("file_path"),
+                    "content": item.get("text", ""),
+                    "metadata": item.get("metadata", {}),
+                }
+            )
 
-            results.append({
-                "path": item["file_path"],
-                "score": float(score),
-                "content": chunk["content"],
-                "metadata": chunk["metadata"],
-            })
+        scored_results.sort(key=lambda x: x["score"], reverse=True)
+        return scored_results[:top_k]
 
-        results.sort(key=lambda x: x["score"], reverse=True)
-        return results[:top_k]
+    def cosine_similarity(self, a: list[float], b: list[float]) -> float:
+        if not a or not b or len(a) != len(b):
+            return 0.0
+
+        dot_product = sum(x * y for x, y in zip(a, b))
+        norm_a = sum(x * x for x in a) ** 0.5
+        norm_b = sum(y * y for y in b) ** 0.5
+
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+
+        return dot_product / (norm_a * norm_b)

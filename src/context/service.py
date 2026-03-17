@@ -22,7 +22,6 @@ class ContextService:
             memory_items, reflection_items
         )
 
-        # simple deduplication by normalized text
         seen = set()
         deduped_memory = []
 
@@ -33,10 +32,27 @@ class ContextService:
                 deduped_memory.append(item)
                 seen.add(key)
 
-        conversation_memories = [m for m in deduped_memory if m.item_type == "conversation"]
-        journal_memories = [m for m in deduped_memory if m.item_type != "conversation"]
+        conversation_memories = [
+            m for m in deduped_memory if m.item_type == "conversation"
+        ]
+        document_memories = [
+            m for m in deduped_memory if m.item_type == "document"
+        ]
+        journal_memories = [
+            m for m in deduped_memory if m.item_type == "journal"
+        ]
+        other_memories = [
+            m for m in deduped_memory
+            if m.item_type not in {"conversation", "document", "journal"}
+        ]
 
-        selected_memory = conversation_memories[:2] + journal_memories[:2]
+        selected_memory = (
+            conversation_memories[:2]
+            + document_memories[:2]
+            + journal_memories[:1]
+            + other_memories[:1]
+        )
+
         selected_reflections = ranked_reflections[:2]
 
         return self.formatter.format(

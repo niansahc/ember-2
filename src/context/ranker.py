@@ -7,6 +7,45 @@ from src.context.models import ContextItem
 
 
 class ContextRanker:
+    def apply_policy(self, items: list[ContextItem], policy) -> list[ContextItem]:
+        adjusted: list[ContextItem] = []
+
+        for item in items:
+            score = float(item.score)
+
+            if item.item_type == "reflection":
+                score *= policy.reflection_weight
+            else:
+                score *= policy.memory_weight
+
+            if getattr(policy, "recency_bias", 0.0):
+                score += self._recency_boost(item.timestamp) * float(policy.recency_bias)
+
+            content = item.content.lower()
+            metadata = getattr(item, "metadata", {}) or {}
+            content_kind = metadata.get("content_kind")
+
+            if getattr(policy, "prefer_experiences", False):
+                if content_kind == "experience" or self._looks_like_experience(content):
+                    score += 0.20
+
+            if getattr(policy, "prefer_active_work", False):
+                if self._looks_like_active_work(content, metadata):
+                    score += 0.22
+
+            if getattr(policy, "prefer_exact_matches", False):
+                queryish_bonus = 0.0
+                if content_kind == "question":
+                    queryish_bonus -= 0.05
+                else:
+                    queryish_bonus += 0.03
+                score += queryish_bonus
+
+            item.score = score
+            adjusted.append(item)
+
+        return adjusted
+
     def rank(
         self,
         memory_items: list[ContextItem],
@@ -128,5 +167,56 @@ class ContextRanker:
         )
         return any(marker in content for marker in markers)
 
+    def _looks_like_experience(self, content: str) -> bool:
+        markers = (
+            "i am",
+            "i'm",
+            "i was",
+            "i have",
+            "i've",
+            "i feel",
+            "i felt",
+            "today",
+            "yesterday",
+            "this week",
+            "lately",
+            "noticed",
+            "experiencing",
+            "having",
+            "trying",
+        )
+        return any(marker in content for marker in markers)
+
+    def _looks_like_active_work(self, content: str, metadata: dict) -> bool:
+    title = str(metadata.get("title", "")).lower()
+
+    markers = (
+        "working on",
+        "trying to",
+        "focused on",
+        "making progress",
+        "next step",
+        "next steps",
+        "plan",
+        "planning",
+        "started",
+        "finished",
+        "need to",
+        "figuring out",
+        "stuck",
+        "blocked",
+        "updating",
+        "changing",
+        "organizing",
+        "building",
+        "improving",
+        "fixing",
+    )
+
+    return any(marker in content for marker in markers) or any(
+        marker in title for marker in markers
+    )
+
     def _tokenize(self, text: str) -> list[str]:
         return re.findall(r"\b[a-z0-9]{3,}\b", text)
+    

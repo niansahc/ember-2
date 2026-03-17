@@ -25,10 +25,11 @@ The system is built in phases to keep progress achievable and enjoyable.
 
 # Current
 
-Phase: **Context Builder (Implemented)/Retrieval Integration**
+Phase: **Multi-source memory retrieval, prompt grounding, and conversation memory integration are operational**
 
 Current milestone:
 **Multi-source memory retrieval, prompt grounding, and conversation memory integration are operational**
+
 
 Next milestone:
 **Improve retrieval quality with memory importance, clustering, and reflection input refinement**
@@ -205,7 +206,7 @@ Tasks:
 - [ ] Create conversation summary template
 - [ ] Create reference document folder
 - [ ] Populate initial curated memory
-- [ ] Integrate vault into Open WebUI knowledge base
+- [x] Integrate vault into Open WebUI knowledge base
 
 
 Deliverable:
@@ -221,9 +222,9 @@ Goal: integrate memory retrieval into everyday conversations.
 Tasks:
 
 - [x] Test RAG retrieval across documents
-- [ ] Tune chunk sizes
-- [ ] Test multi-document retrieval
-- [ ] Validate prompt injection behavior
+- [x] Tune chunk sizes
+- [x] Test multi-document retrieval
+- [x] Validate prompt injection behavior
 - [x] Test memory recall during conversations
 - [ ] Document retrieval workflow
 

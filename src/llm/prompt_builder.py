@@ -3,39 +3,46 @@ from src.context.models import ContextPacket
 
 
 class PromptBuilder:
-
     def __init__(self):
         base_dir = Path(__file__).resolve().parents[2]
         prompt_path = base_dir / "prompts" / "ember_system_prompt.txt"
-        
         self.system_prompt = prompt_path.read_text(encoding="utf-8")
 
-   
-
     def build_prompt(self, context_packet: ContextPacket) -> str:
-
-        sections: list[str] = [self.system_prompt]
-
         if context_packet.memory_items:
-            memory_lines = "\n".join(
-                f"- {item.content}" for item in context_packet.memory_items[:5]
-            )
-            sections.append(f"Retrieved memories:\n{memory_lines}")
+            memory_lines = [item.content for item in context_packet.memory_items[:8]]
+            memory_section = "\n\n".join(memory_lines)
         else:
-            sections.append("Retrieved memories:\nNone relevant.")
+            memory_section = "NO MEMORY FOUND"
 
-        if context_packet.reflection_items:
-            reflection_lines = "\n".join(
-                f"- {item.content}" for item in context_packet.reflection_items[:3]
-            )
-            sections.append(f"Retrieved reflections:\n{reflection_lines}")
-        else:
-            sections.append("Retrieved reflections:\nNone relevant.")
+        return f"""
+You are Ember.
 
-        sections.append(f"Current user message:\n{context_packet.user_message}")
+You must ONLY use the user's memory below.
 
-        prompt = "\n\n".join(sections)
+RULES:
+- Do NOT invent patterns.
+- Do NOT generalize from outside knowledge.
+- If something is not explicitly in memory, do not claim it.
+- First extract exact details from memory.
+- Then describe patterns ONLY if they clearly repeat.
 
-      
+STEP 1: Extract facts (quote or paraphrase what actually happened)
+STEP 2: Identify patterns (only if repeated evidence exists)
+STEP 3: Answer the user
 
-        return prompt
+--- MEMORY ---
+{memory_section}
+
+--- USER QUESTION ---
+{context_packet.user_message}
+
+--- RESPONSE FORMAT ---
+Facts:
+- ...
+
+Patterns:
+- ...
+
+Answer:
+"""

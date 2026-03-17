@@ -1,39 +1,74 @@
 import json
+from pathlib import Path
+
 from src.ingest.models import NormalizedDocument
 
-def load_chatgpt_export(file_path):
-    with open(file_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
 
+def _flatten_part(part):
+    if isinstance(part, str):
+        return part
+
+    if isinstance(part, dict):
+        if "text" in part and isinstance(part["text"], str):
+            return part["text"]
+
+        if "content" in part and isinstance(part["content"], str):
+            return part["content"]
+
+        return json.dumps(part, ensure_ascii=False)
+
+    return str(part)
+
+
+def load_chatgpt_export(folder_path: str):
+    folder = Path(folder_path)
     docs = []
 
-    for i, convo in enumerate(data):
-        title = convo.get("title", f"chat_{i}")
-        created = convo.get("create_time")
+    for file in folder.glob("conversations-*.json"):
+        with open(file, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-        messages = []
-        mapping = convo.get("mapping", {})
+        for i, convo in enumerate(data):
+            title = convo.get("title", f"chat_{file.stem}_{i}")
+            created = convo.get("create_time")
+            mapping = convo.get("mapping", {})
 
-        for node in mapping.values():
-            msg = node.get("message")
-            if not msg:
+            messages = []
+
+            for node in mapping.values():
+                msg = node.get("message")
+                if not msg:
+                    continue
+
+                author = msg.get("author", {}).get("role", "unknown")
+                parts = msg.get("content", {}).get("parts", [])
+
+                if not parts:
+                    continue
+
+                text = "\n".join(_flatten_part(p) for p in parts).strip()
+
+                if not text:
+                    continue
+
+                messages.append(f"{author.title()}: {text}")
+
+            if not messages:
                 continue
 
-            parts = msg.get("content", {}).get("parts", [])
-            if parts:
-                messages.append(parts[0])
-
-        content = "\n".join(messages)
-
-        docs.append(
-            NormalizedDocument(
-                source="chatgpt",
-                doc_id=f"chatgpt_{i}",
-                title=title,
-                created_at=str(created) if created else None,
-                content=content,
-                metadata={"type": "chatgpt_export"},
+            docs.append(
+                NormalizedDocument(
+                    source="chatgpt",
+                    doc_id=f"{file.stem}_{i}",
+                    title=title,
+                    created_at=str(created) if created else None,
+                    content="\n\n".join(messages),
+                    metadata={
+                        "type": "chatgpt_export",
+                        "file": file.name,
+                        "messages": messages,
+                    },
+                )
             )
-        )
 
     return docs

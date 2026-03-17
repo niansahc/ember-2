@@ -6,7 +6,12 @@ from src.retrieval.vector_index import VectorIndex
 vector_index = VectorIndex()
 
 
-def semantic_search(query: str, limit: int = 5, memory_type: str | None = None, min_score: float | None = None):
+def semantic_search(
+    query: str,
+    limit: int = 5,
+    memory_type: str | None = None,
+    min_score: float | None = 0.20,
+):
     vault = get_private_vault_path()
     embeddings_dir = vault / "embeddings"
 
@@ -14,6 +19,7 @@ def semantic_search(query: str, limit: int = 5, memory_type: str | None = None, 
         return []
 
     query_embedding = embed_text(query)
+    query_lower = query.lower().strip()
     results = []
 
     if memory_type:
@@ -30,10 +36,18 @@ def semantic_search(query: str, limit: int = 5, memory_type: str | None = None, 
             memory_type=mem_type,
             query_embedding=query_embedding,
             top_k=limit,
-            min_score=min_score
+            min_score=min_score,
         )
 
         for r in index_results:
+            content = r.get("content", "").lower()
+
+            if query_lower and query_lower in content:
+                r["score"] += 0.10
+
+            if mem_type == "conversation":
+                r["score"] += 0.05
+
             r["memory_type"] = mem_type
             results.append(r)
 

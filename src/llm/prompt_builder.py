@@ -7,34 +7,47 @@ class PromptBuilder:
     def __init__(self):
         base_dir = Path(__file__).resolve().parents[2]
         prompt_path = base_dir / "prompts" / "ember_system_prompt.txt"
-        self.system_prompt = prompt_path.read_text(encoding="utf-8")
+        self.system_prompt = prompt_path.read_text(encoding="utf-8").strip()
 
     def build_prompt(self, context_packet: ContextPacket) -> str:
-        sections: list[str] = []
+        sections: list[str] = [self.system_prompt]
 
-        if context_packet.memory_items:
-            memory_lines = []
-            for item in context_packet.memory_items[:8]:
-                memory_lines.append(
-                    f"[{item.item_type} | score={item.score:.3f}]\n{item.content}"
-                )
-            sections.append("Retrieved context:\n" + "\n\n".join(memory_lines))
-        else:
-            sections.append("Retrieved context:\nNone relevant.")
+        sections.append(self._build_context_section(context_packet))
+        sections.append(self._build_reflection_section(context_packet))
+        sections.append(self._build_instruction_section())
 
-        if context_packet.reflection_items:
-            reflection_lines = []
-            for item in context_packet.reflection_items[:3]:
-                reflection_lines.append(f"[reflection]\n{item.content}")
-            sections.append("Retrieved reflections:\n" + "\n\n".join(reflection_lines))
-        else:
-            sections.append("Retrieved reflections:\nNone relevant.")
+        return "\n\n".join(section for section in sections if section.strip())
 
-        sections.append(
-            "Instructions:\nUse retrieved context when it is relevant and specific. "
-            "Ground claims in the retrieved material. If context is weak or missing, say so plainly."
+    def _build_context_section(self, context_packet: ContextPacket) -> str:
+        if not context_packet.memory_items:
+            return "MEMORY CONTEXT:\nNone relevant."
+
+        lines: list[str] = []
+
+        for item in context_packet.memory_items[:6]:
+            lines.append(
+                f"- ({item.item_type}) {item.content.strip()}"
+            )
+
+        return "MEMORY CONTEXT:\n" + "\n\n".join(lines)
+
+    def _build_reflection_section(self, context_packet: ContextPacket) -> str:
+        if not context_packet.reflection_items:
+            return "REFLECTION CONTEXT:\nNone relevant."
+
+        lines: list[str] = []
+
+        for item in context_packet.reflection_items[:2]:
+            lines.append(f"- {item.content.strip()}")
+
+        return "REFLECTION CONTEXT:\n" + "\n\n".join(lines)
+
+    def _build_instruction_section(self) -> str:
+        return (
+            "CONTEXT USAGE RULES:\n"
+            "- Use retrieved context when it is relevant and specific.\n"
+            "- Prefer concrete memory evidence over generic assumptions.\n"
+            "- If context is weak, mixed, or incomplete, say so plainly.\n"
+            "- Do not claim memory support for things that are not actually present in context.\n"
+            "- Reflections are helpful summaries, but raw memory items are the primary evidence."
         )
-
-        sections.append(f"User message:\n{context_packet.user_message}")
-
-        return "\n\n".join(sections)

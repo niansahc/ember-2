@@ -13,10 +13,12 @@ class ContextService:
         retriever: ContextRetriever | None = None,
         ranker: ContextRanker | None = None,
         formatter: ContextFormatter | None = None,
+        debug: bool = False,
     ) -> None:
         self.retriever = retriever or ContextRetriever()
         self.ranker = ranker or ContextRanker()
         self.formatter = formatter or ContextFormatter()
+        self.debug = debug
 
     def build_context(self, user_message: str) -> ContextPacket:
         policy = classify_query(user_message)
@@ -76,8 +78,9 @@ class ContextService:
 
         selected_reflections = deduped_reflections[:reflection_limit]
 
-        for m in selected_memory:
-            print(f"[CTX] {m.item_type}: {m.content[:120]}")
+        if self.debug:
+            for item in selected_memory:
+                print(f"[CTX] {item.item_type}: {item.content[:120]}")
 
         return self.formatter.format(
             user_message=user_message,

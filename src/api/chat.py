@@ -22,20 +22,30 @@ class ChatResponse(BaseModel):
 
 @router.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest) -> ChatResponse:
+    # Build context
     context_packet = context_service.build_context(request.message)
+
+    # Generate response
     reply = llm_adapter.generate_response(context_packet)
 
-    max_len = 300
-    user_part = request.message[:max_len]
-    reply_part = reply[:max_len]
+    # Store clean conversation memory (no meta wrappers)
+    user_part = request.message.strip()
+    reply_part = reply.strip()
 
-    conversation_memory = f"User asked: {user_part}. Ember responded: {reply_part}"
+    # Keep it short but readable
+    max_len = 300
+    user_part = user_part[:max_len]
+    reply_part = reply_part[:max_len]
 
     memory_service.write(
-        text=conversation_memory,
+        text=f"{user_part}\n{reply_part}",
         memory_type="conversation",
         source="chat",
         tags=["conversation"],
+        metadata={
+            "role": "dialogue",
+            "content_kind": "exchange",
+        },
     )
 
     return ChatResponse(response=reply)

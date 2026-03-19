@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from src.context.models import ContextPacket
-from src.safety.models import SafetyReviewResult
+from src.safety.models import SafetyReviewResult, SafetyTriggerResult
 
 
 class SafetyReviewLogger:
@@ -18,6 +18,7 @@ class SafetyReviewLogger:
         self,
         context_packet: ContextPacket,
         draft_response: str,
+        trigger_result: SafetyTriggerResult,
         review_result: SafetyReviewResult,
     ) -> Path:
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
@@ -28,7 +29,12 @@ class SafetyReviewLogger:
             "user_message": context_packet.user_message,
             "draft_response": draft_response,
             "final_response": self._final_response(review_result, draft_response),
-            "safety": review_result.log_payload(),
+            "trigger": {
+                "triggered": trigger_result.triggered,
+                "triggered_by": trigger_result.triggered_by,
+                "notes": trigger_result.notes,
+            },
+            "review": review_result.log_payload(),
             "critique": self._critique_payload(review_result),
             "metadata": self._context_metadata(context_packet),
         }
@@ -49,7 +55,10 @@ class SafetyReviewLogger:
             return review_result.refusal_message or ""
         return review_result.reviewed_text or draft_response
 
-    def _critique_payload(self, review_result: SafetyReviewResult) -> dict[str, Any] | None:
+    def _critique_payload(
+        self,
+        review_result: SafetyReviewResult,
+    ) -> dict[str, Any] | None:
         if review_result.critique is None:
             return None
 

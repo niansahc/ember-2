@@ -39,6 +39,14 @@ class LLMAdapter:
 
         trigger_result = self.policy_service.evaluate_trigger(initial_review_context)
 
+        print(
+            "[SAFETY]",
+            {
+                "triggered": trigger_result.triggered,
+                "triggered_by": trigger_result.triggered_by,
+            },
+        )
+
         if not trigger_result.triggered:
             return draft_response
 
@@ -53,11 +61,14 @@ class LLMAdapter:
 
         review_result = self.review_service.review(review_context)
 
-        self.review_logger.log(
+        log_path = self.review_logger.log(
             context_packet=context_packet,
             draft_response=draft_response,
+            trigger_result=trigger_result,
             review_result=review_result,
         )
+
+        print(f"[SAFETY] log written to: {log_path}")
 
         if review_result.outcome == "allow":
             return review_result.reviewed_text or draft_response

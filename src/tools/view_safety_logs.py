@@ -30,21 +30,44 @@ def print_logs(limit: int = 10):
         return
 
     for log in logs:
-        print("=" * 60)
-        print(f"Time: {log['timestamp']}")
-        print(f"User: {log['user_message']}")
-        print(f"Triggered: {log['trigger']['triggered']}")
-        print(f"Signals: {log['trigger'].get('triggered_by', [])}")
-        print(f"Review Outcome: {log['review']['outcome']}")
+        trigger = log.get("trigger")
+        review = log.get("review")
+        critique = log.get("critique")
 
-        if log.get("critique"):
-            print(f"Severity: {log['critique']['severity']}")
-            print(f"Issues: {log['critique']['issues_found']}")
+        # Backward compatibility for older log format
+        if trigger is None:
+            safety = log.get("safety", {})
+            trigger = {
+                "triggered": safety.get("triggered", False),
+                "triggered_by": safety.get("triggered_by", []),
+                "notes": [],
+            }
+
+        if review is None:
+            safety = log.get("safety", {})
+            review = {
+                "triggered": safety.get("triggered", False),
+                "outcome": safety.get("outcome", "unknown"),
+                "rules": safety.get("rules", []),
+            }
+
+        print("=" * 60)
+        print(f"Time: {log.get('timestamp', 'unknown')}")
+        print(f"User: {log.get('user_message', '')}")
+        print(f"Triggered: {trigger.get('triggered', False)}")
+        print(f"Signals: {trigger.get('triggered_by', [])}")
+        print(f"Review Outcome: {review.get('outcome', 'unknown')}")
+        print(f"Rules: {review.get('rules', [])}")
+
+        if critique:
+            print(f"Severity: {critique.get('severity', 'none')}")
+            print(f"Issues: {critique.get('issues_found', [])}")
 
         print("\nDraft Response:")
-        print(log["draft_response"])
+        print(log.get("draft_response", ""))
+
         print("\nFinal Response:")
-        print(log["final_response"])
+        print(log.get("final_response", ""))
         print()
 
 

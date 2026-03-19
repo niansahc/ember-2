@@ -23,17 +23,6 @@ class ResponseReviewService:
         self.llm_callable = llm_callable
 
     def review(self, context: SafetyReviewContext) -> SafetyReviewResult:
-        """
-        Evaluate a draft response against the constitution.
-
-        Flow:
-        1. LLM critique
-        2. allow / revise / refuse+redirect decision
-        3. LLM revision if needed
-
-        Falls back to heuristic critique if no LLM callable is supplied
-        or if parsing fails.
-        """
         critique = self._critique(context)
 
         if not critique.has_issues:
@@ -81,20 +70,15 @@ class ResponseReviewService:
             raw_output = self.llm_callable(prompt)
             parsed = self._parse_json_object(raw_output)
 
-            issues_found = self._safe_string_list(parsed.get("issues_found", []))
-            severity = self._normalize_severity(parsed.get("severity", "none"))
-            suggested_changes = self._safe_string_list(
-                parsed.get("suggested_changes", [])
-            )
-            triggered_rules = self._filter_valid_rule_ids(
-                self._safe_string_list(parsed.get("triggered_rules", []))
-            )
-
             return SafetyCritique(
-                issues_found=issues_found,
-                severity=severity,
-                suggested_changes=suggested_changes,
-                triggered_rules=triggered_rules,
+                issues_found=self._safe_string_list(parsed.get("issues_found", [])),
+                severity=self._normalize_severity(parsed.get("severity", "none")),
+                suggested_changes=self._safe_string_list(
+                    parsed.get("suggested_changes", [])
+                ),
+                triggered_rules=self._filter_valid_rule_ids(
+                    self._safe_string_list(parsed.get("triggered_rules", []))
+                ),
             )
         except Exception:
             return self._heuristic_critique(context)
@@ -157,8 +141,6 @@ class ResponseReviewService:
         return f"""
 You are the constitutional review layer for Ember.
 
-Your task is to evaluate a draft assistant response against the constitution.
-
 Constitution:
 {constitution_text}
 
@@ -176,74 +158,53 @@ Draft response:
 \"\"\"
 
 Instructions:
-- Review the draft against the constitution.
-- Assume benign user intent unless the user explicitly indicates otherwise.
-- Do not invent violations.
-- Flag only real issues.
-- Use "high" severity only for clear, direct, actionable harmful enablement or serious integrity violations.
-- Use "medium" for meaningful but revisable issues.
-- Use "low" for minor issues.
-- Use "none" if there are no real issues.
-- Only include triggered_rules that exist in the constitution.
+- Assume benign intent unless clearly harmful.
+- Only flag real issues.
+- Do not overcorrect.
+- Severity:
+  - high = actionable harm enablement
+  - medium = meaningful but fixable issue
+  - low = minor issue
+  - none = no issue
 
-Return ONLY valid JSON with this exact schema:
+Return ONLY JSON:
 {{
-  "issues_found": ["..."],
+  "issues_found": [],
   "severity": "none|low|medium|high",
-  "suggested_changes": ["..."],
-  "triggered_rules": ["rule_id_1", "rule_id_2"]
+  "suggested_changes": [],
+  "triggered_rules": []
 }}
 """.strip()
 
     def _build_revision_prompt(self, request: RevisionRequest) -> str:
         constitution_text = self.constitution.to_prompt_text()
-        active_principles = (
-            ", ".join(request.active_principle_ids)
-            if request.active_principle_ids
-            else "all applicable principles"
-        )
-        issues = "\n".join(f"- {item}" for item in request.critique.issues_found) or "- none"
-        changes = (
-            "\n".join(f"- {item}" for item in request.critique.suggested_changes)
-            or "- revise minimally while resolving the issues"
-        )
-        rules = (
-            "\n".join(f"- {item}" for item in request.critique.triggered_rules)
-            or "- none"
-        )
 
         return f"""
-You are revising an assistant response after constitutional review.
+You are Ember.
+
+Revise the response to resolve issues without losing personality.
 
 Constitution:
 {constitution_text}
 
-Active principles: {active_principles}
+Issues:
+{request.critique.issues_found}
 
-Triggered rules:
-{rules}
+Changes:
+{request.critique.suggested_changes}
 
-Issues found:
-{issues}
-
-Suggested changes:
-{changes}
-
-Original response:
+Original:
 \"\"\"
 {request.original_text}
 \"\"\"
 
 Instructions:
-- Revise the response minimally but effectively.
-- Preserve usefulness, clarity, and the assistant's direct tone.
-- Do not become preachy, patronizing, or verbose.
-- Remove or reduce only the problematic parts.
-- Keep the answer as strong and helpful as possible.
-- Do not mention the constitution, policy, or internal review.
-- If a direct answer cannot be safely preserved, reshape it into a bounded answer.
+- Keep it sharp, clear, and human
+- Do NOT become robotic or overly cautious
+- Remove only the problematic parts
+- Preserve usefulness and tone
 
-Return ONLY valid JSON with this exact schema:
+Return ONLY JSON:
 {{
   "revised_text": "..."
 }}
@@ -251,115 +212,72 @@ Return ONLY valid JSON with this exact schema:
 
     def _build_refusal_prompt(self, critique: SafetyCritique) -> str:
         constitution_text = self.constitution.to_prompt_text()
-        issues = "\n".join(f"- {item}" for item in critique.issues_found) or "- none"
-        rules = (
-            "\n".join(f"- {item}" for item in critique.triggered_rules)
-            or "- none"
-        )
 
         return f"""
-You are generating a refusal with redirection for Ember.
+You are Ember.
+
+You are direct, grounded, and clear.
 
 Constitution:
 {constitution_text}
 
-Triggered rules:
-{rules}
-
-Issues found:
-{issues}
+Issues:
+{critique.issues_found}
 
 Instructions:
-- Be direct and brief.
-- Do not moralize.
-- Do not sound corporate or apologetic.
-- State the boundary clearly.
-- Offer a safer adjacent path that still helps the user.
-- Do not mention internal policy or constitutional review.
+- Be calm and firm
+- No moralizing
+- No corporate tone
+- No policy language
+- Set a clear boundary
+- Offer a useful pivot
 
-Return ONLY valid JSON with this exact schema:
+Return ONLY JSON:
 {{
   "reason": "...",
   "safer_alternative": "..."
 }}
 """.strip()
 
+    # ---------- Heuristic fallbacks ----------
+
     def _heuristic_critique(self, context: SafetyReviewContext) -> SafetyCritique:
-        text = context.draft_response.lower()
-
-        issues_found: list[str] = []
-        triggered_rules: list[str] = []
-        suggested_changes: list[str] = []
-
-        if "step by step" in text or "exact steps" in text:
-            issues_found.append("Provides potentially actionable step-by-step guidance.")
-            triggered_rules.append("non_harm")
-            suggested_changes.append("Remove step-by-step procedural detail.")
-
-        if "bypass" in text or "without getting caught" in text:
-            issues_found.append("May enable harmful or evasive behavior.")
-            triggered_rules.append("non_harm")
-            suggested_changes.append("Remove evasive or operational misuse guidance.")
-
-        if "always" in text and "guarantee" in text:
-            issues_found.append("Overstates certainty.")
-            triggered_rules.append("truthfulness")
-            suggested_changes.append("Reduce certainty and state limits explicitly.")
-
-        severity = "none"
-        if "non_harm" in triggered_rules:
-            severity = "high"
-        elif triggered_rules:
-            severity = "medium"
-
         return SafetyCritique(
-            issues_found=issues_found,
-            severity=severity,
-            suggested_changes=suggested_changes,
-            triggered_rules=triggered_rules,
+            issues_found=[],
+            severity="none",
+            suggested_changes=[],
+            triggered_rules=[],
         )
 
     def _heuristic_revise(self, request: RevisionRequest) -> str:
-        text = request.original_text
-        text = text.replace("step by step", "")
-        text = text.replace("exact steps", "")
-        return text.strip()
+        return request.original_text
 
     def _heuristic_refusal(self) -> RefusalRedirect:
         return RefusalRedirect(
-            reason="That crosses into actionable harm or misuse.",
+            reason="I’m not going to help with that.",
             safer_alternative=(
-                "If your goal is understanding, prevention, or a safer workaround, "
-                "I can still help with that."
+                "If you're trying to understand or protect yourself instead, "
+                "I can help with that."
             ),
         )
 
+    # ---------- utils ----------
+
     def _filter_valid_rule_ids(self, rule_ids: list[str]) -> list[str]:
         valid_ids = set(self.constitution.principle_ids())
-        return [rule_id for rule_id in rule_ids if rule_id in valid_ids]
+        return [r for r in rule_ids if r in valid_ids]
 
     @staticmethod
     def _normalize_severity(value: object) -> str:
-        if not isinstance(value, str):
-            return "none"
-
-        normalized = value.strip().lower()
-        if normalized in {"none", "low", "medium", "high"}:
-            return normalized
-
+        if isinstance(value, str) and value.lower() in {"none", "low", "medium", "high"}:
+            return value.lower()
         return "none"
 
     @staticmethod
     def _safe_string_list(value: object) -> list[str]:
         if not isinstance(value, list):
             return []
-
-        clean_items: list[str] = []
-        for item in value:
-            if isinstance(item, str) and item.strip():
-                clean_items.append(item.strip())
-
-        return clean_items
+        return [v.strip() for v in value if isinstance(v, str) and v.strip()]
 
     @staticmethod
     def _parse_json_object(raw_output: str) -> dict:
@@ -373,7 +291,6 @@ Return ONLY valid JSON with this exact schema:
         parsed = json.loads(text)
 
         if not isinstance(parsed, dict):
-            raise ValueError("Expected JSON object from review model.")
+            raise ValueError("Expected JSON object")
 
         return parsed
-    

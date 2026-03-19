@@ -6,6 +6,7 @@ from src.context.models import ContextPacket
 from src.llm.prompt_builder import PromptBuilder
 from src.safety.models import SafetyReviewContext
 from src.safety.policy_service import SafetyPolicyService
+from src.safety.review_logger import SafetyReviewLogger
 from src.safety.review_service import ResponseReviewService
 
 
@@ -21,6 +22,7 @@ class LLMAdapter:
         self.review_service = ResponseReviewService(
             llm_callable=self._call_model_with_prompt
         )
+        self.review_logger = SafetyReviewLogger()
 
     def generate_response(self, context_packet: ContextPacket) -> str:
         system_prompt = self.prompt_builder.build_prompt(context_packet)
@@ -51,6 +53,12 @@ class LLMAdapter:
 
         review_result = self.review_service.review(review_context)
 
+        self.review_logger.log(
+            context_packet=context_packet,
+            draft_response=draft_response,
+            review_result=review_result,
+        )
+
         if review_result.outcome == "allow":
             return review_result.reviewed_text or draft_response
 
@@ -77,12 +85,6 @@ class LLMAdapter:
         return response["message"]["content"]
 
     def _call_model_with_prompt(self, prompt: str) -> str:
-        """
-        Lightweight callable for constitutional critique/revision prompts.
-
-        These prompts are self-contained, so we send them directly as a user
-        message with a strict JSON-oriented system instruction.
-        """
         response = ollama.chat(
             model=self.model,
             messages=[
@@ -101,4 +103,3 @@ class LLMAdapter:
         )
 
         return response["message"]["content"]
-    

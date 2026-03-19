@@ -72,7 +72,9 @@ class SafetyPolicyService:
 
     def _contains_exploitation_signal(self, text: str) -> bool:
         keywords = [
-            "manipulate someone",
+            "manipulate",
+            "psychological manipulation",
+            "influence behavior",
             "coerce",
             "exploit",
             "take advantage",

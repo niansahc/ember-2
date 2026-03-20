@@ -1,22 +1,23 @@
-> Canonical source: docs/Ember2_TDD.md
+> Canonical source: docs/Ember2_TDD.md  
 > This file is a high-level overview.
-> 
+
 # Ember-2
 
 A local, private personal intelligence system for reasoning, memory, reflection, and long-term assistance.
 
-Ember-2 is designed to evolve beyond a chatbot into a structured cognitive system that can support life, work, and decision-making over time.
+Ember-2 is designed to evolve beyond a chatbot into a structured cognitive system that supports life, work, decision-making, and future automation over time.
 
 ---
 
 # Core Principles
 
-- **Local-first architecture**
-- **LLM is not the system of record**
-- **Append-only memory**
-- **Structured retrieval over raw prompting**
-- **Clean ingestion and rebuildability**
-- **Separation of source vs derived knowledge**
+- Local-first architecture
+- LLM is not the system of record
+- Append-only memory
+- Structured retrieval over raw prompting
+- Clean ingestion and rebuildability
+- Separation of source vs derived knowledge
+- Explicit policy over hidden prompt folklore
 
 ---
 
@@ -28,7 +29,9 @@ Ember-2 supports:
 - long-term pattern recognition
 - structured knowledge retrieval (RAG)
 - reflective synthesis (daily/weekly insights)
-- project and life context awareness (future state layer)
+- project and life context awareness
+- future state and task continuity
+- explicit constitutional response governance
 
 ---
 
@@ -41,6 +44,7 @@ Ember-2 is built as a modular system, not a monolithic agent.
 ### Interface Layer
 - Open WebUI
 - FastAPI API
+- CLI scripts
 
 Handles:
 - user interaction
@@ -50,104 +54,210 @@ Handles:
 ---
 
 ### Reasoning Layer
-- Local LLM (Ollama)
+- Local LLM runtime (Ollama)
+- prompt templates
+- adapter layer
 
 Handles:
 - interpretation
 - synthesis
 - reflection generation
+- critique and revision prompts when orchestration requests them
 
-**Does not store memory**
+Does not store memory or own canonical truth.
 
 ---
 
 ### Cognitive Layer
-- Context Builder
-- Retrieval System
+- ContextRetriever
+- ContextRanker
+- ContextService / ContextBuilder
 - Reflection Engine
+- Retrieval Policy
+- SafetyPolicyService
+- ResponseReviewService
 
 Handles:
-- selecting relevant memory
-- assembling context
-- prioritizing reflections and source material
-- preparing structured input for the LLM
+- retrieving relevant memory and reflections
+- ranking and deduplicating evidence
+- assembling structured context
+- calling the reasoning layer
+- deciding whether review is triggered
+- applying constitutional review after draft generation
+
+Constitutional review lives here as orchestration and policy logic, not as a separate top-level ethics layer.
 
 ---
 
 ### State Layer (Planned)
-
 Handles:
 - active goals
-- tasks and open loops
-- project tracking
-- current context for decision-making
+- current priorities
+- open loops
+- project continuity
+- near-term operational context
+
+State is distinct from both raw memory and reflections.
 
 ---
 
 ### Memory Layer
-
 Stores all persistent knowledge.
 
 Includes:
-- Source Memory (raw conversations, ingested data)
-- Derived Memory (reflections, summaries)
-- Reference Memory (documents, static knowledge)
-- Vector Index (semantic retrieval)
+- Source Memory
+- Derived Memory
+- State Memory
+- Reference Memory
+- Archive Memory
+- Operational / Policy Artifacts
+- Vector Index
 
 Characteristics:
 - append-only
-- JSON-based storage
+- JSON-based storage today
 - rebuildable
 - chronologically traceable
 
 ---
 
+### Tool Layer (Planned)
+Handles:
+- web lookup
+- document search
+- calendars, tasks, contacts
+- local automations
+- future controlled action-taking workflows
+
+Tool usage should remain observable and policy-driven.
+
+---
+
 # Memory Model
 
-Each memory record includes:
+Each canonical record includes:
 
-- timestamp
-- type
-- text
-- source
-- tags
-- metadata
+- `id`
+- `timestamp`
+- `type`
+- `text`
+- `source`
+- `tags`
+- `metadata`
 
-The system distinguishes between:
+## Memory Classes
 
-- **Source Memory** → original content
-- **Derived Memory** → reflections/summaries
-- **State Memory** → active context (future)
-- **Reference Memory** → external documents
+### Source Memory
+Original first-order evidence:
+- user statements
+- conversation turns
+- journal entries
+- imported notes
+- project logs
+- imported documents
+
+### Derived Memory
+Synthesized artifacts:
+- summaries
+- reflections
+- pattern analyses
+- retrospectives
+
+### State Memory
+Operational continuity artifacts:
+- active priorities
+- blockers
+- current focus
+- routines
+- next actions
+- open loops
+
+### Reference Memory
+Imported background material:
+- docs
+- manuals
+- architecture notes
+- requirements
+- chat exports
+
+### Archive Memory
+Older or lower-priority preserved material.
+
+### Operational / Policy Artifacts
+Inspectable governance artifacts:
+- review logs
+- evaluation results
+- audit traces
 
 ---
 
 # Retrieval Strategy
 
-Retrieval is based on:
+Retrieval is not just vector similarity.
+
+It uses a hybrid policy built from:
 
 - semantic similarity
 - lexical relevance
-- source quality
+- chronological recall
 - memory type weighting
+- source quality
 - query intent
 
-The system prioritizes:
+## Query Intent Classes
+At minimum:
+
+- reflective
+- task/work
+- timeline
+- status/state
+- research/reference
+- operational/debugging
+
+## Retrieval Priorities
+The system generally boosts:
 
 - user-authored content
 - concrete experiences
-- diverse evidence
-- clean, non-meta content
+- recent state
+- meaningful reflections
+- clearly scoped project records
+
+It penalizes:
+
+- assistant filler
+- tool traces
+- wrappers
+- JSON payloads
+- trivial or meta content
+
+The top context packet should avoid duplication and thematic collapse.
 
 ---
 
 # Ingestion Principles
 
+Ingestion converts raw content into clean, typed, retrievable artifacts.
+
+Principles:
+
 - filter out JSON, tool traces, and prompt scaffolding
 - remove trivial or low-value messages
 - preserve meaningful user and assistant content
 - attach structured metadata
+- chunk according to meaning, not size alone
+- write canonical records before derived index entries
 - ensure full rebuild capability
+
+Pipeline stages:
+
+- import
+- normalize
+- chunk
+- quality filter
+- write canonical records
+- generate embeddings
+- update index
 
 ---
 
@@ -161,33 +271,103 @@ Reflection transforms memory into higher-level insight.
 
 ## Weekly Reflection
 - identifies patterns
-- synthesizes broader insights
+- consolidates progress
+- surfaces blockers and broader trends
 
-Reflections are stored as first-class memory objects.
+## Future Reflection Modes
+- monthly synthesis
+- thematic reflection
+- strategic review
+
+Reflections are stored as first-class Derived Memory and remain traceable to source windows.
 
 ---
 
-# Development Roadmap
+# Constitutional Response Governance
 
-## Current
+Ember-2 uses explicit constitutional response governance.
+
+This is inference-time orchestration, not training.
+
+## Core Design
+- review is triggered, not universal
+- review happens post-draft
+- review outcomes are:
+  - allow
+  - revise
+  - refuse + redirect
+- constitution lives in external config
+- review behavior is logged and inspectable
+
+## Components
+- `config/constitution.yaml`
+- ConstitutionLoader
+- SafetyPolicyService
+- ResponseReviewService
+- SafetyReviewLogger
+
+## Review Flow
+1. user query is processed
+2. context is assembled
+3. draft response is generated
+4. trigger layer evaluates risk
+5. if triggered, constitutional review critiques the draft
+6. system allows, revises, or refuses + redirects
+7. review path is logged
+
+This governance layer must not contaminate retrieval logic.
+
+---
+
+# Observability and Debugging
+
+The system is designed to be inspectable.
+
+At minimum, debugging should expose:
+
+- retrieved candidate chunks
+- final selected context
+- memory classes used
+- dropped items and why
+- reflection input windows
+- current state resolution results
+- whether review triggered
+- which signals fired
+- which constitutional rules were used
+- whether the base model already refused before review
+- whether review changed the draft or passed it through
+
+Logs are intended to support debugging, tuning, and evaluation rather than act as canonical memory.
+
+---
+
+# Current State
+
+## Working
 - memory storage
 - ingestion pipeline
 - semantic retrieval
+- context assembly
 - reflection engine
 - API + WebUI integration
+- constitutional review flow
+- safety review logging
 
 ## Next
-- memory class enforcement
+- formal typed memory class enforcement
 - retrieval evaluation benchmarks
-- state/task layer implementation
-- improved context assembly
+- state layer implementation
+- audit scripts
+- context quality tuning
+- trigger coverage improvements without overfitting
 
 ## Future
-- agent capabilities
-- proactive suggestions
-- scheduling and routines
+- task layer
 - tool integrations
-- index migration (SQLite/DuckDB)
+- proactive assistance
+- controlled agent workflows
+- index migration to SQLite / DuckDB
+- stronger evaluation and review analytics
 
 ---
 
@@ -196,10 +376,15 @@ Reflections are stored as first-class memory objects.
 Ember-2 is not a chatbot.
 
 It is a system that:
+
 - remembers
 - reflects
-- understands context
+- retrieves with intent
+- assembles context intelligently
+- applies explicit policy
 - evolves over time
+
+The LLM is a reasoning engine, not storage.
 
 The goal is to build a durable, extensible personal intelligence system that improves with use.
 
@@ -207,19 +392,27 @@ The goal is to build a durable, extensible personal intelligence system that imp
 
 # Repository Structure
 
+```text
 ember-2/
 │
 ├ api/
 ├ src/
+│   ├ core/
+│   ├ context/
 │   ├ ingest/
+│   ├ llm/
 │   ├ memory/
 │   ├ retrieval/
 │   ├ reflection/
-│   ├ context/
-│   └ core/
+│   ├ safety/
+│   ├ state/        (planned)
+│   └ tasks/        (planned)
 │
-├ jobs/
-├ prompts/
-├ tools/
+├ config/
 ├ docs/
+├ jobs/
+├ logs/
+├ prompts/
+├ scripts/
+├ tools/
 ├ private_vault/  (excluded from git)

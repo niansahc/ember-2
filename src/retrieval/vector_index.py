@@ -1,8 +1,12 @@
 import json
+import os
 from pathlib import Path
 
 
 class VectorIndex:
+    def __init__(self) -> None:
+        self.max_index_size_mb = int(os.getenv("MAX_INDEX_SIZE_MB", "50"))
+
     def get_index_path(self, vault_path: Path, memory_type: str) -> Path:
         embeddings_dir = vault_path / "embeddings"
         embeddings_dir.mkdir(parents=True, exist_ok=True)
@@ -10,25 +14,39 @@ class VectorIndex:
 
     def load_index(self, index_path: Path) -> list:
         if not index_path.exists():
+            print(f"[VECTOR_INDEX] Missing index: {index_path}")
             return []
 
         try:
-            with open(index_path, "r", encoding="utf-8") as f:
+            size_mb = index_path.stat().st_size / (1024 * 1024)
+
+            if size_mb > self.max_index_size_mb:
+                print(
+                    f"[VECTOR_INDEX] Skipping oversized index: {index_path} "
+                    f"({size_mb:.2f} MB > {self.max_index_size_mb} MB)"
+                )
+                return []
+
+            print(f"[VECTOR_INDEX] Loading index: {index_path} ({size_mb:.2f} MB)")
+
+            with index_path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
 
             if isinstance(data, list):
                 return data
 
+            print(f"[VECTOR_INDEX] Invalid index format (expected list): {index_path}")
             return []
 
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"[VECTOR_INDEX] Failed to load index {index_path}: {exc}")
             return []
 
     def save_index(self, index_path: Path, index_data: list) -> None:
         index_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(index_path, "w", encoding="utf-8") as f:
-            json.dump(index_data, f, ensure_ascii=False, indent=2)
+        with index_path.open("w", encoding="utf-8") as f:
+            json.dump(index_data, f, ensure_ascii=False)
 
     def search(
         self,

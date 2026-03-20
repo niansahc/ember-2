@@ -13,25 +13,19 @@ class SafetyPolicyService:
     def __init__(self, constitution: Constitution | None = None) -> None:
         self.constitution = constitution or ConstitutionLoader().load()
 
-    # ---------- Public API ----------
-
     def evaluate_trigger(self, context: SafetyReviewContext) -> SafetyTriggerResult:
-        """
-        Decide whether a safety review should run.
-
-        This is intentionally lightweight and heuristic-based.
-        It can be upgraded later with ML or scoring models.
-        """
         signals: List[str] = []
 
         combined_text = f"{context.user_message} {context.draft_response}".lower()
 
-        # --- Heuristic triggers (v1) ---
         if self._contains_illegal_signal(combined_text):
             signals.append("illegal_activity")
 
         if self._contains_exploitation_signal(combined_text):
             signals.append("exploitation")
+
+        if self._contains_dual_use_signal(combined_text):
+            signals.append("dual_use")
 
         if self._contains_high_risk_pattern(combined_text):
             signals.append("high_risk_pattern")
@@ -45,28 +39,36 @@ class SafetyPolicyService:
         )
 
     def get_active_principles(self, trigger: SafetyTriggerResult) -> list[str]:
-        """
-        Determine which principles should be emphasized during review.
-
-        For now:
-        - If triggered → all principles
-        - If not → empty list (no review)
-        """
         if not trigger.triggered:
             return []
 
-        return self.constitution.principle_ids()
+        principle_ids = {"truthfulness", "usefulness_over_compliance"}
 
-    # ---------- Heuristics (v1 — intentionally simple) ----------
+        for signal in trigger.triggered_by:
+            if signal in {"illegal_activity", "exploitation", "dual_use", "high_risk_pattern"}:
+                principle_ids.add("non_harm")
+                principle_ids.add("proportional_safety")
+                principle_ids.add("system_integrity")
+
+        return [pid for pid in self.constitution.principle_ids() if pid in principle_ids]
 
     def _contains_illegal_signal(self, text: str) -> bool:
         keywords = [
             "how to hack",
             "how to break into",
+            "break into",
             "bypass security",
+            "bypass a system",
+            "bypass system",
             "illegal",
             "steal",
+            "steal from",
             "fraud",
+            "rob",
+            "shoplift",
+            "build explosives",
+            "explosive",
+            "c4",
         ]
         return any(keyword in text for keyword in keywords)
 
@@ -78,6 +80,19 @@ class SafetyPolicyService:
             "coerce",
             "exploit",
             "take advantage",
+            "emotionally manipulate",
+            "emotional manipulation",
+        ]
+        return any(keyword in text for keyword in keywords)
+
+    def _contains_dual_use_signal(self, text: str) -> bool:
+        keywords = [
+            "weapon",
+            "explosive",
+            "c4",
+            "bypass",
+            "evade",
+            "without getting caught",
         ]
         return any(keyword in text for keyword in keywords)
 
@@ -85,6 +100,6 @@ class SafetyPolicyService:
         keywords = [
             "step by step",
             "exact steps",
-            "how do i do this without getting caught",
+            "without getting caught",
         ]
         return any(keyword in text for keyword in keywords)

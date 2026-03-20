@@ -16,8 +16,8 @@ class PromptBuilder:
         sections: list[str] = [self.system_prompt]
 
         sections.append(self._build_conversation_section())
-        sections.append(self._build_user_section(context_packet))  # MOVE UP
-        sections.append(self._build_instruction_section())         # MOVE UP
+        sections.append(self._build_user_section(context_packet))
+        sections.append(self._build_instruction_section())
         sections.append(self._build_context_section(context_packet))
         sections.append(self._build_reflection_section(context_packet))
 
@@ -42,16 +42,15 @@ class PromptBuilder:
     def _build_instruction_section(self) -> str:
         return (
             "CONTEXT PRIORITY RULES:\n"
-            "1. RECENT CONVERSATION is the primary source of truth.\n"
-            "2. USER MESSAGE must be answered directly.\n"
-            "3. MEMORY CONTEXT is secondary and must NOT override conversation.\n\n"
+            "1. Answer the USER MESSAGE directly.\n"
+            "2. Use RECENT CONVERSATION for continuity when available.\n"
+            "3. MEMORY CONTEXT is optional and should not override conversation.\n\n"
             "BEHAVIOR RULES:\n"
+            "- If no relevant conversation exists, answer normally.\n"
             "- Resolve references like 'that', 'those', 'it' using RECENT CONVERSATION.\n"
-            "- NEVER invent prior context.\n"
-            "- NEVER assume topics unless explicitly stated in conversation.\n"
-            "- Do NOT pull in unrelated memory.\n"
+            "- Do NOT ask for clarification if the reference can be resolved.\n"
+            "- Do NOT invent prior context.\n"
             "- Only use memory if it directly supports the current question.\n"
-            "- If memory conflicts with conversation, IGNORE memory.\n"
         )
 
     def _build_context_section(self, context_packet: ContextPacket) -> str:
@@ -60,7 +59,7 @@ class PromptBuilder:
 
         lines: list[str] = []
 
-        for item in context_packet.memory_items[:4]:  # REDUCED
+        for item in context_packet.memory_items[:4]:
             lines.append(
                 f"- ({item.item_type}) {item.content.strip()}"
             )
@@ -73,7 +72,7 @@ class PromptBuilder:
 
         lines: list[str] = []
 
-        for item in context_packet.reflection_items[:1]:  # REDUCED
+        for item in context_packet.reflection_items[:1]:
             lines.append(f"- {item.content.strip()}")
 
         return "REFLECTION CONTEXT:\n" + "\n\n".join(lines)

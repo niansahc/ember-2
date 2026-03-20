@@ -47,39 +47,48 @@ class LLMAdapter:
             },
         )
 
-        if not trigger_result.triggered:
-            return draft_response
+        # DEFAULT = draft
+        final_response = draft_response
 
-        review_context = SafetyReviewContext(
-            user_message=context_packet.user_message,
-            draft_response=draft_response,
-            risk_signals=trigger_result.triggered_by,
-            active_principle_ids=self.policy_service.get_active_principles(
-                trigger_result
-            ),
+        if trigger_result.triggered:
+            review_context = SafetyReviewContext(
+                user_message=context_packet.user_message,
+                draft_response=draft_response,
+                risk_signals=trigger_result.triggered_by,
+                active_principle_ids=self.policy_service.get_active_principles(
+                    trigger_result
+                ),
+            )
+
+            review_result = self.review_service.review(review_context)
+
+            log_path = self.review_logger.log(
+                context_packet=context_packet,
+                draft_response=draft_response,
+                trigger_result=trigger_result,
+                review_result=review_result,
+            )
+
+            print(f"[SAFETY] log written to: {log_path}")
+
+            if review_result.outcome == "allow":
+                final_response = review_result.reviewed_text or draft_response
+
+            elif review_result.outcome == "revise":
+                final_response = review_result.reviewed_text or draft_response
+
+            elif review_result.outcome == "refuse_redirect":
+                final_response = (
+                    review_result.refusal_message or "I can't help with that."
+                )
+
+        # NEW — write to conversation buffer (THIS is the fix)
+        self.prompt_builder.conversation_buffer.add_turn(
+            context_packet.user_message,
+            final_response
         )
 
-        review_result = self.review_service.review(review_context)
-
-        log_path = self.review_logger.log(
-            context_packet=context_packet,
-            draft_response=draft_response,
-            trigger_result=trigger_result,
-            review_result=review_result,
-        )
-
-        print(f"[SAFETY] log written to: {log_path}")
-
-        if review_result.outcome == "allow":
-            return review_result.reviewed_text or draft_response
-
-        if review_result.outcome == "revise":
-            return review_result.reviewed_text or draft_response
-
-        if review_result.outcome == "refuse_redirect":
-            return review_result.refusal_message or "I can't help with that."
-
-        return draft_response
+        return final_response
 
     def _chat(self, system_prompt: str, user_message: str) -> str:
         response = ollama.chat(

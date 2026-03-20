@@ -10,25 +10,19 @@ class PromptBuilder:
         prompt_path = base_dir / "prompts" / "ember_system_prompt.txt"
         self.system_prompt = prompt_path.read_text(encoding="utf-8").strip()
 
-        # NEW
         self.conversation_buffer = ConversationBuffer()
 
     def build_prompt(self, context_packet: ContextPacket) -> str:
         sections: list[str] = [self.system_prompt]
 
-        # NEW — add conversation FIRST (highest priority context)
         sections.append(self._build_conversation_section())
-
         sections.append(self._build_context_section(context_packet))
         sections.append(self._build_reflection_section(context_packet))
         sections.append(self._build_instruction_section())
-
-        # NEW — always anchor on current user message
         sections.append(self._build_user_section(context_packet))
 
         return "\n\n".join(section for section in sections if section.strip())
 
-    # NEW
     def _build_conversation_section(self) -> str:
         recent = self.conversation_buffer.format_for_prompt()
         return f"RECENT CONVERSATION:\n{recent}"
@@ -60,8 +54,10 @@ class PromptBuilder:
     def _build_instruction_section(self) -> str:
         return (
             "CONTEXT USAGE RULES:\n"
-            "- Always answer the user's most recent question.\n"
-            "- Use recent conversation when relevant for continuity.\n"
+            "- ALWAYS answer the user's most recent question.\n"
+            "- Resolve references like 'that', 'those', 'it' using RECENT CONVERSATION.\n"
+            "- Do NOT ask for clarification if the answer exists in recent conversation.\n"
+            "- Treat RECENT CONVERSATION as the primary source for continuity.\n"
             "- Use retrieved context when it is relevant and specific.\n"
             "- Prefer concrete memory evidence over generic assumptions.\n"
             "- If context is weak, mixed, or incomplete, say so plainly.\n"
@@ -69,6 +65,5 @@ class PromptBuilder:
             "- Reflections are helpful summaries, but raw memory items are the primary evidence."
         )
 
-    # NEW
     def _build_user_section(self, context_packet: ContextPacket) -> str:
         return f"USER MESSAGE:\n{context_packet.user_message}"

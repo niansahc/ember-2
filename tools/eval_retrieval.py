@@ -3,8 +3,14 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 import json
+import sys
 
-from src.context.service import ContextService
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.context.service import ContextService  # noqa: E402
 
 
 @dataclass
@@ -66,7 +72,10 @@ def run_eval(output_path: str = "logs/retrieval_eval/latest.json") -> Path:
 
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    output_file.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+    output_file.write_text(
+        json.dumps(results, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     return output_file
 
 

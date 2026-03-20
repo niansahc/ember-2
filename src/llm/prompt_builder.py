@@ -43,13 +43,15 @@ class PromptBuilder:
         return (
             "CONTEXT PRIORITY RULES:\n"
             "1. Answer the USER MESSAGE directly.\n"
-            "2. Use RECENT CONVERSATION for continuity when available.\n"
-            "3. MEMORY CONTEXT is optional and should not override conversation.\n\n"
+            "2. Use the MOST RECENT assistant response as the primary reference.\n"
+            "3. Use RECENT CONVERSATION for continuity.\n"
+            "4. MEMORY CONTEXT is optional and must not override conversation.\n\n"
             "BEHAVIOR RULES:\n"
-            "- If no relevant conversation exists, answer normally.\n"
-            "- Resolve references like 'that', 'those', 'it' using RECENT CONVERSATION.\n"
-            "- Do NOT ask for clarification if the reference can be resolved.\n"
-            "- Do NOT invent prior context.\n"
+            "- If no prior conversation exists, answer normally.\n"
+            "- When the user says 'those', 'that', or similar, refer to the LAST assistant answer.\n"
+            "- Do NOT reinterpret or invent new context.\n"
+            "- Do NOT introduce new topics not present in the last answer.\n"
+            "- Do NOT ask for clarification if the reference is clear.\n"
             "- Only use memory if it directly supports the current question.\n"
         )
 

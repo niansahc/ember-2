@@ -16,10 +16,10 @@ class PromptBuilder:
         sections: list[str] = [self.system_prompt]
 
         sections.append(self._build_conversation_section())
+        sections.append(self._build_user_section(context_packet))  # MOVE UP
+        sections.append(self._build_instruction_section())         # MOVE UP
         sections.append(self._build_context_section(context_packet))
         sections.append(self._build_reflection_section(context_packet))
-        sections.append(self._build_instruction_section())
-        sections.append(self._build_user_section(context_packet))
 
         return "\n\n".join(section for section in sections if section.strip())
 
@@ -31,10 +31,28 @@ class PromptBuilder:
 
         lines = []
         for i, turn in enumerate(turns, 1):
-            lines.append(f"Turn {i} - User: {turn['user']}")
-            lines.append(f"Turn {i} - Assistant: {turn['assistant']}")
+            lines.append(f"[Turn {i} | User] {turn['user']}")
+            lines.append(f"[Turn {i} | Assistant] {turn['assistant']}")
 
         return "RECENT CONVERSATION:\n" + "\n".join(lines)
+
+    def _build_user_section(self, context_packet: ContextPacket) -> str:
+        return f"USER MESSAGE:\n{context_packet.user_message}"
+
+    def _build_instruction_section(self) -> str:
+        return (
+            "CONTEXT PRIORITY RULES:\n"
+            "1. RECENT CONVERSATION is the primary source of truth.\n"
+            "2. USER MESSAGE must be answered directly.\n"
+            "3. MEMORY CONTEXT is secondary and must NOT override conversation.\n\n"
+            "BEHAVIOR RULES:\n"
+            "- Resolve references like 'that', 'those', 'it' using RECENT CONVERSATION.\n"
+            "- NEVER invent prior context.\n"
+            "- NEVER assume topics unless explicitly stated in conversation.\n"
+            "- Do NOT pull in unrelated memory.\n"
+            "- Only use memory if it directly supports the current question.\n"
+            "- If memory conflicts with conversation, IGNORE memory.\n"
+        )
 
     def _build_context_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.memory_items:
@@ -42,7 +60,7 @@ class PromptBuilder:
 
         lines: list[str] = []
 
-        for item in context_packet.memory_items[:6]:
+        for item in context_packet.memory_items[:4]:  # REDUCED
             lines.append(
                 f"- ({item.item_type}) {item.content.strip()}"
             )
@@ -55,24 +73,7 @@ class PromptBuilder:
 
         lines: list[str] = []
 
-        for item in context_packet.reflection_items[:2]:
+        for item in context_packet.reflection_items[:1]:  # REDUCED
             lines.append(f"- {item.content.strip()}")
 
         return "REFLECTION CONTEXT:\n" + "\n\n".join(lines)
-
-    def _build_instruction_section(self) -> str:
-        return (
-            "CONTEXT USAGE RULES:\n"
-            "- ALWAYS answer the user's most recent question.\n"
-            "- Resolve references like 'that', 'those', 'it' using RECENT CONVERSATION.\n"
-            "- Do NOT ask for clarification if the answer exists in recent conversation.\n"
-            "- Treat RECENT CONVERSATION as the primary source for continuity.\n"
-            "- Use retrieved context when it is relevant and specific.\n"
-            "- Prefer concrete memory evidence over generic assumptions.\n"
-            "- If context is weak, mixed, or incomplete, say so plainly.\n"
-            "- Do not claim memory support for things that are not actually present in context.\n"
-            "- Reflections are helpful summaries, but raw memory items are the primary evidence."
-        )
-
-    def _build_user_section(self, context_packet: ContextPacket) -> str:
-        return f"USER MESSAGE:\n{context_packet.user_message}"

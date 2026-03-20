@@ -24,8 +24,17 @@ class PromptBuilder:
         return "\n\n".join(section for section in sections if section.strip())
 
     def _build_conversation_section(self) -> str:
-        recent = self.conversation_buffer.format_for_prompt()
-        return f"RECENT CONVERSATION:\n{recent}"
+        turns = self.conversation_buffer.get_recent()
+
+        if not turns:
+            return "RECENT CONVERSATION:\nNone"
+
+        lines = []
+        for i, turn in enumerate(turns, 1):
+            lines.append(f"Turn {i} - User: {turn['user']}")
+            lines.append(f"Turn {i} - Assistant: {turn['assistant']}")
+
+        return "RECENT CONVERSATION:\n" + "\n".join(lines)
 
     def _build_context_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.memory_items:

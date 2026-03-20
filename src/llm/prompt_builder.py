@@ -14,7 +14,6 @@ class PromptBuilder:
 
     def build_prompt(self, context_packet: ContextPacket) -> str:
         sections: list[str] = [self.system_prompt]
-
         sections.append(self._build_conversation_section())
         sections.append(self._build_user_section(context_packet))
         sections.append(self._build_instruction_section())
@@ -29,7 +28,7 @@ class PromptBuilder:
         if not turns:
             return "RECENT CONVERSATION:\nNone"
 
-        lines = []
+        lines: list[str] = []
         for i, turn in enumerate(turns, 1):
             lines.append(f"[Turn {i} | User] {turn['user']}")
             lines.append(f"[Turn {i} | Assistant] {turn['assistant']}")
@@ -43,16 +42,17 @@ class PromptBuilder:
         return (
             "CONTEXT PRIORITY RULES:\n"
             "1. Answer the USER MESSAGE directly.\n"
-            "2. Use the MOST RECENT assistant response as the primary reference.\n"
+            "2. Use the most recent assistant response as the primary reference for follow-up questions.\n"
             "3. Use RECENT CONVERSATION for continuity.\n"
-            "4. MEMORY CONTEXT is optional and must not override conversation.\n\n"
+            "4. MEMORY CONTEXT is secondary and must not override recent conversation.\n\n"
             "BEHAVIOR RULES:\n"
             "- If no prior conversation exists, answer normally.\n"
-            "- When the user says 'those', 'that', or similar, refer to the LAST assistant answer.\n"
-            "- Do NOT reinterpret or invent new context.\n"
-            "- Do NOT introduce new topics not present in the last answer.\n"
-            "- Do NOT ask for clarification if the reference is clear.\n"
+            "- Resolve references like 'that', 'those', and 'it' from the last assistant answer when possible.\n"
+            "- Do not ask for clarification if the reference is reasonably clear from recent conversation.\n"
+            "- Do not invent prior context.\n"
+            "- Do not introduce new topics that were not present in the recent exchange unless the user asks for them.\n"
             "- Only use memory if it directly supports the current question.\n"
+            "- If memory conflicts with recent conversation, trust recent conversation.\n"
         )
 
     def _build_context_section(self, context_packet: ContextPacket) -> str:
@@ -62,9 +62,7 @@ class PromptBuilder:
         lines: list[str] = []
 
         for item in context_packet.memory_items[:4]:
-            lines.append(
-                f"- ({item.item_type}) {item.content.strip()}"
-            )
+            lines.append(f"- ({item.item_type}) {item.content.strip()}")
 
         return "MEMORY CONTEXT:\n" + "\n\n".join(lines)
 

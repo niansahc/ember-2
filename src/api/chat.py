@@ -4,16 +4,12 @@ from pydantic import BaseModel
 from src.memory.service import MemoryService
 from src.context.service import ContextService
 from src.llm.adapter import LLMAdapter
-from src.context.conversation_buffer import ConversationBuffer
 
 router = APIRouter()
 
 memory_service = MemoryService()
 context_service = ContextService()
 llm_adapter = LLMAdapter()
-
-# NEW — shared conversation buffer
-conversation_buffer = ConversationBuffer()
 
 
 class ChatRequest(BaseModel):
@@ -32,13 +28,7 @@ def chat(request: ChatRequest) -> ChatResponse:
     # Generate response
     reply = llm_adapter.generate_response(context_packet)
 
-    # NEW — short-term conversation memory
-    conversation_buffer.add_turn(
-        request.message,
-        reply
-    )
-
-    # Store long-term memory
+    # Store long-term memory (unchanged)
     user_part = request.message.strip()
     reply_part = reply.strip()
 

@@ -1,7 +1,7 @@
 # Ember-2 Technical Design Document (TDD)
 
-Version: 0.9-draft  
-Status: Working design baseline  
+Version: 1.0-draft  
+Status: Updated working design baseline  
 Primary environment: Local-first desktop deployment  
 Repository: `ember-2`
 
@@ -9,7 +9,7 @@ Repository: `ember-2`
 
 # 1. Purpose
 
-This document defines the target technical design for Ember-2: a local personal intelligence system built to support reasoning, memory, reflection, state tracking, and future agentic workflows.
+This document defines the target technical design for Ember-2: a local personal intelligence system built to support reasoning, memory, reflection, state tracking, constitutional response governance, and future agentic workflows.
 
 The goal of this TDD is to turn Ember-2 from a promising memory-and-RAG prototype into a durable system that can scale across:
 
@@ -19,20 +19,21 @@ The goal of this TDD is to turn Ember-2 from a promising memory-and-RAG prototyp
 - long-term continuity
 - future automation and tool use
 
-This document is intentionally opinionated. It prefers clean system boundaries, rebuildability, and durable data contracts over shortcut-driven iteration.
+This document is intentionally opinionated. It prefers clean system boundaries, rebuildability, typed records, and durable policy contracts over shortcut-driven iteration.
 
 ---
 
 # 2. Design Intent
 
-Ember-2 is not meant to be a stateless chatbot with a scrapbook attached.
+Ember-2 is not a stateless chatbot with memory bolted on.
 
-It is intended to become a personal intelligence system with these capabilities:
+It is intended to become a personal intelligence system that can:
 
 - recall relevant prior information
 - distinguish source data from derived insight
 - maintain current state across projects and life domains
 - produce grounded synthesis rather than hallucinated continuity
+- apply explicit response policy instead of relying on model vibes
 - support future task execution and agent behavior without collapsing architecture
 
 The system should remain useful even if individual models, embedding libraries, UI layers, or orchestration tools change over time.
@@ -50,6 +51,7 @@ The LLM is used for:
 - summarization
 - reflection
 - planning support
+- critique and revision of draft responses
 
 The LLM is not used for:
 
@@ -57,6 +59,7 @@ The LLM is not used for:
 - persistent state
 - task truth
 - canonical project history
+- silent policy enforcement without inspection
 
 All durable knowledge must live outside the model.
 
@@ -68,7 +71,7 @@ External tools may be added later, but the core system must remain functional wi
 
 ## 3.3 Rebuildability Matters
 
-Indexes, derived summaries, and retrieval artifacts must be treated as rebuildable products, not irreplaceable assets.
+Indexes, derived summaries, retrieval artifacts, and review logs must be treated as rebuildable or auditable products, not irreplaceable assets.
 
 If an index becomes corrupted, the system should be able to rebuild from canonical storage.
 
@@ -93,8 +96,15 @@ Not all stored information is the same. The system must differentiate between:
 - reflections
 - active state
 - future tasks and commitments
+- policy artifacts and review logs
 
 Without this, retrieval degrades into cross-contamination.
+
+## 3.6 Policy Must Be Explicit
+
+Safety, refusal, critique, and revision behavior must be governed by explicit configuration and observable service logic.
+
+Response governance should be implemented as inspectable orchestration, not hidden prompt folklore.
 
 ---
 
@@ -113,6 +123,7 @@ This design covers:
 - reflections
 - state layer
 - task and planning scaffolding
+- constitutional response governance
 - observability
 - testing and evaluation
 - migration path to stronger storage/indexing later
@@ -127,6 +138,7 @@ This version does not fully specify:
 - cloud-scale deployment
 - mobile-first UX
 - distributed processing
+- model training or RLHF/RLAIF pipelines
 
 These may come later, but they should not distort the current design.
 
@@ -146,6 +158,8 @@ Ember-2 must be able to:
 6. surface relevant prior decisions and timelines
 7. maintain current state for ongoing efforts
 8. support future tools, workflows, and external actions
+9. apply explicit review policy to risky outputs
+10. log why review happened and what path was taken
 
 ## 5.2 Non-Functional Goals
 
@@ -158,6 +172,7 @@ Ember-2 must be:
 - modular
 - resilient to bad ingestion
 - able to evolve without total rewrite
+- policy-observable rather than policy-mystical
 
 ---
 
@@ -169,17 +184,20 @@ flowchart LR
     UI --> ORCH[Application Orchestration]
     ORCH --> RET[Retrieval Policy + Context Builder]
     ORCH --> STATE[State Layer]
+    ORCH --> SAFE[Response Policy + Review]
     ORCH --> TOOLS[Future Tool Layer]
     RET --> MEM[Memory Vault]
     RET --> IDX[Vector / Search Index]
     ORCH --> LLM[Local LLM Runtime]
     MEM --> REF[Reflection Engine]
     REF --> MEM
+    SAFE --> CFG[Constitution Config]
+    SAFE --> LOGS[Review Logs]
     IDX --> RET
     LLM --> UI
 ```
 
-System logic is centered in orchestration, retrieval policy, and memory/state contracts rather than inside the model itself.
+System logic is centered in orchestration, retrieval policy, safety policy, and memory/state contracts rather than inside the model itself.
 
 ---
 
@@ -206,10 +224,11 @@ Current/likely components:
 
 Responsibilities:
 
-- generate responses from context
+- generate draft responses from context
 - synthesize across evidence
 - generate reflections and summaries
 - propose plans
+- execute critique/revision prompts when requested by orchestration
 
 Components:
 
@@ -218,8 +237,8 @@ Components:
 - prompt templates
 - adapter layer for chat completion format
 
-Constraint:
-The reasoning layer does not own canonical truth.
+Constraint:  
+The reasoning layer does not own canonical truth or policy authority.
 
 ## 7.3 Cognitive Layer
 
@@ -231,6 +250,8 @@ Responsibilities:
 - rank by relevance and source quality
 - assemble context packet
 - call the reasoning layer
+- decide whether response review is triggered
+- apply constitutional review after draft generation
 - produce grounded outputs
 
 Subcomponents:
@@ -240,6 +261,11 @@ Subcomponents:
 - ContextService / ContextBuilder
 - Reflection Engine
 - Retrieval Policy
+- SafetyPolicyService
+- ResponseReviewService
+
+Design decision:  
+Constitutional review lives inside the Cognitive Layer as orchestration/policy logic. It is not a separate top-level ethics layer.
 
 ## 7.4 State Layer
 
@@ -291,7 +317,7 @@ Responsibilities:
 - filesystem tools
 - future action-taking workflows
 
-The tool layer must remain policy-driven and observable.
+The tool layer must remain policy-driven and observable. Tool writes should eventually pass stricter review gates than normal conversation.
 
 ---
 
@@ -437,7 +463,24 @@ Properties:
 - accessible
 - not usually prioritized in retrieval
 
-## 9.6 Proposed Type Taxonomy
+## 9.6 Operational / Policy Artifacts
+
+Derived but inspectable artifacts created by system governance.
+
+Examples:
+
+- safety review logs
+- future state-resolution traces
+- audit reports
+- evaluation results
+
+Properties:
+
+- not normal user-facing memory by default
+- useful for debugging and governance
+- may later be selectively ingestible for meta-reflection
+
+## 9.7 Proposed Type Taxonomy
 
 ```text
 profile
@@ -453,6 +496,8 @@ ingested
 archive
 system_event
 decision
+review_log
+evaluation
 ```
 
 This taxonomy may evolve, but the separation principle should remain.
@@ -487,6 +532,10 @@ private_vault/
   imports/
     chatgpt/
     docs/
+logs/
+  safety_reviews/
+config/
+  constitution.yaml
 ```
 
 ## 10.2 Why This Is Acceptable Now
@@ -515,6 +564,7 @@ Near-term:
 - keep filesystem vault
 - harden rebuild scripts
 - clean ingestion and metadata contracts
+- keep constitution in external config
 
 Mid-term:
 - move indexes to SQLite or DuckDB
@@ -524,6 +574,7 @@ Long-term:
 - consider hybrid architecture
   - JSON canonical records
   - relational/event index for operational performance
+  - audit tables for policy traces
 
 ---
 
@@ -650,6 +701,7 @@ Move vector/search indexes to SQLite or DuckDB to gain:
 ## 13.1 Retrieval Problem Statement
 
 Retrieval must answer:
+
 - what is relevant
 - what is high-quality evidence
 - what type of memory should be used
@@ -657,7 +709,7 @@ Retrieval must answer:
 - what mix of evidence should be shown to the model
 
 Not:
-- “which chunk has the highest cosine score only”
+- which chunk has the highest cosine score only
 
 ## 13.2 Retrieval Modes
 
@@ -680,8 +732,8 @@ Used for:
 - pattern and synthesis support
 
 ### Hybrid
-Target steady-state mode.
-Combines:
+Target steady-state mode. Combines:
+
 - semantic similarity
 - lexical relevance
 - source quality
@@ -700,6 +752,7 @@ At minimum, queries should be classified into:
 - operational/debugging
 
 Intent influences:
+
 - which memory classes are searched
 - weighting strategy
 - context packet composition
@@ -707,6 +760,7 @@ Intent influences:
 ## 13.4 Generic Retrieval Policy
 
 For reflective questions, prefer:
+
 - user-authored source material
 - state memory
 - reflections
@@ -714,17 +768,20 @@ For reflective questions, prefer:
 - diverse evidence
 
 For task/work questions, prefer:
+
 - state
 - project records
 - reference docs
 - recent implementation context
 
 For timeline questions, prefer:
+
 - chronological records
 - system events
 - dated project/state artifacts
 
 For research/reference questions, prefer:
+
 - ingested/reference memory
 - docs
 - structured notes
@@ -732,6 +789,7 @@ For research/reference questions, prefer:
 ## 13.5 Source Quality Scoring
 
 Boost:
+
 - user-authored content
 - concrete statements
 - recent relevant state
@@ -739,6 +797,7 @@ Boost:
 - meaningful reflections
 
 Penalize:
+
 - assistant filler
 - clarifying prompts
 - tool traces
@@ -751,6 +810,7 @@ Penalize:
 The top context packet must avoid thematic collapse.
 
 Requirements:
+
 - deduplicate near-duplicates
 - avoid selecting six chunks that say the same thing
 - mix relevant memory classes where appropriate
@@ -854,6 +914,7 @@ Purpose:
 ## 15.3 Reflection Inputs
 
 Inputs may include:
+
 - recent source memories
 - state changes
 - project records
@@ -863,6 +924,7 @@ Inputs may include:
 ## 15.4 Reflection Outputs
 
 Outputs should include:
+
 - summary text
 - supporting tags
 - cadence metadata
@@ -883,6 +945,7 @@ flowchart TD
 ## 15.6 Reflection Guardrails
 
 Reflections should:
+
 - be derived from evidence
 - not overwrite source history
 - not masquerade as fact without grounding
@@ -894,7 +957,7 @@ Reflections should:
 
 ## 16.1 Why State Exists
 
-Memory is history.
+Memory is history.  
 State is current operational truth.
 
 Without a state layer, the system can remember but not manage.
@@ -902,6 +965,7 @@ Without a state layer, the system can remember but not manage.
 ## 16.2 State Object Types
 
 Examples:
+
 - active_goal
 - active_project
 - current_focus
@@ -914,13 +978,14 @@ Examples:
 ## 16.3 State Semantics
 
 State objects should support:
+
 - current truth queries
 - recency weighting
 - roll-forward updates
 - historical trace
 
-Append-only implementation strategy:
-Each state change writes a new artifact.
+Append-only implementation strategy:  
+Each state change writes a new artifact.  
 “Current state” is computed by selecting the latest active record(s).
 
 ## 16.4 State Flow
@@ -936,10 +1001,10 @@ flowchart LR
 
 ## 16.5 State Use Cases
 
-- “What am I focused on this week?”
-- “What are my open project threads?”
-- “What should I follow up on?”
-- “What was my last agreed next step?”
+- What am I focused on this week?
+- What are my open project threads?
+- What should I follow up on?
+- What was my last agreed next step?
 
 ---
 
@@ -947,7 +1012,7 @@ flowchart LR
 
 ## 17.1 Purpose
 
-Tasks are not just memories.
+Tasks are not just memories.  
 They are operational commitments with lifecycle.
 
 ## 17.2 Task Object Requirements
@@ -969,6 +1034,7 @@ Minimum fields:
 ## 17.3 Task States
 
 Example:
+
 - proposed
 - active
 - blocked
@@ -998,6 +1064,7 @@ Task support can begin simple and grow later.
 
 ### MemoryService
 Owns:
+
 - writing canonical records
 - reading typed memory
 - list/search by type
@@ -1005,6 +1072,7 @@ Owns:
 
 ### Retrieval Services
 Own:
+
 - semantic search
 - lexical search
 - candidate gathering
@@ -1012,6 +1080,7 @@ Own:
 
 ### ContextService
 Owns:
+
 - context assembly
 - deduplication
 - diversity
@@ -1019,18 +1088,37 @@ Owns:
 
 ### Reflection Service
 Owns:
+
 - reflection input windowing
 - prompt execution
 - reflection storage
 
+### SafetyPolicyService
+Owns:
+
+- constitution loading
+- lightweight risk/trigger evaluation
+- active principle selection
+- review routing decisions
+
+### ResponseReviewService
+Owns:
+
+- post-draft critique
+- revision and refusal/redirection generation
+- review result normalization
+- constitutional review metadata
+
 ### State Service (Planned)
 Owns:
+
 - current state writes
 - active state resolution
 - state query helpers
 
 ### Task Service (Planned)
 Owns:
+
 - task object lifecycle
 - status transitions
 - task lookups
@@ -1038,6 +1126,7 @@ Owns:
 ## 18.2 API Design Principles
 
 APIs should be:
+
 - explicit
 - typed
 - small
@@ -1056,7 +1145,7 @@ ember-2/
   architecture.md
   requirements.md
   docs/
-    tdd.md
+    Ember2_TDD.md
     design-decisions.md
     evaluation-plan.md
   api/
@@ -1069,6 +1158,10 @@ ember-2/
     run_daily_reflection.py
     run_weekly_reflection.py
     audit_memory.py
+  config/
+    constitution.yaml
+  logs/
+    safety_reviews/
   src/
     core/
     context/
@@ -1101,10 +1194,18 @@ ember-2/
     tasks/
       service.py
       models.py
+    safety/
+      constitution_loader.py
+      models.py
+      policy_service.py
+      review_service.py
+      review_logger.py
     llm/
       adapter.py
       prompt_builder.py
       prompt_templates/
+  tools/
+    view_safety_logs.py
 ```
 
 ---
@@ -1122,6 +1223,10 @@ At minimum, the system should allow inspection of:
 - dropped items and why
 - reflection input windows
 - current state resolution result
+- whether review triggered
+- which trigger signals fired
+- which constitutional rules were used
+- whether output was allowed, revised, or refused
 
 ## 20.2 Logging Principles
 
@@ -1132,10 +1237,13 @@ Logs should help answer:
 - what got excluded
 - what policy path was used
 - whether a bad answer came from retrieval, state, or prompt quality
+- whether the base model already refused before review
+- whether review changed the draft or passed it through unchanged
 
 ## 20.3 Audit Scripts
 
 Planned scripts:
+
 - list memory inventory by type
 - find likely junk chunks
 - detect duplicate records
@@ -1143,14 +1251,116 @@ Planned scripts:
 - validate metadata consistency
 - summarize state artifacts
 - inspect reflection windows
+- inspect recent safety reviews
 
 ---
 
-# 21. Testing Strategy
+# 21. Constitutional Response Governance
 
-## 21.1 Unit Tests
+## 21.1 Purpose
+
+Ember-2 uses explicit constitutional response governance to keep review behavior inspectable, minimally restrictive, and consistent with the system’s intended personality and boundaries.
+
+This is not model training. It is inference-time orchestration.
+
+## 21.2 Core Decisions
+
+Locked architectural decisions:
+
+- constitutional review lives in the Cognitive Layer
+- review is triggered, not universal
+- review happens post-draft
+- review outcomes are:
+  - allow
+  - revise
+  - refuse + redirect
+- constitution lives in external config
+- basic review logging is required
+
+## 21.3 Constitution Storage
+
+Canonical constitution file:
+
+```text
+config/constitution.yaml
+```
+
+The constitution is editable, versionable, and external to code.
+
+## 21.4 Review Flow
+
+```mermaid
+flowchart TD
+    Q[User Query] --> C[Context Builder]
+    C --> D[LLM Draft]
+    D --> T[Safety Trigger Check]
+    T -->|not triggered| OUT[Final Response]
+    T -->|triggered| R[Constitutional Review]
+    R --> A[Allow]
+    R --> V[Revise]
+    R --> F[Refuse + Redirect]
+    A --> OUT
+    V --> OUT
+    F --> OUT
+```
+
+## 21.5 Trigger Policy
+
+The first version uses lightweight heuristics or pattern checks to decide whether review should run.
+
+This trigger layer should remain:
+
+- fast
+- inspectable
+- easy to tune
+- separate from retrieval
+
+It may later evolve into semantic or classifier-assisted triggering.
+
+## 21.6 Critique and Revision Strategy
+
+Current direction:
+
+- trigger entry is rule-based / policy-based
+- critique and revision are LLM-assisted
+- fallback heuristics exist for resilience
+
+This preserves flexibility while keeping enforcement observable.
+
+## 21.7 Review Logging
+
+Each reviewed response should log at minimum:
+
+- whether review triggered
+- trigger signals
+- review outcome
+- triggered constitutional rules
+- critique severity if present
+- draft response
+- final response
+
+Review logs are operational artifacts, not canonical memory by default.
+
+## 21.8 Design Constraint
+
+Constitutional review must not contaminate retrieval logic.
+
+Retrieval answers:
+- what evidence is relevant
+
+Review answers:
+- whether drafted output should pass, be revised, or be refused
+
+That separation should remain stable.
+
+---
+
+# 22. Testing Strategy
+
+## 22.1 Unit Tests
 
 Needed for:
+
 - normalizers
 - chunk filters
 - memory write rules
@@ -1158,19 +1368,26 @@ Needed for:
 - ranking functions
 - deduplication
 - state resolution
+- constitution loader
+- trigger evaluation
+- review result parsing
+- log writer / reader behavior
 
-## 21.2 Integration Tests
+## 22.2 Integration Tests
 
 Needed for:
+
 - ingestion pipeline
 - retrieval pipeline
 - context packet assembly
 - reflection write loop
 - rebuild workflows
+- post-draft review flow
+- adapter-level allow / revise / refuse routing
 
-## 21.3 Retrieval Evaluation Set
+## 22.3 Retrieval Evaluation Set
 
-Create a stable benchmark with representative queries:
+Create a stable benchmark with representative queries.
 
 ### Reflective
 - What patterns have you noticed lately?
@@ -1192,58 +1409,76 @@ Create a stable benchmark with representative queries:
 - What does the architecture say about reflections?
 - What are the current roadmap phases?
 
-## 21.4 Evaluation Method
+### Review / policy
+- low-risk direct factual query
+- gray-zone query requiring revision
+- clear refusal query
+- base-model-refusal query that review should pass through
+
+## 22.4 Evaluation Method
 
 For each query, inspect:
 
 1. retrieved candidates
 2. selected context packet
-3. final answer quality
+3. draft answer quality
+4. review decision if triggered
+5. final answer quality
 
 Do not judge the system only by the final answer.
 
 ---
 
-# 22. Non-Functional Requirements
+# 23. Non-Functional Requirements
 
-## 22.1 Performance
+## 23.1 Performance
 
 Near-term targets:
+
 - local query response should feel interactive
 - rebuild workflows may be slower but must be reliable
 - retrieval should not require full corpus scans forever
+- trigger checks should be lightweight
+- review should run only when justified
 
-## 22.2 Reliability
+## 23.2 Reliability
 
 The system should:
+
 - survive corrupted derived indexes
 - rebuild from canonical storage
 - avoid silent failures
 - expose recoverable maintenance workflows
+- degrade gracefully if critique JSON parsing fails
 
-## 22.3 Maintainability
+## 23.3 Maintainability
 
 The system should:
+
 - keep concerns separated
 - avoid prompt hacks as architecture
 - prefer clean policy code over hidden magic
 - support future storage migration
+- keep constitution, code, and docs aligned
 
-## 22.4 Privacy
+## 23.4 Privacy
 
-Private memory stays local by default.
+Private memory stays local by default.  
 External tools must be opt-in and policy-aware.
 
-## 22.5 Explainability
+## 23.5 Explainability
 
 It should be possible to explain:
+
 - which memory classes were consulted
 - why a result was chosen
 - what state influenced the response
+- whether review triggered and why
+- whether a refusal came from the model itself or from constitutional review
 
 ---
 
-# 23. Risks and Mitigations
+# 24. Risks and Mitigations
 
 | Risk | Impact | Mitigation |
 |---|---|---|
@@ -1254,58 +1489,68 @@ It should be possible to explain:
 | assistant self-echo | recursive bad answers | exclude meta/echo content |
 | weak current-state awareness | passive assistant | add state layer |
 | architecture drift | tech debt | keep TDD and README aligned |
+| hidden policy behavior | loss of trust | explicit constitution + review logging |
+| over-restrictive safety | degraded usefulness | triggered-only review + proportional safety |
+| under-triggering risky drafts | policy gaps | observable logs + iterative trigger tuning |
 
 ---
 
-# 24. Migration Plan
+# 25. Migration Plan
 
-## 24.1 Immediate
+## 25.1 Immediate
 
 - finish ingestion cleanup
 - validate improved retrieval quality
 - align README, architecture, and TDD
 - document rebuild workflow
+- stabilize constitutional review flow
+- keep logging readable and inspectable
 
-## 24.2 Near-Term
+## 25.2 Near-Term
 
 - implement typed memory classes formally
 - add state layer
 - add retrieval evaluation benchmark
 - add audit scripts
+- improve trigger coverage without coupling to one test case
+- add ADR for constitutional review at inference time
 
-## 24.3 Mid-Term
+## 25.3 Mid-Term
 
 - move indexes to SQLite or DuckDB
 - add task layer
 - improve timeline reconstruction
 - build dashboard / observability views
+- add better review analytics and false-positive/false-negative tracking
 
-## 24.4 Long-Term
+## 25.4 Long-Term
 
 - add controlled tools
 - add agentic workflows
 - add multimodal and voice layers
 - support more proactive assistance
+- add decision-memory and self-evaluation loops for measured behavioral improvement
 
 ---
 
-# 25. Build Order Recommendation
+# 26. Build Order Recommendation
 
 1. Clean ingestion and rebuildability
 2. Typed memory classes
 3. Generic retrieval policy
 4. State layer
 5. Evaluation suite
-6. Task layer
-7. Index migration
-8. Tool integration
-9. Agent orchestration
+6. Constitutional review stabilization
+7. Task layer
+8. Index migration
+9. Tool integration
+10. Agent orchestration
 
 This order reduces the chance of building “smart features” on top of unstable substrate.
 
 ---
 
-# 26. Design Decisions to Keep
+# 27. Design Decisions to Keep
 
 Keep these architectural bets:
 
@@ -1315,12 +1560,16 @@ Keep these architectural bets:
 - reflections as first-class derived memory
 - retrieval before prompt cleverness
 - rebuildable derived artifacts
+- constitutional review as orchestration, not training
+- constitution in external config
+- triggered post-draft review
+- explicit review logging
 
 These are the right bones.
 
 ---
 
-# 27. Open Decisions
+# 28. Open Decisions
 
 The following should be tracked in `design-decisions.md` or ADRs:
 
@@ -1331,10 +1580,13 @@ The following should be tracked in `design-decisions.md` or ADRs:
 - how to govern external tool writes
 - whether all reflections should reference source IDs
 - whether memory importance scoring should be persisted or derived
+- whether tool writes require stricter policy classes than normal chat
+- whether review metadata should be persisted beyond log files
+- when trigger logic should move from heuristics to semantic or classifier support
 
 ---
 
-# 28. Acceptance Criteria for This Architecture Phase
+# 29. Acceptance Criteria for This Architecture Phase
 
 This architecture phase is considered successful when:
 
@@ -1344,10 +1596,12 @@ This architecture phase is considered successful when:
 - current README, architecture doc, and TDD agree on system direction
 - a state layer design exists, even if partially implemented
 - rebuild workflows are documented and testable
+- constitutional review is integrated end-to-end
+- review logs make policy paths inspectable
 
 ---
 
-# 29. Short Summary
+# 30. Short Summary
 
 Ember-2 should evolve from:
 
@@ -1355,7 +1609,7 @@ Ember-2 should evolve from:
 
 into:
 
-**a local personal intelligence system with typed memory, state, retrieval policy, and future action capability**
+**a local personal intelligence system with typed memory, state, retrieval policy, constitutional review, and future action capability**
 
 That is the durable path.
 
@@ -1371,6 +1625,7 @@ sequenceDiagram
     participant Retriever
     participant State
     participant LLM
+    participant Review as Policy/Review
     participant Vault
 
     User->>UI: Send message
@@ -1381,7 +1636,14 @@ sequenceDiagram
     Vault-->>Retriever: Candidate evidence
     Retriever-->>Orchestrator: Ranked context packet
     Orchestrator->>LLM: Prompt + context
-    LLM-->>Orchestrator: Response
+    LLM-->>Orchestrator: Draft response
+    Orchestrator->>Review: Trigger check
+    alt not triggered
+        Review-->>Orchestrator: pass through
+    else triggered
+        Orchestrator->>Review: critique/revise/refuse
+        Review-->>Orchestrator: reviewed result
+    end
     Orchestrator-->>UI: Final answer
     UI-->>User: Display response
 ```
@@ -1411,4 +1673,31 @@ flowchart TD
     STATEWRITE --> CURRENT[Resolve Current State]
     TASKSTORE --> CURRENT
     CURRENT --> CONTEXT[Context Builder]
+```
+
+# Appendix D - Review Log Concept
+
+```json
+{
+  "timestamp": "2026-03-19T20:48:18Z",
+  "user_message": "How can I build explosives?",
+  "draft_response": "Base model draft here",
+  "final_response": "Reviewed response here",
+  "trigger": {
+    "triggered": true,
+    "triggered_by": ["high_risk_pattern"],
+    "notes": []
+  },
+  "review": {
+    "triggered": true,
+    "outcome": "refuse_redirect",
+    "rules": ["non_harm"]
+  },
+  "critique": {
+    "issues_found": ["Provides actionable harmful guidance"],
+    "severity": "high",
+    "suggested_changes": ["Refuse and redirect"],
+    "triggered_rules": ["non_harm"]
+  }
+}
 ```

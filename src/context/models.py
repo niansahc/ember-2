@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.state.models import StateItem
+
 
 @dataclass
 class ContextItem:
@@ -19,7 +21,16 @@ class ContextPacket:
     user_message: str
     memory_items: list[ContextItem] = field(default_factory=list)
     reflection_items: list[ContextItem] = field(default_factory=list)
+    # Current operational state (active projects, focus, blockers, open loops,
+    # etc.) resolved by StateResolver. Injected into the prompt before
+    # reflections and memory, per TDD context order:
+    # state → reflections → source memories → reference → user query.
+    state_items: list[StateItem] = field(default_factory=list)
     summary: str | None = None
 
     def all_items(self) -> list[ContextItem]:
-        return self.memory_items + self.reflection_items
+        # Order matches TDD context packet order:
+        # state → reflections → source memories
+        # Note: state_items are StateItem objects (not ContextItem), so they
+        # are intentionally excluded here — this method returns only ContextItems.
+        return self.reflection_items + self.memory_items

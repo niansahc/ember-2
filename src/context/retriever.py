@@ -1,13 +1,50 @@
 import re
+import warnings
 
 from src.context.models import ContextItem
 from src.memory.search_conversation import search_conversation_memories
 from src.memory.service import MemoryService
+from src.state.models import StateItem
+from src.state.state_resolver import StateResolver
 
 
 class ContextRetriever:
-    def __init__(self, memory_service: MemoryService | None = None):
+    def __init__(
+        self,
+        memory_service: MemoryService | None = None,
+        state_resolver: StateResolver | None = None,
+    ):
         self.memory_service = memory_service or MemoryService()
+        # StateResolver is injected so tests can pass a resolver backed by a
+        # temp vault directory without touching the real private vault.
+        self.state_resolver = state_resolver or StateResolver()
+
+    def get_state_items(self) -> list[StateItem]:
+        """
+        Return current state items from the vault via StateResolver.
+
+        Calls StateResolver.get_current_state() which applies "latest record
+        wins" per category and returns one StateItem per populated category.
+
+        Failures are caught and logged as warnings — state retrieval must
+        never crash context building. An empty list is returned on error so
+        the rest of the pipeline continues normally.
+
+        Returns
+        -------
+        list[StateItem]
+            Current state items (one per populated category), or an empty
+            list if the vault has no state records or an error occurs.
+        """
+        try:
+            return self.state_resolver.get_current_state()
+        except Exception as exc:  # noqa: BLE001
+            warnings.warn(
+                f"[CONTEXT_RETRIEVER] State retrieval failed, continuing without "
+                f"state context: {exc}",
+                stacklevel=2,
+            )
+            return []
 
     def get_memory_items(self, user_message: str) -> list[ContextItem]:
         from src.retrieval.semantic_search import semantic_search
@@ -100,7 +137,30 @@ class ContextRetriever:
 
         return items
 
-    def retrieve(self, user_message: str) -> tuple[list[ContextItem], list[ContextItem]]:
+    def retrieve(
+        self, user_message: str
+    ) -> tuple[list[StateItem], list[ContextItem], list[ContextItem]]:
+        """
+        Retrieve all context for a user message.
+
+        Returns a triple in TDD context packet order:
+          (state_items, memory_items, reflection_items)
+
+        State items come first — they represent current operational truth and
+        should be injected into the prompt before reflections and memories.
+
+        Parameters
+        ----------
+        user_message : str
+            The incoming user query used to drive semantic and keyword search.
+
+        Returns
+        -------
+        tuple[list[StateItem], list[ContextItem], list[ContextItem]]
+            (state_items, memory_items, reflection_items)
+        """
+        state_items = self.get_state_items()
+
         memory_items = self.get_memory_items(user_message)
         conversation_items = self.get_conversation_items(user_message)
         reflection_items = self.get_reflection_items(user_message)
@@ -108,7 +168,7 @@ class ContextRetriever:
         memory_items.extend(conversation_items)
         memory_items = self._deduplicate_items(memory_items)
 
-        return memory_items, reflection_items
+        return state_items, memory_items, reflection_items
 
     def _deduplicate_items(self, items: list[ContextItem]) -> list[ContextItem]:
         seen = set()

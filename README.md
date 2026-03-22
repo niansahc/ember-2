@@ -358,6 +358,9 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - state API endpoints (GET /state, GET /state/{category}, POST /write-state)
 - add_state.py CLI script
 - audit_memory.py vault health check script
+- SQLite vector store for ingested content (SqliteVectorStore, 16,728 records)
+- Model configurable via EMBER_MODEL in .env (default: llama3.1:8b)
+- Ingested corpus searchable via semantic retrieval (migrated from 1.32 GB JSON to SQLite)
 
 ## Next
 - formal typed memory class enforcement
@@ -373,7 +376,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - tool integrations
 - proactive assistance
 - controlled agent workflows
-- index migration to SQLite / DuckDB
+- ~~index migration to SQLite / DuckDB~~ — complete for ingested corpus (v0.6.0)
 - stronger evaluation and review analytics
 
 ---

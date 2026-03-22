@@ -92,14 +92,19 @@ def chat_completions(request: ChatCompletionsRequest):
     reply_part = reply[:max_len]
 
     memory_service.write(
-        text=f"User: {user_part}\nAssistant: {reply_part}",
+        text=user_part,
         memory_type="conversation",
         source="chat",
         tags=["conversation"],
-        metadata={
-            "role": "dialogue",
-            "content_kind": "exchange",
-        },
+        metadata={"role": "user", "content_kind": "user_content"},
+    )
+
+    memory_service.write(
+        text=reply_part,
+        memory_type="conversation",
+        source="chat",
+        tags=["conversation"],
+        metadata={"role": "assistant", "content_kind": "answer"},
     )
 
     return ChatCompletionsResponse(

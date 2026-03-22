@@ -50,9 +50,6 @@ def should_skip_memory(text: str, memory_type: str = "journal") -> bool:
     if "```" in text:
         return True
 
-    if memory_type == "conversation" and normalized.startswith("user:") and "assistant:" in normalized:
-        return True
-
     return False
 
 

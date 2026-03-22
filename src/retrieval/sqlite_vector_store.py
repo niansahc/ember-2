@@ -61,9 +61,12 @@ class SqliteVectorStore:
         Open (or create) the SQLite database at db_path.
 
         Creates the vectors table if it does not already exist.
+        check_same_thread=False is required for FastAPI compatibility,
+        where the module-level singleton may be accessed from multiple
+        request handler threads.
         """
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(db_path))
+        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._create_table()
 

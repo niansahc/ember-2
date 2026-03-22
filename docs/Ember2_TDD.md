@@ -1509,11 +1509,12 @@ It should be possible to explain:
 ## 25.2 Near-Term
 
 - implement typed memory classes formally
-- ~~add state layer~~ — complete (v0.5.1-state-prompt): StateService, StateResolver, models, ContextPacket integration, prompt rendering; state flows vault → context pipeline → LLM prompt
+- ~~add state layer~~ — complete (v0.5.2-state-complete): StateService, StateResolver, models, ContextPacket integration, prompt rendering, status_state query intent, state_boost in ContextRanker, API endpoints (GET /state, GET /state/{category}, POST /write-state), add_state.py CLI, audit_memory.py vault health checks; state flows vault → context pipeline → LLM prompt
 - add retrieval evaluation benchmark
 - add audit scripts
 - improve trigger coverage without coupling to one test case
 - add ADR for constitutional review at inference time
+- add ADR for state layer design decisions
 
 ## 25.3 Mid-Term
 

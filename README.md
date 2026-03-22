@@ -352,12 +352,11 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - API + WebUI integration
 - constitutional review flow
 - safety review logging
-- state layer (StateService, StateResolver, models, full context pipeline wiring)
+- state layer (StateService, StateResolver, models, ContextPacket integration, prompt rendering)
 
 ## Next
 - formal typed memory class enforcement
 - retrieval evaluation benchmarks
-- wire state_items into LLM prompt builder
 - audit scripts
 - context quality tuning
 - trigger coverage improvements without overfitting

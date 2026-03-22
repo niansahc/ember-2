@@ -76,8 +76,7 @@ class PromptBuilder:
             "1. Answer the USER MESSAGE directly.\n"
             "2. Use the most recent assistant response as the primary reference for follow-up questions.\n"
             "3. Use RECENT CONVERSATION for continuity.\n"
-            "4. BACKGROUND CONTEXT is secondary and must not override recent conversation.\n"
-            "5. Synthesize background context naturally into responses — never enumerate, list, or recite it back to the user.\n\n"
+            "4. MEMORY CONTEXT is secondary and must not override recent conversation.\n\n"
             "BEHAVIOR RULES:\n"
             "- If no prior conversation exists, answer normally.\n"
             "- Resolve references like 'that', 'those', and 'it' from the last assistant answer when possible.\n"
@@ -90,14 +89,14 @@ class PromptBuilder:
 
     def _build_context_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.memory_items:
-            return ""
+            return "MEMORY CONTEXT:\nNone relevant."
 
         lines: list[str] = []
 
         for item in context_packet.memory_items[:4]:
-            lines.append(item.content.strip())
+            lines.append(f"- ({item.item_type}) {item.content.strip()}")
 
-        return "BACKGROUND CONTEXT (use to inform responses, do not recite):\n" + "\n\n".join(lines)
+        return "MEMORY CONTEXT:\n" + "\n\n".join(lines)
 
     def _build_reflection_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.reflection_items:

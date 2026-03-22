@@ -353,6 +353,11 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - constitutional review flow
 - safety review logging
 - state layer (StateService, StateResolver, models, ContextPacket integration, prompt rendering)
+- status_state query intent with state_boost routing
+- ContextRanker state_boost wiring
+- state API endpoints (GET /state, GET /state/{category}, POST /write-state)
+- add_state.py CLI script
+- audit_memory.py vault health check script
 
 ## Next
 - formal typed memory class enforcement
@@ -360,6 +365,8 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - audit scripts
 - context quality tuning
 - trigger coverage improvements without overfitting
+- API endpoint cleanup / README refactor pass
+- add ADR for state layer design decisions
 
 ## Future
 - task layer

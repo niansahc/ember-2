@@ -114,6 +114,39 @@ class ContextRetriever:
 
         return items
 
+    def get_profile_items(self, user_message: str) -> list[ContextItem]:
+        results = self.memory_service.search(
+            user_message,
+            memory_type="profile",
+            limit=3,
+        )
+
+        if not results:
+            results = self.memory_service.read(memory_type="profile", limit=3)
+
+        items: list[ContextItem] = []
+
+        for result in results:
+            content = result.get("text", "")
+            if not content or len(content.strip()) < 40:
+                continue
+
+            items.append(
+                ContextItem(
+                    id=result.get("id", ""),
+                    content=content,
+                    source="profile",
+                    item_type="profile",
+                    memory_type="profile",
+                    score=1.0,
+                    timestamp=result.get("timestamp"),
+                    tags=result.get("tags", []),
+                    metadata=result,
+                )
+            )
+
+        return items
+
     def get_conversation_items(self, user_message: str) -> list[ContextItem]:
         results = search_conversation_memories(user_message, top_k=6)
         items: list[ContextItem] = []
@@ -165,11 +198,12 @@ class ContextRetriever:
         """
         state_items = self.get_state_items()
 
+        profile_items = self.get_profile_items(user_message)
         memory_items = self.get_memory_items(user_message)
         conversation_items = self.get_conversation_items(user_message)
         reflection_items = self.get_reflection_items(user_message)
 
-        memory_items.extend(conversation_items)
+        memory_items = profile_items + memory_items + conversation_items
         memory_items = self._deduplicate_items(memory_items)
 
         return state_items, memory_items, reflection_items

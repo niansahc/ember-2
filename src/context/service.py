@@ -55,13 +55,21 @@ class ContextService:
         memory_limit = self._memory_limit_for_policy(policy.name)
         reflection_limit = self._reflection_limit_for_policy(policy.name)
 
+        # Profile items are guaranteed slots — partition them out first so the
+        # ranker's score-based ordering cannot push them below the limit cutoff.
+        profile_items = [i for i in deduped_memory if i.memory_type == "profile"]
+        other_items = [i for i in deduped_memory if i.memory_type != "profile"]
+        remaining_limit = max(0, memory_limit - len(profile_items))
+
         if policy.diversity:
-            selected_memory = self._select_diverse_memory(
-                deduped_memory,
-                limit=memory_limit,
+            selected_other = self._select_diverse_memory(
+                other_items,
+                limit=remaining_limit,
             )
         else:
-            selected_memory = deduped_memory[:memory_limit]
+            selected_other = other_items[:remaining_limit]
+
+        selected_memory = profile_items + selected_other
 
         selected_reflections = deduped_reflections[:reflection_limit]
 

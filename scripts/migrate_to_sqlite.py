@@ -100,12 +100,15 @@ def _iter_records(json_path: Path):
 
 def _validate_record(record: dict, index: int) -> bool:
     """
-    Return True if the record has the required fields (id, text, embedding).
+    Return True if the record has the required fields for migration.
+
+    ingested_index.json entries use file_path as the unique identifier
+    (not 'id'). Required fields are: file_path, text, embedding.
 
     Emits a warning and returns False if any required field is missing or
     if the embedding is not a non-empty list.
     """
-    missing = [f for f in ("id", "text", "embedding") if f not in record]
+    missing = [f for f in ("file_path", "text", "embedding") if f not in record]
     if missing:
         warnings.warn(
             f"Record at index {index} missing fields {missing} — skipping"
@@ -115,7 +118,7 @@ def _validate_record(record: dict, index: int) -> bool:
     embedding = record.get("embedding")
     if not isinstance(embedding, list) or len(embedding) == 0:
         warnings.warn(
-            f"Record at index {index} (id={record.get('id')!r}) has "
+            f"Record at index {index} (file_path={record.get('file_path')!r}) has "
             f"invalid embedding — skipping"
         )
         return False
@@ -160,20 +163,20 @@ def migrate() -> None:
             total += 1
             continue
 
-        # Normalise the record into the shape SqliteVectorStore expects.
-        # ingested_index.json entries have: file_path, embedding, text, metadata
-        # We derive `id` from file_path if not explicitly set.
-        record_id = record.get("id") or record.get("file_path") or str(total)
+        # ingested_index.json entries use file_path as the unique identifier.
+        # Pull source, created_at, and memory_type from metadata if not top-level.
+        metadata = record.get("metadata") or {}
+        record_id = record["file_path"]
 
         store.insert(
             {
                 "id": record_id,
                 "text": record["text"],
                 "embedding": record["embedding"],
-                "source": record.get("source") or (record.get("metadata") or {}).get("source"),
-                "memory_type": record.get("memory_type", "ingested"),
-                "created_at": record.get("created_at") or (record.get("metadata") or {}).get("created_at"),
-                "metadata": record.get("metadata", {}),
+                "source": record.get("source") or metadata.get("source"),
+                "memory_type": record.get("memory_type") or metadata.get("type", "ingested"),
+                "created_at": record.get("created_at") or metadata.get("created_at"),
+                "metadata": metadata,
             }
         )
         inserted += 1

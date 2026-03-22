@@ -121,14 +121,15 @@ class ContextRetriever:
             limit=3,
         )
 
-        if not results:
-            results = self.memory_service.read(memory_type="profile", limit=3)
-
         items: list[ContextItem] = []
 
         for result in results:
             content = result.get("text", "")
+            score = result.get("score", 0.0)
+
             if not content or len(content.strip()) < 40:
+                continue
+            if score < 0.3:
                 continue
 
             items.append(
@@ -138,7 +139,7 @@ class ContextRetriever:
                     source="profile",
                     item_type="profile",
                     memory_type="profile",
-                    score=1.0,
+                    score=score,
                     timestamp=result.get("timestamp"),
                     tags=result.get("tags", []),
                     metadata=result,

@@ -1543,6 +1543,56 @@ It should be possible to explain:
 
 ---
 
+## 25.5 Shareability
+
+Ember's persona is the shareable artifact. User data never leaves the local vault.
+
+The goal is to make Ember installable and usable by people who are not the original developer, without compromising the local-first, private-vault architecture.
+
+Two distinct paths:
+
+### Non-Technical User Path
+
+Goal: someone who has never used a terminal can run Ember.
+
+- one-click installer (packaged app or setup script with GUI)
+- no CLI required — all interaction through Open WebUI or a bundled interface
+- no manual vault setup, no `.env` editing, no seed scripts
+- onboarding conversation flow: Ember learns the user through conversation on first run
+  - structured prompts draw out identity, context, goals, and preferences
+  - responses are stored as profile memory records automatically
+  - no `seed_identity_template.py` needed — conversation replaces the script
+- Ember initializes from a blank vault and builds context over time
+- model pulls handled by installer or setup wizard
+
+### Technical User Path
+
+Goal: a developer can clone, configure, and run a personalized Ember in under an hour.
+
+- clean setup documentation: prereqs, `.env` config, vault initialization, model selection
+- `scripts/seed_identity_template.py` as the explicit starting point for identity seeding
+- `config/constitution.yaml` as the explicit starting point for behavioral configuration
+- API-first architecture: all capabilities accessible via documented endpoints
+- runtime model switching via `GET /model` and `POST /model` already implemented
+- configurable model via `EMBER_MODEL` in `.env`
+- configurable constitution via external YAML — no code changes required for policy customization
+- clear separation between the repo (shareable) and `private_vault/` (never shared, never committed)
+
+### What Is and Is Not Shared
+
+| Shareable | Not Shareable |
+|---|---|
+| Ember persona and system prompt | User's vault data |
+| Retrieval and ranking logic | Profile memory records |
+| Constitutional governance config | Conversation history |
+| Ingestion pipeline | Reflections and state |
+| Onboarding conversation flow | Any personally identifying content |
+| Codebase and architecture | `.env` and secrets |
+
+The architecture already enforces this boundary — `private_vault/` is excluded from git by design. Shareability work is about packaging and onboarding, not architectural change.
+
+---
+
 # 26. Build Order Recommendation
 
 1. Clean ingestion and rebuildability

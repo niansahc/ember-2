@@ -33,32 +33,18 @@ class ContextService:
             memory_items, reflection_items
         )
 
-        query_terms = self._extract_query_terms(user_message)
         normalized_user_message = self._normalize_text(user_message)
 
-        relevant_memory = [
-            item
-            for item in ranked_memory
-            if self._relevance_hits(item, query_terms) > 0
-        ]
-
-        if not relevant_memory:
-            relevant_memory = ranked_memory
-
+        # Filter echo/meta/low-value content directly from ranked results.
+        # _relevance_hits was removed — it dropped semantically correct results
+        # that used synonyms or related terms (e.g. "work" for query "working").
+        # The vector search + ranker already handle relevance ranking.
         filtered_memory = [
             item
-            for item in relevant_memory
+            for item in ranked_memory
             if not self._is_echo_or_meta_memory(item, normalized_user_message)
             and not self._is_low_value_memory(item)
         ]
-
-        if not filtered_memory:
-            filtered_memory = [
-                item
-                for item in ranked_memory
-                if not self._is_echo_or_meta_memory(item, normalized_user_message)
-                and not self._is_low_value_memory(item)
-            ]
 
         if not filtered_memory:
             filtered_memory = ranked_memory
@@ -115,41 +101,6 @@ class ContextService:
         if policy_name == "factual_recall":
             return 1
         return 2
-
-    def _extract_query_terms(self, user_message: str) -> list[str]:
-        terms = re.findall(r"\b[a-z0-9]{3,}\b", user_message.lower())
-        stopwords = {
-            "the",
-            "and",
-            "for",
-            "with",
-            "that",
-            "this",
-            "from",
-            "have",
-            "what",
-            "when",
-            "where",
-            "which",
-            "about",
-            "into",
-            "your",
-            "just",
-            "like",
-            "want",
-            "need",
-            "does",
-            "will",
-            "would",
-            "could",
-            "should",
-            "been",
-        }
-        return [term for term in terms if term not in stopwords]
-
-    def _relevance_hits(self, item, query_terms: list[str]) -> int:
-        content = item.content.lower()
-        return sum(1 for term in query_terms if term in content)
 
     def _is_echo_or_meta_memory(self, item, normalized_user_message: str) -> bool:
         content = self._normalize_text(item.content)

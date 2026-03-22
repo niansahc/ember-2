@@ -24,6 +24,7 @@ class ContextService:
         policy = classify_query(user_message)
 
         state_items, memory_items, reflection_items = self.retriever.retrieve(user_message)
+        state_items = self.ranker.apply_state_boost(state_items, policy)
 
         memory_items = self.ranker.apply_policy(memory_items, policy)
         reflection_items = self.ranker.apply_policy(reflection_items, policy)

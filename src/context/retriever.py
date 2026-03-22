@@ -55,6 +55,7 @@ class ContextRetriever:
         for result in results:
             metadata = result.get("metadata", {})
             content = result.get("content", "")
+            mem_type = result.get("memory_type", "memory")
 
             if self._should_exclude_content(content, user_message):
                 continue
@@ -63,15 +64,16 @@ class ContextRetriever:
                 ContextItem(
                     id=metadata.get("chunk_id", result.get("path", "")),
                     content=content,
-                    source=result.get("memory_type", "memory"),
-                    item_type=result.get("memory_type", "memory"),
+                    source=mem_type,
+                    item_type=mem_type,
+                    memory_type=mem_type,
                     score=result.get("score", 0.0),
                     timestamp=metadata.get("created_at"),
                     tags=metadata.get("tags", []),
                     metadata={
                         **metadata,
                         "path": result.get("path"),
-                        "memory_type": result.get("memory_type"),
+                        "memory_type": mem_type,
                     },
                 )
             )
@@ -102,6 +104,7 @@ class ContextRetriever:
                     content=content,
                     source="reflection",
                     item_type="reflection",
+                    memory_type="reflection",
                     score=1.0,
                     timestamp=result.get("timestamp"),
                     tags=result.get("tags", []),
@@ -128,6 +131,7 @@ class ContextRetriever:
                     content=content,
                     source="conversation",
                     item_type="conversation",
+                    memory_type="conversation",
                     score=result.get("score", 0.0),
                     timestamp=memory.get("timestamp"),
                     tags=memory.get("tags", []),

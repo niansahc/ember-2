@@ -11,6 +11,7 @@ class ContextItem:
     source: str
     item_type: str
     score: float = 0.0
+    memory_type: str | None = None
     timestamp: str | None = None
     tags: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)

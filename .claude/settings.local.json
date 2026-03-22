@@ -8,7 +8,9 @@
       "Bash(pytest tests/ -q)",
       "Bash(python tools/inspect_indexes.py)",
       "Bash(findstr /V \"ingested_index 1357 16728\")",
-      "Bash(python -m pytest tests/ -q)"
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(ollama pull:*)",
+      "Bash(python tools/audit_assistant_chunks.py)"
     ]
   }
 }

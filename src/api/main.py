@@ -1,9 +1,12 @@
 from dataclasses import asdict
 
+import ollama
 from fastapi import FastAPI
 from pydantic import BaseModel
 
 from src.api.chat import router as chat_router
+from src.api.openai_adapter import router as openai_adapter_router, llm_adapter
+from src.api.routes.ingest import router as ingest_router
 from src.context.service import ContextService
 from src.memory.service import MemoryService
 from src.reflection.generate_reflection import generate_reflection
@@ -11,8 +14,6 @@ from src.retrieval.semantic_search import semantic_search
 from src.state.models import VALID_STATE_CATEGORIES
 from src.state.state_resolver import StateResolver
 from src.state.state_service import StateService
-from src.api.openai_adapter import router as openai_adapter_router
-from src.api.routes.ingest import router as ingest_router
 
 app = FastAPI()
 app.include_router(chat_router)
@@ -35,6 +36,10 @@ class StateRequest(BaseModel):
     source: str = "api"
     tags: list[str] = []
     metadata: dict = {}
+
+
+class ModelRequest(BaseModel):
+    model: str
 
 
 def clean_context_packet(packet_dict: dict) -> dict:
@@ -123,3 +128,18 @@ def write_state_endpoint(request: StateRequest):
     )
     path = state_service.write(record)
     return {"status": "state written", "type": record.type, "text": record.text, "path": str(path)}
+
+
+@app.get("/model")
+def get_model_endpoint():
+    try:
+        available = [m["model"] for m in ollama.list()["models"]]
+    except Exception:
+        available = []
+    return {"model": llm_adapter.model, "available": available}
+
+
+@app.post("/model")
+def set_model_endpoint(request: ModelRequest):
+    llm_adapter.set_model(request.model)
+    return {"model": llm_adapter.model}

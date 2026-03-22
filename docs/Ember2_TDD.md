@@ -1509,7 +1509,7 @@ It should be possible to explain:
 ## 25.2 Near-Term
 
 - implement typed memory classes formally
-- add state layer
+- ~~add state layer~~ — complete (v0.5.1-state-prompt): StateService, StateResolver, models, ContextPacket integration, prompt rendering; state flows vault → context pipeline → LLM prompt
 - add retrieval evaluation benchmark
 - add audit scripts
 - improve trigger coverage without coupling to one test case

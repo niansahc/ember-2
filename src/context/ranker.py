@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 
 from src.context.models import ContextItem
+from src.state.models import StateItem
 
 
 class ContextRanker:
@@ -45,6 +46,37 @@ class ContextRanker:
             adjusted.append(item)
 
         return adjusted
+
+    def apply_state_boost(
+        self,
+        state_items: list[StateItem],
+        policy,
+    ) -> list[StateItem]:
+        """
+        Apply policy state_boost to state items.
+
+        For status_state queries (state_boost > 0), state items are
+        already the primary source of truth — this method adds a score
+        attribute to StateItem objects so they can be prioritized in
+        context assembly.
+
+        StateItem has no score field by default — we attach one via
+        a simple wrapper approach: return items sorted by priority
+        (high > medium > low > None) when state_boost > 0,
+        otherwise return as-is.
+        """
+        boost = getattr(policy, "state_boost", 0.0)
+
+        if not state_items or boost == 0.0:
+            return state_items
+
+        priority_order = {"high": 3, "medium": 2, "low": 1}
+
+        return sorted(
+            state_items,
+            key=lambda item: priority_order.get(item.priority or "", 0),
+            reverse=True,
+        )
 
     def rank(
         self,
@@ -214,9 +246,8 @@ class ContextRanker:
         )
 
         return any(marker in content for marker in markers) or any(
-        marker in title for marker in markers
-    )
+            marker in title for marker in markers
+        )
 
     def _tokenize(self, text: str) -> list[str]:
         return re.findall(r"\b[a-z0-9]{3,}\b", text)
-    

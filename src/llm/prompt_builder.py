@@ -91,12 +91,24 @@ class PromptBuilder:
         if not context_packet.memory_items:
             return "MEMORY CONTEXT:\nNone relevant."
 
-        lines: list[str] = []
+        profile_items = [i for i in context_packet.memory_items if i.memory_type == "profile"]
+        other_items = [i for i in context_packet.memory_items if i.memory_type != "profile"][:4]
 
-        for item in context_packet.memory_items[:4]:
-            lines.append(f"- ({item.item_type}) {item.content.strip()}")
+        sections: list[str] = []
 
-        return "MEMORY CONTEXT:\n" + "\n\n".join(lines)
+        if profile_items:
+            profile_lines = "\n\n".join(f"- {item.content.strip()}" for item in profile_items)
+            sections.append(
+                "[User self-description — written by the user in first person:]\n" + profile_lines
+            )
+
+        if other_items:
+            other_lines = "\n\n".join(
+                f"- ({item.item_type}) {item.content.strip()}" for item in other_items
+            )
+            sections.append("[Context:]\n" + other_lines)
+
+        return "MEMORY CONTEXT:\n" + "\n\n".join(sections)
 
     def _build_reflection_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.reflection_items:

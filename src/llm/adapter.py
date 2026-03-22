@@ -5,6 +5,8 @@ import ollama
 from src.context.models import ContextPacket
 from src.core.config import get_ember_model
 from src.llm.prompt_builder import PromptBuilder
+from src.memory.service import MemoryService
+from src.reflection.session_summary import write_session_summary
 from src.safety.models import SafetyReviewContext
 from src.safety.policy_service import SafetyPolicyService
 from src.safety.review_logger import SafetyReviewLogger
@@ -24,6 +26,7 @@ class LLMAdapter:
             llm_callable=self._call_model_with_prompt
         )
         self.review_logger = SafetyReviewLogger()
+        self.memory_service = MemoryService()
 
     def set_model(self, model: str) -> None:
         """Switch the active model at runtime without restarting the API."""
@@ -87,11 +90,11 @@ class LLMAdapter:
                     review_result.refusal_message or "I can't help with that."
                 )
 
-        # NEW — write to conversation buffer (THIS is the fix)
         self.prompt_builder.conversation_buffer.add_turn(
             context_packet.user_message,
-            final_response
+            final_response,
         )
+        self._maybe_compress_buffer()
 
         return final_response
 
@@ -108,6 +111,36 @@ class LLMAdapter:
         )
 
         return response["message"]["content"]
+
+    def _maybe_compress_buffer(self) -> None:
+        """Summarize and compress the oldest half of the buffer when it exceeds 70% of the context window."""
+        buf = self.prompt_builder.conversation_buffer
+        if not buf.needs_compression():
+            return
+
+        oldest_turns = buf.pop_oldest_half()
+
+        turns_text = "\n".join(
+            f"User: {t['user']}\nAssistant: {t['assistant']}"
+            for t in oldest_turns
+        )
+        prompt = (
+            "Summarize the following conversation turns into 2-4 sentences. "
+            "Preserve key facts, decisions, and topics discussed. Be concise.\n\n"
+            f"{turns_text}\n\nSummary:"
+        )
+
+        summary = self._call_model_with_prompt(prompt)
+
+        write_session_summary(
+            memory_service=self.memory_service,
+            summary=summary,
+            turns_compressed=len(oldest_turns),
+        )
+
+        buf.inject_summary_turn(summary)
+
+        print(f"[BUFFER] Compressed {len(oldest_turns)} turns into session summary.")
 
     def _call_model_with_prompt(self, prompt: str) -> str:
         response = ollama.chat(

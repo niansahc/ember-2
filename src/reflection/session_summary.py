@@ -1,18 +1,38 @@
-def write_session_summary(memory_writer, recent_messages):
-    """
-    Store a short summary of the current session so Ember
-    can recall what was worked on recently.
-    """
+"""
+session_summary.py — write a session-level compression summary to the vault.
 
-    if not recent_messages:
+Called by LLMAdapter._maybe_compress_buffer() when mid-conversation
+compression produces a summary that should be persisted as a reflection record.
+"""
+from __future__ import annotations
+
+from src.memory.service import MemoryService
+
+
+def write_session_summary(
+    memory_service: MemoryService,
+    summary: str,
+    turns_compressed: int,
+) -> None:
+    """
+    Persist a session compression summary as a reflection record.
+
+    Parameters
+    ----------
+    memory_service : MemoryService
+        Injected writer — avoids import coupling with the adapter.
+    summary : str
+        The LLM-generated summary of the compressed turns.
+    turns_compressed : int
+        Number of conversation turns that were summarized.
+    """
+    if not summary or not summary.strip():
         return
 
-    # simple summary: last user message
-    summary = f"Session summary: {recent_messages[-1]}"
-
-    memory_writer.write_memory(
-        text=summary,
-        memory_type="journal",
-        source="session_summary",
-        tags=["session"]
+    memory_service.write(
+        text=summary.strip(),
+        memory_type="reflection",
+        source="session_compression",
+        tags=["session", "compression"],
+        metadata={"cadence": "session", "turns_compressed": turns_compressed},
     )

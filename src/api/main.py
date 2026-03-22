@@ -142,4 +142,5 @@ def get_model_endpoint():
 @app.post("/model")
 def set_model_endpoint(request: ModelRequest):
     llm_adapter.set_model(request.model)
+    llm_adapter.prompt_builder.conversation_buffer.set_context_window(request.model)
     return {"model": llm_adapter.model}

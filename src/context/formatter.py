@@ -1,4 +1,5 @@
-from src.context.models import ContextPacket, ContextItem
+from src.context.models import ContextItem, ContextPacket
+from src.state.models import StateItem
 
 
 class ContextFormatter:
@@ -7,6 +8,7 @@ class ContextFormatter:
         user_message: str,
         memory_items: list[ContextItem],
         reflection_items: list[ContextItem],
+        state_items: list[StateItem] | None = None,
     ) -> ContextPacket:
         """
         Build a ContextPacket from retrieved and ranked items.
@@ -15,6 +17,6 @@ class ContextFormatter:
             user_message=user_message,
             memory_items=memory_items,
             reflection_items=reflection_items,
+            state_items=state_items or [],
             summary=None,
         )
-    

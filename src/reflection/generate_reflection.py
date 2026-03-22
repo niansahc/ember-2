@@ -48,7 +48,7 @@ def generate_reflection(
         )
 
     candidates.sort(key=lambda item: item["score"], reverse=True)
-    selected = candidates[:8]
+    selected = _select_diverse_candidates(candidates, limit=8)
 
     if not selected:
         return {
@@ -82,6 +82,46 @@ def generate_reflection(
         )
 
     return reflection
+
+
+def _select_diverse_candidates(
+    candidates: list,
+    limit: int,
+    jaccard_threshold: float = 0.3,
+) -> list:
+    """
+    Select up to `limit` candidates, skipping any whose token overlap
+    (Jaccard similarity) with an already-selected candidate exceeds
+    jaccard_threshold.
+
+    Candidates must already be sorted by descending score. Higher-scoring
+    candidates claim their slot first; near-duplicates that follow are
+    skipped rather than penalised, preventing repetitive content from
+    filling the top-8 even when it scores uniformly.
+    """
+    selected = []
+    selected_token_sets = []
+
+    for candidate in candidates:
+        tokens = set(re.findall(r"\b[a-z0-9]{3,}\b", candidate["normalized"]))
+
+        too_similar = False
+        for existing_tokens in selected_token_sets:
+            union = tokens | existing_tokens
+            if union and len(tokens & existing_tokens) / len(union) > jaccard_threshold:
+                too_similar = True
+                break
+
+        if too_similar:
+            continue
+
+        selected.append(candidate)
+        selected_token_sets.append(tokens)
+
+        if len(selected) >= limit:
+            break
+
+    return selected
 
 
 def _extract_memory_text(memory: dict) -> str:
@@ -127,7 +167,10 @@ def _reflection_priority_score(memory: dict, normalized_text: str) -> float:
     elif content_kind == "answer":
         score -= 0.1
 
-    if _looks_like_concrete_experience(normalized_text):
+    # Only grant experience bonus for substantive texts — short repetitive
+    # instructions like "Shorter messages please. I've reminded you 5 times"
+    # match "i've" but are not meaningful experiences.
+    if len(normalized_text) > 100 and _looks_like_concrete_experience(normalized_text):
         score += 0.4
 
     if _looks_like_question(normalized_text):
@@ -137,6 +180,10 @@ def _reflection_priority_score(memory: dict, normalized_text: str) -> float:
         score -= 0.5
     elif len(normalized_text) > 1500:
         score -= 0.2
+
+    # Small quality bonus for longer substantive content.
+    if len(normalized_text) > 200:
+        score += 0.15
 
     return score
 

@@ -278,6 +278,7 @@ Reflection transforms memory into higher-level insight.
 - monthly synthesis
 - thematic reflection
 - strategic review
+- session reflection (end-of-session capture before context is lost)
 
 Reflections are stored as first-class Derived Memory and remain traceable to source windows.
 
@@ -359,16 +360,20 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - add_state.py CLI script
 - audit_memory.py vault health check script
 - SQLite vector store for ingested content (SqliteVectorStore, 16,728 records)
-- Model configurable via EMBER_MODEL in .env (default: llama3.1:8b)
-- Ingested corpus searchable via semantic retrieval (migrated from 1.32 GB JSON to SQLite)
+- model configurable via EMBER_MODEL in .env (default: llama3.1:8b)
+- ingested corpus searchable via semantic retrieval (migrated from 1.32 GB JSON to SQLite)
+- conversation memory write path (openai_adapter writes two records per turn; was silently broken)
+- memory_type propagation end-to-end (ContextItem field + all retriever paths)
+- profile memory retrieval (guaranteed context slots; profile records always reach the LLM)
+- corpus quality suppression (3,327 of 16,728 ingested records suppressed; quality flag in SQLite)
+- reflection scoring and filter improvements (length gate, diversity selection, skip filter tightened)
+- prompt perspective fix (MEMORY CONTEXT split into user self-description and context sub-sections)
 
 ## Next
 - formal typed memory class enforcement
 - retrieval evaluation benchmarks
 - audit scripts
-- context quality tuning
 - trigger coverage improvements without overfitting
-- API endpoint cleanup / README refactor pass
 - add ADR for state layer design decisions
 
 ## Future
@@ -376,6 +381,9 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - tool integrations
 - proactive assistance
 - controlled agent workflows
+- model selector (UI/CLI switching between models per use case)
+- onboarding conversation flow (guided profile seeding for new users)
+- session reflection mode (end-of-session capture distinct from daily/weekly)
 - ~~index migration to SQLite / DuckDB~~ — complete for ingested corpus (v0.6.0)
 - stronger evaluation and review analytics
 

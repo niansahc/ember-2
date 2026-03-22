@@ -8,6 +8,9 @@ from src.context.service import ContextService
 from src.memory.service import MemoryService
 from src.reflection.generate_reflection import generate_reflection
 from src.retrieval.semantic_search import semantic_search
+from src.state.models import VALID_STATE_CATEGORIES
+from src.state.state_resolver import StateResolver
+from src.state.state_service import StateService
 from src.api.openai_adapter import router as openai_adapter_router
 from src.api.routes.ingest import router as ingest_router
 
@@ -17,6 +20,8 @@ app.include_router(openai_adapter_router)
 app.include_router(ingest_router)
 memory_service = MemoryService()
 context_service = ContextService()
+state_service = StateService()
+state_resolver = StateResolver(service=state_service)
 
 
 class MemoryRequest(BaseModel):
@@ -24,8 +29,16 @@ class MemoryRequest(BaseModel):
     memory_type: str = "journal"
 
 
+class StateRequest(BaseModel):
+    type: str
+    text: str
+    source: str = "api"
+    tags: list[str] = []
+    metadata: dict = {}
+
+
 def clean_context_packet(packet_dict: dict) -> dict:
-    for section in ["memory_items", "reflection_items"]:
+    for section in ["memory_items", "reflection_items", "state_items"]:
         for item in packet_dict.get(section, []):
             metadata = item.get("metadata", {})
 
@@ -77,4 +90,36 @@ def reflect_endpoint(memory_type: str = "journal", limit: int = 5):
 def debug_context_endpoint(message: str):
     context_packet = context_service.build_context(message)
     return clean_context_packet(asdict(context_packet))
-#
+
+
+@app.get("/state")
+def get_state_endpoint():
+    items = state_resolver.get_current_state()
+    return {"state": [{"category": i.category, "text": i.text, "timestamp": i.timestamp, "priority": i.priority} for i in items]}
+
+
+@app.get("/state/{category}")
+def get_state_by_category_endpoint(category: str):
+    if category not in VALID_STATE_CATEGORIES:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"Invalid category '{category}'. Valid: {sorted(VALID_STATE_CATEGORIES)}")
+    item = state_resolver.get_current_by_category(category)
+    if not item:
+        return {"state": None}
+    return {"state": {"category": item.category, "text": item.text, "timestamp": item.timestamp, "priority": item.priority}}
+
+
+@app.post("/write-state")
+def write_state_endpoint(request: StateRequest):
+    if request.type not in VALID_STATE_CATEGORIES:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"Invalid type '{request.type}'. Valid: {sorted(VALID_STATE_CATEGORIES)}")
+    record = StateService.make_record(
+        state_type=request.type,
+        text=request.text,
+        source=request.source,
+        tags=request.tags,
+        metadata=request.metadata,
+    )
+    path = state_service.write(record)
+    return {"status": "state written", "type": record.type, "text": record.text, "path": str(path)}

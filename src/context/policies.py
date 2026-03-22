@@ -13,10 +13,34 @@ class ContextPolicy:
     prefer_experiences: bool = False
     prefer_active_work: bool = False
     prefer_exact_matches: bool = False
+    # Signals to the ranker how much to boost state items for this query intent.
+    # 0.0 = no special boost (default). Higher values prioritise current state
+    # over memory and reflections — used for status/state queries.
+    state_boost: float = 0.0
 
 
 def classify_query(user_message: str) -> ContextPolicy:
     q = user_message.lower()
+
+    state_markers = (
+        "what am i working on",
+        "what are my open loops",
+        "what is my current focus",
+        "what's my current focus",
+        "current focus",
+        "open loops",
+        "what are my priorities",
+        "active projects",
+        "what are my blockers",
+        "my blockers",
+        "what is blocking",
+        "what's blocking",
+        "current state",
+        "where am i at",
+        "what am i focused on",
+        "catch me up",
+        "remind me what",
+    )
 
     reflective_markers = (
         "pattern",
@@ -62,6 +86,19 @@ def classify_query(user_message: str) -> ContextPolicy:
         "recall",
         "remember when",
     )
+
+    # Status/state queries resolve against current state first — checked before
+    # reflective so "what am I working on" routes to state, not reflection.
+    if any(marker in q for marker in state_markers):
+        return ContextPolicy(
+            name="status_state",
+            memory_weight=0.6,
+            reflection_weight=0.5,
+            recency_bias=0.8,
+            diversity=False,
+            prefer_active_work=True,
+            state_boost=2.0,
+        )
 
     if any(marker in q for marker in reflective_markers):
         return ContextPolicy(

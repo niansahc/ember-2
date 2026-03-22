@@ -44,7 +44,7 @@ EVAL_CASES: list[EvalCase] = [
 
 
 def clean_context_packet(packet_dict: dict) -> dict:
-    for section in ["memory_items", "reflection_items"]:
+    for section in ["memory_items", "reflection_items", "state_items"]:
         for item in packet_dict.get(section, []):
             metadata = item.get("metadata", {})
             metadata.pop("embedding", None)
@@ -66,6 +66,7 @@ def run_eval(output_path: str = "logs/retrieval_eval/latest.json") -> Path:
                 "query": case.query,
                 "memory_count": len(packet.memory_items),
                 "reflection_count": len(packet.reflection_items),
+                "state_count": len(packet.state_items),
                 "context_packet": packet_dict,
             }
         )

@@ -11,7 +11,7 @@ from src.llm.adapter import LLMAdapter
 
 
 EMBER_MODEL_ID = "ember-2"
-   
+
 SUPPORTED_MODELS = [EMBER_MODEL_ID]
 
 MEMORY_PREVIEW_LENGTH = 300
@@ -87,17 +87,19 @@ def chat_completions(request: ChatCompletionsRequest):
     context_packet = context_service.build_context(latest_user_message)
     reply = llm_adapter.generate_response(context_packet)
 
-    max_len = 300
+    max_len = MEMORY_PREVIEW_LENGTH
     user_part = latest_user_message[:max_len]
     reply_part = reply[:max_len]
 
-    conversation_memory = f"User asked: {user_part}. Ember responded: {reply_part}"
-
     memory_service.write(
-        text=conversation_memory,
+        text=f"User: {user_part}\nAssistant: {reply_part}",
         memory_type="conversation",
         source="chat",
         tags=["conversation"],
+        metadata={
+            "role": "dialogue",
+            "content_kind": "exchange",
+        },
     )
 
     return ChatCompletionsResponse(

@@ -1,4 +1,4 @@
-> Canonical source: docs/Ember2_TDD.md  
+> Canonical source: docs/Ember2_TDD.md
 > This file is a high-level overview.
 
 # Ember-2
@@ -89,7 +89,7 @@ Constitutional review lives here as orchestration and policy logic, not as a sep
 
 ---
 
-### State Layer (Planned)
+### State Layer
 Handles:
 - active goals
 - current priorities
@@ -352,11 +352,12 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - API + WebUI integration
 - constitutional review flow
 - safety review logging
+- state layer (StateService, StateResolver, models, full context pipeline wiring)
 
 ## Next
 - formal typed memory class enforcement
 - retrieval evaluation benchmarks
-- state layer implementation
+- wire state_items into LLM prompt builder
 - audit scripts
 - context quality tuning
 - trigger coverage improvements without overfitting
@@ -405,7 +406,7 @@ ember-2/
 │   ├ retrieval/
 │   ├ reflection/
 │   ├ safety/
-│   ├ state/        (planned)
+│   ├ state/
 │   └ tasks/        (planned)
 │
 ├ config/

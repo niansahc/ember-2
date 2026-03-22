@@ -25,6 +25,10 @@ class LLMAdapter:
         )
         self.review_logger = SafetyReviewLogger()
 
+    def set_model(self, model: str) -> None:
+        """Switch the active model at runtime without restarting the API."""
+        self.model = model
+
     def generate_response(self, context_packet: ContextPacket) -> str:
         system_prompt = self.prompt_builder.build_prompt(context_packet)
 

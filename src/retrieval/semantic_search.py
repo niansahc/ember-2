@@ -2,10 +2,25 @@ import re
 
 from src.core.config import get_private_vault_path
 from src.retrieval.embed_memory import embed_text
+from src.retrieval.sqlite_vector_store import SqliteVectorStore
 from src.retrieval.vector_index import VectorIndex
 
 
 vector_index = VectorIndex()
+
+_sqlite_store: SqliteVectorStore | None = None
+
+
+def _get_sqlite_store() -> SqliteVectorStore | None:
+    global _sqlite_store
+    if _sqlite_store is not None:
+        return _sqlite_store
+    vault = get_private_vault_path()
+    db_path = vault / "embeddings" / "ingested.db"
+    if not db_path.exists():
+        return None
+    _sqlite_store = SqliteVectorStore(db_path)
+    return _sqlite_store
 
 
 def semantic_search(
@@ -31,6 +46,9 @@ def semantic_search(
             index_file.stem.replace("_index", "")
             for index_file in embeddings_dir.glob("*_index.json")
         ]
+        # ingested content is now in SQLite — exclude it from JSON glob
+        # to avoid attempting to load the old oversized JSON file
+        memory_types = [t for t in memory_types if t != "ingested"]
 
     per_type_limit = max(limit * 4, 10)
     results = []
@@ -60,6 +78,32 @@ def semantic_search(
             result["score"] = score
             result["memory_type"] = mem_type
             results.append(result)
+
+    # Search ingested content via SQLite store
+    if memory_type is None or memory_type == "ingested":
+        sqlite_store = _get_sqlite_store()
+        if sqlite_store is not None:
+            sqlite_results = sqlite_store.search(
+                query_embedding=query_embedding,
+                limit=per_type_limit,
+                memory_type="ingested",
+            )
+            for result in sqlite_results:
+                content = result.get("content", "")
+                normalized_content = normalize_text(content)
+
+                if should_exclude_result(normalized_content):
+                    continue
+
+                score = float(result.get("score", 0.0))
+                score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
+                score += memory_type_adjustment("ingested")
+                score += source_quality_adjustment(normalized_content)
+                score += query_intent_adjustment(normalized_query, "ingested", normalized_content)
+
+                result["score"] = score
+                result["memory_type"] = "ingested"
+                results.append(result)
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return results[:limit]
@@ -308,7 +352,7 @@ def looks_like_concrete_experience(content: str) -> bool:
 def looks_like_summary_or_instruction(content: str) -> bool:
     markers = (
         "based on your history",
-        "here’s a summary",
+        "here's a summary",
         "here is a summary",
         "the main themes are",
         "generate",

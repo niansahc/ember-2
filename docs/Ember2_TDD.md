@@ -1583,6 +1583,7 @@ The following should be tracked in `design-decisions.md` or ADRs:
 - whether tool writes require stricter policy classes than normal chat
 - whether review metadata should be persisted beyond log files
 - when trigger logic should move from heuristics to semantic or classifier support
+- Whether to normalize state record timestamps to strict ISO 8601 at read time, or standardize on hyphenated format across all state records for filename consistency. See `src/state/state_service.py` make_record() for context.
 
 ---
 

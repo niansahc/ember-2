@@ -86,7 +86,6 @@ def semantic_search(
             sqlite_results = sqlite_store.search(
                 query_embedding=query_embedding,
                 limit=per_type_limit,
-                memory_type="ingested",
             )
             for result in sqlite_results:
                 content = result.get("content", "")

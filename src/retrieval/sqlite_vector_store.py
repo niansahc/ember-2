@@ -164,11 +164,13 @@ class SqliteVectorStore:
         """
         if memory_type:
             cursor = self._conn.execute(
-                "SELECT * FROM vectors WHERE memory_type = ?",
+                "SELECT * FROM vectors WHERE memory_type = ? AND (quality IS NULL OR quality != 'suppressed')",
                 (memory_type,),
             )
         else:
-            cursor = self._conn.execute("SELECT * FROM vectors")
+            cursor = self._conn.execute(
+                "SELECT * FROM vectors WHERE quality IS NULL OR quality != 'suppressed'"
+            )
 
         scored: list[tuple[float, sqlite3.Row]] = []
 

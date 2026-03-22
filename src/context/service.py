@@ -23,7 +23,7 @@ class ContextService:
     def build_context(self, user_message: str) -> ContextPacket:
         policy = classify_query(user_message)
 
-        memory_items, reflection_items = self.retriever.retrieve(user_message)
+        state_items, memory_items, reflection_items = self.retriever.retrieve(user_message)
 
         memory_items = self.ranker.apply_policy(memory_items, policy)
         reflection_items = self.ranker.apply_policy(reflection_items, policy)
@@ -86,6 +86,7 @@ class ContextService:
             user_message=user_message,
             memory_items=selected_memory,
             reflection_items=selected_reflections,
+            state_items=state_items,
         )
 
     def _memory_limit_for_policy(self, policy_name: str) -> int:

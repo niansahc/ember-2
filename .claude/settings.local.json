@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python -c \":*)",
+      "Bash(python scripts/migrate_to_sqlite.py)",
+      "Bash(python tools/eval_retrieval.py)",
+      "Bash(pytest tests/ -q)",
+      "Bash(python tools/inspect_indexes.py)",
+      "Bash(findstr /V \"ingested_index 1357 16728\")"
+    ]
+  }
+}

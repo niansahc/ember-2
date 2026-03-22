@@ -13,14 +13,46 @@ class PromptBuilder:
         self.conversation_buffer = ConversationBuffer()
 
     def build_prompt(self, context_packet: ContextPacket) -> str:
-        sections: list[str] = [self.system_prompt]
-        sections.append(self._build_conversation_section())
-        sections.append(self._build_user_section(context_packet))
-        sections.append(self._build_instruction_section())
-        sections.append(self._build_context_section(context_packet))
-        sections.append(self._build_reflection_section(context_packet))
+        # Section order matches TDD context packet order:
+        # system prompt → state → reflections → source memories →
+        # recent conversation → instruction rules → user query
+        sections: list[str] = [
+            self.system_prompt,
+            self._build_state_section(context_packet),
+            self._build_reflection_section(context_packet),
+            self._build_context_section(context_packet),
+            self._build_conversation_section(),
+            self._build_instruction_section(),
+            self._build_user_section(context_packet),
+        ]
 
         return "\n\n".join(section for section in sections if section.strip())
+
+    def _build_state_section(self, context_packet: ContextPacket) -> str:
+        """
+        Render current state items into the STATE section of the prompt.
+
+        Each item is formatted as:
+          - [category] text
+          - [category] text (priority: high)
+
+        If no state items are present, returns a "None active" placeholder
+        so the model always sees the section header.
+        """
+        if not context_packet.state_items:
+            return "CURRENT STATE:\nNone active."
+
+        lines: list[str] = []
+
+        for item in context_packet.state_items:
+            if item.priority:
+                lines.append(
+                    f"- [{item.category}] {item.text.strip()} (priority: {item.priority})"
+                )
+            else:
+                lines.append(f"- [{item.category}] {item.text.strip()}")
+
+        return "CURRENT STATE:\n" + "\n".join(lines)
 
     def _build_conversation_section(self) -> str:
         turns = self.conversation_buffer.get_recent()

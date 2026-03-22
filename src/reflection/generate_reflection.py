@@ -197,7 +197,7 @@ def _should_skip_for_reflection(text: str) -> bool:
         "info:",
         "traceback",
         "file \"c:\\",
-        "line ",
+        ", line ",
         "module>",
         "(.venv)",
         "powershell",
@@ -211,10 +211,29 @@ def _should_skip_for_reflection(text: str) -> bool:
         "started server process",
         "started reloader process",
         "waiting for application startup",
+        "shorter messages please",
+        "shorter responses",
+        "that's a long response",
     )
 
     if any(marker in text for marker in skip_markers):
         return True
+
+    # File trees and directory listings use Unicode box-drawing characters.
+    # These are never meaningful reflection content.
+    if "├──" in text or "│" in text:
+        return True
+
+    # Short URL-only or URL-leading content is infrastructure noise.
+    if "https://" in text and len(text) < 200:
+        return True
+
+    # Multi-turn exchanges embedded in a single record are not meaningful
+    # as individual reflections — skip if a second speaker appears.
+    if text.startswith("user:"):
+        tail = text[len("user:"):]
+        if "user:" in tail or "assistant:" in tail:
+            return True
 
     if text.startswith("assistant:") and _looks_like_code_or_debug(text):
         return True

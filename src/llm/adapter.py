@@ -3,6 +3,7 @@ from __future__ import annotations
 import ollama
 
 from src.context.models import ContextPacket
+from src.core.config import get_ember_model
 from src.llm.prompt_builder import PromptBuilder
 from src.safety.models import SafetyReviewContext
 from src.safety.policy_service import SafetyPolicyService
@@ -13,10 +14,10 @@ from src.safety.review_service import ResponseReviewService
 class LLMAdapter:
     def __init__(
         self,
-        model: str = "qwen3:8b",
+        model: str | None = None,
         prompt_builder: PromptBuilder | None = None,
     ) -> None:
-        self.model = model
+        self.model = model or get_ember_model()
         self.prompt_builder = prompt_builder or PromptBuilder()
         self.policy_service = SafetyPolicyService()
         self.review_service = ResponseReviewService(

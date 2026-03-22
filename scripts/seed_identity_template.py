@@ -12,7 +12,7 @@ HOW TO USE
    with your real information.
 
 3. Run it from the repo root:
-       python ../private_vault/seed_identity.py
+       PYTHONPATH=. python ../private_vault/seed_identity.py
 
 4. Verify records were written:
        python tools/inspect_indexes.py

@@ -254,6 +254,25 @@ You should see Ember models appear in the model selector. Select one and start a
 
 ---
 
+### Step 12 — Configure Open WebUI Settings
+
+Disables Open WebUI's built-in retrieval and query rewriting features so they do not interfere with Ember's own retrieval pipeline.
+
+**Settings → Documents**
+
+- **Bypass Embedding and Retrieval** → turn **On**
+  Prevents Open WebUI from embedding and searching documents itself — Ember handles all retrieval from the memory vault.
+
+**Settings → Interface**
+
+- **Retrieval Query Generation** → turn **Off**
+  Stops Open WebUI from rewriting your messages into retrieval queries before they reach Ember, which would corrupt intent classification and context assembly.
+
+- **Web Search Query Generation** → turn **Off**
+  Stops Open WebUI from injecting its own web search queries — Ember uses SearXNG directly and manages web search internally.
+
+---
+
 ## Verify Everything Is Working
 
 Send a message in Open WebUI. If Ember responds with context and personality, setup is complete.

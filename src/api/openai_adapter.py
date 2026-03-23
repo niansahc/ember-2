@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger("ember.openai_adapter")
 
+from src.api.limiter import limiter
 from src.memory.service import MemoryService
 from src.context.service import ContextService
 from src.llm.adapter import LLMAdapter
@@ -80,6 +81,7 @@ def list_models():
 
 
 @router.post("/v1/chat/completions", response_model=ChatCompletionsResponse)
+@limiter.limit("30/minute")
 async def chat_completions(raw_request: Request, request: ChatCompletionsRequest):
     # --- FILE UPLOAD DIAGNOSTIC LOGGING ---
     try:

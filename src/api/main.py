@@ -6,8 +6,12 @@ import ollama
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from src.api.chat import router as chat_router
+from src.api.limiter import limiter
 from src.api.openai_adapter import router as openai_adapter_router, llm_adapter
 from src.api.routes.ingest import router as ingest_router
 from src.context.service import ContextService
@@ -22,6 +26,9 @@ from src.state.state_service import StateService
 logger = logging.getLogger("ember.auth")
 
 app = FastAPI()
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 
 @app.middleware("http")
@@ -157,7 +164,8 @@ def semantic_search_endpoint(
     return {"results": semantic_search(query, limit, memory_type, min_score)}
 
 @app.post("/reflect")
-def reflect_endpoint(memory_type: str = "journal", limit: int = 5):
+@limiter.limit("10/minute")
+def reflect_endpoint(request: Request, memory_type: str = "journal", limit: int = 5):
     return generate_reflection(memory_types=[memory_type], limit=limit)
 
 

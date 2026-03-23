@@ -3,7 +3,7 @@ from src.reflection.generate_reflection import generate_reflection
 
 def run_daily_reflection():
     return generate_reflection(
-        memory_type="ingested",
+        memory_types=["journal", "ingested"],
         limit=20,
         store=True,
         cadence="daily",

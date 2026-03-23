@@ -123,7 +123,7 @@ def semantic_search_endpoint(
 
 @app.post("/reflect")
 def reflect_endpoint(memory_type: str = "journal", limit: int = 5):
-    return generate_reflection(memory_type=memory_type, limit=limit)
+    return generate_reflection(memory_types=[memory_type], limit=limit)
 
 
 @app.get("/debug-context")

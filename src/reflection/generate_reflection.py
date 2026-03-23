@@ -9,17 +9,24 @@ memory_service = MemoryService()
 
 
 def generate_reflection(
-    memory_type: str = "journal",
+    memory_types: list[str] | str = "journal",
     limit: int = 50,
     store: bool = True,
     cadence: str = "daily",
 ):
-    memories = memory_service.read(memory_type=memory_type, limit=limit * 3)
+    # backwards compat: single string wrapped in list
+    if isinstance(memory_types, str):
+        memory_types = [memory_types]
+
+    # read from all sources and pool before scoring
+    all_memories: list[dict] = []
+    for memory_type in memory_types:
+        all_memories.extend(memory_service.read(memory_type=memory_type, limit=limit * 3))
 
     candidates = []
     seen = set()
 
-    for memory in memories:
+    for memory in all_memories:
         text = _extract_memory_text(memory).strip()
         if not text:
             continue
@@ -42,7 +49,7 @@ def generate_reflection(
                 "normalized": normalized,
                 "score": score,
                 "timestamp": memory.get("timestamp") or memory.get("created_at"),
-                "source": memory.get("source", memory_type),
+                "source": memory.get("source", memory.get("type", "unknown")),
                 "title": memory.get("title") or memory.get("metadata", {}).get("title"),
             }
         )
@@ -50,11 +57,13 @@ def generate_reflection(
     candidates.sort(key=lambda item: item["score"], reverse=True)
     selected = _select_diverse_candidates(candidates, limit=8)
 
+    source_label = ", ".join(memory_types)
+
     if not selected:
         return {
             "summary": "No memories available for reflection.",
             "memory_count": 0,
-            "source_type": memory_type,
+            "source_type": source_label,
         }
 
     selected_texts = [item["text"] for item in selected]
@@ -65,7 +74,7 @@ def generate_reflection(
     reflection = {
         "summary": summary,
         "memory_count": len(selected),
-        "source_type": memory_type,
+        "source_type": source_label,
     }
 
     if store:
@@ -76,7 +85,7 @@ def generate_reflection(
             tags=["reflection", cadence],
             metadata={
                 "cadence": cadence,
-                "source_type": memory_type,
+                "source_type": source_label,
                 "memory_count": len(selected),
             },
         )

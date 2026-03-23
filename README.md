@@ -365,9 +365,15 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - conversation memory write path (openai_adapter writes two records per turn; was silently broken)
 - memory_type propagation end-to-end (ContextItem field + all retriever paths)
 - profile memory retrieval (guaranteed context slots; profile records always reach the LLM)
-- corpus quality suppression (3,327 of 16,728 ingested records suppressed; quality flag in SQLite)
+- corpus quality suppression (3,574 of 16,728 ingested records suppressed; quality flag in SQLite)
 - reflection scoring and filter improvements (length gate, diversity selection, skip filter tightened)
 - prompt perspective fix (MEMORY CONTEXT split into user self-description and context sub-sections)
+- profile retrieval score-gated at 0.3 (no more unconditional slot guarantee; irrelevant records excluded)
+- runtime model switching (GET /model, POST /model; qwen2.5:14b and mistral:7b available)
+- mid-conversation context compression (token-based, 70% threshold, LLM summarization, session summaries persisted to vault)
+- journal ingestion (scripts/journal.py CLI + POST /journal endpoint; 20-char minimum; mood and tags metadata)
+- multi-source reflection (daily + weekly reflection now blend journal and ingested content in a single pass)
+- 105 tests passing
 
 ## Next
 - formal typed memory class enforcement

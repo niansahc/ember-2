@@ -1,7 +1,8 @@
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
+from src.api.limiter import limiter
 from src.core.config import get_private_vault_path
 from src.ingest.importers.chatgpt import load_chatgpt_export
 from src.ingest.importers.files import load_file
@@ -47,7 +48,8 @@ def _validate_import_path(file_path: str) -> Path:
 # ChatGPT Export Ingestion
 # -----------------------------
 @router.post("/ingest/chatgpt")
-def ingest_chatgpt(file_path: str):
+@limiter.limit("10/minute")
+def ingest_chatgpt(request: Request, file_path: str):
     safe_path = _validate_import_path(file_path)
 
     docs = load_chatgpt_export(str(safe_path))
@@ -66,7 +68,8 @@ def ingest_chatgpt(file_path: str):
 # Local File Ingestion
 # -----------------------------
 @router.post("/ingest/file")
-def ingest_file(file_path: str):
+@limiter.limit("10/minute")
+def ingest_file(request: Request, file_path: str):
     safe_path = _validate_import_path(file_path)
 
     docs = load_file(str(safe_path))

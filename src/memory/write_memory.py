@@ -24,7 +24,8 @@ def should_skip_memory(text: str, memory_type: str = "journal") -> bool:
     if not normalized:
         return True
 
-    if len(normalized) < 40:
+    min_length = 20 if memory_type == "journal" else 40
+    if len(normalized) < min_length:
         return True
 
     meta_markers = (

@@ -30,6 +30,13 @@ class MemoryRequest(BaseModel):
     memory_type: str = "journal"
 
 
+class JournalRequest(BaseModel):
+    text: str
+    tags: list[str] = []
+    mood: str | None = None
+    date_override: str | None = None
+
+
 class StateRequest(BaseModel):
     type: str
     text: str
@@ -59,6 +66,34 @@ def clean_context_packet(packet_dict: dict) -> dict:
 @app.get("/")
 def root():
     return {"message": "Ember-2 API is running"}
+
+
+@app.post("/journal")
+def write_journal_endpoint(request: JournalRequest):
+    from src.memory.write_memory import write_memory
+
+    metadata: dict = {}
+    if request.mood:
+        metadata["mood"] = request.mood
+    if request.date_override:
+        metadata["date_override"] = request.date_override
+
+    tags = list(request.tags)
+    if request.mood and request.mood not in tags:
+        tags = [request.mood] + tags
+
+    path = write_memory(
+        text=request.text,
+        memory_type="journal",
+        source="api",
+        tags=tags,
+        metadata=metadata,
+    )
+
+    if path is None:
+        return {"status": "skipped", "reason": "content filtered"}
+
+    return {"status": "written", "path": str(path)}
 
 
 @app.post("/write-memory")

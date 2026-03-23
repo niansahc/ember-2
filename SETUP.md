@@ -142,7 +142,7 @@ Creates your personal configuration file from the provided template.
 cp .env.example .env
 ```
 
-Open `.env` in any text editor (Notepad on Windows, TextEdit on Mac) and set:
+Open `.env` in any text editor (Notepad, Notepad++, TextEdit on Mac) and set:
 
 ```
 PRIVATE_VAULT_PATH=C:/EmberVault

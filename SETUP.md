@@ -59,10 +59,18 @@ cd ember-2
 1. Go to [github.com/niansahc/ember-2](https://github.com/niansahc/ember-2)
 2. Click the green **Code** button → **Download ZIP**
 3. Extract the ZIP somewhere on your computer (e.g. your Desktop)
-4. Open a terminal and navigate into the extracted folder:
+   > GitHub names the extracted folder **`ember-2-main`** — that is the correct folder.
+4. Open a terminal (Command Prompt or PowerShell on Windows)
+5. Navigate into the extracted folder. For example, if you extracted to your Desktop:
 ```
-cd path\to\ember-2
+cd %USERPROFILE%\Desktop\ember-2-main
 ```
+6. Confirm you are in the right place — you should see `SETUP.md` listed:
+```
+dir
+```
+
+All commands from this point forward must be run from inside this folder. If you open a new terminal window later, navigate back here before running anything.
 
 ---
 

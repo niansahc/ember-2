@@ -27,6 +27,7 @@ class ContextPacket:
     # reflections and memory, per TDD context order:
     # state → reflections → source memories → reference → user query.
     state_items: list[StateItem] = field(default_factory=list)
+    web_items: list[dict] = field(default_factory=list)
     summary: str | None = None
 
     def all_items(self) -> list[ContextItem]:

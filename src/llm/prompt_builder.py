@@ -20,6 +20,7 @@ class PromptBuilder:
             self.system_prompt,
             self._build_state_section(context_packet),
             self._build_reflection_section(context_packet),
+            self._build_web_search_section(context_packet),
             self._build_context_section(context_packet),
             self._build_conversation_section(),
             self._build_instruction_section(),
@@ -86,6 +87,19 @@ class PromptBuilder:
             "- Only use memory if it directly supports the current question.\n"
             "- If memory conflicts with recent conversation, trust recent conversation.\n"
         )
+
+    def _build_web_search_section(self, context_packet: ContextPacket) -> str:
+        if not context_packet.web_items:
+            return ""
+
+        lines = []
+        for i, item in enumerate(context_packet.web_items, 1):
+            title = item.get("title", "")
+            url = item.get("url", "")
+            snippet = item.get("snippet", "")
+            lines.append(f"[{i}] {title}\n    {url}\n    {snippet}")
+
+        return "WEB SEARCH RESULTS:\n" + "\n\n".join(lines)
 
     def _build_context_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.memory_items:

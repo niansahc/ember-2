@@ -17,6 +17,9 @@ class ContextPolicy:
     # 0.0 = no special boost (default). Higher values prioritise current state
     # over memory and reflections — used for status/state queries.
     state_boost: float = 0.0
+    # When True, ContextService will call web_search() and inject results into
+    # the ContextPacket before prompt assembly.
+    use_web_search: bool = False
 
 
 def classify_query(user_message: str) -> ContextPolicy:
@@ -87,6 +90,22 @@ def classify_query(user_message: str) -> ContextPolicy:
         "remember when",
     )
 
+    # Checked before factual_recall — "search the web" is more specific than
+    # the bare "search" marker in factual_recall_markers.
+    web_search_markers = (
+        "search the web",
+        "search online",
+        "look up online",
+        "google",
+        "what's the latest",
+        "what is the latest",
+        "current news",
+        "news about",
+        "find online",
+        "web search",
+        "look it up",
+    )
+
     # Status/state queries resolve against current state first — checked before
     # reflective so "what am I working on" routes to state, not reflection.
     if any(marker in q for marker in state_markers):
@@ -108,6 +127,16 @@ def classify_query(user_message: str) -> ContextPolicy:
             recency_bias=0.2,
             diversity=True,
             prefer_experiences=True,
+        )
+
+    if any(marker in q for marker in web_search_markers):
+        return ContextPolicy(
+            name="web_search",
+            memory_weight=0.5,
+            reflection_weight=0.3,
+            recency_bias=0.0,
+            diversity=False,
+            use_web_search=True,
         )
 
     if any(marker in q for marker in factual_recall_markers):

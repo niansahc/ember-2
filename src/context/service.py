@@ -5,6 +5,7 @@ from src.context.models import ContextPacket
 from src.context.policies import classify_query
 from src.context.ranker import ContextRanker
 from src.context.retriever import ContextRetriever
+from src.tools.web_search import web_search
 
 
 class ContextService:
@@ -22,6 +23,10 @@ class ContextService:
 
     def build_context(self, user_message: str) -> ContextPacket:
         policy = classify_query(user_message)
+
+        web_items: list[dict] = []
+        if policy.use_web_search:
+            web_items = web_search(user_message)
 
         state_items, memory_items, reflection_items = self.retriever.retrieve(user_message)
         state_items = self.ranker.apply_state_boost(state_items, policy)
@@ -82,6 +87,7 @@ class ContextService:
             memory_items=selected_memory,
             reflection_items=selected_reflections,
             state_items=state_items,
+            web_items=web_items,
         )
 
     def _memory_limit_for_policy(self, policy_name: str) -> int:

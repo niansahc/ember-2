@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger("ember.policies")
 
 
 @dataclass
@@ -24,6 +27,9 @@ class ContextPolicy:
 
 def classify_query(user_message: str) -> ContextPolicy:
     q = user_message.lower()
+    # Normalize curly apostrophes to straight so markers like "what's" match
+    # regardless of input source (Open WebUI, mobile keyboards, etc.)
+    q = q.replace("\u2018", "'").replace("\u2019", "'")
 
     state_markers = (
         "what am i working on",
@@ -129,7 +135,10 @@ def classify_query(user_message: str) -> ContextPolicy:
             prefer_experiences=True,
         )
 
+    logger.debug("[CLASSIFY] normalized query: %s", q[:120])
+
     if any(marker in q for marker in web_search_markers):
+        logger.debug("[CLASSIFY] intent=web_search")
         return ContextPolicy(
             name="web_search",
             memory_weight=0.5,

@@ -213,18 +213,30 @@ You will see a list of records written. Safe to re-run — exact duplicates are 
 
 ### Step 8 — Start SearXNG (Web Search)
 
-Starts the private web search engine Ember uses for web-aware queries. Runs locally in Docker and is not accessible from outside your machine.
+SearXNG is a private web search engine that runs locally in Docker. Ember uses it for web-aware queries. It is not accessible from outside your machine.
 
+**Before running this step:**
+1. Make sure Docker Desktop is open and running — look for the Docker whale icon in your system tray. If it is not there, open Docker Desktop and wait until it says "Engine running".
+2. Make sure your terminal is still in the `ember-2-main\ember-2-main` folder. If you opened a new terminal, navigate back:
+```
+cd %USERPROFILE%\Desktop\ember-2-main\ember-2-main
+```
+
+**Start SearXNG:**
 ```
 docker compose up -d
 ```
 
-Verify it is running:
+The first time you run this it will download the SearXNG image — this may take a minute. After that it starts instantly.
+
+**Verify it is running:**
 ```
 docker ps
 ```
 
-You should see `ember-searxng` in the list.
+You should see a row with `ember-searxng` in the list and `Up` in the status column.
+
+> If you see `docker compose: command not found`, try `docker-compose up -d` (with a hyphen) — older versions of Docker use the hyphen form.
 
 ---
 

@@ -126,11 +126,16 @@ ollama list
 
 ### Step 5 — Create Your Memory Vault
 
-Creates the directory where Ember will store all your memories, journal entries, reflections, and context.
+Creates the directory where Ember will store all your memories, journal entries, reflections, and context. You can put this on any drive — just note the path, you will need it in Step 6.
 
-**Windows:**
+**Windows (C: drive):**
 ```
 mkdir C:\EmberVault
+```
+
+**Windows (D: drive or other):**
+```
+mkdir D:\EmberVault
 ```
 
 **Mac/Linux:**
@@ -150,15 +155,24 @@ Creates your personal configuration file from the provided template.
 cp .env.example .env
 ```
 
-Open `.env` in any text editor (Notepad, Notepad++, TextEdit on Mac) and set:
+Open `.env` in any text editor (Notepad, Notepad++, TextEdit on Mac).
+
+**Set the vault path** to wherever you created it in Step 5. Use forward slashes (`/`) even on Windows:
 
 ```
+# C: drive example:
 PRIVATE_VAULT_PATH=C:/EmberVault
+
+# D: drive example:
+PRIVATE_VAULT_PATH=D:/EmberVault
+```
+
+Also set the model names (leave these as-is unless you pulled different models):
+
+```
 EMBER_MODEL=qwen2.5:14b
 EMBER_VISION_MODEL=llama3.2-vision:11b
 ```
-
-Adjust the vault path to wherever you created it in Step 5.
 
 > `.env` is gitignored. It will never be committed to the repository.
 

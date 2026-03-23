@@ -35,13 +35,24 @@ def test_too_short_is_skipped():
     assert should_skip_memory("Short text.") is True
 
 
-def test_39_chars_is_skipped():
-    assert should_skip_memory("a" * 39) is True
+def test_39_chars_is_skipped_for_non_journal():
+    # non-journal types require 40 chars minimum
+    assert should_skip_memory("a" * 39, memory_type="conversation") is True
 
 
-def test_40_chars_passes_length_check():
-    # guard is len < 40, so exactly 40 passes
-    assert should_skip_memory("a" * 40) is False
+def test_40_chars_passes_length_check_for_non_journal():
+    # guard is len < 40, so exactly 40 passes for non-journal
+    assert should_skip_memory("a" * 40, memory_type="conversation") is False
+
+
+def test_journal_minimum_is_20_chars():
+    assert should_skip_memory("a" * 19, memory_type="journal") is True
+    assert should_skip_memory("a" * 20, memory_type="journal") is False
+
+
+def test_journal_39_chars_passes():
+    # 39 chars is above the journal minimum of 20
+    assert should_skip_memory("a" * 39, memory_type="journal") is False
 
 
 # ---------------------------------------------------------------------------

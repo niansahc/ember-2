@@ -285,11 +285,7 @@ You should see: `{"message": "Ember-2 API is running"}`
 Open WebUI is the chat interface you will use to talk to Ember. Install and run it via Docker:
 
 ```
-docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway \
-  -e WEBUI_AUTH=true \
-  -v open-webui:/app/backend/data \
-  --name open-webui --restart always \
-  ghcr.io/open-webui/open-webui:main
+docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway -e WEBUI_AUTH=true -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main
 ```
 
 Then open a browser and go to `http://localhost:3000`. Create an account (local only — no external sign-up).

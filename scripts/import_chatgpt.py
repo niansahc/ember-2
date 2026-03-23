@@ -14,7 +14,7 @@ BATCH_SIZE = 50
 
 def main():
     vault = get_private_vault_path()
-    folder = r"C:\Users\<username>\OneDrive\Desktop\Ember-2\private_vault\imports\chatgpt\openai-export"
+    folder = vault / "imports" / "chatgpt" / "openai-export"
 
     docs = load_chatgpt_export(folder)
     print(f"Loaded {len(docs)} conversations")

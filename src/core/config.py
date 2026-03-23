@@ -20,6 +20,17 @@ def get_private_vault_path():
     return Path(vault_path).resolve()
 
 
+def get_ember_api_key() -> str | None:
+    """
+    Returns the API key required to access Ember-2 endpoints, or None if not set.
+    Set EMBER_API_KEY in .env to enable authentication.
+    When set, all endpoints except GET / require either:
+      Authorization: Bearer <key>   (Open WebUI / OpenAI-compatible clients)
+      X-API-Key: <key>              (direct API access)
+    """
+    return os.getenv("EMBER_API_KEY") or None
+
+
 def get_ember_vision_model() -> str | None:
     """
     Returns the Ollama vision model for image analysis, or None if not configured.

@@ -64,6 +64,19 @@ Ember-2 is a private, evolving system that:
 - Assist with structuring ideas and projects
 - Maintain continuity of personal themes and interests
 
+### 7. Journal Entry
+- Accept first-person journal entries as a direct input method (CLI and API)
+- Store entries as typed memory records, immediately searchable and retrievable
+- Include mood and tags as structured metadata for filtering and pattern recognition
+- Journal content feeds into daily and weekly reflection alongside other memory sources
+
+### 8. Constitutional Response Governance
+- All responses subject to an explicit, inspectable governance layer
+- Triggered post-draft — does not interfere with normal conversation flow
+- Outcomes are allow, revise, or refuse with redirect — never silent suppression
+- Governance rules live in external config, not buried in prompts or model behavior
+- Review decisions are logged and auditable by the user
+
 ---
 
 ## Future Capabilities
@@ -74,6 +87,7 @@ Ember-2 is a private, evolving system that:
 - Tool integrations (calendar, notes, etc.)
 - Multi-modal inputs (documents, images, etc.)
 - Agent-style workflows
+- Shareability — Ember's persona, governance config, and retrieval logic are the shareable artifacts; user data never leaves the local vault; two distribution paths: (1) non-technical user path with one-click installer, no CLI required, and an onboarding conversation flow that seeds identity context through conversation rather than scripts; (2) technical user path with clean setup docs, seed_identity_template.py, and API-first configuration
 
 ---
 

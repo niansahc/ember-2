@@ -468,24 +468,51 @@ The goal is to build a durable, extensible personal intelligence system that imp
 ```text
 ember-2/
 │
-├ api/
-├ src/
-│   ├ core/
-│   ├ context/
-│   ├ ingest/
-│   ├ llm/
-│   ├ memory/
-│   ├ retrieval/
-│   ├ reflection/
-│   ├ safety/
-│   ├ state/
-│   └ tasks/        (planned)
+src/
+│   ├ api/           FastAPI app, OpenAI-compatible adapter, ingest routes
+│   ├ context/       ContextService, ContextRetriever, ContextRanker, policies
+│   ├ core/          Config (PRIVATE_VAULT_PATH, model settings)
+│   ├ ingest/        Pipeline, chunker, filters, importers
+│   ├ llm/           Ollama adapter, prompt builder, conversation buffer
+│   ├ memory/        MemoryService, storage, read/write/search helpers
+│   ├ retrieval/     VectorIndex, semantic search, embed helpers
+│   ├ reflection/    Daily and weekly reflection generators
+│   ├ safety/        ConstitutionLoader, SafetyPolicyService, ReviewService
+│   ├ state/         StateService, StateResolver, state models
+│   └ tools/         Internal tool helpers
 │
 ├ config/
+│   ├ constitution.yaml   Constitutional governance rules
+│   └ searxng/            SearXNG configuration
+│
 ├ docs/
-├ jobs/
-├ logs/
-├ prompts/
+│   ├ Ember2_TDD.md            Technical design document (canonical)
+│   ├ Ember2_BRequirements.md  Business requirements
+│   └ adr/                     Architecture Decision Records
+│
 ├ scripts/
+│   ├ seed_identity_template.py   Template for seeding your profile
+│   ├ set_api_key.py              Store API key in Windows Credential Manager
+│   ├ import_chatgpt.py           Ingest a ChatGPT export
+│   ├ journal.py                  CLI journal entry writer
+│   ├ audit_memory.py             Vault health check
+│   └ repoint_vault_paths.py      One-time vault migration helper
+│
 ├ tools/
-├ private_vault/  (excluded from git)
+│   ├ eval_retrieval.py           Retrieval evaluation harness
+│   ├ inspect_indexes.py          Browse vector index contents
+│   ├ view_safety_logs.py         View constitutional review logs
+│   ├ audit_assistant_chunks.py   Audit assistant-generated chunks
+│   └ suppress_assistant_noise.py Flag low-quality ingested records
+│
+├ tests/                  Pytest suite (123 tests)
+├ prompts/                LLM prompt templates
+├ logs/                   Audit logs, safety review logs (gitignored)
+├ CLAUDE.md               AI coding instructions and architecture rules
+├ ETHOS.md                Ember's founding principles
+├ SETUP.md                First-time setup guide
+├ .env.example            Environment variable template
+├ docker-compose.yml      SearXNG container
+├ start_api.bat           Windows API startup script
+└ private_vault/          Excluded from git — all memory data lives here
+```

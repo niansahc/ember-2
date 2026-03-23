@@ -1,14 +1,14 @@
 import sqlite3
 import os
 import sys
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-db = os.path.join(
-    r"C:\Users\nians\OneDrive\Desktop\Ember-2\private_vault",
-    "embeddings",
-    "ingested.db",
-)
+from src.core.config import get_private_vault_path
+
+db = os.path.join(str(get_private_vault_path()), "embeddings", "ingested.db")
 conn = sqlite3.connect(db)
 cur = conn.cursor()
 

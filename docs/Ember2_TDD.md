@@ -1729,70 +1729,90 @@ That is the durable path.
 
 # 31. Security and Trust Model
 
-**Status: Planned — required before any public sharing or multi-user deployment**
+**Status: Complete for single-user deployment (v0.8.3–v0.8.4)**
 
-Ember's local-first architecture provides a natural baseline: data never leaves the machine by default. But local does not mean secure. Before Ember is shared with others or runs on a shared host, the following surface areas must be addressed.
+Ember's local-first architecture provides a natural baseline: data never leaves the machine by default. This section documents the current implemented security posture and what remains for multi-user deployment.
 
 ## 31.1 Threat Model
 
-Primary threats in the current deployment model:
-
-| Threat | Risk | Notes |
+| Threat | Status | Implementation |
 |---|---|---|
-| Unauthorized vault access | High | `private_vault/` contains all personal memory; anyone with filesystem access can read it |
-| API exposure on local network | Medium | FastAPI binds to localhost by default; binding to 0.0.0.0 exposes it to LAN |
-| `.env` exposure | High | Contains vault path and model config; must never be committed |
-| Session hijacking via Open WebUI | Low | Open WebUI runs in Docker; no auth on the API itself by default |
-| Prompt injection via ingested content | Medium | Malicious content in ingested docs could influence retrieval context |
-| Log data exposure | Low | Safety review logs contain user message content and draft responses |
+| Vault data in cloud sync | **Mitigated** | Vault moved to `C:\EmberVault\` (outside OneDrive) |
+| Unauthorized vault access at rest | **Mitigated** | Windows BitLocker encrypts C: drive; vault protected at rest |
+| API exposure on local network | **Mitigated** | API binds to Tailscale IP only (`<your-tailscale-ip>:8000`); LAN devices cannot reach it |
+| Unauthenticated API access | **Mitigated** | API key required on all non-health-check endpoints |
+| API key exposed as plaintext | **Mitigated** | Key stored in Windows Credential Manager (DPAPI-encrypted); not in `.env` or any file |
+| Traffic interception in transit | **Mitigated** | All traffic over Tailscale WireGuard; Open WebUI served via HTTPS (Tailscale Serve) |
+| Resource exhaustion / vault flooding | **Mitigated** | Rate limiting via slowapi: 60/min global, 30/min LLM, 10/min reflect/ingest |
+| Path traversal via ingest endpoints | **Mitigated** | `_validate_import_path()` restricts to `vault/imports/` only |
+| Prompt injection via ingested content | Residual | Ingestion filters reduce risk; no full mitigation at this phase |
+| Log data exposure | Residual | Safety review logs and audit logs contain message content; protected by BitLocker |
+| SearXNG exposure on LAN | **Mitigated** | SearXNG bound to `127.0.0.1:8888` only |
+| Tailscale guest device access | **Mitigated** | ACL restricts to `autogroup:member` (account owner's devices only) |
 
-## 31.2 Vault Permissions
+## 31.2 Vault Location and Permissions
 
-Minimum required hardening:
-
-- `private_vault/` should be owned and readable only by the running user (chmod 700 or equivalent on Linux/macOS)
-- On Windows, vault directory should have access control restricted to the user account
-- Vault path should never be logged or echoed in API responses
+- Vault lives at `C:\EmberVault\` — outside OneDrive, not cloud-synced
+- Path set via `PRIVATE_VAULT_PATH` in `.env` (gitignored)
+- Vault path is never logged or echoed in API responses
+- Windows NTFS access controls restrict access to the running user account
 
 ## 31.3 Encryption at Rest
 
-Currently: no encryption. All vault records are plaintext JSON.
+Windows BitLocker is enabled on C:, providing full-disk AES encryption. `C:\EmberVault\` is covered by this. Encryption is transparent to the API — no application-level changes required.
 
-Planned direction:
+Recovery key is stored in a password manager (not on the encrypted drive).
 
-- Evaluate envelope encryption for vault records using a local key (e.g., age, GPG, or OS keychain-backed key)
-- Embeddings index files should be encrypted if vault records are
-- Key management must not depend on the cloud — local keyfile or OS credential store only
-- Encryption should be opt-in initially, with a clear migration path from plaintext
-
-This is a **hard requirement** before any public-facing or shared-host deployment.
+**Remaining gap for multi-user:** Application-level per-record encryption (e.g., DPAPI-backed envelope encryption) would provide stronger isolation between users on the same machine. This is a requirement before multi-user deployment — see §36.
 
 ## 31.4 API Authentication
 
-Currently: no authentication on the FastAPI endpoints.
+All endpoints except `GET /` require authentication via:
 
-Planned direction:
+- `Authorization: Bearer <key>` — Open WebUI and OpenAI-compatible clients
+- `X-API-Key: <key>` — direct API access
 
-- Add API key authentication (static secret in `.env`) as a minimum gate
-- Key checked on all non-health-check routes
-- Open WebUI supports custom API keys — this is configurable without code changes to the frontend
-- For multi-user scenarios: per-user API keys mapped to per-user vault paths (see §36)
+Implementation: `api_key_auth` middleware in `src/api/main.py` using `secrets.compare_digest` (timing-safe).
+
+**Key storage:** The API key is stored in Windows Credential Manager via the `keyring` library (DPAPI-encrypted, tied to Windows login). It is not written to `.env` or any plaintext file. To set or rotate: `python scripts/set_api_key.py`.
 
 ## 31.5 Network Exposure
 
-Default: bind to `127.0.0.1` only.
+- API binds to `<your-tailscale-ip>` (Tailscale interface) — not reachable from LAN or internet
+- All Tailscale traffic is WireGuard-encrypted end-to-end
+- Open WebUI is served over HTTPS via Tailscale Serve (`https://chastainblanc.tail682db9.ts.net`)
+- Tailscale ACL restricts tailnet access to `autogroup:member` (account owner devices only)
+- SearXNG binds to `127.0.0.1:8888` — local machine only
 
-If remote access is needed:
+## 31.6 Rate Limiting
 
-- Use Tailscale (see §36) as the network layer rather than exposing the API to the open internet
-- Never bind to `0.0.0.0` on a public network without auth in place
-- Document the safe exposure model in setup documentation
+Applied via `slowapi` middleware (`src/api/limiter.py`):
 
-## 31.6 Audit and Compliance Notes
+| Scope | Limit |
+|---|---|
+| Global (all routes) | 60 requests/minute per IP |
+| `POST /v1/chat/completions` | 30 requests/minute |
+| `POST /reflect` | 10 requests/minute |
+| `POST /ingest/*` | 10 requests/minute |
 
-- Review logs in `logs/safety_reviews/` contain user message content — these should be treated as sensitive
-- No telemetry, no external logging, no cloud dependency in the core runtime
-- All model inference is local via Ollama — no data leaves the machine during normal operation
+Returns HTTP 429 when exceeded.
+
+## 31.7 Audit Logging
+
+All non-health-check requests are logged to `logs/audit/YYYY-MM-DD.log` as JSON lines:
+
+```json
+{"ts": "2026-03-23T16:00:00+00:00", "method": "POST", "path": "/v1/chat/completions", "ip": "100.84.178.124", "status": 200, "ms": 1243}
+```
+
+Both authenticated (200) and rejected (401) requests are captured. Audit middleware wraps the auth middleware so all outcomes are recorded.
+
+## 31.8 Remaining Work Before Multi-User Deployment
+
+- Per-user vault isolation and per-user API keys (§36)
+- Application-level record encryption for cross-user isolation
+- Automated cert renewal for Tailscale HTTPS (certs expire ~90 days)
+- Formal access audit tooling (`tools/view_audit_logs.py`)
 
 ---
 

@@ -376,6 +376,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - Open WebUI interference hardening (empty message guard; `### Task:` RAG injection guard; type-aware payload logging) — v0.7.10
 - web search via local SearXNG (intent-gated; `web_items` in ContextPacket; results above memory context in prompt; apostrophe normalization) — v0.8.0/v0.8.1
 - vision model integration (`EMBER_VISION_MODEL` in .env; `image_data` pipeline from openai_adapter → ContextPacket → Ollama `images=` kwarg; graceful text-only fallback) — v0.8.2
+- security hardening: Tailscale-only API binding, API key auth middleware, Windows Credential Manager key storage (keyring), BitLocker encryption at rest, rate limiting (slowapi), path traversal protection on ingest endpoints, JSON audit logging to `logs/audit/`, Tailscale HTTPS via Serve, ACL restricted to `autogroup:member` — v0.8.3/v0.8.4
 - 123 tests passing
 
 ## Next
@@ -396,9 +397,50 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - embedding upgrade to nomic-embed-text via Ollama
 - relevance decay and forgetting mechanism (archive-first, policy-governed)
 - multi-user vault isolation (per-user vault paths, API key auth, Tailscale network layer)
-- security and trust model (vault permissions, encryption at rest, API auth)
+- security hardening for multi-user deployment (per-user vault isolation, shared-host hardening)
 - ~~index migration to SQLite / DuckDB~~ — complete for ingested corpus (v0.6.0)
 - stronger evaluation and review analytics
+
+---
+
+# Security
+
+Ember-2 is hardened for single-user local deployment as of v0.8.3–v0.8.4.
+
+## Controls in Place
+
+| Control | Implementation |
+|---|---|
+| Vault encryption at rest | BitLocker (AES) on C: — covers `C:\EmberVault\` |
+| Vault location | `C:\EmberVault\` — off OneDrive, not cloud-synced |
+| API key storage | Windows Credential Manager via `keyring` — never in `.env` |
+| API authentication | `Authorization: Bearer` or `X-API-Key` header; `secrets.compare_digest` |
+| Network exposure | API bound to Tailscale IP only (`<your-tailscale-ip>`); LAN blocked |
+| Transport encryption | HTTPS via Tailscale Serve (TLS cert from Tailscale CA) |
+| Network access control | Tailscale ACL: `autogroup:member` only — no unauthenticated access |
+| Rate limiting | 60/min global default; 30/min chat; 10/min reflect/ingest (slowapi) |
+| Path traversal | Ingest endpoints validate `file_path` is inside `vault/imports/` |
+| Audit logging | JSON lines to `logs/audit/YYYY-MM-DD.log` (ts, method, path, ip, status, ms) |
+| SearXNG | Bound to `127.0.0.1:8888` — not reachable from network |
+
+## Key Setup
+
+```bash
+# Store or rotate API key (run once after setup)
+python scripts/set_api_key.py
+```
+
+The key is DPAPI-encrypted in Windows Credential Manager and tied to your Windows login. It is never written to `.env` or any plaintext file.
+
+## Remaining Gaps (Single-User)
+
+- No application-level file ACLs on vault (relies on OS + BitLocker)
+- Audit log covers authentication layer only — not memory read/write events
+- Rate limits are per-IP (Tailscale IP) — effective for single user, not a substitute for multi-user auth
+
+## Multi-User
+
+Not supported. Multi-user deployment requires per-user vault isolation, independent API keys, and a separate auth layer. See TDD §31 and §36.
 
 ---
 

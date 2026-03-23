@@ -61,9 +61,9 @@ cd ember-2
 3. Extract the ZIP somewhere on your computer (e.g. your Desktop)
    > GitHub names the extracted folder **`ember-2-main`** — that is the correct folder.
 4. Open a terminal (Command Prompt or PowerShell on Windows)
-5. Navigate into the extracted folder. For example, if you extracted to your Desktop:
+5. Navigate into the extracted folder. GitHub creates a folder inside a folder, so you need to go two levels deep. If you extracted to your Desktop:
 ```
-cd %USERPROFILE%\Desktop\ember-2-main
+cd %USERPROFILE%\Desktop\ember-2-main\ember-2-main
 ```
 6. Confirm you are in the right place — you should see `SETUP.md` listed:
 ```

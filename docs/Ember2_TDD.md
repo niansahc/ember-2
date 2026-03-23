@@ -1515,6 +1515,7 @@ It should be possible to explain:
 - ~~memory_type propagation fixed~~ — complete (v0.7.0): ContextItem dataclass now includes memory_type field; set explicitly in all three retriever paths (get_memory_items, get_reflection_items, get_conversation_items)
 - ~~reflection scoring improvements~~ — complete (v0.7.1): _should_skip_for_reflection tightened (box-drawing chars, short URL check, multi-turn detection, formatting complaint markers, ", line " fix); _reflection_priority_score improved with length gate on experience bonus, length quality bonus, and Jaccard-based diversity selection replacing candidates[:8]; 31 tests added in test_should_skip_for_reflection.py
 - ~~profile retrieval guarantee~~ — complete (v0.7.x): get_profile_items() added to ContextRetriever (semantic search scoped to memory_type="profile", read() fallback); profile items partitioned before final slice in ContextService so ranker score cannot push them below the limit cutoff; seed_identity_template.py added for onboarding; MEMORY CONTEXT prompt split into [User self-description] and [Context] sub-sections to fix perspective confusion
+- ~~Open WebUI interference hardening~~ — complete (v0.7.10): empty message guard (no text AND no image_parts) returns early with friendly message; `### Task:` RAG injection guard falls back to prior user message; system-role `User Context:` injection identified as benign noise (no action needed); type-aware diagnostic payload logging added at warning level to openai_adapter
 - add retrieval evaluation benchmark
 - add audit scripts
 - improve trigger coverage without coupling to one test case
@@ -1531,6 +1532,8 @@ It should be possible to explain:
 - ~~mid-conversation context compression~~ — complete (v0.7.6): ConversationBuffer replaced deque(maxlen=6) with list(max_turns=20); token_count() via word×1.3 approximation; needs_compression() triggers at 70% of model context window; pop_oldest_half() + inject_summary_turn() compress oldest N//2 turns via LLM; session summaries written as memory_type="reflection" with cadence="session"; MODEL_CONTEXT_WINDOWS lookup per model; 34 tests in test_conversation_buffer.py
 - ~~journal ingestion~~ — complete (v0.7.8): scripts/journal.py CLI with --text, --mood, --tags, $EDITOR support; POST /journal endpoint with text, tags, mood, date_override; write_memory() minimum length lowered to 20 chars for memory_type="journal" (was 40); both paths bypass MemoryService duplicate-check
 - ~~multi-source reflection~~ — complete (v0.7.9): generate_reflection() signature changed from memory_type: str to memory_types: list[str] | str (backwards compat); daily and weekly runners now pass ["journal", "ingested"]; candidates pooled from all sources before scoring and diversity selection; source_label stored in reflection metadata
+- ~~web search via local SearXNG~~ — complete (v0.8.0/v0.8.1): `src/tools/web_search.py` thin client to SearXNG JSON API at `localhost:8888`; `use_web_search` field on `ContextPolicy`; `web_search` intent class in `classify_query()`; apostrophe normalization (curly → straight) before all marker matching; `web_items` field on `ContextPacket`; results rendered above memory context in prompt builder; `docker-compose.yml` + `config/searxng/settings.yml` for local SearXNG instance
+- ~~vision model integration~~ — complete (v0.8.2): `EMBER_VISION_MODEL` env var + `get_ember_vision_model()` in config; `image_data: list[str]` field on `ContextPacket`; base64 extraction from `data:image/...;base64,` prefix in openai_adapter; `model_override` + `images=` kwarg in `LLMAdapter._chat()`; `use_vision = bool(image_data) and bool(vision_model)` routing in `generate_response()`; graceful fallback to text-only model when vision not configured or no image present; 18 tests in test_vision.py (123 total passing)
 - add task layer
 - improve timeline reconstruction
 - build dashboard / observability views
@@ -1721,6 +1724,423 @@ into:
 **a local personal intelligence system with typed memory, state, retrieval policy, constitutional review, and future action capability**
 
 That is the durable path.
+
+---
+
+# 31. Security and Trust Model
+
+**Status: Planned — required before any public sharing or multi-user deployment**
+
+Ember's local-first architecture provides a natural baseline: data never leaves the machine by default. But local does not mean secure. Before Ember is shared with others or runs on a shared host, the following surface areas must be addressed.
+
+## 31.1 Threat Model
+
+Primary threats in the current deployment model:
+
+| Threat | Risk | Notes |
+|---|---|---|
+| Unauthorized vault access | High | `private_vault/` contains all personal memory; anyone with filesystem access can read it |
+| API exposure on local network | Medium | FastAPI binds to localhost by default; binding to 0.0.0.0 exposes it to LAN |
+| `.env` exposure | High | Contains vault path and model config; must never be committed |
+| Session hijacking via Open WebUI | Low | Open WebUI runs in Docker; no auth on the API itself by default |
+| Prompt injection via ingested content | Medium | Malicious content in ingested docs could influence retrieval context |
+| Log data exposure | Low | Safety review logs contain user message content and draft responses |
+
+## 31.2 Vault Permissions
+
+Minimum required hardening:
+
+- `private_vault/` should be owned and readable only by the running user (chmod 700 or equivalent on Linux/macOS)
+- On Windows, vault directory should have access control restricted to the user account
+- Vault path should never be logged or echoed in API responses
+
+## 31.3 Encryption at Rest
+
+Currently: no encryption. All vault records are plaintext JSON.
+
+Planned direction:
+
+- Evaluate envelope encryption for vault records using a local key (e.g., age, GPG, or OS keychain-backed key)
+- Embeddings index files should be encrypted if vault records are
+- Key management must not depend on the cloud — local keyfile or OS credential store only
+- Encryption should be opt-in initially, with a clear migration path from plaintext
+
+This is a **hard requirement** before any public-facing or shared-host deployment.
+
+## 31.4 API Authentication
+
+Currently: no authentication on the FastAPI endpoints.
+
+Planned direction:
+
+- Add API key authentication (static secret in `.env`) as a minimum gate
+- Key checked on all non-health-check routes
+- Open WebUI supports custom API keys — this is configurable without code changes to the frontend
+- For multi-user scenarios: per-user API keys mapped to per-user vault paths (see §36)
+
+## 31.5 Network Exposure
+
+Default: bind to `127.0.0.1` only.
+
+If remote access is needed:
+
+- Use Tailscale (see §36) as the network layer rather than exposing the API to the open internet
+- Never bind to `0.0.0.0` on a public network without auth in place
+- Document the safe exposure model in setup documentation
+
+## 31.6 Audit and Compliance Notes
+
+- Review logs in `logs/safety_reviews/` contain user message content — these should be treated as sensitive
+- No telemetry, no external logging, no cloud dependency in the core runtime
+- All model inference is local via Ollama — no data leaves the machine during normal operation
+
+---
+
+# 32. Reflection Synthesis Upgrade
+
+**Status: Planned — current implementation is functional but architecturally incomplete**
+
+## 32.1 Current Gap
+
+The current reflection engine generates reflections by:
+
+1. Gathering source memories from a time window
+2. Concatenating them as a block of text
+3. Prompting the LLM to summarize
+
+This produces functional output but misses the core design intent in the TDD: reflections should be **pattern analyses**, not summaries of recent activity.
+
+The gap:
+- Current: "here are things that happened recently, summarize them"
+- Target: "here is accumulated experience, identify patterns, themes, and insight worth preserving"
+
+## 32.2 Target Design
+
+A proper reflection synthesis pipeline should:
+
+- Receive structured, pre-filtered source material (not a raw text dump)
+- Apply a multi-stage prompt designed for insight extraction, not summarization
+- Distinguish between:
+  - **Event summaries** (what happened)
+  - **Pattern observations** (recurring themes or behaviors)
+  - **Insight notes** (non-obvious synthesis worth long-term recall)
+- Store these as distinct fields or sub-artifacts within the reflection record
+- Reference source record IDs so reflections are traceable
+
+## 32.3 Prompt Architecture
+
+Target prompt structure for weekly reflection:
+
+1. **Context section**: source memories organized by type (journal, conversation, ingested)
+2. **Instruction section**: ask for patterns, themes, and notable changes — not a summary
+3. **Output schema**: structured JSON with `patterns`, `themes`, `notable_changes`, `open_questions`, `full_synthesis`
+
+This output schema allows the context builder to selectively retrieve reflection sub-components (e.g., only patterns for a reflective query) rather than always injecting the full text.
+
+## 32.4 Source Quality Gate
+
+Before synthesis, input memories should be scored and filtered:
+
+- Minimum content quality (length, meaningful vs. filler)
+- Diversity across time window (avoid reflections dominated by one topic)
+- Balance across memory types when multi-source
+
+The current `_should_skip_for_reflection()` filter is the starting point. It needs to be strengthened for pattern-oriented synthesis.
+
+## 32.5 Migration Path
+
+1. Define output schema for structured reflection artifacts
+2. Update `ReflectionEngine` prompt to use the new structure
+3. Update `ContextRetriever` to handle sub-component retrieval from structured reflections
+4. Add evaluation: compare pattern-oriented vs. summary-oriented reflection quality on the same time windows
+5. Migrate existing reflections to annotate them with schema version (old reflections remain valid, new ones carry richer structure)
+
+---
+
+# 33. Onboarding Quiz
+
+**Status: Planned — replaces cold-start problem for new users**
+
+## 33.1 Problem
+
+A fresh Ember vault has no identity, no preferences, and no context. The first conversation is impersonal and generic. The current workaround is `scripts/seed_identity_template.py` — a manual script that requires the user to edit a Python file.
+
+This is a blocker for the non-technical user path (§25.5) and creates a poor first-run experience for any user.
+
+## 33.2 Design
+
+An onboarding quiz is a structured intake flow that:
+
+- Runs on first launch when the vault has no profile records
+- Guides the user through a series of questions via the chat interface
+- Stores each answered question as a `profile` memory record
+- Ends with an initialized vault ready for normal use
+
+The quiz replaces `seed_identity_template.py` for all paths.
+
+## 33.3 Question Categories
+
+Minimum question set:
+
+**Identity**
+- What should I call you?
+- What are your pronouns?
+- What do you do for work?
+- Where are you based?
+
+**Context and goals**
+- What are you currently working on?
+- What are you hoping Ember will help you with most?
+- What kinds of things are important to you right now?
+
+**Preferences**
+- How would you describe your communication style preference? (brief, detailed, conversational, structured)
+- Are there topics you'd like me to engage with thoughtfully and carefully?
+- Are there topics that are off-limits for Ember?
+
+**Personality and values**
+- What motivates you?
+- How do you like to handle hard days?
+- Is there anything about how you think or process that would help me work with you better?
+
+## 33.4 Storage
+
+Each question-answer pair writes a `profile` memory record:
+
+```json
+{
+  "id": "...",
+  "timestamp": "...",
+  "type": "profile",
+  "text": "User's name is Chas. They prefer they/them and she/her pronouns.",
+  "source": "onboarding_quiz",
+  "tags": ["profile", "identity"],
+  "metadata": {
+    "question_id": "identity.name",
+    "content_kind": "profile"
+  }
+}
+```
+
+## 33.5 Integration Points
+
+- **Detection**: `ContextRetriever.get_profile_items()` returns empty → trigger onboarding
+- **Interface**: custom frontend (§25.6) exposes a dedicated onboarding mode; Open WebUI path uses the standard chat interface with a guided system prompt
+- **Completion**: quiz writes a `system_event` record marking onboarding complete so it doesn't re-trigger
+- **Re-onboarding**: user can re-run by clearing profile records or via a `/onboarding reset` CLI command
+
+## 33.6 Constitution Consideration
+
+Onboarding responses that touch sensitive topics (health, values, religion) should bypass constitutional review — they are profile-building, not risky output. Add an explicit `skip_review` flag or onboarding-mode context to the trigger evaluator.
+
+---
+
+# 34. Embedding Upgrade
+
+**Status: Planned — current model functional but not optimal for personal knowledge retrieval**
+
+## 34.1 Current State
+
+Ember uses `all-MiniLM-L6-v2` via `sentence-transformers` for all embedding generation.
+
+This model:
+- Is fast and lightweight (22M parameters)
+- Works well for general-purpose semantic similarity
+- Is not optimized for long-form personal knowledge retrieval
+- Requires a separate Python dependency (`sentence-transformers`) outside the Ollama stack
+- Produces 384-dimension vectors
+
+## 34.2 Target: nomic-embed-text
+
+`nomic-embed-text` via Ollama is the target replacement.
+
+Advantages:
+- 768-dimension vectors — more expressive embedding space
+- Trained specifically for retrieval tasks (not just similarity)
+- Runs through Ollama — eliminates `sentence-transformers` dependency
+- Consistent with Ember's local-first, Ollama-centric stack
+- Longer context window than MiniLM (8192 vs. 256 tokens)
+
+Disadvantages:
+- Slower than MiniLM for large batch embedding
+- Requires Ollama to be running for embedding generation (already a dependency)
+- All existing indexes must be rebuilt after migration
+
+## 34.3 Migration Plan
+
+1. Add `get_ember_embed_model()` to `src/core/config.py` — reads `EMBER_EMBED_MODEL` from `.env`
+2. Update `src/retrieval/embed_memory.py` to call `ollama.embeddings(model=embed_model, prompt=text)` instead of `SentenceTransformer`
+3. Pull `nomic-embed-text` via `ollama pull nomic-embed-text`
+4. Run full index rebuild for all memory types
+5. Run retrieval evaluation before and after to confirm quality improvement
+6. Remove `sentence-transformers` from dependencies
+
+The transition requires a one-time full re-embedding of all vault records. With ~16k ingested records this is a batch operation, not a hot migration.
+
+## 34.4 Backward Compatibility
+
+Indexes generated with different embedding models are not interchangeable. The migration is a hard cut:
+
+- Delete all existing `.json` and `.db` index files
+- Re-embed from canonical vault records
+- New indexes are not compatible with old embedding vectors
+
+The canonical vault records (`private_vault/memory/**/*.json`) are not affected — they contain only text, not embeddings.
+
+---
+
+# 35. Relevance Decay and Forgetting
+
+**Status: Planned — important for long-term vault health**
+
+## 35.1 Problem
+
+Ember's vault grows indefinitely. Every conversation turn, journal entry, reflection, and ingested document is stored permanently. Without a forgetting mechanism:
+
+- Old, low-relevance records compete with recent, high-relevance ones
+- Retrieval quality degrades as the corpus grows
+- Storage costs increase (minor locally, but real at scale)
+- Some records become actively misleading as context changes (e.g., old state records, outdated project notes)
+
+## 35.2 Design Principles
+
+Forgetting in Ember must be:
+
+- **Non-destructive by default** — archive before delete, never destroy canonical records silently
+- **Append-only compatible** — forgetting is implemented as status annotation, not file deletion
+- **Reversible** — archived records can be restored if needed
+- **User-visible** — forgetting actions should be logged and inspectable
+- **Policy-governed** — decay rules live in config, not hardcoded in retrieval
+
+## 35.3 Decay Mechanisms
+
+### Access-based decay
+
+Records that are never retrieved over a long window (e.g., 90 days) are candidates for archival.
+
+Implementation:
+- Track `last_retrieved` timestamp on index entries (not in canonical records)
+- After N days without retrieval, flag the record as `archive_candidate`
+- Batch archive job moves flagged records to `private_vault/memory/archive/`
+
+### Time-based decay
+
+Records older than a configurable threshold decay in retrieval weight unless they are:
+- Profile records
+- Reflection records
+- Explicitly tagged as `keep` or `permanent`
+
+Implementation:
+- Add `age_weight` multiplier to ranking — scales from 1.0 at creation to a floor value (e.g., 0.3) over time
+- Configurable decay curve (linear or exponential)
+- Profile and reflection types exempt from age decay
+
+### Quality-based decay
+
+Records already flagged as suppressed (quality='suppressed' in `ingested.db`) are candidates for eventual deletion after a grace period.
+
+### State record expiry
+
+State records older than a configurable window (e.g., 30 days) without a superseding record should be auto-archived. State is operational truth — stale state is worse than no state.
+
+## 35.4 Archive vs. Delete Policy
+
+| Condition | Action |
+|---|---|
+| Low-access general memory (90+ days) | Archive |
+| Outdated state records (superseded + 30 days) | Archive |
+| Already-suppressed ingested chunks (quality='suppressed') after grace period | Delete |
+| Journal entries | Never delete — archive only |
+| Profile records | Never delete — archive only |
+| Reflections | Never delete — archive only |
+| Review logs | Configurable retention (default: 180 days) |
+
+## 35.5 Implementation Path
+
+1. Add `last_retrieved` tracking to `SqliteVectorStore` (nullable timestamp column)
+2. Add `age_weight` multiplier to `ContextRanker`
+3. Build `scripts/archive_stale_memory.py` — dry-run and --apply modes
+4. Add decay config block to `config/constitution.yaml` or a new `config/decay.yaml`
+5. Add state record expiry logic to `StateService`
+
+---
+
+# 36. Multi-User Vault Isolation
+
+**Status: Planned — required before Ember is shareable as a hosted personal assistant**
+
+## 36.1 Problem
+
+Ember's current architecture assumes a single user. All services are instantiated as module-level singletons, and the vault path is a single global value from `.env`. Running Ember for multiple users on one machine — or distributing it to others — requires proper vault isolation.
+
+## 36.2 Design Goals
+
+- Each user gets a completely isolated vault (separate `private_vault/` equivalent)
+- No cross-user data leakage at any layer (retrieval, context, reflection, state)
+- The shared codebase and Ember persona are not per-user
+- Constitution and behavioral config can be shared or per-user depending on deployment
+
+## 36.3 Architecture
+
+### Vault Path as User Context
+
+Replace the global `PRIVATE_VAULT_PATH` with a per-request or per-session vault context:
+
+```python
+class UserContext:
+    user_id: str
+    vault_path: Path
+    embed_model: str  # optional per-user override
+```
+
+All services that currently read `PRIVATE_VAULT_PATH` from config must accept a `UserContext` instead.
+
+### Service Isolation
+
+Currently, `MemoryService`, `ContextService`, `LLMAdapter`, etc. are instantiated as module-level singletons in `openai_adapter.py`. These must become per-request or per-user instances when multi-user is active.
+
+Options:
+
+1. **Request-scoped context** — inject `UserContext` via FastAPI dependency injection; instantiate services per-request (simple, stateless, slight overhead)
+2. **User-session pool** — maintain a pool of service instances per user (more complex, reduces instantiation overhead for active users)
+
+Recommendation: start with request-scoped context injection.
+
+### Authentication
+
+User identity must be established before vault path can be resolved.
+
+Minimum:
+
+- API key per user, stored server-side in a user registry (not in any vault)
+- API key → user_id → vault path mapping
+- Keys set via admin config or a setup script — no self-registration
+
+### Vault Initialization
+
+Each user's vault must be initialized before first use:
+
+- Directory structure creation
+- Optional onboarding quiz (§33) to seed profile records
+- Vault registration in the user registry
+
+## 36.4 Network Layer: Tailscale
+
+For remote personal use (e.g., accessing Ember from a phone or second machine):
+
+- Tailscale provides a zero-config private network between trusted devices
+- Ember API binds to the Tailscale interface only (not 0.0.0.0)
+- Access requires being on the Tailscale network — no public internet exposure
+- Works cleanly with the single-user case and the multi-user hosted case
+
+This is the preferred remote access model. It does not require VPN configuration, dynamic DNS, or firewall rules.
+
+## 36.5 Constraints
+
+- `private_vault/` for each user must remain off-git and off-share regardless of architecture
+- Reflections, state, and indexes must be per-user — no shared retrieval pools
+- The LLM runtime (Ollama) is shared — model inference is not per-user isolated, but context is
+- Conversation buffers in `LLMAdapter` must be per-user (not global in-memory state)
 
 ---
 

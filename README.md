@@ -373,7 +373,10 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - mid-conversation context compression (token-based, 70% threshold, LLM summarization, session summaries persisted to vault)
 - journal ingestion (scripts/journal.py CLI + POST /journal endpoint; 20-char minimum; mood and tags metadata)
 - multi-source reflection (daily + weekly reflection now blend journal and ingested content in a single pass)
-- 105 tests passing
+- Open WebUI interference hardening (empty message guard; `### Task:` RAG injection guard; type-aware payload logging) — v0.7.10
+- web search via local SearXNG (intent-gated; `web_items` in ContextPacket; results above memory context in prompt; apostrophe normalization) — v0.8.0/v0.8.1
+- vision model integration (`EMBER_VISION_MODEL` in .env; `image_data` pipeline from openai_adapter → ContextPacket → Ollama `images=` kwarg; graceful text-only fallback) — v0.8.2
+- 123 tests passing
 
 ## Next
 - formal typed memory class enforcement
@@ -388,8 +391,12 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - proactive assistance
 - controlled agent workflows
 - model selector (UI/CLI switching between models per use case)
-- onboarding conversation flow (guided profile seeding for new users)
+- onboarding conversation flow / quiz (guided profile seeding for new users)
 - session reflection mode (end-of-session capture distinct from daily/weekly)
+- embedding upgrade to nomic-embed-text via Ollama
+- relevance decay and forgetting mechanism (archive-first, policy-governed)
+- multi-user vault isolation (per-user vault paths, API key auth, Tailscale network layer)
+- security and trust model (vault permissions, encryption at rest, API auth)
 - ~~index migration to SQLite / DuckDB~~ — complete for ingested corpus (v0.6.0)
 - stronger evaluation and review analytics
 

@@ -1599,6 +1599,48 @@ The architecture already enforces this boundary — `private_vault/` is excluded
 
 ---
 
+## 25.6 Custom Frontend
+
+A React-based interface built specifically for Ember. Replaces Open WebUI as the primary interface.
+
+Open WebUI is a general-purpose LLM frontend that runs its own RAG pipeline, injects internal task prompts into the conversation (query generation, citation formatting, title generation), and maintains its own conversation history separate from Ember's. These behaviors conflict with Ember's architecture and are not configurable away without forking Open WebUI or disabling its core features.
+
+A custom frontend eliminates these conflicts and enables interface features that directly expose Ember's capabilities rather than working around a generic chat wrapper.
+
+This is a medium-term milestone — between current working state and full shareability. The non-technical user path depends on it.
+
+### Interface Components
+
+- **Chat** — conversation interface that routes directly to `POST /v1/chat/completions` without pre-flight task injection; displays responses without source citation overlays
+- **Journal entry input** — dedicated journal writing surface; routes to `POST /journal`; supports mood and tags inline
+- **Memory inspector** — browsable view of vault contents by memory type (journal, profile, reflection, state); supports search via `GET /semantic-search` and `GET /search-memories`
+- **Model selector** — exposes `GET /model` and `POST /model`; shows available models with context window sizes; active model visible at all times
+- **Document upload** — file upload surface routed through the ingestion pipeline (`POST /ingest`); not Open WebUI's RAG — content goes into the vault as typed memory, not a session-scoped retrieval store
+- **Onboarding flow** — first-run experience for new users; guided conversation that seeds profile memory records; replaces `seed_identity_template.py` for the non-technical path
+
+### Why Not Open WebUI
+
+| Problem | Impact |
+|---|---|
+| Pre-flight `### Task:` query generation requests | Pollutes conversation history; responses appear in the chat |
+| Open WebUI maintains its own conversation history separate from Ember's buffer | Two systems tracking the same conversation out of sync |
+| Open WebUI RAG runs on top of Ember's retrieval | Redundant retrieval; citation overlays confuse the model's voice |
+| Document upload goes to Open WebUI's vector store, not Ember's vault | Ingested content is session-scoped and never persisted to canonical memory |
+| No surface for journal, memory inspection, or model switching | Core Ember capabilities have no UI |
+
+### Build Sequence
+
+1. Minimal chat interface (replaces Open WebUI for conversation)
+2. Model selector
+3. Journal entry input
+4. Memory inspector (read-only)
+5. Document upload via ingest pipeline
+6. Onboarding flow
+
+The API already supports all of these. The frontend is a surface, not a new backend capability.
+
+---
+
 # 26. Build Order Recommendation
 
 1. Clean ingestion and rebuildability

@@ -1,13 +1,17 @@
+import logging
+import secrets
 from dataclasses import asdict
 
 import ollama
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from src.api.chat import router as chat_router
 from src.api.openai_adapter import router as openai_adapter_router, llm_adapter
 from src.api.routes.ingest import router as ingest_router
 from src.context.service import ContextService
+from src.core.config import get_ember_api_key
 from src.memory.service import MemoryService
 from src.reflection.generate_reflection import generate_reflection
 from src.retrieval.semantic_search import semantic_search
@@ -15,7 +19,38 @@ from src.state.models import VALID_STATE_CATEGORIES
 from src.state.state_resolver import StateResolver
 from src.state.state_service import StateService
 
+logger = logging.getLogger("ember.auth")
+
 app = FastAPI()
+
+
+@app.middleware("http")
+async def api_key_auth(request: Request, call_next):
+    # Health check is always open
+    if request.url.path == "/":
+        return await call_next(request)
+
+    expected_key = get_ember_api_key()
+    if not expected_key:
+        # No key configured — open access (warn once at startup instead)
+        return await call_next(request)
+
+    # Accept Authorization: Bearer <key> (Open WebUI / OpenAI clients)
+    # or X-API-Key: <key> (direct access)
+    provided_key = ""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        provided_key = auth_header[7:]
+    if not provided_key:
+        provided_key = request.headers.get("X-API-Key", "")
+
+    if not provided_key or not secrets.compare_digest(provided_key, expected_key):
+        logger.warning("[AUTH] Rejected request to %s — invalid or missing API key", request.url.path)
+        return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+
+    return await call_next(request)
+
+
 app.include_router(chat_router)
 app.include_router(openai_adapter_router)
 app.include_router(ingest_router)

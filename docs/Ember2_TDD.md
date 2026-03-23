@@ -1739,7 +1739,7 @@ Ember's local-first architecture provides a natural baseline: data never leaves 
 |---|---|---|
 | Vault data in cloud sync | **Mitigated** | Vault moved to `C:\EmberVault\` (outside OneDrive) |
 | Unauthorized vault access at rest | **Mitigated** | Windows BitLocker encrypts C: drive; vault protected at rest |
-| API exposure on local network | **Mitigated** | API binds to Tailscale IP only (`<your-tailscale-ip>:8000`); LAN devices cannot reach it |
+| API exposure on local network | **Mitigated** | API binds to Tailscale IP only (`&lt;your-tailscale-ip&gt;:8000`); LAN devices cannot reach it |
 | Unauthenticated API access | **Mitigated** | API key required on all non-health-check endpoints |
 | API key exposed as plaintext | **Mitigated** | Key stored in Windows Credential Manager (DPAPI-encrypted); not in `.env` or any file |
 | Traffic interception in transit | **Mitigated** | All traffic over Tailscale WireGuard; Open WebUI served via HTTPS (Tailscale Serve) |
@@ -1778,7 +1778,7 @@ Implementation: `api_key_auth` middleware in `src/api/main.py` using `secrets.co
 
 ## 31.5 Network Exposure
 
-- API binds to `<your-tailscale-ip>` (Tailscale interface) — not reachable from LAN or internet
+- API binds to `&lt;your-tailscale-ip&gt;` (Tailscale interface) — not reachable from LAN or internet
 - All Tailscale traffic is WireGuard-encrypted end-to-end
 - Open WebUI is served over HTTPS via Tailscale Serve (`https://chastainblanc.tail682db9.ts.net`)
 - Tailscale ACL restricts tailnet access to `autogroup:member` (account owner devices only)

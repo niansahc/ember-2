@@ -415,7 +415,7 @@ Ember-2 is hardened for single-user local deployment as of v0.8.3–v0.8.4.
 | Vault location | `C:\EmberVault\` — off OneDrive, not cloud-synced |
 | API key storage | Windows Credential Manager via `keyring` — never in `.env` |
 | API authentication | `Authorization: Bearer` or `X-API-Key` header; `secrets.compare_digest` |
-| Network exposure | API bound to Tailscale IP only (`<your-tailscale-ip>`); LAN blocked |
+| Network exposure | API bound to Tailscale IP only (`&lt;your-tailscale-ip&gt;`); LAN blocked |
 | Transport encryption | HTTPS via Tailscale Serve (TLS cert from Tailscale CA) |
 | Network access control | Tailscale ACL: `autogroup:member` only — no unauthenticated access |
 | Rate limiting | 60/min global default; 30/min chat; 10/min reflect/ingest (slowapi) |

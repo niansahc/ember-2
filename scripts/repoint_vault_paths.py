@@ -15,7 +15,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-OLD = r"C:\Users\<username>\OneDrive\Desktop\Ember-2\private_vault"
+OLD = r"C:\Users\<username>\OneDrive\Desktop\Ember-2\private_vault"  # replace with your old vault path
 NEW = r"C:\EmberVault"
 EMBEDDINGS = Path(r"C:\EmberVault\embeddings")
 

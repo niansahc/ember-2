@@ -330,3 +330,9 @@ Once Ember is running:
 - Explore retrieved context for a query: `GET /debug-context?message=your+question`
 
 For a full reference of what Ember can do, see [docs/Ember2_TDD.md](docs/Ember2_TDD.md).
+
+---
+
+## Something Not Working?
+
+Report bugs and issues at [github.com/niansahc/ember-2/issues](https://github.com/niansahc/ember-2/issues).

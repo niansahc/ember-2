@@ -2,7 +2,7 @@
 
 A local, private personal intelligence system for reasoning, memory, reflection, and long-term assistance.
 
-[What Ember Believes](ETHOS.md) · [How Ember Works](docs/Ember2_TDD.md) · [Start Working With Ember](SETUP.md)
+[What Ember Believes](ETHOS.md) · [How Ember Works](docs/Ember2_TDD.md) · [Start Working With Ember](SETUP.md) · [Report a Bug](https://github.com/niansahc/ember-2/issues)
 
 Ember-2 is designed to evolve beyond a chatbot into a structured cognitive system that supports life, work, decision-making, and future automation over time.
 

@@ -184,12 +184,18 @@ async def chat_completions(raw_request: Request, request: ChatCompletionsRequest
         )
 
     # If image present but no text, use a placeholder so the pipeline runs.
-    # Full image analysis (passing image_parts to Ollama vision) is a future build step.
     if image_parts and not latest_user_message.strip():
         logger.warning("[IMAGE] Image upload with no text — %d image part(s)", len(image_parts))
         latest_user_message = "Please describe what you see in this image."
 
-    context_packet = context_service.build_context(latest_user_message)
+    # Extract raw base64 strings from image_url parts (strip data URL prefix).
+    image_data: list[str] = []
+    for part in image_parts:
+        url_val = part.get("image_url", {}).get("url", "")
+        if ";base64," in url_val:
+            image_data.append(url_val.split(";base64,", 1)[1])
+
+    context_packet = context_service.build_context(latest_user_message, image_data=image_data)
     reply = llm_adapter.generate_response(context_packet)
 
     max_len = MEMORY_PREVIEW_LENGTH

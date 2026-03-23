@@ -21,7 +21,7 @@ class ContextService:
         self.formatter = formatter or ContextFormatter()
         self.debug = debug
 
-    def build_context(self, user_message: str) -> ContextPacket:
+    def build_context(self, user_message: str, image_data: list[str] | None = None) -> ContextPacket:
         policy = classify_query(user_message)
 
         web_items: list[dict] = []
@@ -88,6 +88,7 @@ class ContextService:
             reflection_items=selected_reflections,
             state_items=state_items,
             web_items=web_items,
+            image_data=image_data or [],
         )
 
     def _memory_limit_for_policy(self, policy_name: str) -> int:

@@ -10,6 +10,7 @@ class ContextFormatter:
         reflection_items: list[ContextItem],
         state_items: list[StateItem] | None = None,
         web_items: list[dict] | None = None,
+        image_data: list[str] | None = None,
     ) -> ContextPacket:
         """
         Build a ContextPacket from retrieved and ranked items.
@@ -20,5 +21,6 @@ class ContextFormatter:
             reflection_items=reflection_items,
             state_items=state_items or [],
             web_items=web_items or [],
+            image_data=image_data or [],
             summary=None,
         )

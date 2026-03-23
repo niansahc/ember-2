@@ -3,7 +3,7 @@ from __future__ import annotations
 import ollama
 
 from src.context.models import ContextPacket
-from src.core.config import get_ember_model
+from src.core.config import get_ember_model, get_ember_vision_model
 from src.llm.prompt_builder import PromptBuilder
 from src.memory.service import MemoryService
 from src.reflection.session_summary import write_session_summary
@@ -35,9 +35,17 @@ class LLMAdapter:
     def generate_response(self, context_packet: ContextPacket) -> str:
         system_prompt = self.prompt_builder.build_prompt(context_packet)
 
+        vision_model = get_ember_vision_model()
+        use_vision = bool(context_packet.image_data) and bool(vision_model)
+
+        if use_vision:
+            print(f"[VISION] Image request — using model: {vision_model}")
+
         draft_response = self._chat(
             system_prompt=system_prompt,
             user_message=context_packet.user_message,
+            image_data=context_packet.image_data if use_vision else [],
+            model_override=vision_model if use_vision else None,
         )
 
         initial_review_context = SafetyReviewContext(
@@ -98,12 +106,23 @@ class LLMAdapter:
 
         return final_response
 
-    def _chat(self, system_prompt: str, user_message: str) -> str:
+    def _chat(
+        self,
+        system_prompt: str,
+        user_message: str,
+        image_data: list[str] | None = None,
+        model_override: str | None = None,
+    ) -> str:
+        model = model_override or self.model
+        user_msg: dict = {"role": "user", "content": user_message}
+        if image_data:
+            user_msg["images"] = image_data
+
         response = ollama.chat(
-            model=self.model,
+            model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
+                user_msg,
             ],
             options={
                 "temperature": 0.7,

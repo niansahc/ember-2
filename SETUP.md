@@ -54,7 +54,7 @@ git clone https://github.com/your-username/ember-2.git
 cd ember-2
 ```
 
-> If you received Ember-2 as a zip file, extract it and open a terminal in the extracted folder.
+> **Note:** The URL above is a placeholder. Update it with the actual repository URL, or if you received Ember-2 directly, extract the folder and open a terminal inside it instead.
 
 ---
 
@@ -80,10 +80,7 @@ You should see `(.venv)` at the start of your terminal prompt. You will need to 
 Installs all Python packages Ember-2 requires.
 
 ```
-pip install fastapi uvicorn ollama sentence-transformers numpy httpx pydantic \
-    python-dotenv slowapi keyring PyYAML pypdf python-docx scikit-learn \
-    google-api-python-client google-auth-httplib2 google-auth-oauthlib \
-    ijson pytest rich typer
+pip install -r requirements.txt
 ```
 
 > This will take a few minutes — sentence-transformers and torch are large.
@@ -203,7 +200,7 @@ Generates a secure API key and stores it in Windows Credential Manager — not i
 python scripts/set_api_key.py
 ```
 
-The script will display your key once. **Copy it immediately** — you will need it in Step 11. You can retrieve it later from Windows Credential Manager if needed, but the script will not show it again.
+The script will display your key once. **Copy it immediately** — you will need it in Step 11. If you lose it, you can retrieve it from Windows Credential Manager (search for "Credential Manager" in the Start menu → Windows Credentials → look for `ember-2`) or run the script again to rotate to a new key.
 
 ---
 
@@ -218,7 +215,7 @@ start_api.bat
 
 **Or directly:**
 ```
-python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --reload
+python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
 ```
 
 > If you plan to access Ember from another device (phone, tablet) via Tailscale, see the **Mobile Access** section at the bottom of this guide before starting — the host binding needs to match your Tailscale IP.

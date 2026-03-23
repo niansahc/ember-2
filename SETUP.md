@@ -148,9 +148,13 @@ Adjust the vault path to wherever you created it in Step 5.
 
 ---
 
-### Step 7 — Seed Your Identity Profile
+### Step 7 — Seed Your Identity Profile (Optional)
 
-Tells Ember who you are so she can personalize responses from the start. This step copies the template to your vault, lets you fill in your information, then writes it to memory.
+Tells Ember who you are so she can personalize responses from the start.
+
+> **Note:** This step is optional. If you skip it, Ember will ask you the same questions interactively the first time you send a message — that onboarding conversation does the same job. Only use this script if you prefer to fill in your profile manually before starting. **If you run this step, the onboarding conversation will not trigger** (Ember will see existing profile records and go straight to normal conversation).
+
+If you'd like to seed manually:
 
 **Copy the template outside the repo:**
 

@@ -13,6 +13,7 @@ from src.api.limiter import limiter
 from src.memory.service import MemoryService
 from src.context.service import ContextService
 from src.llm.adapter import LLMAdapter
+from src.onboarding.service import OnboardingService
 
 
 EMBER_MODEL_ID = "ember-2"
@@ -30,6 +31,7 @@ router = APIRouter()
 memory_service = MemoryService()
 context_service = ContextService()
 llm_adapter = LLMAdapter()
+onboarding_service = OnboardingService()
 
 
 class OpenAIMessage(BaseModel):
@@ -196,6 +198,22 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         url_val = part.get("image_url", {}).get("url", "")
         if ";base64," in url_val:
             image_data.append(url_val.split(";base64,", 1)[1])
+
+    # --- ONBOARDING ---
+    if onboarding_service.is_active():
+        reply = onboarding_service.handle(latest_user_message)
+        return ChatCompletionsResponse(
+            id=f"chatcmpl-{uuid.uuid4().hex}",
+            object="chat.completion",
+            created=int(time.time()),
+            model="ember-2",
+            choices=[ChatCompletionsChoice(
+                index=0,
+                message=ChatCompletionsResponseMessage(role="assistant", content=reply),
+                finish_reason="stop",
+            )],
+        )
+    # --- END ONBOARDING ---
 
     context_packet = context_service.build_context(latest_user_message, image_data=image_data)
     reply = llm_adapter.generate_response(context_packet)

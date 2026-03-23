@@ -36,6 +36,7 @@ VALID_STATE_CATEGORIES: frozenset[str] = frozenset(
         "routine",         # A recurring habit, check-in, or process
         "priority",        # A near-term priority item
         "next_action",     # A concrete next step to take
+        "onboarding",      # System-level onboarding flow state
     }
 )
 

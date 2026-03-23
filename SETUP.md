@@ -208,6 +208,12 @@ The script will display your key once. **Copy it immediately** — you will need
 
 Starts the Ember backend server. Run this from the repo root with your virtual environment activated.
 
+The API host is controlled by `EMBER_HOST` in your `.env` file. It defaults to `127.0.0.1` (local-only access). If you are using Tailscale to access Ember from another device, set `EMBER_HOST` to your Tailscale IP before starting:
+
+```
+EMBER_HOST=100.x.x.x
+```
+
 **Windows (recommended):**
 ```
 start_api.bat
@@ -218,12 +224,9 @@ start_api.bat
 python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
 ```
 
-> If you plan to access Ember from another device (phone, tablet) via Tailscale, see the **Mobile Access** section at the bottom of this guide before starting — the host binding needs to match your Tailscale IP.
+> If using Tailscale, replace `127.0.0.1` in the direct command with your Tailscale IP, or just use `start_api.bat` which reads `EMBER_HOST` from `.env` automatically.
 
-Verify the API is running by opening a browser and navigating to:
-```
-http://127.0.0.1:8000/
-```
+Verify the API is running by opening a browser and navigating to `http://127.0.0.1:8000/` (or `http://<your-tailscale-ip>:8000/` if using Tailscale).
 
 You should see: `{"message": "Ember-2 API is running"}`
 

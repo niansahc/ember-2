@@ -45,16 +45,24 @@ docker --version
 
 ## Setup Steps
 
-### Step 1 — Clone the Repository
+### Step 1 — Get the Code
 
 Downloads the Ember-2 codebase to your machine.
 
+**If you have git:**
 ```
-git clone https://github.com/your-username/ember-2.git
+git clone https://github.com/niansahc/ember-2.git
 cd ember-2
 ```
 
-> **Note:** The URL above is a placeholder. Update it with the actual repository URL, or if you received Ember-2 directly, extract the folder and open a terminal inside it instead.
+**If you don't have git (recommended for most users):**
+1. Go to [github.com/niansahc/ember-2](https://github.com/niansahc/ember-2)
+2. Click the green **Code** button → **Download ZIP**
+3. Extract the ZIP somewhere on your computer (e.g. your Desktop)
+4. Open a terminal and navigate into the extracted folder:
+```
+cd path\to\ember-2
+```
 
 ---
 
@@ -134,7 +142,7 @@ Creates your personal configuration file from the provided template.
 cp .env.example .env
 ```
 
-Open `.env` in any text editor (Notepad, TextEdit, VS Code) and set:
+Open `.env` in any text editor (Notepad on Windows, TextEdit on Mac) and set:
 
 ```
 PRIVATE_VAULT_PATH=C:/EmberVault

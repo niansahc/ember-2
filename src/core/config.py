@@ -23,11 +23,23 @@ def get_private_vault_path():
 def get_ember_api_key() -> str | None:
     """
     Returns the API key required to access Ember-2 endpoints, or None if not set.
-    Set EMBER_API_KEY in .env to enable authentication.
-    When set, all endpoints except GET / require either:
+
+    Looks in this order:
+      1. Windows Credential Manager (service: ember-2, username: api_key)
+         Store with: python scripts/set_api_key.py
+      2. EMBER_API_KEY env var / .env (fallback for tests and non-Windows environments)
+
+    All endpoints except GET / require either:
       Authorization: Bearer <key>   (Open WebUI / OpenAI-compatible clients)
       X-API-Key: <key>              (direct API access)
     """
+    try:
+        import keyring
+        key = keyring.get_password("ember-2", "api_key")
+        if key:
+            return key
+    except Exception:
+        pass
     return os.getenv("EMBER_API_KEY") or None
 
 

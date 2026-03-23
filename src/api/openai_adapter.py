@@ -87,11 +87,12 @@ async def chat_completions(raw_request: Request, request: ChatCompletionsRequest
         raw_json = json.loads(raw_body)
         logger.warning("[PAYLOAD] top-level keys: %s", list(raw_json.keys()))
         for i, msg in enumerate(raw_json.get("messages", [])):
+            role = msg.get("role")
             content = msg.get("content")
             if isinstance(content, list):
                 logger.warning(
                     "[PAYLOAD] messages[%d] role=%s content=LIST len=%d parts=%s",
-                    i, msg.get("role"), len(content),
+                    i, role, len(content),
                     [p.get("type") for p in content if isinstance(p, dict)],
                 )
                 for j, part in enumerate(content):
@@ -100,11 +101,19 @@ async def chat_completions(raw_request: Request, request: ChatCompletionsRequest
                         snippet = str(part)[:200]
                         logger.warning("[PAYLOAD]   part[%d] keys=%s snippet=%s", j, part_keys, snippet)
             else:
-                snippet = str(content)[:120] if content else ""
-                logger.warning(
-                    "[PAYLOAD] messages[%d] role=%s content=STR len=%s snippet=%s",
-                    i, msg.get("role"), len(content) if content else 0, snippet,
-                )
+                content_len = len(content) if content else 0
+                # Log full content for system messages so we can see injected context
+                if role == "system":
+                    logger.warning(
+                        "[PAYLOAD] messages[%d] role=system len=%d FULL_CONTENT=%s",
+                        i, content_len, repr(content),
+                    )
+                else:
+                    snippet = str(content)[:120] if content else ""
+                    logger.warning(
+                        "[PAYLOAD] messages[%d] role=%s content=STR len=%s snippet=%s",
+                        i, role, content_len, snippet,
+                    )
     except Exception as exc:
         logger.warning("[PAYLOAD] failed to log raw request: %s", exc)
     # --- END DIAGNOSTIC LOGGING ---
@@ -124,6 +133,16 @@ async def chat_completions(raw_request: Request, request: ChatCompletionsRequest
             latest_user_message = " ".join(text_parts).strip()
         else:
             latest_user_message = raw_content or ""
+
+    # (3) ### Task: guard — Open WebUI injects a RAG wrapper as the last user message.
+    #     The real user query is always the second-to-last user message.
+    if latest_user_message.startswith("### Task:"):
+        logger.warning("[INTERCEPT] ### Task: injection detected — using prior user message")
+        prior_user_messages = user_messages[:-1]
+        if prior_user_messages:
+            latest_user_message = prior_user_messages[-1].content or ""
+        else:
+            latest_user_message = ""
 
     # (1) Empty message guard — Open WebUI sends empty pre-flight requests.
     #     Short-circuit without running the pipeline or writing to memory.

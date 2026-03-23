@@ -153,6 +153,8 @@ mkdir -p /data/embervault
 
 Creates your personal configuration file from the provided template.
 
+> **Using Tailscale for remote access?** Before filling in this file, you need your Tailscale IP. Install Tailscale now if you haven't already ([tailscale.com/download/windows](https://tailscale.com/download/windows)), sign in, and find your IP address in the system tray icon — it starts with `100.`. Then come back here and set `EMBER_HOST` below.
+
 ```
 cp .env.example .env
 ```
@@ -167,6 +169,16 @@ PRIVATE_VAULT_PATH=C:/EmberVault
 
 # D: drive example:
 PRIVATE_VAULT_PATH=D:/EmberVault
+```
+
+**Set the API host:**
+
+```
+# Local access only (default):
+EMBER_HOST=127.0.0.1
+
+# Tailscale remote access — replace with your Tailscale IP:
+EMBER_HOST=100.x.x.x
 ```
 
 Also set the model names (leave these as-is unless you pulled different models):
@@ -293,7 +305,9 @@ Then open a browser and go to `http://localhost:3000`. Create an account (local 
 **Configure the Ember connection:**
 
 1. Go to **Settings → Connections**
-2. Set the **OpenAI API Base URL** to: `http://host.docker.internal:8000/v1`
+2. Set the **OpenAI API Base URL**:
+   - **Local access:** `http://host.docker.internal:8000/v1`
+   - **Tailscale:** `http://100.x.x.x:8000/v1` (replace with your Tailscale IP)
 3. Set the **API Key** to the key you copied in Step 9
 4. Click **Save**
 
@@ -320,6 +334,25 @@ Disables Open WebUI's built-in retrieval and query rewriting features so they do
 
 ---
 
+### Step 13 — Access Ember from Your Phone (Tailscale)
+
+Skip this step if you are not using Tailscale.
+
+1. Install Tailscale on your phone:
+   - **iPhone:** Search "Tailscale" in the App Store
+   - **Android:** Search "Tailscale" in Google Play
+2. Sign in with the same account you used on your desktop
+3. Tap **Connect**
+4. Open a browser on your phone and go to:
+```
+http://100.x.x.x:3000
+```
+Replace `100.x.x.x` with your Tailscale IP. You should see the Open WebUI login screen.
+
+> Both devices need to have Tailscale running and connected. Check the Tailscale app on your phone — it should list your desktop machine as a connected device.
+
+---
+
 ## Verify Everything Is Working
 
 Send a message in Open WebUI. If Ember responds with context and personality, setup is complete.
@@ -333,59 +366,9 @@ If something is not working:
 
 ---
 
-## Optional: Mobile Access via Tailscale
+## Optional: HTTPS via Tailscale
 
-Tailscale creates a private encrypted network between your devices — no port forwarding, no public exposure. Once set up, you can access Ember from your phone exactly like you're on the same local network.
-
-### Step A — Create a Tailscale Account
-
-1. Go to [tailscale.com](https://tailscale.com) and click **Get started**
-2. Sign up with a Google, Microsoft, or GitHub account — this becomes your Tailscale identity
-
-### Step B — Install Tailscale on Your Desktop (Windows)
-
-1. Download the Windows installer from [tailscale.com/download/windows](https://tailscale.com/download/windows)
-2. Run the installer and follow the prompts
-3. When it asks you to sign in, use the same account you created in Step A
-4. Tailscale will appear in your system tray — look for the icon in the bottom-right corner of your taskbar
-5. Click the tray icon and note your **Tailscale IP address** — it starts with `100.` (e.g. `100.x.x.x`)
-
-### Step C — Configure Ember to Use Your Tailscale IP
-
-Open your `.env` file (in the `ember-2-main\ember-2-main` folder) in Notepad++ and update the `EMBER_HOST` line:
-
-```
-EMBER_HOST=100.x.x.x
-```
-
-Replace `100.x.x.x` with your actual Tailscale IP from Step B.
-
-Save the file and restart the API (`start_api.bat`).
-
-### Step D — Install Tailscale on Your Phone
-
-1. **iPhone:** Search "Tailscale" in the App Store and install it
-2. **Android:** Search "Tailscale" in Google Play and install it
-3. Open the app and sign in with the same account as your desktop
-4. Tap **Connect**
-
-Your phone is now on the same private network as your desktop.
-
-### Step E — Access Ember from Your Phone
-
-Open a browser on your phone and go to:
-
-```
-http://100.x.x.x:3000
-```
-
-Replace `100.x.x.x` with your Tailscale IP. You should see the Open WebUI login screen.
-
-> Both devices need to have Tailscale running and connected for this to work. Check the Tailscale app on your phone — it should show your desktop machine in the list of connected devices.
-
-### Optional: HTTPS (Padlock in Browser)
-
-Tailscale can give you a proper HTTPS address with a real security certificate:
+Once Ember is running with Tailscale, you can add a proper HTTPS address with a real security certificate:
 
 1. Log in at [login.tailscale.com](https://login.tailscale.com) → go to your machine → enable **HTTPS**
 2. In a terminal on your desktop, run:
@@ -394,7 +377,7 @@ tailscale serve --https=443 http://127.0.0.1:8000
 ```
 3. Your Ember API is now available at `https://your-machine-name.tail-hash.ts.net`
 
-Update the Open WebUI connection URL on your phone to use this HTTPS address instead of the IP.
+Update the Open WebUI connection URL to use this HTTPS address instead of the IP.
 
 ---
 

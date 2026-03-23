@@ -126,17 +126,19 @@ ollama list
 
 ### Step 5 — Create Your Memory Vault
 
-Creates the directory where Ember will store all your memories, journal entries, reflections, and context. You can put this on any drive — just note the path, you will need it in Step 6.
+Creates the directory where Ember will store all your memories, journal entries, reflections, and context.
 
-**Windows (C: drive):**
+**The default location is `C:\EmberVault`. If you are happy with that, just run:**
 ```
 mkdir C:\EmberVault
 ```
+And move on to Step 6 — no other changes needed.
 
-**Windows (D: drive or other):**
+**If you want to use a different drive (e.g. D:):**
 ```
 mkdir D:\EmberVault
 ```
+Note the path — you will need to update it in Step 6.
 
 **Mac/Linux:**
 ```

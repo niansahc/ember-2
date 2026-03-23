@@ -223,9 +223,9 @@ You will see a list of records written. Safe to re-run — exact duplicates are 
 
 ---
 
-### Step 8 — Start SearXNG (Web Search)
+### Step 8 — Start SearXNG and Open WebUI
 
-SearXNG is a private web search engine that runs locally in Docker. Ember uses it for web-aware queries. It is not accessible from outside your machine.
+This single command starts two things: SearXNG (private web search) and Open WebUI (the chat interface), both running locally in Docker.
 
 **Before running this step:**
 1. Make sure Docker Desktop is open and running — look for the Docker whale icon in your system tray. If it is not there, open Docker Desktop and wait until it says "Engine running".
@@ -234,19 +234,19 @@ SearXNG is a private web search engine that runs locally in Docker. Ember uses i
 cd %USERPROFILE%\Desktop\ember-2-main\ember-2-main
 ```
 
-**Start SearXNG:**
+**Start both services:**
 ```
 docker compose up -d
 ```
 
-The first time you run this it will download the SearXNG image — this may take a minute. After that it starts instantly.
+The first time you run this it will download and build the images — this may take a few minutes. After that it starts instantly.
 
-**Verify it is running:**
+**Verify both are running:**
 ```
 docker ps
 ```
 
-You should see a row with `ember-searxng` in the list and `Up` in the status column.
+You should see two rows: `ember-searxng` and `ember-webui`, both with `Up` in the status column.
 
 > If you see `docker compose: command not found`, try `docker-compose up -d` (with a hyphen) — older versions of Docker use the hyphen form.
 
@@ -294,13 +294,7 @@ You should see: `{"message": "Ember-2 API is running"}`
 
 ### Step 11 — Connect Open WebUI
 
-Open WebUI is the chat interface you will use to talk to Ember. Install and run it via Docker:
-
-```
-docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway -e WEBUI_AUTH=true -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main
-```
-
-Then open a browser and go to `http://localhost:3000`. Create an account (local only — no external sign-up).
+Open WebUI was already started in Step 8. Open a browser and go to `http://localhost:3000`. Create an account (local only — no external sign-up).
 
 **Configure the Ember connection:**
 

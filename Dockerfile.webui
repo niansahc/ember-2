@@ -1,0 +1,14 @@
+# Dockerfile.webui
+#
+# Builds a custom Open WebUI image with Ember's branding assets overlaid
+# on top of the official image. No source rebuild required.
+#
+# Assets sourced from webui/ in this repo:
+#   webui/static/         → /app/build/static/     (logos, favicons, splash screens)
+#   webui/assets/images/  → /app/build/assets/images/  (background images)
+
+FROM ghcr.io/open-webui/open-webui:main
+
+# Copy branding assets over the defaults
+COPY webui/static/ /app/build/static/
+COPY webui/assets/images/ /app/build/assets/images/

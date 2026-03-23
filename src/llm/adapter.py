@@ -130,7 +130,7 @@ class LLMAdapter:
             f"{turns_text}\n\nSummary:"
         )
 
-        summary = self._call_model_with_prompt(prompt)
+        summary = self._summarize_with_plain_prompt(prompt)
 
         write_session_summary(
             memory_service=self.memory_service,
@@ -141,6 +141,24 @@ class LLMAdapter:
         buf.inject_summary_turn(summary)
 
         print(f"[BUFFER] Compressed {len(oldest_turns)} turns into session summary.")
+
+    def _summarize_with_plain_prompt(self, prompt: str) -> str:
+        """Plain summarization call — neutral system message, no JSON instruction.
+        Used for buffer compression to avoid leaking JSON into conversation context."""
+        response = ollama.chat(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant. Follow the instructions in the user message exactly.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            options={
+                "temperature": 0.3,
+            },
+        )
+        return response["message"]["content"]
 
     def _call_model_with_prompt(self, prompt: str) -> str:
         response = ollama.chat(

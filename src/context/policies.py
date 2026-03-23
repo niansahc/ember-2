@@ -103,14 +103,18 @@ def classify_query(user_message: str) -> ContextPolicy:
         "search the web",
         "search online",
         "look up online",
+        "look this up",
+        "look it up",
         "google",
         "what's the latest",
         "what is the latest",
         "current news",
         "news about",
         "find online",
+        "find this online",
+        "find it online",
+        "can you find",
         "web search",
-        "look it up",
     )
 
     # Status/state queries resolve against current state first — checked before

@@ -30,6 +30,7 @@ def classify_query(user_message: str) -> ContextPolicy:
     # Normalize curly apostrophes to straight so markers like "what's" match
     # regardless of input source (Open WebUI, mobile keyboards, etc.)
     q = q.replace("\u2018", "'").replace("\u2019", "'")
+    logger.warning("[CLASSIFY] normalized query: %s", q[:120])
 
     state_markers = (
         "what am i working on",
@@ -135,10 +136,8 @@ def classify_query(user_message: str) -> ContextPolicy:
             prefer_experiences=True,
         )
 
-    logger.debug("[CLASSIFY] normalized query: %s", q[:120])
-
     if any(marker in q for marker in web_search_markers):
-        logger.debug("[CLASSIFY] intent=web_search")
+        logger.warning("[CLASSIFY] intent=web_search")
         return ContextPolicy(
             name="web_search",
             memory_weight=0.5,

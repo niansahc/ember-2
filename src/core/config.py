@@ -20,6 +20,15 @@ def get_private_vault_path():
     return Path(vault_path).resolve()
 
 
+def get_ember_vision_model() -> str | None:
+    """
+    Returns the Ollama vision model for image analysis, or None if not configured.
+    Set EMBER_VISION_MODEL in .env to enable image analysis.
+      EMBER_VISION_MODEL=llama3.2-vision:11b
+    """
+    return os.getenv("EMBER_VISION_MODEL") or None
+
+
 def get_ember_model() -> str:
     """
     Returns the Ollama model name to use for Ember-2.

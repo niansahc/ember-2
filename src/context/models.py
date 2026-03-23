@@ -28,6 +28,9 @@ class ContextPacket:
     # state → reflections → source memories → reference → user query.
     state_items: list[StateItem] = field(default_factory=list)
     web_items: list[dict] = field(default_factory=list)
+    # Raw base64 image strings (data URL prefix stripped) for vision requests.
+    # Populated by openai_adapter when the user uploads an image.
+    image_data: list[str] = field(default_factory=list)
     summary: str | None = None
 
     def all_items(self) -> list[ContextItem]:

@@ -82,10 +82,10 @@ def list_models():
 
 @router.post("/v1/chat/completions", response_model=ChatCompletionsResponse)
 @limiter.limit("30/minute")
-async def chat_completions(raw_request: Request, request: ChatCompletionsRequest):
+async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # --- FILE UPLOAD DIAGNOSTIC LOGGING ---
     try:
-        raw_body = await raw_request.body()
+        raw_body = await request.body()
         raw_json = json.loads(raw_body)
         logger.warning("[PAYLOAD] top-level keys: %s", list(raw_json.keys()))
         for i, msg in enumerate(raw_json.get("messages", [])):
@@ -138,7 +138,7 @@ async def chat_completions(raw_request: Request, request: ChatCompletionsRequest
     # (2) Only the last user message is used — Ember's ConversationBuffer
     #     handles conversation history. All prior messages from the request
     #     are intentionally ignored.
-    user_messages = [m for m in request.messages if m.role == "user"]
+    user_messages = [m for m in body.messages if m.role == "user"]
 
     if not user_messages:
         latest_user_message = ""

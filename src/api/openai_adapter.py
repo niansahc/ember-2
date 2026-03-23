@@ -97,9 +97,24 @@ async def chat_completions(raw_request: Request, request: ChatCompletionsRequest
                 )
                 for j, part in enumerate(content):
                     if isinstance(part, dict):
-                        part_keys = list(part.keys())
-                        snippet = str(part)[:200]
-                        logger.warning("[PAYLOAD]   part[%d] keys=%s snippet=%s", j, part_keys, snippet)
+                        part_type = part.get("type", "unknown")
+                        if part_type == "text":
+                            logger.warning(
+                                "[PAYLOAD]   part[%d] type=text len=%d content=%s",
+                                j, len(part.get("text", "")), part.get("text", "")[:120],
+                            )
+                        elif part_type == "image_url":
+                            img = part.get("image_url", {})
+                            url_val = img.get("url", "")
+                            logger.warning(
+                                "[PAYLOAD]   part[%d] type=image_url image_url.keys=%s url.len=%d url.prefix=%s",
+                                j, list(img.keys()), len(url_val), url_val[:80],
+                            )
+                        else:
+                            logger.warning(
+                                "[PAYLOAD]   part[%d] type=%s keys=%s snippet=%s",
+                                j, part_type, list(part.keys()), str(part)[:200],
+                            )
             else:
                 content_len = len(content) if content else 0
                 # Log full content for system messages so we can see injected context
@@ -125,14 +140,17 @@ async def chat_completions(raw_request: Request, request: ChatCompletionsRequest
 
     if not user_messages:
         latest_user_message = ""
+        image_parts: list[dict] = []
     else:
         raw_content = user_messages[-1].content
-        # content is str normally; extract text from list parts when files attached
+        # content is str normally; extract text and image parts when files attached
         if isinstance(raw_content, list):
             text_parts = [p.get("text", "") for p in raw_content if isinstance(p, dict) and p.get("type") == "text"]
+            image_parts = [p for p in raw_content if isinstance(p, dict) and p.get("type") == "image_url"]
             latest_user_message = " ".join(text_parts).strip()
         else:
             latest_user_message = raw_content or ""
+            image_parts = []
 
     # (3) ### Task: guard — Open WebUI injects a RAG wrapper as the last user message.
     #     The real user query is always the second-to-last user message.
@@ -144,9 +162,9 @@ async def chat_completions(raw_request: Request, request: ChatCompletionsRequest
         else:
             latest_user_message = ""
 
-    # (1) Empty message guard — Open WebUI sends empty pre-flight requests.
-    #     Short-circuit without running the pipeline or writing to memory.
-    if not latest_user_message or not latest_user_message.strip():
+    # (1) Empty message guard — fires only when there is truly nothing:
+    #     no text AND no image parts. Image-only uploads are not empty.
+    if (not latest_user_message or not latest_user_message.strip()) and not image_parts:
         logger.warning("[INTERCEPT] Empty user message — returning without pipeline")
         return ChatCompletionsResponse(
             id=f"chatcmpl-{uuid.uuid4().hex}",
@@ -164,6 +182,12 @@ async def chat_completions(raw_request: Request, request: ChatCompletionsRequest
                 )
             ],
         )
+
+    # If image present but no text, use a placeholder so the pipeline runs.
+    # Full image analysis (passing image_parts to Ollama vision) is a future build step.
+    if image_parts and not latest_user_message.strip():
+        logger.warning("[IMAGE] Image upload with no text — %d image part(s)", len(image_parts))
+        latest_user_message = "Please describe what you see in this image."
 
     context_packet = context_service.build_context(latest_user_message)
     reply = llm_adapter.generate_response(context_packet)

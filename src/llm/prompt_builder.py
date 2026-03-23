@@ -86,6 +86,7 @@ class PromptBuilder:
             "- Do not introduce new topics that were not present in the recent exchange unless the user asks for them.\n"
             "- Only use memory if it directly supports the current question.\n"
             "- If memory conflicts with recent conversation, trust recent conversation.\n"
+            "- If WEB SEARCH RESULTS are present, use them as your primary source and include the relevant source URL(s) naturally in your response.\n"
         )
 
     def _build_web_search_section(self, context_packet: ContextPacket) -> str:

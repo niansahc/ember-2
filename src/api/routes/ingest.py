@@ -1,4 +1,6 @@
-from fastapi import APIRouter
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException
 
 from src.core.config import get_private_vault_path
 from src.ingest.importers.chatgpt import load_chatgpt_export
@@ -17,13 +19,38 @@ from src.ingest.importers.gdrive_sync import sync_gdrive_folder
 router = APIRouter()
 
 
+def _validate_import_path(file_path: str) -> Path:
+    """
+    Resolve file_path and confirm it is inside vault/imports/.
+    Raises HTTP 400 if the path escapes the allowed directory.
+    Raises HTTP 404 if the path does not exist.
+    """
+    vault_path = get_private_vault_path()
+    allowed_root = (vault_path / "imports").resolve()
+    resolved = Path(file_path).resolve()
+
+    try:
+        resolved.relative_to(allowed_root)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"file_path must be inside the vault imports directory: {allowed_root}",
+        )
+
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {resolved}")
+
+    return resolved
+
+
 # -----------------------------
 # ChatGPT Export Ingestion
 # -----------------------------
 @router.post("/ingest/chatgpt")
 def ingest_chatgpt(file_path: str):
+    safe_path = _validate_import_path(file_path)
 
-    docs = load_chatgpt_export(file_path)
+    docs = load_chatgpt_export(str(safe_path))
     chunks = run_ingestion_pipeline(docs)
 
     vault_path = get_private_vault_path()
@@ -40,8 +67,9 @@ def ingest_chatgpt(file_path: str):
 # -----------------------------
 @router.post("/ingest/file")
 def ingest_file(file_path: str):
+    safe_path = _validate_import_path(file_path)
 
-    docs = load_file(file_path)
+    docs = load_file(str(safe_path))
     chunks = run_ingestion_pipeline(docs)
 
     vault_path = get_private_vault_path()

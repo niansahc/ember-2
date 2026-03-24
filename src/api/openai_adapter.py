@@ -11,6 +11,7 @@ logger = logging.getLogger("ember.openai_adapter")
 
 from src.api.limiter import limiter
 from src.memory.service import MemoryService
+from src.memory.session import create_session, session_exists
 from src.context.service import ContextService
 from src.llm.adapter import LLMAdapter
 from src.onboarding.service import OnboardingService
@@ -82,6 +83,35 @@ def list_models():
     }
 
 
+def _extract_session_id(request: Request) -> str:
+    """
+    Read X-Session-ID from request headers.
+    If not present, generate a new one.
+    """
+    session_id = request.headers.get("X-Session-ID", "").strip()
+    if not session_id:
+        session_id = f"sess_{uuid.uuid4().hex[:16]}"
+        logger.info("[SESSION] No X-Session-ID header — generated %s", session_id)
+    return session_id
+
+
+def _ensure_session(session_id: str, first_user_message: str) -> None:
+    """
+    Create a session record if one doesn't exist for this session_id.
+    Title is auto-generated from the first 50 chars of the first user message.
+    """
+    if session_exists(session_id):
+        return
+    title = first_user_message[:50].strip()
+    if not title:
+        title = "New conversation"
+    # Remove trailing partial words if we truncated
+    if len(first_user_message) > 50 and " " in title:
+        title = title.rsplit(" ", 1)[0] + "..."
+    create_session(session_id, title)
+    logger.info("[SESSION] Created session %s: %s", session_id, title)
+
+
 @router.post("/v1/chat/completions", response_model=ChatCompletionsResponse)
 @limiter.limit("30/minute")
 async def chat_completions(request: Request, body: ChatCompletionsRequest):
@@ -136,6 +166,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     except Exception as exc:
         logger.warning("[PAYLOAD] failed to log raw request: %s", exc)
     # --- END DIAGNOSTIC LOGGING ---
+
+    # --- SESSION ID ---
+    session_id = _extract_session_id(request)
 
     # (2) Only the last user message is used — Ember's ConversationBuffer
     #     handles conversation history. All prior messages from the request
@@ -215,6 +248,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         )
     # --- END ONBOARDING ---
 
+    # --- ENSURE SESSION EXISTS ---
+    _ensure_session(session_id, latest_user_message)
+
     context_packet = context_service.build_context(latest_user_message, image_data=image_data)
     reply = llm_adapter.generate_response(context_packet)
 
@@ -227,7 +263,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         memory_type="conversation",
         source="chat",
         tags=["conversation"],
-        metadata={"role": "user", "content_kind": "user_content"},
+        metadata={"role": "user", "content_kind": "user_content", "session_id": session_id},
     )
 
     memory_service.write(
@@ -235,7 +271,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         memory_type="conversation",
         source="chat",
         tags=["conversation"],
-        metadata={"role": "assistant", "content_kind": "answer"},
+        metadata={"role": "assistant", "content_kind": "answer", "session_id": session_id},
     )
 
     return ChatCompletionsResponse(

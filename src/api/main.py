@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import ollama
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from slowapi import _rate_limit_exceeded_handler
@@ -21,6 +21,13 @@ from src.api.routes.ingest import router as ingest_router
 from src.context.service import ContextService
 from src.core.config import get_ember_api_key
 from src.memory.service import MemoryService
+from src.memory.session import (
+    list_sessions,
+    get_session,
+    get_turns,
+    rename_session,
+    delete_session,
+)
 from src.reflection.generate_reflection import generate_reflection
 from src.retrieval.semantic_search import semantic_search
 from src.state.models import VALID_STATE_CATEGORIES
@@ -130,6 +137,10 @@ class ModelRequest(BaseModel):
     model: str
 
 
+class RenameRequest(BaseModel):
+    title: str
+
+
 def clean_context_packet(packet_dict: dict) -> dict:
     for section in ["memory_items", "reflection_items", "state_items"]:
         for item in packet_dict.get(section, []):
@@ -147,6 +158,62 @@ def clean_context_packet(packet_dict: dict) -> dict:
 @app.get("/")
 def root():
     return {"message": "Ember-2 API is running"}
+
+
+# ── Conversation session endpoints ─────────────────────────────────────
+
+
+@app.get("/v1/conversations")
+def list_conversations_endpoint(limit: int = 50):
+    """List all conversation sessions, newest first."""
+    sessions = list_sessions(limit=limit)
+    return {"conversations": sessions}
+
+
+@app.get("/v1/conversations/{session_id}")
+def get_conversation_endpoint(session_id: str, limit: int = 200):
+    """Get all turns for a conversation session."""
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    turns = get_turns(session_id, limit=limit)
+    return {
+        "session": {
+            "id": session_id,
+            "title": session.get("text", "Untitled"),
+            "created_at": session.get("metadata", {}).get("created_at", ""),
+        },
+        "turns": [
+            {
+                "id": t.get("id"),
+                "role": t.get("metadata", {}).get("role", "unknown"),
+                "content": t.get("text", ""),
+                "timestamp": t.get("timestamp", ""),
+            }
+            for t in turns
+        ],
+    }
+
+
+@app.patch("/v1/conversations/{session_id}")
+def rename_conversation_endpoint(session_id: str, body: RenameRequest):
+    """Rename a conversation session. Append-only: writes a new session record."""
+    result = rename_session(session_id, body.title)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    return {"status": "renamed", "session_id": session_id, "title": body.title}
+
+
+@app.delete("/v1/conversations/{session_id}")
+def delete_conversation_endpoint(session_id: str):
+    """Soft-delete a conversation session. Append-only: writes a new record with deleted: true."""
+    result = delete_session(session_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    return {"status": "deleted", "session_id": session_id}
+
+
+# ── Memory endpoints ───────────────────────────────────────────────────
 
 
 @app.post("/journal")
@@ -214,6 +281,9 @@ def debug_context_endpoint(message: str):
     return clean_context_packet(asdict(context_packet))
 
 
+# ── State endpoints ────────────────────────────────────────────────────
+
+
 @app.get("/state")
 def get_state_endpoint():
     items = state_resolver.get_current_state()
@@ -223,7 +293,6 @@ def get_state_endpoint():
 @app.get("/state/{category}")
 def get_state_by_category_endpoint(category: str):
     if category not in VALID_STATE_CATEGORIES:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Invalid category '{category}'. Valid: {sorted(VALID_STATE_CATEGORIES)}")
     item = state_resolver.get_current_by_category(category)
     if not item:
@@ -234,7 +303,6 @@ def get_state_by_category_endpoint(category: str):
 @app.post("/write-state")
 def write_state_endpoint(request: StateRequest):
     if request.type not in VALID_STATE_CATEGORIES:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Invalid type '{request.type}'. Valid: {sorted(VALID_STATE_CATEGORIES)}")
     record = StateService.make_record(
         state_type=request.type,
@@ -245,6 +313,9 @@ def write_state_endpoint(request: StateRequest):
     )
     path = state_service.write(record)
     return {"status": "state written", "type": record.type, "text": record.text, "path": str(path)}
+
+
+# ── Model endpoints ────────────────────────────────────────────────────
 
 
 @app.get("/model")

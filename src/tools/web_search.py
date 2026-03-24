@@ -7,7 +7,7 @@ logger = logging.getLogger("ember.web_search")
 SEARXNG_URL = "http://localhost:8888/search"
 MAX_RESULTS = 5
 SNIPPET_MAX_LEN = 200
-TIMEOUT_SECONDS = 2
+TIMEOUT_SECONDS = 20
 
 
 def web_search(query: str) -> list[dict]:

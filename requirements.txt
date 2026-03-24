@@ -2,6 +2,7 @@
 fastapi
 uvicorn
 slowapi
+python-multipart
 
 # LLM and embeddings
 ollama

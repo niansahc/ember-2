@@ -1,10 +1,15 @@
+import base64
+import logging
+import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 
 from src.api.limiter import limiter
 from src.core.config import get_private_vault_path
 from src.ingest.importers.chatgpt import load_chatgpt_export
+from src.ingest.importers.csv import load_csv
+from src.ingest.importers.docx import load_docx
 from src.ingest.importers.files import load_file
 from src.ingest.importers.gdrive import (
     list_drive_files,
@@ -12,12 +17,32 @@ from src.ingest.importers.gdrive import (
     get_drive_file,
 )
 from src.ingest.importers.gdrive_download import download_drive_file
+from src.ingest.importers.pdf import load_pdf
 from src.ingest.pipeline import run_ingestion_pipeline
 from src.ingest.writers import write_chunks_to_vault
 from src.ingest.importers.gdrive_sync import sync_gdrive_folder
 
+logger = logging.getLogger("ember.ingest")
 
 router = APIRouter()
+
+# File extensions routed to importers
+DOCUMENT_EXTENSIONS = {
+    ".pdf": "pdf",
+    ".docx": "docx",
+    ".csv": "csv",
+    ".xlsx": "csv",
+}
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+
+MIME_MAP = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
 
 
 def _validate_import_path(file_path: str) -> Path:
@@ -42,6 +67,87 @@ def _validate_import_path(file_path: str) -> Path:
         raise HTTPException(status_code=404, detail=f"File not found: {resolved}")
 
     return resolved
+
+
+# -----------------------------
+# Multipart File Upload
+# -----------------------------
+@router.post("/ingest/upload")
+@limiter.limit("10/minute")
+async def ingest_upload(request: Request, file: UploadFile = File(...)):
+    """
+    Accept a file upload via multipart form.
+
+    Documents (.pdf, .docx, .csv, .xlsx) are ingested into the vault
+    through the standard pipeline: load → clean → chunk → embed → write.
+
+    Images (.jpg, .jpeg, .png, .gif, .webp) are returned as base64
+    for use as vision model input — they are NOT ingested into the vault.
+
+    Returns:
+      Documents: {"status": "ingested", "filename": "...", "chunks": N}
+      Images:    {"status": "image", "data": "base64...", "media_type": "image/..."}
+    """
+    filename = file.filename or "unknown"
+    ext = Path(filename).suffix.lower()
+
+    # --- Image passthrough ---
+    if ext in IMAGE_EXTENSIONS:
+        content = await file.read()
+        b64 = base64.b64encode(content).decode("ascii")
+        media_type = MIME_MAP.get(ext, "application/octet-stream")
+        logger.info("[UPLOAD] Image passthrough: %s (%s, %d bytes)", filename, media_type, len(content))
+        return {
+            "status": "image",
+            "filename": filename,
+            "data": b64,
+            "media_type": media_type,
+        }
+
+    # --- Document ingestion ---
+    if ext not in DOCUMENT_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {ext}. Supported: {', '.join(sorted(DOCUMENT_EXTENSIONS.keys() | IMAGE_EXTENSIONS))}",
+        )
+
+    # Save upload to a temp file, then run through the appropriate importer
+    content = await file.read()
+    vault_path = get_private_vault_path()
+    uploads_dir = vault_path / "imports" / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write to vault/imports/uploads/ so it persists as a source file
+    saved_path = uploads_dir / filename
+    saved_path.write_bytes(content)
+    logger.info("[UPLOAD] Saved %s (%d bytes) to %s", filename, len(content), saved_path)
+
+    try:
+        doc_type = DOCUMENT_EXTENSIONS[ext]
+
+        if doc_type == "pdf":
+            docs = load_pdf(str(saved_path))
+        elif doc_type == "docx":
+            docs = load_docx(str(saved_path))
+        elif doc_type == "csv":
+            docs = load_csv(str(saved_path))
+        else:
+            raise HTTPException(status_code=400, detail=f"No importer for {ext}")
+
+        chunks = run_ingestion_pipeline(docs)
+        write_chunks_to_vault(chunks, vault_path)
+
+        logger.info("[UPLOAD] Ingested %s: %d docs, %d chunks", filename, len(docs), len(chunks))
+        return {
+            "status": "ingested",
+            "filename": filename,
+            "documents": len(docs),
+            "chunks": len(chunks),
+        }
+
+    except Exception as e:
+        logger.error("[UPLOAD] Failed to ingest %s: %s", filename, e)
+        raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(e)}")
 
 
 # -----------------------------

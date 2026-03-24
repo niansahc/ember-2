@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from src.core.config import PRIVATE_VAULT_PATH
+from src.core.config import get_private_vault_path
 from src.memory.storage import MemoryStorage
 
 logger = logging.getLogger("ember.session")
@@ -28,12 +28,12 @@ storage = MemoryStorage()
 
 def _session_dir() -> Path:
     """Return the session storage directory, creating it if needed."""
-    return storage.get_memory_dir(Path(PRIVATE_VAULT_PATH), "session")
+    return storage.get_memory_dir(get_private_vault_path(), "session")
 
 
 def _conversation_dir() -> Path:
     """Return the conversation storage directory."""
-    return storage.get_memory_dir(Path(PRIVATE_VAULT_PATH), "conversation")
+    return storage.get_memory_dir(get_private_vault_path(), "conversation")
 
 
 def _now_id() -> str:

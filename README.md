@@ -515,3 +515,9 @@ src/
 ├ start_api.bat           Windows API startup script
 └ private_vault/          Excluded from git — all memory data lives here
 ```
+
+---
+
+## License
+
+Ember's code is licensed under AGPL-3.0. Her visual identity, assets, and branding are licensed under CC BY-NC 4.0 — free to use personally, not for commercial products. Ember belongs to the community.

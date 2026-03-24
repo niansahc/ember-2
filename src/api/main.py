@@ -157,7 +157,10 @@ def clean_context_packet(packet_dict: dict) -> dict:
 
 @app.get("/")
 def root():
-    return {"message": "Ember-2 API is running"}
+    return {
+        "message": "Ember-2 API is running",
+        "model": llm_adapter.model,
+    }
 
 
 # ── Conversation session endpoints ─────────────────────────────────────

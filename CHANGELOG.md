@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.9.2 — 2026-03-24
+
+### Conversation Sessions
+- **Session persistence** — every chat turn now carries a `session_id` in metadata, linking turns to a named conversation
+- **Session records** — stored in `memory/session/` as append-only JSON; supports rename and soft-delete without overwriting
+- **Auto-titling** — session title auto-generated from first 50 characters of first user message
+- **Session resolution** — latest record per session_id wins; `updated_at` and `turn_count` derived at read time
+- **CRUD endpoints** — `GET /v1/conversations`, `GET /v1/conversations/{id}`, `PATCH` (rename), `DELETE` (soft-delete)
+- **X-Session-ID header** — UI generates session IDs; API generates one if header is missing (backwards compatible)
+
+### File Upload
+- **POST /ingest/upload** — multipart file upload endpoint; routes by extension
+- **.pdf, .docx, .csv, .xlsx** — ingested through the full pipeline (load → clean → chunk → embed → write to vault)
+- **Image passthrough** — .jpg, .jpeg, .png, .gif, .webp returned as base64 for vision model input (not ingested)
+- **Upload persistence** — uploaded documents saved to `vault/imports/uploads/` as source files
+- **python-multipart** added to requirements.txt
+
+### API Improvements
+- **Health check returns model** — `GET /` now includes `"model": "qwen2.5:14b"` alongside the status message
+- **CORS middleware** — added `CORSMiddleware` for cross-origin UI access during development
+- **API key support for UI** — all authenticated endpoints work with `Authorization: Bearer` from the custom UI
+
+### Fixes
+- Fixed `session.py` import bug: `get_private_vault_path()` function call instead of missing constant
+
+### Tests
+- 138 tests passing (15 new: health check, ingest upload routing, MIME mapping, session import fix)
+
 ## v0.9.0 — 2026-03-24
 
 First feature-complete release of Ember-2 as a local personal intelligence system.

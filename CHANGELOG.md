@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.9.3 — 2026-03-24
+
+### Projects Backend
+- **Project CRUD** — projects stored as append-only records in `memory/project/`
+- **GET /v1/projects** — list all projects with name, color, and conversation count
+- **POST /v1/projects** — create project with name and color
+- **PATCH /v1/projects/{id}** — rename or recolor (append-only)
+- **DELETE /v1/projects/{id}** — soft delete (append-only)
+- **GET /v1/projects/{id}/conversations** — list conversations in a project
+- **PATCH /v1/conversations/{id}** — now accepts `project_id` to move conversations between projects
+- Same resolution pattern as sessions: latest record per project_id wins
+
+### Session Improvements
+- Sessions now carry `project_id` in metadata and list output
+- `update_session()` supports setting title and/or project_id in one call
+- `list_sessions_by_project()` for filtering conversations by project
+
+### Tests
+- 153 tests passing (15 new for projects: ID generation, resolution, endpoint models, session support)
+
 ## v0.9.2 — 2026-03-24
 
 ### Conversation Sessions

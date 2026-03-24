@@ -337,11 +337,28 @@ Skip this step if you are not using Tailscale.
    - **Android:** Search "Tailscale" in Google Play
 2. Sign in with the same account you used on your desktop
 3. Tap **Connect**
-4. Open a browser on your phone and go to:
+
+**Enable MagicDNS and HTTPS (recommended):**
+
+4. Log in at [login.tailscale.com](https://login.tailscale.com) → go to **DNS** → enable **MagicDNS**
+5. Go to your machine in the Tailscale admin panel → enable **HTTPS**
+6. On your desktop, run:
+```
+tailscale serve --bg http://localhost:3000
+```
+7. Open a browser on your phone and go to:
+```
+https://your-machine-name.your-tailnet.ts.net
+```
+You should see the Open WebUI login screen.
+
+**Or use the IP directly (simpler, no HTTPS):**
+
+Open a browser on your phone and go to:
 ```
 http://100.x.x.x:3000
 ```
-Replace `100.x.x.x` with your Tailscale IP. You should see the Open WebUI login screen.
+Replace `100.x.x.x` with your Tailscale IP.
 
 > Both devices need to have Tailscale running and connected. Check the Tailscale app on your phone — it should list your desktop machine as a connected device.
 
@@ -362,16 +379,13 @@ If something is not working:
 
 ## Optional: HTTPS via Tailscale
 
-Once Ember is running with Tailscale, you can add a proper HTTPS address with a real security certificate:
+Once Ember is running with Tailscale, you can access Open WebUI via a proper HTTPS address with a real security certificate. This is covered in Step 13 above. The command is:
 
-1. Log in at [login.tailscale.com](https://login.tailscale.com) → go to your machine → enable **HTTPS**
-2. In a terminal on your desktop, run:
 ```
-tailscale serve --https=443 http://127.0.0.1:8000
+tailscale serve --bg http://localhost:3000
 ```
-3. Your Ember API is now available at `https://your-machine-name.tail-hash.ts.net`
 
-Update the Open WebUI connection URL to use this HTTPS address instead of the IP.
+This makes Open WebUI available at `https://your-machine-name.your-tailnet.ts.net` from any device on your Tailscale network.
 
 ---
 

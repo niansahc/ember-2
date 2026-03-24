@@ -25,8 +25,16 @@ from src.memory.session import (
     list_sessions,
     get_session,
     get_turns,
-    rename_session,
+    update_session,
     delete_session,
+    list_sessions_by_project,
+)
+from src.memory.project import (
+    list_projects,
+    get_project,
+    create_project,
+    update_project,
+    delete_project,
 )
 from src.reflection.generate_reflection import generate_reflection
 from src.retrieval.semantic_search import semantic_search
@@ -54,7 +62,18 @@ def _write_audit_log(method: str, path: str, client_ip: str, status: int, ms: in
         f.write(entry + "\n")
 
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
@@ -137,8 +156,19 @@ class ModelRequest(BaseModel):
     model: str
 
 
-class RenameRequest(BaseModel):
-    title: str
+class ConversationUpdateRequest(BaseModel):
+    title: str | None = None
+    project_id: str | None = None
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str
+    color: str = "#ff8c00"
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str | None = None
+    color: str | None = None
 
 
 def clean_context_packet(packet_dict: dict) -> dict:
@@ -199,12 +229,14 @@ def get_conversation_endpoint(session_id: str, limit: int = 200):
 
 
 @app.patch("/v1/conversations/{session_id}")
-def rename_conversation_endpoint(session_id: str, body: RenameRequest):
-    """Rename a conversation session. Append-only: writes a new session record."""
-    result = rename_session(session_id, body.title)
+def update_conversation_endpoint(session_id: str, body: ConversationUpdateRequest):
+    """Update a conversation's title and/or project assignment. Append-only."""
+    if body.title is None and body.project_id is None:
+        raise HTTPException(status_code=400, detail="Provide at least one of: title, project_id")
+    result = update_session(session_id, title=body.title, project_id=body.project_id if body.project_id is not None else "__unset__")
     if result is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
-    return {"status": "renamed", "session_id": session_id, "title": body.title}
+    return {"status": "updated", "session_id": session_id, "title": body.title, "project_id": body.project_id}
 
 
 @app.delete("/v1/conversations/{session_id}")
@@ -214,6 +246,57 @@ def delete_conversation_endpoint(session_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
     return {"status": "deleted", "session_id": session_id}
+
+
+# ── Project endpoints ──────────────────────────────────────────────────
+
+
+@app.get("/v1/projects")
+def list_projects_endpoint():
+    """List all projects with conversation counts."""
+    projects = list_projects()
+    # Add conversation_count per project
+    for proj in projects:
+        convos = list_sessions_by_project(proj["id"], limit=9999)
+        proj["conversation_count"] = len(convos)
+    return {"projects": projects}
+
+
+@app.post("/v1/projects")
+def create_project_endpoint(body: ProjectCreateRequest):
+    """Create a new project."""
+    result = create_project(body.name, body.color)
+    return {"status": "created", **result}
+
+
+@app.patch("/v1/projects/{project_id}")
+def update_project_endpoint(project_id: str, body: ProjectUpdateRequest):
+    """Rename or recolor a project. Append-only."""
+    if body.name is None and body.color is None:
+        raise HTTPException(status_code=400, detail="Provide at least one of: name, color")
+    result = update_project(project_id, name=body.name, color=body.color)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    return {"status": "updated", "project_id": project_id, "name": body.name, "color": body.color}
+
+
+@app.delete("/v1/projects/{project_id}")
+def delete_project_endpoint(project_id: str):
+    """Soft-delete a project. Append-only."""
+    result = delete_project(project_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    return {"status": "deleted", "project_id": project_id}
+
+
+@app.get("/v1/projects/{project_id}/conversations")
+def list_project_conversations_endpoint(project_id: str, limit: int = 50):
+    """List conversations belonging to a project."""
+    proj = get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    sessions = list_sessions_by_project(project_id, limit=limit)
+    return {"project_id": project_id, "conversations": sessions}
 
 
 # ── Memory endpoints ───────────────────────────────────────────────────

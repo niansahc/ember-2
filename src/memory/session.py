@@ -116,6 +116,7 @@ def list_sessions(limit: int = 50) -> list[dict]:
             "created_at": created_at,
             "updated_at": updated_at,
             "turn_count": turn_count,
+            "project_id": rec.get("metadata", {}).get("project_id"),
         })
 
     # Sort by updated_at descending
@@ -181,33 +182,66 @@ def create_session(session_id: str, title: str) -> Path:
     return file_path
 
 
-def rename_session(session_id: str, new_title: str) -> Optional[Path]:
+def update_session(
+    session_id: str,
+    title: Optional[str] = None,
+    project_id: Optional[str] = "__unset__",
+) -> Optional[Path]:
     """
-    Rename a session by writing a new record with the updated title.
+    Update a session's title and/or project_id by writing a new record.
     Append-only: the old record remains untouched.
+
+    Pass project_id=None to remove from a project.
+    Pass project_id="__unset__" (default) to leave unchanged.
     """
     existing = get_session(session_id)
     if existing is None:
         return None
 
+    meta = existing.get("metadata", {})
+    new_title = title if title is not None else existing.get("text", "Untitled")
+    new_project_id = meta.get("project_id") if project_id == "__unset__" else project_id
+
     now = datetime.now(timezone.utc)
+    new_meta = {
+        "session_id": session_id,
+        "created_at": meta.get("created_at", now.isoformat()),
+        "deleted": False,
+    }
+    if new_project_id is not None:
+        new_meta["project_id"] = new_project_id
+
+    tags = ["session"]
+    if title is not None:
+        tags.append("renamed")
+    if project_id != "__unset__":
+        tags.append("moved")
+
     record = {
         "id": _now_id(),
         "timestamp": now.isoformat(),
         "type": "session",
         "text": new_title,
         "source": "api",
-        "tags": ["session", "renamed"],
-        "metadata": {
-            "session_id": session_id,
-            "created_at": existing.get("metadata", {}).get("created_at", now.isoformat()),
-            "deleted": False,
-        },
+        "tags": tags,
+        "metadata": new_meta,
     }
     file_path = _session_dir() / f"{record['id']}.json"
     storage.write_json(file_path, record)
-    logger.info("Renamed session %s -> %s", session_id, new_title)
+    logger.info("Updated session %s: title=%s project_id=%s", session_id, new_title, new_project_id)
     return file_path
+
+
+def rename_session(session_id: str, new_title: str) -> Optional[Path]:
+    """Rename a session. Convenience wrapper around update_session."""
+    return update_session(session_id, title=new_title)
+
+
+def list_sessions_by_project(project_id: str, limit: int = 50) -> list[dict]:
+    """List all sessions belonging to a project, newest first."""
+    all_sessions = list_sessions(limit=9999)
+    matched = [s for s in all_sessions if s.get("project_id") == project_id]
+    return matched[:limit]
 
 
 def delete_session(session_id: str) -> Optional[Path]:

@@ -82,8 +82,9 @@ app.add_middleware(SlowAPIMiddleware)
 
 @app.middleware("http")
 async def api_key_auth(request: Request, call_next):
-    # Health check is always open
-    if request.url.path == "/":
+    # Public routes: UI files, health check
+    path = request.url.path
+    if path == "/" or path.startswith("/assets") or path == "/api/health" or path == "/favicon.ico":
         return await call_next(request)
 
     expected_key = get_ember_api_key()

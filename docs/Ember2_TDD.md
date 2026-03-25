@@ -180,7 +180,7 @@ Ember-2 must be:
 
 ```mermaid
 flowchart LR
-    U[User] --> UI[Open WebUI / API / Future Interfaces]
+    U[User] --> UI[Ember UI / API / CLI]
     UI --> ORCH[Application Orchestration]
     ORCH --> RET[Retrieval Policy + Context Builder]
     ORCH --> STATE[State Layer]
@@ -215,7 +215,7 @@ Responsibilities:
 
 Current/likely components:
 
-- Open WebUI
+- Ember UI (served from ui/ folder by FastAPI)
 - FastAPI API
 - CLI scripts
 - future voice and dashboard layers
@@ -1515,7 +1515,7 @@ It should be possible to explain:
 - ~~memory_type propagation fixed~~ — complete (v0.7.0): ContextItem dataclass now includes memory_type field; set explicitly in all three retriever paths (get_memory_items, get_reflection_items, get_conversation_items)
 - ~~reflection scoring improvements~~ — complete (v0.7.1): _should_skip_for_reflection tightened (box-drawing chars, short URL check, multi-turn detection, formatting complaint markers, ", line " fix); _reflection_priority_score improved with length gate on experience bonus, length quality bonus, and Jaccard-based diversity selection replacing candidates[:8]; 31 tests added in test_should_skip_for_reflection.py
 - ~~profile retrieval guarantee~~ — complete (v0.7.x): get_profile_items() added to ContextRetriever (semantic search scoped to memory_type="profile", read() fallback); profile items partitioned before final slice in ContextService so ranker score cannot push them below the limit cutoff; seed_identity_template.py added for onboarding; MEMORY CONTEXT prompt split into [User self-description] and [Context] sub-sections to fix perspective confusion
-- ~~Open WebUI interference hardening~~ — complete (v0.7.10): empty message guard (no text AND no image_parts) returns early with friendly message; `### Task:` RAG injection guard falls back to prior user message; system-role `User Context:` injection identified as benign noise (no action needed); type-aware diagnostic payload logging added at warning level to openai_adapter
+- ~~payload interference hardening~~ — complete (v0.7.10): empty message guard (no text AND no image_parts) returns early with friendly message; `### Task:` RAG injection guard falls back to prior user message; system-role `User Context:` injection identified as benign noise (no action needed); type-aware diagnostic payload logging added at warning level to openai_adapter
 - add retrieval evaluation benchmark
 - add audit scripts
 - improve trigger coverage without coupling to one test case
@@ -1565,7 +1565,7 @@ Two distinct paths:
 Goal: someone who has never used a terminal can run Ember.
 
 - one-click installer (packaged app or setup script with GUI)
-- no CLI required — all interaction through Open WebUI or a bundled interface
+- no CLI required — all interaction through the Ember UI
 - no manual vault setup, no `.env` editing, no seed scripts
 - onboarding conversation flow: Ember learns the user through conversation on first run
   - structured prompts draw out identity, context, goals, and preferences
@@ -1602,15 +1602,13 @@ The architecture already enforces this boundary — `private_vault/` is excluded
 
 ---
 
-## 25.6 Custom Frontend
+## 25.6 Ember UI
 
-A React-based interface built specifically for Ember. Replaces Open WebUI as the primary interface.
+A React-based interface built specifically for Ember. Served directly by FastAPI from the `ui/` folder at the same port as the API (8000).
 
-Open WebUI is a general-purpose LLM frontend that runs its own RAG pipeline, injects internal task prompts into the conversation (query generation, citation formatting, title generation), and maintains its own conversation history separate from Ember's. These behaviors conflict with Ember's architecture and are not configurable away without forking Open WebUI or disabling its core features.
+The Ember UI replaces the previous Open WebUI dependency. Open WebUI was a general-purpose LLM frontend that ran its own RAG pipeline, injected internal task prompts, and maintained separate conversation history — all of which conflicted with Ember's architecture. The custom frontend eliminates these conflicts and exposes Ember's capabilities directly.
 
-A custom frontend eliminates these conflicts and enables interface features that directly expose Ember's capabilities rather than working around a generic chat wrapper.
-
-This is a medium-term milestone — between current working state and full shareability. The non-technical user path depends on it.
+The built UI is produced by the `ember-2-ui` repository. The installer clones that repo, runs `npm run build`, and copies `dist/` into `ember-2/ui/`. The `ui/` folder is gitignored.
 
 ### Interface Components
 
@@ -1618,22 +1616,12 @@ This is a medium-term milestone — between current working state and full share
 - **Journal entry input** — dedicated journal writing surface; routes to `POST /journal`; supports mood and tags inline
 - **Memory inspector** — browsable view of vault contents by memory type (journal, profile, reflection, state); supports search via `GET /semantic-search` and `GET /search-memories`
 - **Model selector** — exposes `GET /model` and `POST /model`; shows available models with context window sizes; active model visible at all times
-- **Document upload** — file upload surface routed through the ingestion pipeline (`POST /ingest`); not Open WebUI's RAG — content goes into the vault as typed memory, not a session-scoped retrieval store
+- **Document upload** — file upload surface routed through the ingestion pipeline (`POST /ingest`); content goes into the vault as typed memory, not a session-scoped retrieval store
 - **Onboarding flow** — first-run experience for new users; guided conversation that seeds profile memory records; replaces `seed_identity_template.py` for the non-technical path
-
-### Why Not Open WebUI
-
-| Problem | Impact |
-|---|---|
-| Pre-flight `### Task:` query generation requests | Pollutes conversation history; responses appear in the chat |
-| Open WebUI maintains its own conversation history separate from Ember's buffer | Two systems tracking the same conversation out of sync |
-| Open WebUI RAG runs on top of Ember's retrieval | Redundant retrieval; citation overlays confuse the model's voice |
-| Document upload goes to Open WebUI's vector store, not Ember's vault | Ingested content is session-scoped and never persisted to canonical memory |
-| No surface for journal, memory inspection, or model switching | Core Ember capabilities have no UI |
 
 ### Build Sequence
 
-1. Minimal chat interface (replaces Open WebUI for conversation)
+1. Minimal chat interface
 2. Model selector
 3. Journal entry input
 4. Memory inspector (read-only)
@@ -1742,7 +1730,7 @@ Ember's local-first architecture provides a natural baseline: data never leaves 
 | API exposure on local network | **Mitigated** | API binds to Tailscale IP only (`&lt;your-tailscale-ip&gt;:8000`); LAN devices cannot reach it |
 | Unauthenticated API access | **Mitigated** | API key required on all non-health-check endpoints |
 | API key exposed as plaintext | **Mitigated** | Key stored in Windows Credential Manager (DPAPI-encrypted); not in `.env` or any file |
-| Traffic interception in transit | **Mitigated** | All traffic over Tailscale WireGuard; Open WebUI served via HTTPS (Tailscale Serve) |
+| Traffic interception in transit | **Mitigated** | All traffic over Tailscale WireGuard; Ember UI served via HTTPS (Tailscale Serve) |
 | Resource exhaustion / vault flooding | **Mitigated** | Rate limiting via slowapi: 60/min global, 30/min LLM, 10/min reflect/ingest |
 | Path traversal via ingest endpoints | **Mitigated** | `_validate_import_path()` restricts to `vault/imports/` only |
 | Prompt injection via ingested content | Residual | Ingestion filters reduce risk; no full mitigation at this phase |
@@ -1769,7 +1757,7 @@ Recovery key is stored in a password manager (not on the encrypted drive).
 
 All endpoints except `GET /` require authentication via:
 
-- `Authorization: Bearer <key>` — Open WebUI and OpenAI-compatible clients
+- `Authorization: Bearer <key>` — Ember UI and OpenAI-compatible clients
 - `X-API-Key: <key>` — direct API access
 
 Implementation: `api_key_auth` middleware in `src/api/main.py` using `secrets.compare_digest` (timing-safe).
@@ -1780,7 +1768,7 @@ Implementation: `api_key_auth` middleware in `src/api/main.py` using `secrets.co
 
 - API binds to `&lt;your-tailscale-ip&gt;` (Tailscale interface) — not reachable from LAN or internet
 - All Tailscale traffic is WireGuard-encrypted end-to-end
-- Open WebUI is served over HTTPS via Tailscale Serve (`https://chastainblanc.tail682db9.ts.net`)
+- Ember UI is served over HTTPS via Tailscale Serve (`https://chastainblanc.tail682db9.ts.net`)
 - Tailscale ACL restricts tailnet access to `autogroup:member` (account owner devices only)
 - SearXNG binds to `127.0.0.1:8888` — local machine only
 
@@ -1945,7 +1933,7 @@ Each question-answer pair writes a `profile` memory record:
 ## 33.5 Integration Points
 
 - **Detection**: `ContextRetriever.get_profile_items()` returns empty → trigger onboarding
-- **Interface**: custom frontend (§25.6) exposes a dedicated onboarding mode; Open WebUI path uses the standard chat interface with a guided system prompt
+- **Interface**: Ember UI (§25.6) exposes a dedicated onboarding mode; API path uses the standard chat interface with a guided system prompt
 - **Completion**: quiz writes a `system_event` record marking onboarding complete so it doesn't re-trigger
 - **Re-onboarding**: user can re-run by clearing profile records or via a `/onboarding reset` CLI command
 
@@ -2169,7 +2157,7 @@ This is the preferred remote access model. It does not require VPN configuration
 ```mermaid
 sequenceDiagram
     participant User
-    participant UI as WebUI/API
+    participant UI as Ember UI/API
     participant Orchestrator
     participant Retriever
     participant State

@@ -32,7 +32,7 @@ These decisions are locked. Do not undermine them:
 ## System Layers
 
 ```
-Interface Layer      — FastAPI (src/api/), Open WebUI, CLI scripts
+Interface Layer      — FastAPI (src/api/), Ember UI (ui/), CLI scripts
 Reasoning Layer      — Ollama + local LLM, prompt templates (src/llm/)
 Cognitive Layer      — ContextService, ContextRetriever, ContextRanker,
                        ReflectionEngine, SafetyPolicyService, ResponseReviewService
@@ -78,6 +78,7 @@ ember-2/
     test_policy_service.py
     test_review_service.py
     test_vault.py
+  ui/                 Built frontend served by FastAPI (gitignored, built from ember-2-ui)
   prompts/            LLM prompt templates
   logs/               Safety review logs, retrieval eval output
   private_vault/      EXCLUDED FROM GIT — all actual memory data lives here
@@ -178,9 +179,11 @@ python -m src.reflection.run_daily_reflection
 python -m src.reflection.run_weekly_reflection
 ```
 
+Docker Compose runs SearXNG only (private web search engine). The `ui/` folder contains the built Ember UI frontend, served by FastAPI at the same port.
+
 Key API endpoints:
-- `GET /` — health check
-- `POST /v1/chat/completions` — OpenAI-compatible chat (used by Open WebUI)
+- `GET /` — serves the Ember UI when ui/ folder exists, otherwise health check JSON
+- `POST /v1/chat/completions` — OpenAI-compatible chat
 - `GET /debug-context?message=...` — inspect context packet for a query
 - `GET /semantic-search?query=...` — direct vector search
 - `POST /reflect` — trigger reflection
@@ -197,7 +200,7 @@ These are confirmed working as of the latest commits:
 - Semantic retrieval via vector indexes
 - Context assembly with policy-weighted ranking and diversity selection
 - Daily and weekly reflection generation
-- FastAPI + Open WebUI integration (OpenAI-compatible adapter)
+- FastAPI + Ember UI integration (UI served from ui/ folder)
 - Constitutional review flow end-to-end
 - Safety review logging
 - Retrieval evaluation harness (`tools/eval_retrieval.py`, 5 benchmark cases)

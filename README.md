@@ -43,7 +43,7 @@ Ember-2 is built as a modular system, not a monolithic agent.
 ## Layers
 
 ### Interface Layer
-- Open WebUI
+- Ember UI (served from ui/ folder by FastAPI)
 - FastAPI API
 - CLI scripts
 
@@ -351,7 +351,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - semantic retrieval
 - context assembly
 - reflection engine
-- API + WebUI integration
+- API + Ember UI (served from FastAPI)
 - constitutional review flow
 - safety review logging
 - state layer (StateService, StateResolver, models, ContextPacket integration, prompt rendering)
@@ -374,7 +374,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - mid-conversation context compression (token-based, 70% threshold, LLM summarization, session summaries persisted to vault)
 - journal ingestion (scripts/journal.py CLI + POST /journal endpoint; 20-char minimum; mood and tags metadata)
 - multi-source reflection (daily + weekly reflection now blend journal and ingested content in a single pass)
-- Open WebUI interference hardening (empty message guard; `### Task:` RAG injection guard; type-aware payload logging) — v0.7.10
+- payload interference hardening (empty message guard; `### Task:` RAG injection guard; type-aware payload logging) — v0.7.10
 - web search via local SearXNG (intent-gated; `web_items` in ContextPacket; results above memory context in prompt; apostrophe normalization) — v0.8.0/v0.8.1
 - vision model integration (`EMBER_VISION_MODEL` in .env; `image_data` pipeline from openai_adapter → ContextPacket → Ollama `images=` kwarg; graceful text-only fallback) — v0.8.2
 - security hardening: Tailscale-only API binding, API key auth middleware, Windows Credential Manager key storage (keyring), BitLocker encryption at rest, rate limiting (slowapi), path traversal protection on ingest endpoints, JSON audit logging to `logs/audit/`, Tailscale HTTPS via Serve, ACL restricted to `autogroup:member` — v0.8.3/v0.8.4
@@ -509,6 +509,7 @@ src/
 ├ tests/                  Pytest suite (123 tests)
 ├ prompts/                LLM prompt templates
 ├ logs/                   Audit logs, safety review logs (gitignored)
+├ ui/                     Built Ember UI frontend (gitignored, built from ember-2-ui)
 ├ CLAUDE.md               AI coding instructions and architecture rules
 ├ ETHOS.md                Ember's founding principles
 ├ SETUP.md                First-time setup guide

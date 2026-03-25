@@ -2,14 +2,17 @@
 
 This guide walks you through setting up Ember-2 from scratch. It assumes you are comfortable running commands in a terminal but does not assume a software development background.
 
+**Recommended for non-technical users:** Download the [Ember Setup installer](https://github.com/niansahc/ember-2-installer/releases) instead — it handles all of these steps automatically.
+
 ---
 
 ## What You Are Setting Up
 
-- **Ember API** — the core backend (FastAPI, runs locally)
+- **Ember API + UI** — the core backend and web interface (FastAPI, runs locally on port 8000)
 - **Ollama** — runs the local language model on your hardware
 - **SearXNG** — a private web search engine running in Docker (used for web-aware queries)
-- **Open WebUI** — a chat interface that connects to Ember
+
+One process, one port, one URL. The Ember UI is served directly by FastAPI from the `ui/` folder.
 
 ---
 
@@ -41,6 +44,9 @@ Verify:
 docker --version
 ```
 
+### 4. Git (optional)
+Download from [git-scm.com](https://git-scm.com/downloads). Only needed if you want to clone the repo directly. You can also download a ZIP from GitHub.
+
 ---
 
 ## Setup Steps
@@ -55,7 +61,7 @@ git clone https://github.com/niansahc/ember-2.git
 cd ember-2
 ```
 
-**If you don't have git (recommended for most users):**
+**If you don't have git:**
 1. Go to [github.com/niansahc/ember-2](https://github.com/niansahc/ember-2)
 2. Click the green **Code** button → **Download ZIP**
 3. Extract the ZIP somewhere on your computer (e.g. your Desktop)
@@ -223,36 +229,7 @@ You will see a list of records written. Safe to re-run — exact duplicates are 
 
 ---
 
-### Step 8 — Start SearXNG and Open WebUI
-
-This single command starts two things: SearXNG (private web search) and Open WebUI (the chat interface), both running locally in Docker.
-
-**Before running this step:**
-1. Make sure Docker Desktop is open and running — look for the Docker whale icon in your system tray. If it is not there, open Docker Desktop and wait until it says "Engine running".
-2. Make sure your terminal is still in the `ember-2-main\ember-2-main` folder. If you opened a new terminal, navigate back:
-```
-cd %USERPROFILE%\Desktop\ember-2-main\ember-2-main
-```
-
-**Start both services:**
-```
-docker compose up -d
-```
-
-The first time you run this it will download and build the images — this may take a few minutes. After that it starts instantly.
-
-**Verify both are running:**
-```
-docker ps
-```
-
-You should see two rows: `ember-searxng` and `ember-webui`, both with `Up` in the status column.
-
-> If you see `docker compose: command not found`, try `docker-compose up -d` (with a hyphen) — older versions of Docker use the hyphen form.
-
----
-
-### Step 9 — Set Your API Key
+### Step 8 — Set Your API Key
 
 Generates a secure API key and stores it in Windows Credential Manager — not in any file. This key protects the Ember API from unauthorized access.
 
@@ -260,19 +237,61 @@ Generates a secure API key and stores it in Windows Credential Manager — not i
 python scripts/set_api_key.py
 ```
 
-The script will display your key once. **Copy it immediately** — you will need it in Step 11. If you lose it, you can retrieve it from Windows Credential Manager (search for "Credential Manager" in the Start menu → Windows Credentials → look for `ember-2`) or run the script again to rotate to a new key.
+The script will display your key once. **Copy it immediately** — you will need it when accessing the UI. If you lose it, you can retrieve it from Windows Credential Manager (search for "Credential Manager" in the Start menu → Windows Credentials → look for `ember-2`) or run the script again to rotate to a new key.
 
 ---
 
-### Step 10 — Start the Ember API
+### Step 9 — Start SearXNG
 
-Starts the Ember backend server. Run this from the repo root with your virtual environment activated.
+Starts SearXNG (private web search) locally in Docker.
 
-The API host is controlled by `EMBER_HOST` in your `.env` file. It defaults to `127.0.0.1` (local-only access). If you are using Tailscale to access Ember from another device, set `EMBER_HOST` to your Tailscale IP before starting:
+**Before running this step:**
+1. Make sure Docker Desktop is open and running — look for the Docker whale icon in your system tray. If it is not there, open Docker Desktop and wait until it says "Engine running".
+2. Make sure your terminal is still in the ember-2 folder.
 
+**Start SearXNG:**
 ```
-EMBER_HOST=100.x.x.x
+docker compose up -d
 ```
+
+The first time you run this it will download the image — this may take a few minutes. After that it starts instantly.
+
+**Verify it is running:**
+```
+docker ps
+```
+
+You should see `ember-searxng` with `Up` in the status column.
+
+> If you see `docker compose: command not found`, try `docker-compose up -d` (with a hyphen) — older versions of Docker use the hyphen form.
+
+---
+
+### Step 10 — Populate the UI Folder
+
+The Ember UI is a built web application served by FastAPI from the `ui/` folder. The installer does this automatically. If you are setting up manually, you have two options:
+
+**Option A — Copy from a release (simplest):**
+Download a pre-built UI from the [ember-2-ui releases](https://github.com/niansahc/ember-2-ui/releases) and extract the contents into an `ui/` folder at the root of the ember-2 repo.
+
+**Option B — Build from source:**
+```
+git clone https://github.com/niansahc/ember-2-ui.git
+cd ember-2-ui
+npm install
+npm run build
+```
+Then copy the contents of `ember-2-ui/dist/` into `ember-2/ui/`.
+
+> The `ui/` folder is gitignored. It is not part of the ember-2 repository — it is populated at install time.
+
+---
+
+### Step 11 — Start Ember
+
+Starts the Ember backend server and UI. Run this from the repo root with your virtual environment activated.
+
+The API host is controlled by `EMBER_HOST` in your `.env` file. It defaults to `127.0.0.1` (local-only access). If you are using Tailscale to access Ember from another device, set `EMBER_HOST` to your Tailscale IP before starting.
 
 **Windows (recommended):**
 ```
@@ -286,49 +305,13 @@ python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
 
 > If using Tailscale, replace `127.0.0.1` in the direct command with your Tailscale IP, or just use `start_api.bat` which reads `EMBER_HOST` from `.env` automatically.
 
-Verify the API is running by opening a browser and navigating to `http://127.0.0.1:8000/` (or `http://<your-tailscale-ip>:8000/` if using Tailscale).
+Open a browser and go to **http://localhost:8000**. You should see the Ember UI.
 
-You should see: `{"message": "Ember-2 API is running"}`
-
----
-
-### Step 11 — Connect Open WebUI
-
-Open WebUI was already started in Step 8. Open a browser and go to `http://localhost:3000`. Create an account (local only — no external sign-up).
-
-**Configure the Ember connection:**
-
-1. Go to **Settings → Connections**
-2. Set the **OpenAI API Base URL**:
-   - **Local access:** `http://host.docker.internal:8000/v1`
-   - **Tailscale:** `http://100.x.x.x:8000/v1` (replace with your Tailscale IP)
-3. Set the **API Key** to the key you copied in Step 9
-4. Click **Save**
-
-You should see Ember models appear in the model selector. Select one and start a conversation.
+> If the `ui/` folder is not populated, you will see `{"message": "Ember-2 API is running"}` instead.
 
 ---
 
-### Step 12 — Configure Open WebUI Settings
-
-Disables Open WebUI's built-in retrieval and query rewriting features so they do not interfere with Ember's own retrieval pipeline.
-
-**Settings → Documents**
-
-- **Bypass Embedding and Retrieval** → turn **On**
-  Prevents Open WebUI from embedding and searching documents itself — Ember handles all retrieval from the memory vault.
-
-**Settings → Interface**
-
-- **Retrieval Query Generation** → turn **Off**
-  Stops Open WebUI from rewriting your messages into retrieval queries before they reach Ember, which would corrupt intent classification and context assembly.
-
-- **Web Search Query Generation** → turn **Off**
-  Stops Open WebUI from injecting its own web search queries — Ember uses SearXNG directly and manages web search internally.
-
----
-
-### Step 13 — Access Ember from Your Phone (Tailscale)
+### Step 12 — Access Ember from Your Phone (Tailscale)
 
 Skip this step if you are not using Tailscale.
 
@@ -344,19 +327,19 @@ Skip this step if you are not using Tailscale.
 5. Go to your machine in the Tailscale admin panel → enable **HTTPS**
 6. On your desktop, run:
 ```
-tailscale serve --bg http://localhost:3000
+tailscale serve --bg http://localhost:8000
 ```
 7. Open a browser on your phone and go to:
 ```
 https://your-machine-name.your-tailnet.ts.net
 ```
-You should see the Open WebUI login screen.
+You should see the Ember UI.
 
 **Or use the IP directly (simpler, no HTTPS):**
 
 Open a browser on your phone and go to:
 ```
-http://100.x.x.x:3000
+http://100.x.x.x:8000
 ```
 Replace `100.x.x.x` with your Tailscale IP.
 
@@ -366,11 +349,11 @@ Replace `100.x.x.x` with your Tailscale IP.
 
 ## Verify Everything Is Working
 
-Send a message in Open WebUI. If Ember responds with context and personality, setup is complete.
+Open http://localhost:8000 in a browser. If Ember responds with context and personality when you send a message, setup is complete.
 
 If something is not working:
 
-- **No models in Open WebUI** — check that the API URL and key are correct in Settings → Connections
+- **Blank page at localhost:8000** — make sure the `ui/` folder is populated (Step 10)
 - **API won't start** — make sure your virtual environment is activated and `.env` has the correct vault path
 - **No web results** — check that Docker is running and `docker ps` shows `ember-searxng`
 - **Slow first response** — normal. The embedding model loads on first use and caches after that.
@@ -379,13 +362,13 @@ If something is not working:
 
 ## Optional: HTTPS via Tailscale
 
-Once Ember is running with Tailscale, you can access Open WebUI via a proper HTTPS address with a real security certificate. This is covered in Step 13 above. The command is:
+Once Ember is running with Tailscale, you can access it via a proper HTTPS address with a real security certificate. This is covered in Step 12 above. The command is:
 
 ```
-tailscale serve --bg http://localhost:3000
+tailscale serve --bg http://localhost:8000
 ```
 
-This makes Open WebUI available at `https://your-machine-name.your-tailnet.ts.net` from any device on your Tailscale network.
+This makes Ember available at `https://your-machine-name.your-tailnet.ts.net` from any device on your Tailscale network.
 
 ---
 

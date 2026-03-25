@@ -186,8 +186,21 @@ def clean_context_packet(packet_dict: dict) -> dict:
     return packet_dict
 
 
+_UI_DIR = Path(__file__).resolve().parents[2] / "ui"
+
 @app.get("/")
 def root():
+    # Serve Ember UI if available, otherwise return API health check
+    if _UI_DIR.is_dir() and (_UI_DIR / "index.html").is_file():
+        return FileResponse(_UI_DIR / "index.html")
+    return {
+        "message": "Ember-2 API is running",
+        "model": llm_adapter.model,
+    }
+
+@app.get("/api/health")
+def health_check():
+    """API health check — always returns JSON, even when UI is served at /"""
     return {
         "message": "Ember-2 API is running",
         "model": llm_adapter.model,
@@ -425,8 +438,6 @@ def set_model_endpoint(request: ModelRequest):
 # Serves the built Ember UI from ui/ if it exists.
 # Must be registered AFTER all API routes — acts as a fallback.
 # If ui/ doesn't exist, the API runs in headless mode (API only).
-
-_UI_DIR = Path(__file__).resolve().parents[2] / "ui"
 
 if _UI_DIR.is_dir():
     # Serve static assets (js, css, images)

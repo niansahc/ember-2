@@ -17,6 +17,9 @@ cache/
 __pycache__/
 *.pyc
 
+# Built UI (populated by installer from ember-2-ui)
+ui/
+
 # OS junk
 .DS_Store
 Thumbs.db

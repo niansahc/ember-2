@@ -8,7 +8,8 @@ from pathlib import Path
 
 import ollama
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -418,3 +419,25 @@ def set_model_endpoint(request: ModelRequest):
     llm_adapter.set_model(request.model)
     llm_adapter.prompt_builder.conversation_buffer.set_context_window(request.model)
     return {"model": llm_adapter.model}
+
+
+# ── UI static file serving ─────────────────────────────────────────────
+# Serves the built Ember UI from ui/ if it exists.
+# Must be registered AFTER all API routes — acts as a fallback.
+# If ui/ doesn't exist, the API runs in headless mode (API only).
+
+_UI_DIR = Path(__file__).resolve().parents[2] / "ui"
+
+if _UI_DIR.is_dir():
+    # Serve static assets (js, css, images)
+    app.mount("/assets", StaticFiles(directory=_UI_DIR / "assets"), name="ui-assets")
+
+    # SPA catch-all: any non-API route returns index.html
+    @app.get("/{path:path}")
+    def serve_ui(path: str):
+        # If the file exists in ui/, serve it directly (favicon, etc.)
+        file_path = _UI_DIR / path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        # Otherwise serve index.html for SPA client-side routing
+        return FileResponse(_UI_DIR / "index.html")

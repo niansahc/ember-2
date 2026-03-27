@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 from src.context.models import ContextPacket
@@ -18,6 +19,7 @@ class PromptBuilder:
         # recent conversation → instruction rules → user query
         sections: list[str] = [
             self.system_prompt,
+            self._build_date_section(),
             self._build_state_section(context_packet),
             self._build_reflection_section(context_packet),
             self._build_web_search_section(context_packet),
@@ -28,6 +30,10 @@ class PromptBuilder:
         ]
 
         return "\n\n".join(section for section in sections if section.strip())
+
+    def _build_date_section(self) -> str:
+        """Inject current date for temporal grounding."""
+        return f"TODAY: {datetime.now().strftime('%A, %B %d, %Y')}."
 
     def _build_state_section(self, context_packet: ContextPacket) -> str:
         """
@@ -123,20 +129,41 @@ class PromptBuilder:
                 content = item.content.strip()
                 metadata = getattr(item, "metadata", {}) or {}
                 role = metadata.get("role", "")
+                date_str = self._format_item_date(item.timestamp)
 
                 # Label conversation turns by role so the model knows whose words are whose.
                 # This prevents assistant self-echo: without labels, Ember attributes
                 # her own prior responses back to the user as things "you said."
                 if item.item_type == "conversation" and role == "user":
-                    other_lines.append(f"- [you said] {content}")
+                    label = f"[you said{date_str}]"
                 elif item.item_type == "conversation" and role == "assistant":
-                    other_lines.append(f"- [Ember said] {content}")
+                    label = f"[Ember said{date_str}]"
                 else:
-                    other_lines.append(f"- ({item.item_type}) {content}")
+                    label = f"({item.item_type}{date_str})"
+
+                other_lines.append(f"- {label} {content}")
 
             sections.append("[Context:]\n" + "\n\n".join(other_lines))
 
         return "MEMORY CONTEXT:\n" + "\n\n".join(sections)
+
+    @staticmethod
+    def _format_item_date(timestamp: str | None) -> str:
+        """Format a timestamp into a short date string for context labels.
+        Returns ', Mar 27' or '' if no parseable timestamp."""
+        if not timestamp:
+            return ""
+        try:
+            # Handle Ember's hyphenated timestamps: 2026-03-27T15-18-02
+            clean = timestamp.replace("Z", "").split("+")[0]
+            if "T" in clean:
+                date_part = clean.split("T")[0]
+            else:
+                date_part = clean[:10]
+            dt = datetime.strptime(date_part, "%Y-%m-%d")
+            return f", {dt.strftime('%b %d')}"
+        except (ValueError, TypeError):
+            return ""
 
     def _build_reflection_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.reflection_items:

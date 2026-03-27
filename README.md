@@ -345,7 +345,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 
 # Current State
 
-## Working (v0.9.4+)
+## Working (v0.10.0)
 - memory storage (append-only JSON vault with typed enforcement via VALID_MEMORY_TYPES)
 - ingestion pipeline (ChatGPT, PDF, DOCX, CSV, GDrive, POST /ingest/upload multipart)
 - semantic retrieval
@@ -385,12 +385,18 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - retrieval evaluation harness (15 benchmark cases, pass/warn/fail scoring)
 - vault health audit (scripts/audit_memory.py — 7 checks, GREEN/YELLOW/RED)
 - PWA manifest for Android/iOS home screen installation
+- **streaming responses** — SSE from Ollama through FastAPI; first token in 1-2s
+- **auto state extraction** — background detection of focus, blockers, goals from conversation
+- **project-scoped retrieval** (ADR-007) — +0.15 boost for matching project_id
+- **typed memory enforcement** — VALID_MEMORY_TYPES validates all writes
+- **vault health audit** — scripts/audit_memory.py with 7 checks and health score
+- **buffer compression backgrounded** — no longer blocks response
 - 196 tests passing
 
 ## Next
-- cloud model provider support (ADR-008, proposed — opt-in, never default)
+- cloud model provider support (ADR-008, proposed — opt-in, pending disclosure UI and license terms)
+- conversation quality eval harness (Claude as evaluator)
 - context quality tuning (run retrieval eval, adjust weights)
-- streaming responses (SSE from API)
 - desktop/browser integrations (research phase)
 - trigger coverage improvements without overfitting
 

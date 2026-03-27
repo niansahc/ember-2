@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.10.0 — 2026-03-27
+
+### Major Features
+- **Streaming responses** — first token appears in 1-2 seconds; response builds word by word instead of waiting 10-20 seconds for full response; safety review runs post-stream with follow-up revision if needed
+- **Auto state extraction** — Ember automatically detects and records state signals (focus, blockers, goals, open loops) from conversation turns; non-blocking background process
+- **Project-scoped retrieval (ADR-007)** — memories tagged with a project get +0.15 boost when user is in that project context; project_id written to conversation metadata at turn level
+- **Cloud model provider support (ADR-008)** — architecture planned; Anthropic and OpenAI providers designed; pending installer UX, disclosure UI, and license terms before acceptance
+
+### Performance
+- **Vector index caching** — indexes loaded once into memory, not from disk on every query; saves 2-4 seconds per turn
+- **Buffer compression backgrounded** — conversation buffer compression moved to background thread; no longer blocks response in streaming or non-streaming path
+
+### Architecture
+- **Typed memory enforcement** — VALID_MEMORY_TYPES in storage.py; write_memory() raises ValueError on invalid type; ingested chunks now include type field
+- **Retrieval evaluation expanded** — 15 benchmark cases across all query intent classes; pass/warn/fail scoring per query; output to logs/retrieval_eval_{timestamp}.log
+- **Vault health audit script** — scripts/audit_memory.py; inventory, schema validation, type mismatch detection, duplicate detection, junk detection, index health; --verbose and --fix flags
+- **Constitutional principle: authentic_expression** — Ember is permitted and expected to have genuine aesthetic responses; deflection pattern flagged for revision
+
+### Bug Fixes
+- **UI: New Project button** — always visible in sidebar even when no projects exist; context menu also has New Project option
+- **Installer: venv lock detection** — friendly error message when API is running during install; actionable steps instead of cryptic permission error
+- **Installer: auto-start API** — API starts automatically after install; Done screen polls health before enabling Open Ember button
+- **Installer: pip time warning** — warm callout when pip step starts; tells users it takes 1-2 hours and what they can do meanwhile
+- **Tailscale serve** — fixed to use localhost binding instead of Tailscale IP; works correctly with HTTPS termination
+- **Mobile viewport** — used 100dvh instead of 100vh; input bar stays visible on mobile browsers
+- **Project conversations** — new conversations started inside a project view automatically assigned to that project
+
+### UI / UX
+- **PWA manifest** — Ember-2 installable as home screen app on Android and iOS
+- **Ember-2 branding** — consistent product name across all user-facing surfaces in all three repos
+- **Streaming UI** — tokens render in real time; stop button works during streaming; revision messages append inline with markdown separator
+
+### Tests
+- 196 tests passing (43 new this release)
+
 ## v0.9.3 — 2026-03-24
 
 ### Projects Backend

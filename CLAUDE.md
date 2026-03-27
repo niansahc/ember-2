@@ -252,9 +252,9 @@ These are confirmed working as of v0.9.4+:
 2. **Context quality tuning** — run retrieval eval, review results, adjust policy weights and filters
 3. **Installer UX polish** — post-install health check, animated transitions, better error messages
 4. **Desktop/browser integrations** — research Claude-style integrations for Ember (system tray, clipboard, ambient presence)
-5. **Streaming responses** — SSE streaming from the API so the UI shows tokens as they arrive instead of waiting for the full response
+5. **Conversation quality eval** — use Claude as evaluator to score Ember's response quality
 
-Build order from TDD: ~~clean ingestion~~ → ~~typed memory~~ → retrieval policy → ~~state layer~~ → ~~evaluation suite~~ → review stabilization → task layer → ~~index migration~~ → tools → agent orchestration.
+Build order from TDD: ~~clean ingestion~~ → ~~typed memory~~ → retrieval policy → ~~state layer~~ → ~~evaluation suite~~ → review stabilization → task layer → ~~index migration~~ → tools → agent orchestration. ~~Streaming~~ complete.
 
 ---
 

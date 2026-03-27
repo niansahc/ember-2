@@ -1516,11 +1516,15 @@ It should be possible to explain:
 - ~~reflection scoring improvements~~ — complete (v0.7.1): _should_skip_for_reflection tightened (box-drawing chars, short URL check, multi-turn detection, formatting complaint markers, ", line " fix); _reflection_priority_score improved with length gate on experience bonus, length quality bonus, and Jaccard-based diversity selection replacing candidates[:8]; 31 tests added in test_should_skip_for_reflection.py
 - ~~profile retrieval guarantee~~ — complete (v0.7.x): get_profile_items() added to ContextRetriever (semantic search scoped to memory_type="profile", read() fallback); profile items partitioned before final slice in ContextService so ranker score cannot push them below the limit cutoff; seed_identity_template.py added for onboarding; MEMORY CONTEXT prompt split into [User self-description] and [Context] sub-sections to fix perspective confusion
 - ~~payload interference hardening~~ — complete (v0.7.10): empty message guard (no text AND no image_parts) returns early with friendly message; `### Task:` RAG injection guard falls back to prior user message; system-role `User Context:` injection identified as benign noise (no action needed); type-aware diagnostic payload logging added at warning level to openai_adapter
-- add retrieval evaluation benchmark
-- add audit scripts
+- ~~add retrieval evaluation benchmark~~ — complete (v0.10.0): 15 benchmark cases across 6 intent classes; pass/warn/fail scoring; output to logs/retrieval_eval/
+- ~~add audit scripts~~ — complete (v0.10.0): scripts/audit_memory.py with 7 checks (inventory, schema, type mismatch, duplicates, junk, index health, summary); GREEN/YELLOW/RED health score; --verbose and --fix flags
+- ~~typed memory enforcement~~ — complete (v0.10.0): VALID_MEMORY_TYPES frozenset in storage.py (17 types); get_memory_dir() validates; write_memory() raises ValueError on invalid type; ingested chunks now include type field
+- ~~streaming responses~~ — complete (v0.10.0): ollama.chat(stream=True) through FastAPI StreamingResponse; OpenAI-compatible SSE format; safety review runs post-stream; buffer compression backgrounded
+- ~~auto state extraction~~ — complete (v0.10.0): StateExtractor analyzes conversation turns via separate LLM call; writes StateRecords for high/medium confidence signals; background thread, non-blocking
+- ~~project-scoped retrieval~~ — complete (v0.10.0): ADR-007; ContextRanker.apply_project_boost() adds +0.15 for matching project_id; project_id written to conversation metadata at turn level
+- ~~vector index caching~~ — complete (v0.10.0): module-level dict cache in vector_index.py; auto-invalidation on save_index(); eliminated 2-4s disk reads per query
 - improve trigger coverage without coupling to one test case
 - add ADR for constitutional review at inference time
-- add ADR for state layer design decisions
 
 ## 25.3 Mid-Term
 

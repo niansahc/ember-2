@@ -21,7 +21,8 @@ EMBER_MODEL_ID = "ember-2"
 
 SUPPORTED_MODELS = [EMBER_MODEL_ID]
 
-MEMORY_PREVIEW_LENGTH = 300
+
+# MEMORY_PREVIEW_LENGTH removed — full conversation text is now stored
 
 model=EMBER_MODEL_ID
 # This exists as the acceptable API format for Web
@@ -254,12 +255,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     context_packet = context_service.build_context(latest_user_message, image_data=image_data)
     reply = llm_adapter.generate_response(context_packet)
 
-    max_len = MEMORY_PREVIEW_LENGTH
-    user_part = latest_user_message[:max_len]
-    reply_part = reply[:max_len]
-
+    # Store full conversation text — no truncation.
+    # Full text is needed for conversation reload and retrieval quality.
     memory_service.write(
-        text=user_part,
+        text=latest_user_message,
         memory_type="conversation",
         source="chat",
         tags=["conversation"],
@@ -267,7 +266,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     )
 
     memory_service.write(
-        text=reply_part,
+        text=reply,
         memory_type="conversation",
         source="chat",
         tags=["conversation"],

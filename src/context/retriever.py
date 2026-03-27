@@ -200,11 +200,15 @@ class ContextRetriever:
         state_items = self.get_state_items()
 
         profile_items = self.get_profile_items(user_message)
+        # get_memory_items() does a full semantic_search() which already searches
+        # the conversation index. get_conversation_items() would load and search
+        # the same conversation index again via search_conversation_memories().
+        # Skipping get_conversation_items() to avoid the double index load —
+        # conversation results are already included in get_memory_items().
         memory_items = self.get_memory_items(user_message)
-        conversation_items = self.get_conversation_items(user_message)
         reflection_items = self.get_reflection_items(user_message)
 
-        memory_items = profile_items + memory_items + conversation_items
+        memory_items = profile_items + memory_items
         memory_items = self._deduplicate_items(memory_items)
 
         return state_items, memory_items, reflection_items

@@ -1,6 +1,39 @@
+"""
+src/retrieval/vector_index.py
+
+Vector index management for semantic search.
+
+Indexes are JSON files containing embeddings and text for each memory type.
+They are cached in memory after first load to avoid re-reading from disk
+on every query. The cache is invalidated when an index is written to.
+"""
+
 import json
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger("ember.vector_index")
+
+# Module-level index cache: path_string -> list of index entries
+_index_cache: dict[str, list] = {}
+
+
+def clear_index_cache(index_path: str | None = None) -> None:
+    """
+    Clear the in-memory index cache.
+
+    If index_path is provided, only that index is cleared.
+    If None, the entire cache is cleared.
+    """
+    if index_path:
+        key = str(index_path)
+        if key in _index_cache:
+            del _index_cache[key]
+            logger.info("[VECTOR_INDEX] Cache cleared for: %s", key)
+    else:
+        _index_cache.clear()
+        logger.info("[VECTOR_INDEX] Full cache cleared")
 
 
 class VectorIndex:
@@ -13,33 +46,42 @@ class VectorIndex:
         return embeddings_dir / f"{memory_type}_index.json"
 
     def load_index(self, index_path: Path) -> list:
+        key = str(index_path)
+
+        # Check cache first
+        if key in _index_cache:
+            logger.info("[VECTOR_INDEX] Cache hit: %s", index_path.name)
+            return _index_cache[key]
+
+        # Cache miss — load from disk
         if not index_path.exists():
-            print(f"[VECTOR_INDEX] Missing index: {index_path}")
+            logger.info("[VECTOR_INDEX] Missing index: %s", index_path)
             return []
 
         try:
             size_mb = index_path.stat().st_size / (1024 * 1024)
 
             if size_mb > self.max_index_size_mb:
-                print(
-                    f"[VECTOR_INDEX] Skipping oversized index: {index_path} "
-                    f"({size_mb:.2f} MB > {self.max_index_size_mb} MB)"
+                logger.warning(
+                    "[VECTOR_INDEX] Skipping oversized index: %s (%.2f MB > %d MB)",
+                    index_path, size_mb, self.max_index_size_mb,
                 )
                 return []
 
-            print(f"[VECTOR_INDEX] Loading index: {index_path} ({size_mb:.2f} MB)")
+            logger.info("[VECTOR_INDEX] Cache miss — loading: %s (%.2f MB)", index_path.name, size_mb)
 
             with index_path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
 
             if isinstance(data, list):
+                _index_cache[key] = data
                 return data
 
-            print(f"[VECTOR_INDEX] Invalid index format (expected list): {index_path}")
+            logger.warning("[VECTOR_INDEX] Invalid index format (expected list): %s", index_path)
             return []
 
         except (json.JSONDecodeError, OSError) as exc:
-            print(f"[VECTOR_INDEX] Failed to load index {index_path}: {exc}")
+            logger.warning("[VECTOR_INDEX] Failed to load index %s: %s", index_path, exc)
             return []
 
     def save_index(self, index_path: Path, index_data: list) -> None:
@@ -47,6 +89,12 @@ class VectorIndex:
 
         with index_path.open("w", encoding="utf-8") as f:
             json.dump(index_data, f, ensure_ascii=False)
+
+        # Invalidate cache for this index — next read will load fresh data
+        key = str(index_path)
+        if key in _index_cache:
+            del _index_cache[key]
+            logger.info("[VECTOR_INDEX] Cache invalidated after write: %s", index_path.name)
 
     def search(
         self,

@@ -21,6 +21,7 @@ def write_chunks_to_vault(chunks, vault_path):
         file_path = memory_dir / f"{chunk.chunk_id}.json"
 
         chunk_payload = {
+            "type": "ingested",
             "source": chunk.source,
             "doc_id": chunk.doc_id,
             "chunk_id": chunk.chunk_id,

@@ -79,6 +79,13 @@ def write_memory(
     tags: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
 ):
+    """
+    Write a memory record to the vault.
+
+    memory_type must be a valid type from VALID_MEMORY_TYPES in
+    src/memory/storage.py. Invalid types will raise ValueError
+    at the storage layer (get_memory_dir validation).
+    """
     if should_skip_memory(text, memory_type=memory_type):
         return None
 

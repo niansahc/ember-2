@@ -195,34 +195,66 @@ Key API endpoints:
 
 ## Current Working State
 
-These are confirmed working as of the latest commits:
+These are confirmed working as of v0.9.4+:
 
+**Core Systems:**
 - Memory storage (append-only JSON vault)
-- Ingestion pipeline (ChatGPT, PDF, DOCX, CSV, GDrive importers)
-- Semantic retrieval via vector indexes
+- Typed memory enforcement (`VALID_MEMORY_TYPES` in `src/memory/storage.py` — all writes validated)
+- Ingestion pipeline (ChatGPT, PDF, DOCX, CSV, GDrive importers, POST /ingest/upload)
+- Semantic retrieval via vector indexes (cached in memory — no disk load per query)
 - Context assembly with policy-weighted ranking and diversity selection
+- Project-scoped retrieval boost (ADR-007 — +0.15 for matching project_id)
 - Daily and weekly reflection generation
-- FastAPI + Ember UI integration (UI served from ui/ folder)
-- Constitutional review flow end-to-end
+- State layer (StateService, StateResolver, StateExtractor for auto-extraction from conversations)
+- FastAPI + Ember UI integration (UI served from ui/ folder, same port as API)
+- Constitutional review flow end-to-end (8 principles including authentic_expression)
 - Safety review logging
-- Retrieval evaluation harness (`tools/eval_retrieval.py`, 5 benchmark cases)
-- Safeguarded vector index loading (size limits, corrupt-file resilience)
+- Conversation session system (session_id, project_id, rename, soft-delete)
+- Projects backend (CRUD endpoints, conversation assignment)
 
-Recent work addressed: conversation buffer, reference resolution in prompts, safety trigger tightening, preventing unsolicited JSON output.
+**Tooling:**
+- Retrieval evaluation harness (`tools/eval_retrieval.py`, 15 benchmark cases, pass/warn/fail scoring)
+- Vault health audit (`scripts/audit_memory.py` — 7 checks, GREEN/YELLOW/RED health score)
+- Vector index in-memory caching (cache hit/miss logging, auto-invalidation on write)
+
+**Security:**
+- API key auth via Windows Credential Manager
+- Auth only on API routes — UI static files are public
+- Rate limiting, path traversal protection, JSON audit logging
+- SearXNG bound to localhost only
+- Tailscale serve uses localhost binding (API binds to 127.0.0.1, Tailscale handles routing)
+
+**UI (ember-2-ui, served from ui/):**
+- Chat with markdown rendering, copy, edit/resend, regenerate, scroll-to-bottom, export
+- Sidebar with projects, conversations, search, right-click context menu, New Project button
+- Settings: 5 themes, model selector, vision toggle, web search toggle
+- About panel with Ember's story, beliefs, ethos
+- Bug reports to GitHub Issues, update checker
+- PWA manifest for Android/iOS home screen installation
+- Consistent Ember-2 branding across all surfaces
+- WCAG 2.1 AA accessible
+
+**Installer (ember-2-installer):**
+- Auto-install prerequisites via winget
+- Curated model cards with disk sizes
+- Ember detection scan, disk space summary
+- Venv/API lock detection with friendly error messages
+- Auto-start API after install with health check polling
+- Tailscale walkthrough with correct serve binding
+- Progress bar + fun facts during install
+- Clones ember-2 repo, builds UI from ember-2-ui
 
 ---
 
 ## Immediate Next Priorities
 
-Per TDD section 25 (Migration Plan):
+1. **Cloud model provider support** — see ADR-008 (proposed). Abstract `LLMAdapter._chat()` to dispatch based on provider. Opt-in, never default.
+2. **Context quality tuning** — run retrieval eval, review results, adjust policy weights and filters
+3. **Installer UX polish** — post-install health check, animated transitions, better error messages
+4. **Desktop/browser integrations** — research Claude-style integrations for Ember (system tray, clipboard, ambient presence)
+5. **Streaming responses** — SSE streaming from the API so the UI shows tokens as they arrive instead of waiting for the full response
 
-1. **Formal typed memory class enforcement** — ensure ingestion writes to correct typed folders with correct `type` field; prevent cross-contamination
-2. **State layer implementation** — `src/state/` stubs exist; build `StateService`, `StateResolver`, and state object models
-3. **Retrieval evaluation expansion** — add more benchmark cases and a scoring mechanism to `tools/eval_retrieval.py`
-4. **Audit scripts** — `scripts/audit_memory.py` is planned but not written; needed for memory inventory, duplicate detection, junk detection
-5. **Context quality tuning** — review retrieval eval output and adjust policy weights, filters, and diversity parameters
-
-Build order from TDD: clean ingestion → typed memory → retrieval policy → state layer → evaluation suite → review stabilization → task layer → index migration → tools → agent orchestration.
+Build order from TDD: ~~clean ingestion~~ → ~~typed memory~~ → retrieval policy → ~~state layer~~ → ~~evaluation suite~~ → review stabilization → task layer → ~~index migration~~ → tools → agent orchestration.
 
 ---
 
@@ -241,7 +273,7 @@ Build order from TDD: clean ingestion → typed memory → retrieval policy → 
 pytest tests/
 ```
 
-Tests cover: constitution loader, policy service, review service, vault read/write.
+196 tests covering: constitution loader, policy service, review service, vault read/write, state layer, state extractor, project boost, index caching, memory type enforcement, health check, ingest upload.
 Tests do not mock the filesystem vault (real path via `PRIVATE_VAULT_PATH`). Integration tests hit real storage.
 
 When adding features: unit test normalizers, filters, ranking functions, and state resolution. Integration test full pipeline paths.

@@ -345,9 +345,9 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 
 # Current State
 
-## Working
-- memory storage
-- ingestion pipeline
+## Working (v0.9.4+)
+- memory storage (append-only JSON vault with typed enforcement via VALID_MEMORY_TYPES)
+- ingestion pipeline (ChatGPT, PDF, DOCX, CSV, GDrive, POST /ingest/upload multipart)
 - semantic retrieval
 - context assembly
 - reflection engine
@@ -378,14 +378,21 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - web search via local SearXNG (intent-gated; `web_items` in ContextPacket; results above memory context in prompt; apostrophe normalization) — v0.8.0/v0.8.1
 - vision model integration (`EMBER_VISION_MODEL` in .env; `image_data` pipeline from openai_adapter → ContextPacket → Ollama `images=` kwarg; graceful text-only fallback) — v0.8.2
 - security hardening: Tailscale-only API binding, API key auth middleware, Windows Credential Manager key storage (keyring), BitLocker encryption at rest, rate limiting (slowapi), path traversal protection on ingest endpoints, JSON audit logging to `logs/audit/`, Tailscale HTTPS via Serve, ACL restricted to `autogroup:member` — v0.8.3/v0.8.4
-- 123 tests passing
+- auto state extraction from conversation turns (StateExtractor, background thread)
+- conversation session system (session_id, project_id, rename, soft-delete)
+- projects backend (CRUD, conversation assignment, project-scoped retrieval boost ADR-007)
+- vector index in-memory caching (cache hit/miss logging, auto-invalidation on write)
+- retrieval evaluation harness (15 benchmark cases, pass/warn/fail scoring)
+- vault health audit (scripts/audit_memory.py — 7 checks, GREEN/YELLOW/RED)
+- PWA manifest for Android/iOS home screen installation
+- 196 tests passing
 
 ## Next
-- formal typed memory class enforcement
-- retrieval evaluation benchmarks
-- audit scripts
+- cloud model provider support (ADR-008, proposed — opt-in, never default)
+- context quality tuning (run retrieval eval, adjust weights)
+- streaming responses (SSE from API)
+- desktop/browser integrations (research phase)
 - trigger coverage improvements without overfitting
-- add ADR for state layer design decisions
 
 ## Future
 - task layer
@@ -400,7 +407,11 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - multi-user vault isolation (per-user vault paths, API key auth, Tailscale network layer)
 - security hardening for multi-user deployment (per-user vault isolation, shared-host hardening)
 - ~~index migration to SQLite / DuckDB~~ — complete for ingested corpus (v0.6.0)
-- stronger evaluation and review analytics
+- ~~formal typed memory class enforcement~~ — complete (v0.9.4+)
+- ~~state layer implementation~~ — complete (v0.9.3)
+- ~~retrieval evaluation expansion~~ — complete (v0.9.4+)
+- ~~audit scripts~~ — complete (v0.9.4+)
+- ~~onboarding conversation flow~~ — complete (v0.9.0)
 
 ---
 

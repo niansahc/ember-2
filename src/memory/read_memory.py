@@ -19,6 +19,10 @@ def read_memories(memory_type: str = "journal", limit: int = 5):
 
     for file_path in files:
         memory = storage.read_json(file_path)
+        # Skip suppressed records (junk flagged by audit tools)
+        metadata = memory.get("metadata", {})
+        if isinstance(metadata, dict) and metadata.get("quality") == "suppressed":
+            continue
         memories.append(memory)
 
     memories.sort(key=_memory_sort_key, reverse=True)

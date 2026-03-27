@@ -684,15 +684,9 @@ Requirements:
 - not contain irrelevant payload spam
 - support per-type retrieval and future composite strategies
 
-## 12.3 Future Direction
+## 12.3 Index Migration Status
 
-Move vector/search indexes to SQLite or DuckDB to gain:
-
-- stronger durability
-- easier filtering
-- partial updates
-- queryable metadata
-- better large-scale performance
+~~Move vector/search indexes to SQLite or DuckDB~~ — **complete for ingested corpus (v0.6.0).** SqliteVectorStore with struct-packed BLOBs, 16,728 records searchable. Remaining indexes (conversation, profile, reflection, journal) still JSON but cached in memory as of v0.10.0 — disk reads eliminated per query.
 
 ---
 
@@ -955,9 +949,11 @@ Reflections should:
 
 # 16. State Layer Design
 
+**Status: Complete (v0.5.2 initial, v0.10.0 auto-extraction).** StateService, StateResolver, StateExtractor, 8 categories, context packet integration, API endpoints, auto-extraction from conversation turns.
+
 ## 16.1 Why State Exists
 
-Memory is history.  
+Memory is history.
 State is current operational truth.
 
 Without a state layer, the system can remember but not manage.
@@ -1543,6 +1539,14 @@ It should be possible to explain:
 - build dashboard / observability views
 - add better review analytics and false-positive/false-negative tracking
 
+**Immediate next priorities (as of v0.10.0):**
+- Cloud model provider support (ADR-008 — pending disclosure UI, installer rework, license terms)
+- Conversation quality eval harness (Claude as evaluator)
+- Context quality tuning based on retrieval eval results
+- Task layer implementation
+- Desktop/browser integrations research
+- Embedding upgrade to nomic-embed-text (Section 34)
+
 ## 25.4 Long-Term
 
 - add controlled tools
@@ -1550,8 +1554,8 @@ It should be possible to explain:
 - add multimodal and voice layers
 - support more proactive assistance
 - add decision-memory and self-evaluation loops for measured behavioral improvement
-- model selector — expose EMBER_MODEL switching in settings UI or CLI; allow per-conversation model override for different use cases (fast/light vs. deep reasoning)
-- onboarding conversation flow — guided first-run experience that seeds identity/profile records through conversation rather than requiring manual script execution; surfaces seed_identity_template.py workflow
+- ~~model selector~~ — complete (v0.7.4): GET/POST /model, settings UI dropdown
+- ~~onboarding conversation flow~~ — complete (v0.9.0): guided 7-question first-run that seeds profile records
 - session reflection mode — end-of-session reflection prompt distinct from daily/weekly cadence; captures what happened in a single work session before context is lost
 
 ---
@@ -1694,14 +1698,16 @@ The following should be tracked in `design-decisions.md` or ADRs:
 
 This architecture phase is considered successful when:
 
-- ingestion can be cleaned and re-run safely
-- retrieval quality improves through policy, not topic hacks
-- source, derived, and reference artifacts are clearly separated
-- current README, architecture doc, and TDD agree on system direction
-- a state layer design exists, even if partially implemented
-- rebuild workflows are documented and testable
-- constitutional review is integrated end-to-end
-- review logs make policy paths inspectable
+- ~~ingestion can be cleaned and re-run safely~~ ✓ (pipeline with quality filters, suppression flags, typed enforcement)
+- ~~retrieval quality improves through policy, not topic hacks~~ ✓ (policy-weighted ranking, project-scoped boost, 15-case eval harness)
+- ~~source, derived, and reference artifacts are clearly separated~~ ✓ (VALID_MEMORY_TYPES enforced at write time, 17 types)
+- ~~current README, architecture doc, and TDD agree on system direction~~ ✓ (updated v0.10.0)
+- ~~a state layer design exists, even if partially implemented~~ ✓ (fully implemented: StateService, StateResolver, StateExtractor, auto-extraction, 8 categories, context integration)
+- ~~rebuild workflows are documented and testable~~ ✓ (SETUP.md, installer, audit script)
+- ~~constitutional review is integrated end-to-end~~ ✓ (8 principles, triggered post-draft, streaming-compatible)
+- ~~review logs make policy paths inspectable~~ ✓ (logs/safety_reviews/, trigger_result + review_result logged)
+
+**All acceptance criteria met as of v0.10.0.**
 
 ---
 

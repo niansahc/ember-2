@@ -12,6 +12,7 @@ logger = logging.getLogger("ember.openai_adapter")
 
 from src.api.limiter import limiter
 from src.memory.service import MemoryService
+from src.memory.write_memory import write_memory
 from src.memory.session import create_session, session_exists, get_session
 from src.context.service import ContextService
 from src.llm.adapter import LLMAdapter
@@ -284,16 +285,17 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     )
     reply = llm_adapter.generate_response(context_packet)
 
-    # Store full conversation text — no truncation.
-    # Full text is needed for conversation reload and retrieval quality.
-    # project_id written at turn level so retrieval can boost by project.
+    # Store full conversation text — no truncation, no dedup.
+    # Conversation turns must always be saved, even if the text is identical
+    # to a recent message. Using write_memory() directly to bypass the
+    # MemoryService dedup check (which was silently dropping user messages).
     user_meta = {"role": "user", "content_kind": "user_content", "session_id": session_id}
     assistant_meta = {"role": "assistant", "content_kind": "answer", "session_id": session_id}
     if project_id:
         user_meta["project_id"] = project_id
         assistant_meta["project_id"] = project_id
 
-    memory_service.write(
+    write_memory(
         text=latest_user_message,
         memory_type="conversation",
         source="chat",
@@ -301,7 +303,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         metadata=user_meta,
     )
 
-    memory_service.write(
+    write_memory(
         text=reply,
         memory_type="conversation",
         source="chat",

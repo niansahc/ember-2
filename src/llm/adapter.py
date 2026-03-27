@@ -106,6 +106,80 @@ class LLMAdapter:
 
         return final_response
 
+    def generate_response_stream(self, context_packet: ContextPacket):
+        """
+        Stream a response token by token. Yields string chunks.
+
+        After the stream completes, runs safety review on the accumulated
+        text. If safety triggers a revision, yields a follow-up correction.
+        Buffer compression and conversation buffer update happen after stream.
+
+        Usage:
+            for chunk in llm_adapter.generate_response_stream(packet):
+                yield chunk  # send to client
+        """
+        system_prompt = self.prompt_builder.build_prompt(context_packet)
+
+        vision_model = get_ember_vision_model()
+        use_vision = bool(context_packet.image_data) and bool(vision_model)
+
+        if use_vision:
+            print(f"[VISION] Image request — using model: {vision_model}")
+
+        # Stream from Ollama, accumulate full text
+        accumulated = []
+        for chunk in self._chat_stream(
+            system_prompt=system_prompt,
+            user_message=context_packet.user_message,
+            image_data=context_packet.image_data if use_vision else [],
+            model_override=vision_model if use_vision else None,
+        ):
+            accumulated.append(chunk)
+            yield chunk
+
+        full_response = "".join(accumulated)
+
+        # Post-stream safety review
+        review_context = SafetyReviewContext(
+            user_message=context_packet.user_message,
+            draft_response=full_response,
+        )
+        trigger_result = self.policy_service.evaluate_trigger(review_context)
+
+        print("[SAFETY]", {"triggered": trigger_result.triggered, "triggered_by": trigger_result.triggered_by})
+
+        if trigger_result.triggered:
+            review_ctx = SafetyReviewContext(
+                user_message=context_packet.user_message,
+                draft_response=full_response,
+                risk_signals=trigger_result.triggered_by,
+                active_principle_ids=self.policy_service.get_active_principles(trigger_result),
+            )
+            review_result = self.review_service.review(review_ctx)
+            self.review_logger.log(
+                context_packet=context_packet,
+                draft_response=full_response,
+                trigger_result=trigger_result,
+                review_result=review_result,
+            )
+
+            if review_result.outcome == "revise" and review_result.reviewed_text:
+                # Yield a correction as a follow-up
+                yield "\n\n---\n\n*Let me rephrase that.*\n\n"
+                yield review_result.reviewed_text
+                full_response = review_result.reviewed_text
+            elif review_result.outcome == "refuse_redirect":
+                yield "\n\n---\n\n"
+                yield review_result.refusal_message or "I can't help with that."
+                full_response = review_result.refusal_message or "I can't help with that."
+
+        # Post-stream: update buffer and compress if needed
+        self.prompt_builder.conversation_buffer.add_turn(
+            context_packet.user_message,
+            full_response,
+        )
+        self._maybe_compress_buffer()
+
     def _chat(
         self,
         system_prompt: str,
@@ -130,6 +204,34 @@ class LLMAdapter:
         )
 
         return response["message"]["content"]
+
+    def _chat_stream(
+        self,
+        system_prompt: str,
+        user_message: str,
+        image_data: list[str] | None = None,
+        model_override: str | None = None,
+    ):
+        """Stream chat response from Ollama. Yields string chunks."""
+        model = model_override or self.model
+        user_msg: dict = {"role": "user", "content": user_message}
+        if image_data:
+            user_msg["images"] = image_data
+
+        stream = ollama.chat(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                user_msg,
+            ],
+            options={"temperature": 0.7},
+            stream=True,
+        )
+
+        for chunk in stream:
+            content = chunk.get("message", {}).get("content", "")
+            if content:
+                yield content
 
     def _maybe_compress_buffer(self) -> None:
         """Summarize and compress the oldest half of the buffer when it exceeds 70% of the context window."""

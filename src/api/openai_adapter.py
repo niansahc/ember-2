@@ -6,6 +6,7 @@ import uuid
 from typing import Any, List, Optional, Literal
 
 from fastapi import APIRouter, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger("ember.openai_adapter")
@@ -283,17 +284,88 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     context_packet = context_service.build_context(
         latest_user_message, image_data=image_data, project_id=project_id,
     )
-    reply = llm_adapter.generate_response(context_packet)
 
-    # Store full conversation text — no truncation, no dedup.
-    # Conversation turns must always be saved, even if the text is identical
-    # to a recent message. Using write_memory() directly to bypass the
-    # MemoryService dedup check (which was silently dropping user messages).
+    # Build metadata for memory writes
     user_meta = {"role": "user", "content_kind": "user_content", "session_id": session_id}
     assistant_meta = {"role": "assistant", "content_kind": "answer", "session_id": session_id}
     if project_id:
         user_meta["project_id"] = project_id
         assistant_meta["project_id"] = project_id
+
+    # --- STREAMING PATH ---
+    if body.stream:
+        completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+
+        def _stream_sse():
+            """Generator that yields SSE events and handles post-stream cleanup."""
+            accumulated = []
+
+            for chunk in llm_adapter.generate_response_stream(context_packet):
+                accumulated.append(chunk)
+                sse_data = json.dumps({
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": "ember-2",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": chunk},
+                        "finish_reason": None,
+                    }],
+                })
+                yield f"data: {sse_data}\n\n"
+
+            # Final chunk with finish_reason
+            final_data = json.dumps({
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": "ember-2",
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop",
+                }],
+            })
+            yield f"data: {final_data}\n\n"
+            yield "data: [DONE]\n\n"
+
+            # Post-stream: write memories and extract state
+            full_reply = "".join(accumulated)
+
+            write_memory(
+                text=latest_user_message,
+                memory_type="conversation",
+                source="chat",
+                tags=["conversation"],
+                metadata=user_meta,
+            )
+            write_memory(
+                text=full_reply,
+                memory_type="conversation",
+                source="chat",
+                tags=["conversation"],
+                metadata=assistant_meta,
+            )
+
+            threading.Thread(
+                target=_background_state_extraction,
+                args=(latest_user_message, full_reply),
+                daemon=True,
+            ).start()
+
+        return StreamingResponse(
+            _stream_sse(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    # --- NON-STREAMING PATH (unchanged) ---
+    reply = llm_adapter.generate_response(context_packet)
 
     write_memory(
         text=latest_user_message,
@@ -311,8 +383,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         metadata=assistant_meta,
     )
 
-    # --- BACKGROUND STATE EXTRACTION ---
-    # Runs in a separate thread so it doesn't delay the HTTP response.
+    # Background state extraction
     threading.Thread(
         target=_background_state_extraction,
         args=(latest_user_message, reply),

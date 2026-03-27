@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.10.1 — 2026-03-27
+
+### Bug Fixes
+- **Assistant self-echo** — Ember was attributing her own previous responses back to the user as things "you said." Fixed by: stronger scoring penalty for assistant conversation turns (-0.25, up from -0.08), metadata-aware source quality adjustment that correctly identifies assistant role, and role-labeled context rendering ([you said] vs [Ember said]) so the model can distinguish whose words are whose.
+
+### Tests
+- 207 tests passing (11 new)
+
 ## v0.10.0 — 2026-03-27
 
 ### Major Features

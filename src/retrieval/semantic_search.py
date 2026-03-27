@@ -72,7 +72,8 @@ def semantic_search(
             score = float(result.get("score", 0.0))
             score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
             score += memory_type_adjustment(mem_type)
-            score += source_quality_adjustment(normalized_content)
+            metadata = result.get("metadata", {})
+            score += source_quality_adjustment(normalized_content, metadata)
             score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
 
             result["score"] = score
@@ -94,10 +95,11 @@ def semantic_search(
                 if should_exclude_result(normalized_content):
                     continue
 
+                metadata = result.get("metadata", {})
                 score = float(result.get("score", 0.0))
                 score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
                 score += memory_type_adjustment("ingested")
-                score += source_quality_adjustment(normalized_content)
+                score += source_quality_adjustment(normalized_content, metadata)
                 score += query_intent_adjustment(normalized_query, "ingested", normalized_content)
 
                 result["score"] = score
@@ -136,13 +138,20 @@ def memory_type_adjustment(mem_type: str) -> float:
     return 0.0
 
 
-def source_quality_adjustment(content: str) -> float:
+def source_quality_adjustment(content: str, metadata: dict | None = None) -> float:
     score = 0.0
+    metadata = metadata or {}
 
-    if content.startswith("user:"):
+    # Check metadata.role first (reliable), then fall back to content prefix (legacy)
+    role = metadata.get("role", "")
+    if role == "user":
+        score += 0.16
+    elif role == "assistant":
+        score -= 0.20
+    elif content.startswith("user:"):
         score += 0.16
     elif content.startswith("assistant:"):
-        score -= 0.12
+        score -= 0.20
 
     if is_question_like(content):
         score -= 0.10

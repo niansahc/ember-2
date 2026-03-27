@@ -118,10 +118,23 @@ class PromptBuilder:
             )
 
         if other_items:
-            other_lines = "\n\n".join(
-                f"- ({item.item_type}) {item.content.strip()}" for item in other_items
-            )
-            sections.append("[Context:]\n" + other_lines)
+            other_lines = []
+            for item in other_items:
+                content = item.content.strip()
+                metadata = getattr(item, "metadata", {}) or {}
+                role = metadata.get("role", "")
+
+                # Label conversation turns by role so the model knows whose words are whose.
+                # This prevents assistant self-echo: without labels, Ember attributes
+                # her own prior responses back to the user as things "you said."
+                if item.item_type == "conversation" and role == "user":
+                    other_lines.append(f"- [you said] {content}")
+                elif item.item_type == "conversation" and role == "assistant":
+                    other_lines.append(f"- [Ember said] {content}")
+                else:
+                    other_lines.append(f"- ({item.item_type}) {content}")
+
+            sections.append("[Context:]\n" + "\n\n".join(other_lines))
 
         return "MEMORY CONTEXT:\n" + "\n\n".join(sections)
 

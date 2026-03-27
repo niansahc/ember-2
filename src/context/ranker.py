@@ -138,7 +138,10 @@ class ContextRanker:
         if role == "user":
             score += 0.12
         elif role == "assistant":
-            score -= 0.08
+            # Strong penalty — assistant self-echo is the #1 context quality issue.
+            # Prior assistant responses retrieved and presented unlabeled cause
+            # the model to attribute its own words back to the user.
+            score -= 0.25
         elif role in {"tool", "system"}:
             score -= 0.20
 
@@ -147,7 +150,8 @@ class ContextRanker:
         elif content_kind == "user_content":
             score += 0.05
         elif content_kind == "answer":
-            score += 0.03
+            # Additional penalty for assistant answers beyond the role penalty
+            score -= 0.10
         elif content_kind == "question":
             score -= 0.10
 

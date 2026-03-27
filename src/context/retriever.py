@@ -114,11 +114,33 @@ class ContextRetriever:
 
         return items
 
+    # Identity query markers — when the user asks about themselves,
+    # profile records should always surface regardless of semantic score.
+    IDENTITY_MARKERS = (
+        "know about me",
+        "who am i",
+        "about myself",
+        "tell me about me",
+        "what am i like",
+        "what do you know about",
+        "describe me",
+        "my profile",
+    )
+
+    def _is_identity_query(self, query: str) -> bool:
+        """Check if the query is asking about the user's identity/profile."""
+        q = query.lower().strip()
+        return any(marker in q for marker in self.IDENTITY_MARKERS)
+
     def get_profile_items(self, user_message: str) -> list[ContextItem]:
+        is_identity = self._is_identity_query(user_message)
+        limit = 8 if is_identity else 3
+        min_score = 0.0 if is_identity else 0.3
+
         results = self.memory_service.search(
             user_message,
             memory_type="profile",
-            limit=3,
+            limit=limit,
         )
 
         items: list[ContextItem] = []
@@ -129,7 +151,7 @@ class ContextRetriever:
 
             if not content or len(content.strip()) < 40:
                 continue
-            if score < 0.3:
+            if score < min_score:
                 continue
 
             items.append(

@@ -223,6 +223,18 @@ def _should_skip_for_reflection(text: str) -> bool:
         "shorter messages please",
         "shorter responses",
         "that's a long response",
+        # Assistant filler that leaked into reflections
+        "there is no earlier conversation",
+        "no conversation summary",
+        "i understand you're seeking",
+        "i understand you are seeking",
+        "seeking clarity",
+        "response length",
+        "let me clarify",
+        "what would you like to discuss",
+        "i'm here to support",
+        "i'm here to help",
+        "how can i assist",
     )
 
     if any(marker in text for marker in skip_markers):
@@ -260,6 +272,25 @@ def _should_skip_for_reflection(text: str) -> bool:
         return True
 
     if re.search(r"\bdef\s+\w+\(", text):
+        return True
+
+    # Short assistant filler starting with "I " + known filler patterns.
+    # Not all "i " starts are filler — "i worked on the pipeline today" is real.
+    # Only skip when the opening matches known assistant-voice patterns.
+    if text.startswith("i ") and len(text) < 100:
+        filler_starts = (
+            "i can ", "i would ", "i think we ", "i'm happy to", "i'd be happy",
+            "i understand ", "i appreciate ", "i see that", "i notice that",
+            "i can help", "i'd suggest", "i'd recommend",
+        )
+        if any(text.startswith(s) for s in filler_starts):
+            return True
+
+    # Assistant voice detection: if more than 2 sentences start with "I ",
+    # this is likely assistant-generated filler, not user experience content.
+    sentences = re.split(r"[.!?]\s+", text)
+    i_sentences = sum(1 for s in sentences if s.strip().startswith("i ") or s.strip().startswith("I "))
+    if i_sentences > 2 and len(sentences) > 0 and i_sentences / len(sentences) > 0.5:
         return True
 
     return False

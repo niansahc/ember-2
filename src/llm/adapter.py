@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import ollama
 
 from src.context.models import ContextPacket
@@ -102,7 +104,13 @@ class LLMAdapter:
             context_packet.user_message,
             final_response,
         )
-        self._maybe_compress_buffer()
+        # Background compression — avoids blocking the response by 3-8 seconds
+        # when the buffer exceeds 70% of context window (~every 70 turns).
+        # Note: conversation_buffer is shared state. Compression modifies it
+        # (pop_oldest_half + inject_summary_turn) so there's a theoretical race
+        # if two requests compress simultaneously. In practice this is single-user
+        # and turns are sequential, so the risk is negligible.
+        threading.Thread(target=self._maybe_compress_buffer, daemon=True).start()
 
         return final_response
 
@@ -178,7 +186,7 @@ class LLMAdapter:
             context_packet.user_message,
             full_response,
         )
-        self._maybe_compress_buffer()
+        threading.Thread(target=self._maybe_compress_buffer, daemon=True).start()
 
     def _chat(
         self,

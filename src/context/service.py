@@ -21,7 +21,12 @@ class ContextService:
         self.formatter = formatter or ContextFormatter()
         self.debug = debug
 
-    def build_context(self, user_message: str, image_data: list[str] | None = None) -> ContextPacket:
+    def build_context(
+        self,
+        user_message: str,
+        image_data: list[str] | None = None,
+        project_id: str | None = None,
+    ) -> ContextPacket:
         policy = classify_query(user_message)
 
         web_items: list[dict] = []
@@ -33,6 +38,10 @@ class ContextService:
 
         memory_items = self.ranker.apply_policy(memory_items, policy)
         reflection_items = self.ranker.apply_policy(reflection_items, policy)
+
+        # Boost memories from the active project (ADR-007)
+        memory_items = self.ranker.apply_project_boost(memory_items, project_id)
+        reflection_items = self.ranker.apply_project_boost(reflection_items, project_id)
 
         ranked_memory, ranked_reflections = self.ranker.rank(
             memory_items, reflection_items

@@ -12,7 +12,7 @@ logger = logging.getLogger("ember.openai_adapter")
 
 from src.api.limiter import limiter
 from src.memory.service import MemoryService
-from src.memory.session import create_session, session_exists
+from src.memory.session import create_session, session_exists, get_session
 from src.context.service import ContextService
 from src.llm.adapter import LLMAdapter
 from src.onboarding.service import OnboardingService
@@ -269,17 +269,36 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # --- ENSURE SESSION EXISTS ---
     _ensure_session(session_id, latest_user_message)
 
-    context_packet = context_service.build_context(latest_user_message, image_data=image_data)
+    # --- RESOLVE PROJECT CONTEXT ---
+    # Look up the session's project_id so retrieval can boost project-relevant memories.
+    project_id = None
+    try:
+        session_rec = get_session(session_id)
+        if session_rec:
+            project_id = session_rec.get("metadata", {}).get("project_id")
+    except Exception:
+        pass  # Non-fatal — proceed without project context
+
+    context_packet = context_service.build_context(
+        latest_user_message, image_data=image_data, project_id=project_id,
+    )
     reply = llm_adapter.generate_response(context_packet)
 
     # Store full conversation text — no truncation.
     # Full text is needed for conversation reload and retrieval quality.
+    # project_id written at turn level so retrieval can boost by project.
+    user_meta = {"role": "user", "content_kind": "user_content", "session_id": session_id}
+    assistant_meta = {"role": "assistant", "content_kind": "answer", "session_id": session_id}
+    if project_id:
+        user_meta["project_id"] = project_id
+        assistant_meta["project_id"] = project_id
+
     memory_service.write(
         text=latest_user_message,
         memory_type="conversation",
         source="chat",
         tags=["conversation"],
-        metadata={"role": "user", "content_kind": "user_content", "session_id": session_id},
+        metadata=user_meta,
     )
 
     memory_service.write(
@@ -287,7 +306,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         memory_type="conversation",
         source="chat",
         tags=["conversation"],
-        metadata={"role": "assistant", "content_kind": "answer", "session_id": session_id},
+        metadata=assistant_meta,
     )
 
     # --- BACKGROUND STATE EXTRACTION ---

@@ -78,6 +78,31 @@ class ContextRanker:
             reverse=True,
         )
 
+    def apply_project_boost(
+        self,
+        items: list[ContextItem],
+        project_id: str | None,
+    ) -> list[ContextItem]:
+        """
+        Boost memories that belong to the active project (ADR-007).
+
+        This is a boost, not a filter — all items are returned, but items
+        whose metadata.project_id matches the active project get a score
+        increase of 0.15. This is meaningful enough to promote project-relevant
+        memories without overwhelming general recall.
+
+        If project_id is None (no active project), items are returned unchanged.
+        """
+        if not project_id or not items:
+            return items
+
+        for item in items:
+            metadata = getattr(item, "metadata", {}) or {}
+            if metadata.get("project_id") == project_id:
+                item.score = float(item.score) + 0.15
+
+        return items
+
     def rank(
         self,
         memory_items: list[ContextItem],

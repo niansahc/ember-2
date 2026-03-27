@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 import time
 import uuid
 from typing import Any, List, Optional, Literal
@@ -15,6 +16,8 @@ from src.memory.session import create_session, session_exists
 from src.context.service import ContextService
 from src.llm.adapter import LLMAdapter
 from src.onboarding.service import OnboardingService
+from src.state.state_extractor import StateExtractor
+from src.state.state_service import StateService
 
 
 EMBER_MODEL_ID = "ember-2"
@@ -34,6 +37,20 @@ memory_service = MemoryService()
 context_service = ContextService()
 llm_adapter = LLMAdapter()
 onboarding_service = OnboardingService()
+state_extractor = StateExtractor()
+state_service = StateService()
+
+
+def _background_state_extraction(user_message: str, reply: str) -> None:
+    """Run state extraction in a background thread so it doesn't delay the HTTP response."""
+    try:
+        records = state_extractor.extract(user_message, reply)
+        for record in records:
+            state_service.write(record)
+        if records:
+            logger.info("[STATE_EXTRACT] Wrote %d state record(s) to vault", len(records))
+    except Exception as exc:
+        logger.warning("[STATE_EXTRACT] Background extraction failed (non-fatal): %s", exc)
 
 
 class OpenAIMessage(BaseModel):
@@ -272,6 +289,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         tags=["conversation"],
         metadata={"role": "assistant", "content_kind": "answer", "session_id": session_id},
     )
+
+    # --- BACKGROUND STATE EXTRACTION ---
+    # Runs in a separate thread so it doesn't delay the HTTP response.
+    threading.Thread(
+        target=_background_state_extraction,
+        args=(latest_user_message, reply),
+        daemon=True,
+    ).start()
 
     return ChatCompletionsResponse(
         id=f"chatcmpl-{uuid.uuid4().hex}",

@@ -16,6 +16,13 @@ Cloud models (Claude, GPT-4) have stronger capacity for nuanced,
 character-consistent responses. Using them as the reasoning engine would
 give Ember a more genuine voice.
 
+Conversation quality evaluation (v0.10.1 baseline) scored qwen2.5:14b at
+3.9/10 overall. Code-layer fixes improved self-attribution (6.3) and state
+awareness (6.3). Remaining failures are model-ceiling problems: preference
+expression (2.3), constitutional behavior (2.3), memory grounding (2.0),
+tone (4.0). This eval provides quantitative justification for cloud model
+support. See `docs/eval_baseline_v0.10.1.md` for full results.
+
 ## The Tension
 
 Ember's ethos says memory stays local. Cloud reasoning means the assembled

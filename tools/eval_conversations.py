@@ -32,6 +32,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import httpx
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

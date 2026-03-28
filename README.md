@@ -391,33 +391,27 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - **typed memory enforcement** — VALID_MEMORY_TYPES validates all writes
 - **vault health audit** — scripts/audit_memory.py with 7 checks and health score
 - **buffer compression backgrounded** — no longer blocks response
-- 196 tests passing
+- self-echo prevention (role-labeled context, metadata-aware scoring)
+- conversation quality eval with Claude as external evaluator (18 tests, 6 categories)
+- local model comparison eval (automated, all installed models)
+- reflection quality audit and suppression tools
+- temporal grounding (date injection, timestamps on context items)
+- profile retrieval tuning for identity queries
+- authentic_expression constitutional principle
+- Ember uses she/her pronouns
+- 228 tests passing
 
-## Next
-- cloud model provider support (ADR-008, proposed — opt-in, pending disclosure UI and license terms)
-- conversation quality eval harness (Claude as evaluator)
-- context quality tuning (run retrieval eval, adjust weights)
-- desktop/browser integrations (research phase)
-- trigger coverage improvements without overfitting
+> Note: Eval harness results reflect personal vault contents and are not generic benchmarks.
 
-## Future
-- task layer
-- tool integrations
-- proactive assistance
-- controlled agent workflows
-- model selector (UI/CLI switching between models per use case)
-- onboarding conversation flow / quiz (guided profile seeding for new users)
-- session reflection mode (end-of-session capture distinct from daily/weekly)
-- embedding upgrade to nomic-embed-text via Ollama
-- relevance decay and forgetting mechanism (archive-first, policy-governed)
-- multi-user vault isolation (per-user vault paths, API key auth, Tailscale network layer)
-- security hardening for multi-user deployment (per-user vault isolation, shared-host hardening)
-- ~~index migration to SQLite / DuckDB~~ — complete for ingested corpus (v0.6.0)
-- ~~formal typed memory class enforcement~~ — complete (v0.9.4+)
-- ~~state layer implementation~~ — complete (v0.9.3)
-- ~~retrieval evaluation expansion~~ — complete (v0.9.4+)
-- ~~audit scripts~~ — complete (v0.9.4+)
-- ~~onboarding conversation flow~~ — complete (v0.9.0)
+## Roadmap
+
+**v0.10.2** — Model eval results, cloud integration (Claude Sonnet 4.6), model selection guide
+**v0.11.0** — Cloud provider support (ADR-008), backup/export, recovery playbook, semantic safety triggers (ADR-010)
+**v0.12.0** — Task layer, session reflection (ADR-009), Mac/Linux installer
+**v0.13.0** — Memory tiering, embedding upgrade, vault encryption at rest
+**v0.14.0** — Offline knowledge (Kiwix ZIM, Project Gutenberg)
+**v0.15.0** — Agent orchestration, self-evaluation loops
+**Post-v0.15.0** — Multi-user vault isolation, full platform parity
 
 ---
 

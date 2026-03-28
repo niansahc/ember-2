@@ -1,5 +1,7 @@
 # Conversation Quality Eval — v0.10.1 Baseline
 
+> **Note:** These results reflect evaluation against the developer's personal vault. Users with different vault contents will see different scores. The eval harness is a personal diagnostic tool, not a generic benchmark.
+
 **Date:** 2026-03-27
 **Evaluator:** claude-sonnet-4-20250514
 **Model under test:** qwen2.5:14b (local, via Ollama)

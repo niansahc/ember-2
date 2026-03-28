@@ -193,96 +193,126 @@ Key API endpoints:
 
 ---
 
-## Current Working State
+## Current State (v0.10.1)
 
-These are confirmed working as of v0.9.4+:
+All items from the original TDD §25 build order are complete through step 6. The system is feature-complete for single-user local deployment on Windows.
 
 **Core Systems:**
-- Memory storage (append-only JSON vault)
-- Typed memory enforcement (`VALID_MEMORY_TYPES` in `src/memory/storage.py` — all writes validated)
-- Ingestion pipeline (ChatGPT, PDF, DOCX, CSV, GDrive importers, POST /ingest/upload)
-- Semantic retrieval via vector indexes (cached in memory — no disk load per query)
-- Context assembly with policy-weighted ranking and diversity selection
-- Project-scoped retrieval boost (ADR-007 — +0.15 for matching project_id)
-- Daily and weekly reflection generation
-- State layer (StateService, StateResolver, StateExtractor for auto-extraction from conversations)
-- FastAPI + Ember UI integration (UI served from ui/ folder, same port as API)
-- Constitutional review flow end-to-end (8 principles including authentic_expression)
-- Safety review logging
-- Conversation session system (session_id, project_id, rename, soft-delete)
-- Projects backend (CRUD endpoints, conversation assignment)
+- Append-only JSON vault with typed memory enforcement (`VALID_MEMORY_TYPES`, 17 types)
+- Ingestion pipeline (ChatGPT, PDF, DOCX, CSV, GDrive, POST /ingest/upload multipart)
+- Semantic retrieval via vector indexes (cached in memory, no disk load per query)
+- Context assembly with policy-weighted ranking, diversity selection, project-scoped boost (ADR-007)
+- SSE streaming responses from Ollama through FastAPI
+- Auto state extraction from conversation turns (StateExtractor, background thread)
+- State layer (StateService, StateResolver, 8 categories, context packet integration)
+- Daily and weekly reflection generation (multi-source, junk-filtered, suppression tools)
+- Constitutional review (8 principles including authentic_expression, streaming-compatible)
+- Conversation sessions (session_id, project_id, rename, soft-delete, auto-title)
+- Projects backend (CRUD, conversation assignment, project-scoped retrieval)
+- Self-echo prevention (role-labeled context, metadata-aware scoring, -0.25 assistant penalty)
+- Temporal grounding (current date injected, timestamps on context items)
+- Profile retrieval tuning (identity queries lower score gate, return more items)
+- Buffer compression backgrounded (no longer blocks response)
+- Ember uses she/her pronouns (system prompt)
 
-**Tooling:**
-- Retrieval evaluation harness (`tools/eval_retrieval.py`, 15 benchmark cases, pass/warn/fail scoring)
-- Vault health audit (`scripts/audit_memory.py` — 7 checks, GREEN/YELLOW/RED health score)
-- Vector index in-memory caching (cache hit/miss logging, auto-invalidation on write)
+**Evaluation & Tooling:**
+- Retrieval evaluation (15 benchmark cases, pass/warn/fail scoring, latency tracking)
+- Conversation quality eval with Claude as external evaluator (18 test cases, 6 categories)
+- Local model comparison eval (automated, all installed models, comparison table)
+- Vault health audit (7 checks, GREEN/YELLOW/RED health score, --fix flag)
+- Reflection quality audit and suppression tools
 
 **Security:**
 - API key auth via Windows Credential Manager
 - Auth only on API routes — UI static files are public
 - Rate limiting, path traversal protection, JSON audit logging
 - SearXNG bound to localhost only
-- Tailscale serve uses localhost binding (API binds to 127.0.0.1, Tailscale handles routing)
+- Tailscale serve uses localhost binding
 
 **UI (ember-2-ui, served from ui/):**
-- Chat with markdown rendering, copy, edit/resend, regenerate, scroll-to-bottom, export
+- Streaming chat with markdown, copy, edit/resend, regenerate, scroll-to-bottom, export
 - Sidebar with projects, conversations, search, right-click context menu, New Project button
 - Settings: 5 themes, model selector, vision toggle, web search toggle
 - About panel with Ember's story, beliefs, ethos
 - Bug reports to GitHub Issues, update checker
 - PWA manifest for Android/iOS home screen installation
-- Consistent Ember-2 branding across all surfaces
-- WCAG 2.1 AA accessible
+- Consistent Ember-2 branding, WCAG 2.1 AA accessible
 
 **Installer (ember-2-installer):**
-- Auto-install prerequisites via winget
-- Curated model cards with disk sizes
-- Ember detection scan, disk space summary
-- Venv/API lock detection with friendly error messages
-- Auto-start API after install with health check polling
-- Tailscale walkthrough with correct serve binding
-- Progress bar + fun facts during install
+- Auto-install prerequisites via winget (Git, Python, Node, Ollama, Docker)
+- Curated model cards with disk sizes, Ember detection scan, disk space summary
+- Venv/API lock detection, auto-start API with health check polling
+- Tailscale walkthrough, progress bar + fun facts, pip time warning
 - Clones ember-2 repo, builds UI from ember-2-ui
+
+**Tests:** 228 passing
 
 ---
 
+## Immediate Next Priorities
+
+Before v0.10.2 closes:
+- Verify "who am I" profile retrieval fix held — run debug-context check and document result
+
 ## Release Roadmap
 
-**v0.10.2 — Eval and Model Guide** (current)
-- Local model eval results across all tested models
-- Cloud model provider support (Claude Sonnet 4.6) wired up and tested
-- Response latency added as eval metric
-- Model selection guide published and linked from installer Done screen
+**v0.10.2 — Model Eval + Cloud Integration** (current)
+- Local model eval results with real scores and latency
+- Claude Sonnet 4.6 wired up and tested
+- Model selection guide published, linked from installer Done screen
+- Response latency as eval metric (complete)
 
-**v0.11.0 — Cloud Provider Support** (ADR-008)
-- Full cloud provider UI with persistent active indicator
-- Installer rework with disclosure warnings and license terms
-- Provider API key management per provider
-- AGPL and terms acknowledgment in installer
+**v0.11.0 — Cloud Provider Support + Recovery + Onboarding**
+- Provider-aware LLMAdapter (Anthropic, OpenAI)
+- API key management per provider via keyring
+- Persistent cloud mode indicator in UI
+- Hardware detection in installer, auto-recommends local model
+- AGPL acknowledgment screen in installer
+- Backup and export story — vault backup guide, export to portable format
+- Recovery playbook — "what to do if Ember breaks" user-facing doc
+- Social engineering constitutional upgrade — semantic pattern matching (ADR-010)
+- Tray icon / OS notifications research
 
-**v0.12.0 — Task Layer**
-- Task objects with verifiable binary completion criteria (ISC pattern from PAI research)
-- Task CRUD API and state lifecycle
-- UI surface for tasks
-- Task layer ADR
+**v0.12.0 — Task Layer + Session Reflection + Mac/Linux**
+- Task objects with ISC verifiable completion criteria
+- Task CRUD API and state lifecycle, task layer ADR
+- Session reflection mode (ADR-009)
+- Mac and Linux installer support
+- Reflection corpus guidance in onboarding
 
-**v0.13.0 — Archive and Memory Tiering**
+**v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption**
 - Hot/warm/cold memory tiering by recency and relevance
+- nomic-embed-text embedding upgrade via Ollama
 - Index migration for remaining JSON indexes to SQLite
-- Relevance decay policy design
+- Monthly/thematic reflection
+- Vault encryption at rest (Ember-managed, with key recovery story)
 
 **v0.14.0 — Offline Knowledge**
-- Kiwix ZIM ingestion adapter (curated packs only — Wikipedia Medical, survival, technical reference)
+- Kiwix ZIM ingestion adapter (curated packs only)
 - Project Gutenberg adapter (epub/txt/html as Reference Memory)
-- Curated pack recommendations in docs
-- NOMAD-compatible path supported
+- Curated pack recommendations in docs, NOMAD-compatible path
 
 **v0.15.0 — Agent Orchestration**
 - Self-evaluation and decision-memory loops
 - OpenJarvis Learning primitive as reference implementation
 - Controlled tool writes with stricter policy gates
 
-Build order: ~~clean ingestion~~ → ~~typed memory~~ → ~~retrieval policy~~ → ~~state layer~~ → ~~evaluation suite~~ → ~~streaming~~ → cloud providers → task layer → memory tiering → offline knowledge → agent orchestration.
+**Post-v0.15.0:**
+- Multi-user vault isolation (per-user vault paths, independent API keys, separate auth)
+- Windows/Mac/Linux full parity across all features
+
+## Watch Items
+- OpenJarvis Learning primitive — reference for self-evaluation loops (active at v0.15.0)
+- PAI TELOS pattern — evaluate against constitution + profile memory during v0.11.0
+- Multi-user vault isolation — post-v0.15.0 milestone
+- Eval harness uses user's own vault — results are personal, not generic benchmarks
+
+## Known Gaps (tracked, not yet scheduled)
+- Vault encryption at rest — v0.13.0
+- Social engineering trigger upgrade — v0.11.0
+- Mac/Linux installer — v0.12.0
+- Backup/export story — v0.11.0
+- Recovery playbook — v0.11.0
 
 ---
 

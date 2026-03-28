@@ -1541,31 +1541,40 @@ It should be possible to explain:
 
 **Release Roadmap (as of v0.10.1):**
 
-**v0.10.2 — Eval and Model Guide**
-- Local model eval results across all tested models
-- Cloud model provider support (Claude Sonnet 4.6) wired up and tested
-- Response latency added as eval metric
-- Model selection guide published and linked from installer Done screen
+**v0.10.2 — Model Eval + Cloud Integration**
+- Local model eval results with real scores and latency
+- Claude Sonnet 4.6 wired up and tested
+- Model selection guide published
+- Response latency as eval metric (complete)
 
-**v0.11.0 — Cloud Provider Support (ADR-008)**
-- Full cloud provider UI with persistent active indicator
-- Installer rework with disclosure warnings and license terms
-- Provider API key management per provider
-- AGPL and terms acknowledgment in installer
+**v0.11.0 — Cloud Provider Support + Recovery + Onboarding**
+- Provider-aware LLMAdapter (Anthropic, OpenAI)
+- API key management per provider via keyring
+- Persistent cloud mode indicator in UI
+- Hardware detection in installer, auto-recommends local model
+- AGPL acknowledgment screen in installer
+- Backup and export story — vault backup guide, export to portable format
+- Recovery playbook — "what to do if Ember breaks" user-facing doc
+- Social engineering constitutional upgrade — semantic pattern matching in trigger layer (ADR-010)
+- Tray icon / OS notifications research
 
-**v0.12.0 — Task Layer**
-- Task objects with verifiable binary completion criteria (ISC pattern from PAI research)
+**v0.12.0 — Task Layer + Session Reflection + Mac/Linux**
+- Task objects with ISC verifiable completion criteria
 - Task CRUD API and state lifecycle
-- UI surface for tasks
 - Task layer ADR
+- Session reflection mode (ADR-009)
+- Mac and Linux installer support
+- Reflection corpus guidance in onboarding
 
-**v0.13.0 — Archive and Memory Tiering**
+**v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption**
 - Hot/warm/cold memory tiering by recency and relevance
+- nomic-embed-text embedding upgrade via Ollama
 - Index migration for remaining JSON indexes to SQLite
-- Relevance decay policy design
+- Monthly/thematic reflection
+- Vault encryption at rest (Ember-managed, with key recovery story)
 
 **v0.14.0 — Offline Knowledge**
-- Kiwix ZIM ingestion adapter (curated packs only — Wikipedia Medical, survival, technical reference)
+- Kiwix ZIM ingestion adapter (curated packs only)
 - Project Gutenberg adapter (epub/txt/html as Reference Memory)
 - Curated pack recommendations in docs
 - NOMAD-compatible path supported
@@ -1575,9 +1584,13 @@ It should be possible to explain:
 - OpenJarvis Learning primitive as reference implementation
 - Controlled tool writes with stricter policy gates
 
+**Post-v0.15.0**
+- Multi-user vault isolation (per-user vault paths, independent API keys, separate auth)
+- Windows/Mac/Linux full parity
+
 **Watch Items (research, not build):**
-- OpenJarvis Learning primitive (github.com/open-jarvis/OpenJarvis) — reference implementation for self-evaluation loops; becomes active at v0.15.0
-- PAI TELOS pattern (github.com/danielmiessler/Personal_AI_Infrastructure) — explicit purpose encoding; evaluate against constitution + profile memory during onboarding work
+- OpenJarvis Learning primitive (github.com/open-jarvis/OpenJarvis) — reference for self-evaluation loops; active at v0.15.0
+- PAI TELOS pattern (github.com/danielmiessler/Personal_AI_Infrastructure) — evaluate against constitution + profile memory during v0.11.0 onboarding work
 
 ## 25.4 Long-Term
 
@@ -1728,6 +1741,9 @@ The following should be tracked in `design-decisions.md` or ADRs:
 - Whether constitution + profile memory is sufficient for purpose encoding or whether an explicit TELOS layer is needed (evaluate during v0.11.0 onboarding work). See PAI TELOS pattern.
 - Hot/warm/cold memory tiering policy design — what triggers archival, how decay is computed, whether it's time-based or relevance-based or both (evaluate during v0.13.0).
 - OpenJarvis Learning primitive integration approach — whether to adopt directly, adapt the pattern, or build from scratch (evaluate during v0.15.0).
+- Vault encryption key management approach — Ember-managed vs OS-dependent, key recovery story (v0.13.0)
+- Social engineering semantic trigger design — performance impact, false positive rate, pre-screening scope (v0.11.0)
+- Whether eval harness results should be normalized across different vault contents for cross-user comparison
 
 ---
 
@@ -1993,6 +2009,8 @@ Onboarding responses that touch sensitive topics (health, values, religion) shou
 # 34. Embedding Upgrade
 
 **Status: Planned — current model functional but not optimal for personal knowledge retrieval**
+
+Scheduled for v0.13.0 alongside memory tiering and index migration.
 
 ## 34.1 Current State
 
@@ -2285,3 +2303,83 @@ flowchart TD
   }
 }
 ```
+
+---
+
+# 36. Session Reflection Mode
+
+**Status:** Planned (v0.12.0, ADR-009)
+
+## Purpose
+
+End-of-session capture distinct from daily/weekly reflection cadence. Captures what happened in a single work session before context is lost to buffer compression or session end.
+
+## Design
+
+- Triggered manually via POST /reflect/session or at session end
+- Uses the conversation buffer as primary input (not vault search)
+- Stored as derived memory with type="reflection", cadence="session", session_id reference
+- Fed into daily and weekly reflection as source material
+
+---
+
+# 37. Multi-User Vault Isolation
+
+**Status:** Planned (post-v0.15.0)
+
+Requires per-user vault paths, independent API keys, and a separate auth layer. See §31 for current single-user security posture.
+
+Not a near-term priority. The architecture supports it (vault path is configurable, API key auth exists) but the orchestration layer (user routing, vault switching, session isolation) is unbuilt.
+
+---
+
+# 38. Vault Encryption at Rest
+
+**Status:** Planned (v0.13.0)
+
+## Current State
+
+The vault is plain JSON files on disk. Users on sensitive hardware should use OS-level encryption (BitLocker on Windows, FileVault on Mac) in the interim.
+
+## Planned
+
+Ember-managed encryption — the system encrypts vault files at rest using a user-provided key or derived key. Must include a key recovery story: losing the key means losing the vault. This is an explicit tradeoff between security and recoverability.
+
+---
+
+# 39. Platform Support
+
+**Status:** Windows complete, Mac/Linux planned (v0.12.0)
+
+- Manual setup via SETUP.md works on all platforms today (Python, Docker, Ollama are cross-platform)
+- Installer (ember-2-installer) is currently Windows-only (Electron + NSIS)
+- Mac (.dmg) and Linux (.AppImage) installer builds scheduled for v0.12.0
+- Tailscale works identically on all platforms
+
+---
+
+# 40. Backup and Recovery
+
+**Status:** Planned (v0.11.0)
+
+## Vault Backup
+
+The vault is plain files — copyable, movable, restorable. But users need guidance:
+- What to back up (vault folder + .env + credential manager export)
+- How often
+- Where to store backups (not in the vault, not in a cloud-synced folder)
+
+## Export
+
+Export vault to a portable format (zip of vault, or structured JSON export) for migration or archival.
+
+## Recovery Playbook
+
+User-facing document: what to do when things break.
+- Corrupt vector index → delete and rebuild
+- Failed embedding model load → reinstall sentence-transformers
+- Lost API key → run scripts/set_api_key.py to generate new one
+- Bad ingestion → run scripts/audit_memory.py, suppress junk, rebuild indexes
+- Installer failed mid-install → retry from failed step
+
+Link from installer Done screen and UI settings panel.

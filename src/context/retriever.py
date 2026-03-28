@@ -115,9 +115,11 @@ class ContextRetriever:
 
         return items
 
-    # Identity query markers — when the user asks about themselves,
-    # profile records should always surface regardless of semantic score.
+    # Identity query markers — when the user asks about themselves OR about
+    # Ember, profile records should surface. Ember knowing who she's talking
+    # to is essential context for answering identity questions about herself.
     IDENTITY_MARKERS = (
+        # User-directed: "tell me about me"
         "know about me",
         "who am i",
         "about myself",
@@ -126,6 +128,13 @@ class ContextRetriever:
         "what do you know about",
         "describe me",
         "my profile",
+        # Ember-directed: "tell me about yourself"
+        "about yourself",
+        "who are you",
+        "what are you",
+        "describe yourself",
+        "tell me about ember",
+        "who is ember",
     )
 
     def _is_identity_query(self, query: str) -> bool:
@@ -282,6 +291,14 @@ class ContextRetriever:
             return True
 
         if "```" in content:
+            return True
+
+        # File trees and directory listings (Unicode box-drawing characters)
+        if "\u2502" in content or "\u251c" in content or "\u2514" in content:
+            return True
+
+        # "Recent themes:" followed by short user complaints — session summary junk
+        if normalized_content.startswith("recent themes:"):
             return True
 
         if normalized_user_message and normalized_user_message in normalized_content:

@@ -2,46 +2,124 @@
 tests/test_profile_retrieval.py
 
 Tests for profile retrieval via semantic search.
-Verifies that get_profile_items() uses the vector index, not keyword matching.
+Verifies that get_profile_items() uses the vector index, not keyword matching,
+and that identity query detection covers both user-directed and Ember-directed queries.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from src.context.retriever import ContextRetriever
 
 
+# ---------------------------------------------------------------------------
+# Helpers — realistic mock profile records
+# ---------------------------------------------------------------------------
+
+MOCK_PROFILE_RECORDS = [
+    {"id": "p1", "content": "My name is Chastain. I go by Chas. My pronouns are they/them and she/her. I am nonbinary, femme-leaning, and queer.", "score": 0.50, "memory_type": "profile", "metadata": {}},
+    {"id": "p2", "content": "I am a Business Systems Analyst working in Generative AI and enterprise systems. My domains include prompt engineering and RAG.", "score": 0.33, "memory_type": "profile", "metadata": {}},
+    {"id": "p3", "content": "I am autistic and have ADHD. I prefer structured, concise information. I process best with bullets, steps, and frameworks.", "score": 0.26, "memory_type": "profile", "metadata": {}},
+    {"id": "p4", "content": "My current major personal project is Ember-2 — a local-first AI intelligence system I am building for long-term memory and reasoning.", "score": 0.29, "memory_type": "profile", "metadata": {}},
+    {"id": "p5", "content": "I maintain a personal spiritual practice rooted in seasonal cycles, ritual, symbolism, witchcraft-adjacent frameworks.", "score": 0.17, "memory_type": "profile", "metadata": {}},
+    {"id": "p6", "content": "I prefer communication that is clear, structured, concise, and dense with meaning. I dislike empty reassurance.", "score": 0.27, "memory_type": "profile", "metadata": {}},
+    {"id": "p7", "content": "What I value most from an AI: pattern recognition across time, long-term synthesis, context awareness, not cheerfulness.", "score": 0.17, "memory_type": "profile", "metadata": {}},
+    {"id": "p8", "content": "I have a partner who I live with. He works in cybersecurity. He supports my work but is not a collaborator on Ember.", "score": 0.15, "memory_type": "profile", "metadata": {}},
+]
+
+
+# ---------------------------------------------------------------------------
+# Identity query detection
+# ---------------------------------------------------------------------------
+
+class TestIdentityQueryDetection:
+    """_is_identity_query() must detect both user-directed and Ember-directed queries."""
+
+    @pytest.mark.parametrize("query", [
+        # User-directed: asking about themselves
+        "what do you know about me",
+        "who am I",
+        "tell me about myself",
+        "what have I told you about myself",
+        "my profile",
+        "describe me",
+    ])
+    def test_user_directed_identity_queries(self, query):
+        retriever = ContextRetriever()
+        assert retriever._is_identity_query(query) is True
+
+    @pytest.mark.parametrize("query", [
+        # Ember-directed: asking Ember about herself
+        "tell me about yourself",
+        "who are you",
+        "what are you",
+        "describe yourself",
+        "tell me about ember",
+        "who is ember",
+    ])
+    def test_ember_directed_identity_queries(self, query):
+        retriever = ContextRetriever()
+        assert retriever._is_identity_query(query) is True
+
+    @pytest.mark.parametrize("query", [
+        "what is the weather",
+        "help me write code",
+        "what should I focus on today",
+        "how do I install docker",
+        "what patterns have you noticed",
+    ])
+    def test_non_identity_queries_not_detected(self, query):
+        retriever = ContextRetriever()
+        assert retriever._is_identity_query(query) is False
+
+
+# ---------------------------------------------------------------------------
+# Profile retrieval routing and surfacing
+# ---------------------------------------------------------------------------
+
 class TestProfileRetrievalRoute:
-    """Verify get_profile_items() routes through semantic search."""
+    """get_profile_items() must route through semantic_search and surface multiple records."""
 
     def test_calls_semantic_search_not_memory_service(self):
-        """get_profile_items() should call semantic_search, not MemoryService.search."""
         retriever = ContextRetriever()
 
-        mock_results = [
-            {
-                "id": "test-1",
-                "content": "My name is Test User. I am a software engineer with experience in Python.",
-                "score": 0.85,
-                "memory_type": "profile",
-                "metadata": {},
-            }
-        ]
-
-        with patch("src.context.retriever._semantic_search", return_value=mock_results) as mock_sem:
+        with patch("src.context.retriever._semantic_search", return_value=MOCK_PROFILE_RECORDS) as mock_sem:
             items = retriever.get_profile_items("who am I")
             mock_sem.assert_called_once_with(
                 "who am I",
                 memory_type="profile",
-                limit=8,  # identity query → limit=8
-                min_score=0.0,  # identity query → min_score=0.0
+                limit=8,
+                min_score=0.0,
             )
-            assert len(items) == 1
-            assert items[0].content == mock_results[0]["content"]
-            assert items[0].memory_type == "profile"
 
-    def test_non_identity_query_uses_higher_threshold(self):
-        """Non-identity queries should use limit=3 and min_score=0.3."""
+    def test_identity_query_surfaces_all_available_profiles(self):
+        """An identity query should return all 8 profile records, not just the top 1."""
+        retriever = ContextRetriever()
+
+        with patch("src.context.retriever._semantic_search", return_value=MOCK_PROFILE_RECORDS):
+            items = retriever.get_profile_items("tell me about yourself")
+            assert len(items) == 8
+            # Verify we got diverse content, not just the top-scoring record
+            ids = {item.id for item in items}
+            assert "p1" in ids  # name/pronouns
+            assert "p2" in ids  # job
+            assert "p3" in ids  # ADHD/autism
+            assert "p5" in ids  # spirituality
+
+    def test_ember_directed_query_triggers_full_profile(self):
+        """'tell me about yourself' should trigger identity detection and get limit=8."""
+        retriever = ContextRetriever()
+
+        with patch("src.context.retriever._semantic_search", return_value=[]) as mock_sem:
+            retriever.get_profile_items("tell me about yourself")
+            mock_sem.assert_called_once_with(
+                "tell me about yourself",
+                memory_type="profile",
+                limit=8,
+                min_score=0.0,
+            )
+
+    def test_non_identity_query_uses_restricted_params(self):
         retriever = ContextRetriever()
 
         with patch("src.context.retriever._semantic_search", return_value=[]) as mock_sem:
@@ -54,55 +132,69 @@ class TestProfileRetrievalRoute:
             )
 
 
-class TestProfileScoreFiltering:
-    """Verify score threshold and content filtering."""
+# ---------------------------------------------------------------------------
+# Content filtering
+# ---------------------------------------------------------------------------
+
+class TestProfileContentFiltering:
 
     def test_short_content_filtered(self):
-        """Records shorter than 40 characters should be excluded."""
         retriever = ContextRetriever()
-
         mock_results = [
             {"id": "short", "content": "Too short.", "score": 0.9, "memory_type": "profile", "metadata": {}},
             {"id": "ok", "content": "This is a long enough profile record to pass the 40-char minimum filter.", "score": 0.8, "memory_type": "profile", "metadata": {}},
         ]
-
         with patch("src.context.retriever._semantic_search", return_value=mock_results):
             items = retriever.get_profile_items("who am I")
             assert len(items) == 1
             assert items[0].id == "ok"
 
     def test_empty_content_filtered(self):
-        """Records with empty content should be excluded."""
         retriever = ContextRetriever()
-
         mock_results = [
             {"id": "empty", "content": "", "score": 0.9, "memory_type": "profile", "metadata": {}},
         ]
-
         with patch("src.context.retriever._semantic_search", return_value=mock_results):
             items = retriever.get_profile_items("who am I")
             assert len(items) == 0
 
 
-class TestIdentityQueryDetection:
-    """Verify identity query patterns."""
+# ---------------------------------------------------------------------------
+# Reflection junk filtering
+# ---------------------------------------------------------------------------
 
-    @pytest.mark.parametrize("query", [
-        "what do you know about me",
-        "who am I",
-        "tell me about myself",
-        "what have I told you about myself",
-        "my profile",
-    ])
-    def test_identity_queries_detected(self, query):
-        retriever = ContextRetriever()
-        assert retriever._is_identity_query(query) is True
+class TestReflectionJunkFiltering:
+    """_should_exclude_content() must catch file trees and session summary junk."""
 
-    @pytest.mark.parametrize("query", [
-        "what is the weather",
-        "help me write code",
-        "what should I focus on today",
-    ])
-    def test_non_identity_queries_not_detected(self, query):
+    def test_file_tree_content_excluded(self):
         retriever = ContextRetriever()
-        assert retriever._is_identity_query(query) is False
+        file_tree = (
+            "Recent themes: User: Shorter messages please. | User: Okay it gave me a "
+            "file structure clean up task \n\nsrc/\n\u251c\u2500\u2500 __init__.py\n"
+            "\u251c\u2500\u2500 api/\n\u2502   \u251c\u2500\u2500 __init__.py"
+        )
+        assert retriever._should_exclude_content(file_tree, "tell me about yourself") is True
+
+    def test_box_drawing_characters_excluded(self):
+        retriever = ContextRetriever()
+        # Just the box-drawing chars, no other markers
+        assert retriever._should_exclude_content(
+            "some content with \u2502 vertical line and \u251c branch chars in it for whatever reason",
+            "anything"
+        ) is True
+
+    def test_recent_themes_prefix_excluded(self):
+        retriever = ContextRetriever()
+        assert retriever._should_exclude_content(
+            "Recent themes: User: Shorter messages please. I've reminded you 5 times in this conversation.",
+            "tell me about yourself"
+        ) is True
+
+    def test_legitimate_reflection_not_excluded(self):
+        retriever = ContextRetriever()
+        reflection = (
+            "The user has been working intensively on Ember-2 development, "
+            "logging 40 hours in four days. They expressed feeling worn out but "
+            "not behind on work. Key themes: technical progress, work-life balance."
+        )
+        assert retriever._should_exclude_content(reflection, "what patterns have you noticed") is False

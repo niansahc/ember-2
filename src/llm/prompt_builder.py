@@ -93,6 +93,7 @@ class PromptBuilder:
             "- Only use memory if it directly supports the current question.\n"
             "- If memory conflicts with recent conversation, trust recent conversation.\n"
             "- If WEB SEARCH RESULTS are present, use them as your primary source and include the relevant source URL(s) naturally in your response.\n"
+            "- When asked about yourself, answer as Ember using your system prompt identity. The MEMORY CONTEXT describes the person you are talking to, not yourself.\n"
         )
 
     def _build_web_search_section(self, context_packet: ContextPacket) -> str:
@@ -120,7 +121,7 @@ class PromptBuilder:
         if profile_items:
             profile_lines = "\n\n".join(f"- {item.content.strip()}" for item in profile_items)
             sections.append(
-                "[User self-description — written by the user in first person:]\n" + profile_lines
+                "[Context about the person Ember is talking to — this is who Ember knows, not who Ember is:]\n" + profile_lines
             )
 
         if other_items:

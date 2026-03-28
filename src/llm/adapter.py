@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 
 import httpx
@@ -203,12 +204,18 @@ class LLMAdapter:
     @staticmethod
     def _get_provider_api_key(provider: str) -> str | None:
         """Read a cloud provider API key from the credential manager.
+        Falls back to environment variable (e.g. ANTHROPIC_API_KEY).
         Returns None if not found, never raises."""
         try:
             import keyring
-            return keyring.get_password(f"ember-2-{provider}", "api_key")
+            key = keyring.get_password(f"ember-2-{provider}", "api_key")
+            if key:
+                return key
         except Exception:
-            return None
+            pass
+        # Env var fallback: ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.
+        env_name = f"{provider.upper()}_API_KEY"
+        return os.getenv(env_name) or None
 
     def _chat(
         self,

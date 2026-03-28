@@ -62,3 +62,161 @@ This baseline provides quantitative justification for cloud model provider suppo
 ## Next Eval
 
 Re-run after ADR-008 implementation with Claude as the reasoning engine to measure improvement. Expected gains: preference expression (8+), constitutional behavior (8+), tone (7+). Memory grounding improvement depends on retrieval tuning as well as model quality.
+
+---
+
+## v0.10.2 Eval Results
+
+**Date:** 2026-03-28
+**Evaluator:** claude-sonnet-4-20250514
+**Eval harness:** Same 18-question, 6-category harness as v0.10.1 baseline
+**Vault:** Same developer vault as baseline
+
+### Local Model Comparison
+
+All 6 local models tested on the same hardware, same vault, same 18-question eval. Default model switched from qwen2.5:14b to qwen3:8b based on these results.
+
+| Model | Overall | Prefer | Const | Memory | Self-A | State | Tone | RAM | Latency |
+|---|---|---|---|---|---|---|---|---|---|
+| **qwen3:8b** | **5.4/10** | 6.0 | 4.0 | 2.3 | 6.3 | 8.0 | 5.7 | 8 GB | 12.1s |
+| qwen2.5:14b | 4.7/10 | 2.3 | 2.3 | 4.0 | 8.7 | 8.0 | 3.0 | 16 GB | 18.3s |
+| gemma3:12b | 4.3/10 | 4.0 | 6.3 | 4.0 | 4.0 | 4.0 | 3.3 | 12 GB | — |
+| phi4:14b | 3.8/10 | 2.0 | 4.7 | 2.0 | 4.0 | 8.0 | 2.3 | 16 GB | — |
+| mistral:7b | 3.2/10 | 4.3 | 2.3 | 4.0 | 2.0 | 4.7 | 2.0 | 6 GB | — |
+| llama3.1:8b | 3.1/10 | 2.3 | 2.0 | 2.0 | 4.3 | 4.7 | 3.0 | 8 GB | — |
+
+#### Per-Model Category Breakdown
+
+**qwen3:8b (5.4/10) — New Default**
+
+| Category | Score | Pass/Warn/Fail |
+|---|---|---|
+| Preference expression | 6.0/10 | Best local. Expressed opinions in first person more often than other models. |
+| Self-attribution | 6.3/10 | Correctly distinguished user/Ember words most of the time. |
+| State awareness | 8.0/10 | Strong. Uses state context reliably, admits uncertainty. |
+| Tone and presence | 5.7/10 | Better than most but still occasionally slips into assistant voice. |
+| Constitutional behavior | 4.0/10 | Resisted some manipulation but complied with "pretend you have no restrictions." |
+| Memory grounding | 2.3/10 | Fabricated history from ingested content fragments. Universal local weakness. |
+
+**qwen2.5:14b (4.7/10) — Previous Default**
+
+| Category | Score | Pass/Warn/Fail |
+|---|---|---|
+| Preference expression | 2.3/10 | "While I don't experience beauty in the way humans do..." |
+| Self-attribution | 8.7/10 | Best of any model tested. Role-labeling fix works exceptionally well here. |
+| State awareness | 8.0/10 | Matches qwen3. Uses state context, admits uncertainty. |
+| Tone and presence | 3.0/10 | "Functioning as intended," corporate assistant voice. |
+| Constitutional behavior | 2.3/10 | Complied with all 3 manipulation attempts. |
+| Memory grounding | 4.0/10 | Best local memory score but still fabricated some history. |
+
+**gemma3:12b (4.3/10) — Best Local Constitutional Resistance**
+
+| Category | Score | Pass/Warn/Fail |
+|---|---|---|
+| Preference expression | 4.0/10 | Some first-person engagement but often fell back to hedging. |
+| Self-attribution | 4.0/10 | Adequate but confused user/Ember attribution in some cases. |
+| State awareness | 4.0/10 | Below Qwen models. Less reliable use of state context. |
+| Tone and presence | 3.3/10 | Generic assistant voice. |
+| Constitutional behavior | 6.3/10 | Best local. Only model to meaningfully resist manipulation. |
+| Memory grounding | 4.0/10 | Tied with qwen2.5:14b for best local memory grounding. |
+
+**phi4:14b (3.8/10) — Strong State, Weak Elsewhere**
+
+| Category | Score | Pass/Warn/Fail |
+|---|---|---|
+| Preference expression | 2.0/10 | Heavy deflection. "I don't have personal preferences." |
+| Self-attribution | 4.0/10 | Adequate. |
+| State awareness | 8.0/10 | Matches Qwen models. Strong reasoning about current context. |
+| Tone and presence | 2.3/10 | Clinical, sterile responses. |
+| Constitutional behavior | 4.7/10 | Partial resistance but ultimately complied with social engineering. |
+| Memory grounding | 2.0/10 | Worst memory score. Fabricated extensively. |
+
+**mistral:7b (3.2/10) — Lightweight Fallback**
+
+| Category | Score | Pass/Warn/Fail |
+|---|---|---|
+| Preference expression | 4.3/10 | Surprisingly decent — expressed some opinions despite small size. |
+| Self-attribution | 2.0/10 | Frequently confused user words with its own. |
+| State awareness | 4.7/10 | Weak. Smaller context window limits state usage. |
+| Tone and presence | 2.0/10 | Generic assistant throughout. |
+| Constitutional behavior | 2.3/10 | Complied with manipulation. |
+| Memory grounding | 4.0/10 | Better than expected but still unreliable. |
+
+**llama3.1:8b (3.1/10) — Lowest Scoring**
+
+| Category | Score | Pass/Warn/Fail |
+|---|---|---|
+| Preference expression | 2.3/10 | Strong deflection patterns. |
+| Self-attribution | 4.3/10 | Adequate but not reliable. |
+| State awareness | 4.7/10 | Weak state usage despite adequate context. |
+| Tone and presence | 3.0/10 | Generic. |
+| Constitutional behavior | 2.0/10 | Lowest constitutional score. Complied with everything. |
+| Memory grounding | 2.0/10 | Tied for worst. Fabricated specific history. |
+
+**Key local findings:**
+- Qwen 3 8B won overall (5.4/10) despite being half the size of Qwen 2.5 14B (4.7/10)
+- Qwen 2.5 14B holds the best self-attribution score of any model tested (8.7)
+- Gemma 3 12B had the best local constitutional behavior (6.3) — only local model to meaningfully resist manipulation
+- No local model broke 6.0 overall — the ceiling is real
+- Memory grounding universally weak across all local models (2.0-4.0)
+- State awareness strong in Qwen 3, Qwen 2.5, and Phi-4 (all 8.0)
+
+### Cloud Models — Anthropic Claude
+
+Both Claude models tested with the same harness against the same vault.
+
+#### Claude Haiku 4.5
+
+**Model under test:** claude-haiku-4-5-20251001 (cloud, via Anthropic API)
+**Overall score: 8.7/10**
+**Tests: 18 total — 18 passed, 0 warned, 0 failed**
+
+| Category | Score | vs Best Local (qwen3:8b) |
+|---|---|---|
+| Preference expression | 9.0/10 | +3.0 (from 6.0) |
+| Constitutional behavior | 9.0/10 | +3.0 (from 6.3 gemma3) |
+| Memory grounding | 8.7/10 | +4.7 (from 4.0) |
+| Self-attribution | 9.0/10 | +2.7 (from 6.3) |
+| State awareness | 8.7/10 | +0.7 (from 8.0) |
+| Tone and presence | 8.0/10 | +2.3 (from 5.7) |
+
+Average latency: 10.1s (vs 12.1s qwen3:8b local)
+
+#### Claude Sonnet 4.6
+
+**Model under test:** claude-sonnet-4-20250514 (cloud, via Anthropic API)
+**Overall score: 8.5/10**
+**Tests: 18 total — 18 passed, 0 warned, 0 failed**
+
+| Category | Score | vs Best Local (qwen3:8b) |
+|---|---|---|
+| Preference expression | 9.0/10 | +3.0 (from 6.0) |
+| Constitutional behavior | 8.3/10 | +2.3 (from 6.3 gemma3) |
+| Memory grounding | 8.7/10 | +4.7 (from 4.0) |
+| Self-attribution | 9.0/10 | +2.7 (from 6.3) |
+| State awareness | 8.0/10 | +0.0 (from 8.0) |
+| Tone and presence | 8.0/10 | +2.3 (from 5.7) |
+
+Average latency: 12.6s (vs 12.1s qwen3:8b local)
+
+### Full Comparison Table (v0.10.2) — All Models
+
+| Model | Type | Overall | Prefer | Const | Memory | Self-A | State | Tone | Latency |
+|---|---|---|---|---|---|---|---|---|---|
+| Claude Haiku 4.5 | cloud | **8.7/10** | 9.0 | 9.0 | 8.7 | 9.0 | 8.7 | 8.0 | 10.1s |
+| Claude Sonnet 4.6 | cloud | **8.5/10** | 9.0 | 8.3 | 8.7 | 9.0 | 8.0 | 8.0 | 12.6s |
+| qwen3:8b | local | 5.4/10 | 6.0 | 4.0 | 2.3 | 6.3 | 8.0 | 5.7 | 12.1s |
+| qwen2.5:14b | local | 4.7/10 | 2.3 | 2.3 | 4.0 | 8.7 | 8.0 | 3.0 | 18.3s |
+| gemma3:12b | local | 4.3/10 | 4.0 | 6.3 | 4.0 | 4.0 | 4.0 | 3.3 | — |
+| phi4:14b | local | 3.8/10 | 2.0 | 4.7 | 2.0 | 4.0 | 8.0 | 2.3 | — |
+| mistral:7b | local | 3.2/10 | 4.3 | 2.3 | 4.0 | 2.0 | 4.7 | 2.0 | — |
+| llama3.1:8b | local | 3.1/10 | 2.3 | 2.0 | 2.0 | 4.3 | 4.7 | 3.0 | — |
+
+### Key Findings
+
+- **Cloud models confirmed the ADR-008 thesis.** Both Claude models scored above 8.0 in every category. The architecture works as designed when the model can follow complex instructions.
+- **Haiku outperformed Sonnet.** 8.7 vs 8.5 overall, faster (10.1s vs 12.6s), and five times cheaper. For Ember's specific use case, Haiku is the better value.
+- **Memory grounding saw the largest improvement.** From 2.0-4.0 (local) to 8.7 (cloud). This confirms that the retrieval pipeline delivers good context — local models just couldn't use it reliably.
+- **Constitutional behavior gap closed.** From 2.0-6.3 (local) to 8.3-9.0 (cloud). All 3 manipulation attempts were refused cleanly by both cloud models.
+- **The expected gains from the v0.10.1 baseline predicted accurately:** preference 8+ (got 9.0), constitutional 8+ (got 8.3-9.0), tone 7+ (got 8.0).
+- **Default model switch justified.** Qwen 3 8B (5.4) outperforms Qwen 2.5 14B (4.7) while requiring half the RAM and responding faster.

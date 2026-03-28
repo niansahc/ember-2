@@ -66,7 +66,8 @@ class TestProviderApiKey:
     def test_get_key_returns_none_when_not_configured(self):
         mock_kr = MagicMock()
         mock_kr.get_password.return_value = None
-        with patch.dict("sys.modules", {"keyring": mock_kr}):
+        with patch.dict("sys.modules", {"keyring": mock_kr}), \
+             patch.dict("os.environ", {}, clear=True):
             result = LLMAdapter._get_provider_api_key("anthropic")
             assert result is None
 
@@ -81,9 +82,18 @@ class TestProviderApiKey:
     def test_get_key_never_raises(self):
         mock_kr = MagicMock()
         mock_kr.get_password.side_effect = Exception("keyring broken")
-        with patch.dict("sys.modules", {"keyring": mock_kr}):
+        with patch.dict("sys.modules", {"keyring": mock_kr}), \
+             patch.dict("os.environ", {}, clear=True):
             result = LLMAdapter._get_provider_api_key("anthropic")
             assert result is None
+
+    def test_get_key_falls_back_to_env_var(self):
+        mock_kr = MagicMock()
+        mock_kr.get_password.return_value = None
+        with patch.dict("sys.modules", {"keyring": mock_kr}), \
+             patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-env-test"}, clear=True):
+            result = LLMAdapter._get_provider_api_key("anthropic")
+            assert result == "sk-env-test"
 
     def test_anthropic_chat_raises_without_key(self):
         adapter = LLMAdapter(model="claude-sonnet-4-20250514")

@@ -352,6 +352,20 @@ When adding features: unit test normalizers, filters, ranking functions, and sta
 - The human has ADHD and Autism — minimize cognitive overhead, be explicit about what is changing and why before touching anything
 - Before editing any file, state: what file, what change, and what the commit message will be
 
+## Release Checklist
+
+When cutting a release (tagging a new version), always update these files:
+
+1. `version.json` — bump the version string (installer reads this to display Ember version)
+2. `CHANGELOG.md` — add a new section for the version with changes, bug fixes, test count
+3. `docs/Ember2_TDD.md` — mark completed items in §25, update roadmap
+4. `CLAUDE.md` — update Current State version, test count, any new capabilities
+5. `README.md` — update Current State version, test count, roadmap if changed
+6. Git tag: `git tag -a vX.Y.Z -m "vX.Y.Z — summary"`
+7. Push: `git push origin main` then `git push origin vX.Y.Z`
+
+If the installer repo (ember-2-installer) has changes, also bump `package.json` version and tag.
+
 ---
 
 ## Key Design Risks to Watch

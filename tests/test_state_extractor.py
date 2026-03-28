@@ -42,6 +42,25 @@ class TestShortMessageSkipping:
             assert mock_ollama.chat.called
             assert result == []
 
+    def test_ten_word_message_triggers_extraction(self):
+        """A realistic 10-word message with state signal should trigger extraction."""
+        msg = "I am focused on fixing the retrieval pipeline this week"  # 10 words
+        assert len(msg.split()) == 10
+        extractor = StateExtractor()
+        response_json = json.dumps({
+            "extractions": [
+                {"type": "current_focus", "text": "Fixing retrieval pipeline", "confidence": "high"},
+            ]
+        })
+        with patch("src.state.state_extractor.ollama") as mock_ollama:
+            mock_ollama.chat.return_value = {
+                "message": {"content": response_json}
+            }
+            result = extractor.extract(msg, "Got it.")
+            assert mock_ollama.chat.called
+            assert len(result) == 1
+            assert result[0].type == "current_focus"
+
 
 class TestErrorHandling:
     """Extraction errors should never raise — always return empty list."""

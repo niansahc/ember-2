@@ -34,7 +34,7 @@ logger = logging.getLogger("ember.state_extractor")
 EXTRACTABLE_CATEGORIES = VALID_STATE_CATEGORIES - {"onboarding"}
 
 # Minimum word count to attempt extraction — short messages rarely contain state
-MIN_WORDS_FOR_EXTRACTION = 15
+MIN_WORDS_FOR_EXTRACTION = 10
 
 
 class StateExtractor:

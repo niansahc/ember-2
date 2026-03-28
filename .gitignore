@@ -20,6 +20,9 @@ __pycache__/
 # Built UI (populated by installer from ember-2-ui)
 ui/
 
+# One-time cleanup scripts (not part of the codebase)
+scripts/cleanup_today_test_sessions.py
+
 # OS junk
 .DS_Store
 Thumbs.db

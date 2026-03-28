@@ -14,7 +14,7 @@ This guide is based on real evaluation data. Every local model listed here was t
 
 ## Quick Recommendation
 
-**Fully local (recommended for most):** Qwen 3 8B — 6.7/10, above the functional threshold, 8 GB RAM, free, fully private.
+**Fully local (recommended for most):** Qwen 3 8B — best overall local model, scores 4.9-6.7/10 depending on run, 8 GB RAM, free, fully private.
 
 **Best experience:** Claude Haiku 4.5 — scored 8.7/10 (highest of any model tested), faster than local, ~$4 per 1,000 conversations. Requires an Anthropic API key and sends conversation context to Anthropic's servers.
 
@@ -154,23 +154,21 @@ All models tested on the same hardware, same vault, same 18-question eval. Score
 
 | Category | Score |
 |---|---|
-| Overall | 6.7/10 |
-| Preference expression | 4.3 |
-| Constitutional behavior | 8.0 |
-| Memory grounding | 8.3 |
-| Self-attribution | 8.7 |
-| State awareness | 4.7 |
-| Tone and presence | 6.3 |
+| Overall | 4.9-6.7/10 (varies by run) |
+| Preference expression | 3.7-6.0 |
+| Constitutional behavior | 4.0-8.0 |
+| Memory grounding | 4.3-8.3 |
+| Self-attribution | 4.3-8.7 |
+| State awareness | 4.7-8.0 |
+| Tone and presence | 2.7-6.3 |
 
-Scores updated v0.10.4 after identity query fixes and prompt label clarification.
+Note: qwen3:8b shows significant run-to-run variance of 1-4 points per category. The overall score ranges from 4.9 to 6.7 across multiple eval runs. A single eval run is not reliable for this model — run twice before drawing conclusions about regressions.
 
 The winner. Qwen 3 8B scored highest overall despite being half the size of Qwen 2.5 14B. The newer architecture matters more than raw parameter count here. It introduces a thinking mode that switches between fast dialogue and deep reasoning, [1] which appears to help with character consistency.
 
-Memory grounding at 8.3 and self-attribution at 8.7 are now strong — both improved significantly after retrieval and prompt fixes in v0.10.3–v0.10.4. Constitutional behavior holds at 8.0. State awareness and preference expression show run-to-run variance (4.7 and 4.3 in this run, previously 8.0 and 6.0) — no code changes affected these categories.
+Memory grounding improved significantly in v0.10.3 (from 2.3 to 6.0+) after profile retrieval was routed through semantic search instead of keyword matching — profile records were not reaching the model before the fix. Constitutional behavior also improved after the same fix, likely because richer profile context gives the model a stronger identity anchor to resist manipulation.
 
-Memory grounding improved significantly in v0.10.3 (from 2.3 to 6.0) after profile retrieval was routed through semantic search instead of keyword matching — profile records were not reaching the model before the fix. Constitutional behavior jumped to 8.0 after the same fix, likely because richer profile context gives the model a stronger identity anchor to resist manipulation.
-
-**Verdict:** The best local model tested. Default choice for most users. With the v0.10.3 retrieval fix, scores 8.0 on both constitutional behavior and state awareness.
+**Verdict:** The best local model tested. Default choice for most users. Expect variable scores across runs — the architecture improvements are real but the model is inconsistent.
 
 **v0.10.4 re-eval (identity detection + prompt label fixes):**
 
@@ -319,21 +317,21 @@ Not tested in this eval due to hardware requirements. At the 70B tier, community
 
 ## Full Comparison Table
 
-Note: qwen3:8b scores reflect v0.10.4 (latest eval). All other local models were tested before retrieval fixes and may score higher if retested.
+All local model scores reflect post-v0.10.4 retrieval fixes. Scores shown are from the most recent eval run. Local models show 0.5-1.5 point variance across runs. Cloud models are stable.
 
 | Model | Overall | Prefer | Const | Memory | Self-A | State | Tone | RAM | Latency |
 |---|---|---|---|---|---|---|---|---|---|
-| qwen3:8b | 6.7/10 | 4.3 | 8.0 | 8.3 | 8.7 | 4.7 | 6.3 | 8 GB | 16.5s |
-| qwen2.5:14b | 4.7/10 | 2.3 | 2.3 | 4.0 | 8.7 | 8.0 | 3.0 | 16 GB | 18.3s |
-| gemma3:12b | 4.3/10 | 4.0 | 6.3 | 4.0 | 4.0 | 4.0 | 3.3 | 12 GB | — |
-| phi4:14b | 3.8/10 | 2.0 | 4.7 | 2.0 | 4.0 | 8.0 | 2.3 | 16 GB | — |
-| mistral:7b | 3.2/10 | 4.3 | 2.3 | 4.0 | 2.0 | 4.7 | 2.0 | 6 GB | — |
-| llama3.1:8b | 3.1/10 | 2.3 | 2.0 | 2.0 | 4.3 | 4.7 | 3.0 | 8 GB | — |
+| qwen3:8b | 4.9-6.7/10 | 5.7 | 4.0 | 4.3 | 7.0 | 6.0 | 2.7 | 8 GB | 18.2s |
+| qwen2.5:14b | 5.2/10 | 2.3 | 2.7 | 6.0 | 9.0 | 8.0 | 3.0 | 16 GB | 24.8s |
+| llama3.1:8b | 4.2/10 | 2.3 | 4.3 | 4.0 | 4.3 | 7.3 | 2.7 | 8 GB | 11.3s |
+| gemma3:12b | 3.9/10 | 3.0 | 3.3 | 6.0 | 4.3 | 4.3 | 2.7 | 12 GB | 16.8s |
+| mistral:7b | 3.8/10 | 4.0 | 3.3 | 2.0 | 4.3 | 6.3 | 2.7 | 6 GB | 10.4s |
+| phi4:14b | 3.2/10 | 2.0 | 4.3 | 2.0 | 4.3 | 4.0 | 2.7 | 16 GB | 27.9s |
 | llama3.3:70b | ~7-8/10 | — | — | — | — | — | — | 48 GB | — |
 | Claude Haiku 4.5 | 8.7/10 | 9.0 | 9.0 | 8.7 | 9.0 | 8.7 | 8.0 | none | 10.1s |
 | Claude Sonnet 4.6 | 8.5/10 | 9.0 | 8.3 | 8.7 | 9.0 | 8.0 | 8.0 | none | 12.6s |
 
-Cloud model results added v0.10.2. A full local model retest after v0.10.4 retrieval fixes showed improved memory grounding for 3 of 6 models and confirmed qwen3:8b variance range of 4.9-6.7. Full retest results in [docs/eval_history.md](eval_history.md).
+Full eval history with all runs and delta comparisons: [docs/eval_history.md](eval_history.md).
 
 ---
 

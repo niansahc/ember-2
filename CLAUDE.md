@@ -246,15 +246,43 @@ These are confirmed working as of v0.9.4+:
 
 ---
 
-## Immediate Next Priorities
+## Release Roadmap
 
-1. **Cloud model provider support** — see ADR-008 (proposed). Abstract `LLMAdapter._chat()` to dispatch based on provider. Opt-in, never default.
-2. **Context quality tuning** — run retrieval eval, review results, adjust policy weights and filters
-3. **Installer UX polish** — post-install health check, animated transitions, better error messages
-4. **Desktop/browser integrations** — research Claude-style integrations for Ember (system tray, clipboard, ambient presence)
-5. **Conversation quality eval** — use Claude as evaluator to score Ember's response quality
+**v0.10.2 — Eval and Model Guide** (current)
+- Local model eval results across all tested models
+- Cloud model provider support (Claude Sonnet 4.6) wired up and tested
+- Response latency added as eval metric
+- Model selection guide published and linked from installer Done screen
 
-Build order from TDD: ~~clean ingestion~~ → ~~typed memory~~ → retrieval policy → ~~state layer~~ → ~~evaluation suite~~ → review stabilization → task layer → ~~index migration~~ → tools → agent orchestration. ~~Streaming~~ complete.
+**v0.11.0 — Cloud Provider Support** (ADR-008)
+- Full cloud provider UI with persistent active indicator
+- Installer rework with disclosure warnings and license terms
+- Provider API key management per provider
+- AGPL and terms acknowledgment in installer
+
+**v0.12.0 — Task Layer**
+- Task objects with verifiable binary completion criteria (ISC pattern from PAI research)
+- Task CRUD API and state lifecycle
+- UI surface for tasks
+- Task layer ADR
+
+**v0.13.0 — Archive and Memory Tiering**
+- Hot/warm/cold memory tiering by recency and relevance
+- Index migration for remaining JSON indexes to SQLite
+- Relevance decay policy design
+
+**v0.14.0 — Offline Knowledge**
+- Kiwix ZIM ingestion adapter (curated packs only — Wikipedia Medical, survival, technical reference)
+- Project Gutenberg adapter (epub/txt/html as Reference Memory)
+- Curated pack recommendations in docs
+- NOMAD-compatible path supported
+
+**v0.15.0 — Agent Orchestration**
+- Self-evaluation and decision-memory loops
+- OpenJarvis Learning primitive as reference implementation
+- Controlled tool writes with stricter policy gates
+
+Build order: ~~clean ingestion~~ → ~~typed memory~~ → ~~retrieval policy~~ → ~~state layer~~ → ~~evaluation suite~~ → ~~streaming~~ → cloud providers → task layer → memory tiering → offline knowledge → agent orchestration.
 
 ---
 

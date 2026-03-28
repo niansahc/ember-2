@@ -1539,24 +1539,58 @@ It should be possible to explain:
 - build dashboard / observability views
 - add better review analytics and false-positive/false-negative tracking
 
-**Immediate next priorities (as of v0.10.0):**
-- Cloud model provider support (ADR-008 — pending disclosure UI, installer rework, license terms)
-- Conversation quality eval harness (Claude as evaluator)
-- Context quality tuning based on retrieval eval results
-- Task layer implementation
-- Desktop/browser integrations research
-- Embedding upgrade to nomic-embed-text (Section 34)
+**Release Roadmap (as of v0.10.1):**
+
+**v0.10.2 — Eval and Model Guide**
+- Local model eval results across all tested models
+- Cloud model provider support (Claude Sonnet 4.6) wired up and tested
+- Response latency added as eval metric
+- Model selection guide published and linked from installer Done screen
+
+**v0.11.0 — Cloud Provider Support (ADR-008)**
+- Full cloud provider UI with persistent active indicator
+- Installer rework with disclosure warnings and license terms
+- Provider API key management per provider
+- AGPL and terms acknowledgment in installer
+
+**v0.12.0 — Task Layer**
+- Task objects with verifiable binary completion criteria (ISC pattern from PAI research)
+- Task CRUD API and state lifecycle
+- UI surface for tasks
+- Task layer ADR
+
+**v0.13.0 — Archive and Memory Tiering**
+- Hot/warm/cold memory tiering by recency and relevance
+- Index migration for remaining JSON indexes to SQLite
+- Relevance decay policy design
+
+**v0.14.0 — Offline Knowledge**
+- Kiwix ZIM ingestion adapter (curated packs only — Wikipedia Medical, survival, technical reference)
+- Project Gutenberg adapter (epub/txt/html as Reference Memory)
+- Curated pack recommendations in docs
+- NOMAD-compatible path supported
+
+**v0.15.0 — Agent Orchestration**
+- Self-evaluation and decision-memory loops
+- OpenJarvis Learning primitive as reference implementation
+- Controlled tool writes with stricter policy gates
+
+**Watch Items (research, not build):**
+- OpenJarvis Learning primitive (github.com/open-jarvis/OpenJarvis) — reference implementation for self-evaluation loops; becomes active at v0.15.0
+- PAI TELOS pattern (github.com/danielmiessler/Personal_AI_Infrastructure) — explicit purpose encoding; evaluate against constitution + profile memory during onboarding work
 
 ## 25.4 Long-Term
 
-- add controlled tools
-- add agentic workflows
 - add multimodal and voice layers
 - support more proactive assistance
-- add decision-memory and self-evaluation loops for measured behavioral improvement
+- session reflection mode — end-of-session reflection prompt distinct from daily/weekly cadence
+- embedding upgrade to nomic-embed-text
+- desktop/browser integrations (system tray, clipboard, ambient presence)
 - ~~model selector~~ — complete (v0.7.4): GET/POST /model, settings UI dropdown
 - ~~onboarding conversation flow~~ — complete (v0.9.0): guided 7-question first-run that seeds profile records
-- session reflection mode — end-of-session reflection prompt distinct from daily/weekly cadence; captures what happened in a single work session before context is lost
+- ~~add controlled tools~~ → moved to v0.15.0 roadmap
+- ~~add agentic workflows~~ → moved to v0.15.0 roadmap
+- ~~add decision-memory and self-evaluation loops~~ → moved to v0.15.0 roadmap
 
 ---
 
@@ -1691,6 +1725,9 @@ The following should be tracked in `design-decisions.md` or ADRs:
 - whether review metadata should be persisted beyond log files
 - when trigger logic should move from heuristics to semantic or classifier support
 - Whether to normalize state record timestamps to strict ISO 8601 at read time, or standardize on hyphenated format across all state records for filename consistency. See `src/state/state_service.py` make_record() for context.
+- Whether constitution + profile memory is sufficient for purpose encoding or whether an explicit TELOS layer is needed (evaluate during v0.11.0 onboarding work). See PAI TELOS pattern.
+- Hot/warm/cold memory tiering policy design — what triggers archival, how decay is computed, whether it's time-based or relevance-based or both (evaluate during v0.13.0).
+- OpenJarvis Learning primitive integration approach — whether to adopt directly, adapt the pattern, or build from scratch (evaluate during v0.15.0).
 
 ---
 

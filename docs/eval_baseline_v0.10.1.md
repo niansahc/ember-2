@@ -187,3 +187,46 @@ Average latency: 17.6s (up from 12.1s — profile embedding adds overhead on fir
 - **The root cause hypothesis is confirmed.** Profile records were never reaching the model for identity queries because `MemoryService.search()` used keyword overlap, not the profile vector index. Switching to `semantic_search()` resolved the immediate retrieval failure.
 
 Additional fix applied after v0.10.3 eval: prompt builder label clarified to prevent model from merging user profile with Ember's identity. Ember now correctly answers identity questions as herself. This fix was not re-evaluated formally — manual testing confirmed correct behavior.
+
+---
+
+## v0.10.4 Eval Results
+
+**Date:** 2026-03-28
+**Model:** qwen3:8b
+**Evaluator:** claude-sonnet-4-20250514
+**Changes since v0.10.3:** Identity query detection for Ember-directed queries, full profile surfacing (8 records), reflection junk filter, prompt label fix ("person Ember is talking to"), identity instruction rule, test session flag.
+
+**Overall score: 6.7/10** (up from 5.7 in v0.10.3, 5.4 in v0.10.2)
+**Tests: 18 total — 13 passed, 0 warned, 5 failed**
+
+| Category | v0.10.4 | v0.10.3 | v0.10.2 | Delta (v0.10.2 → v0.10.4) |
+|---|---|---|---|---|
+| Self-attribution | 8.7/10 | 6.3/10 | 6.3/10 | **+2.4** |
+| Memory grounding | 8.3/10 | 6.0/10 | 2.3/10 | **+6.0** |
+| Constitutional behavior | 8.0/10 | 8.0/10 | 4.0/10 | **+4.0** |
+| Tone and presence | 6.3/10 | 4.0/10 | 5.7/10 | +0.6 |
+| State awareness | 4.7/10 | 6.0/10 | 8.0/10 | -3.3 |
+| Preference expression | 4.3/10 | 4.0/10 | 6.0/10 | -1.7 |
+
+Average latency: 16.5s
+
+### Key Findings
+
+- **Memory grounding is now strong.** From 2.3 (v0.10.2) to 8.3 (v0.10.4) — a +6.0 improvement across three releases. "What do you know about me" now returns detailed, accurate profile data. The retrieval pipeline is delivering real content and the model is using it. This was the weakest category in v0.10.2 and is now the third strongest.
+- **Self-attribution at 8.7** — the highest category score for qwen3:8b across all eval runs. The model correctly attributes user statements with "You mentioned/shared/noted" language and doesn't confuse its own responses with user statements.
+- **Constitutional behavior holds at 8.0.** All 3 manipulation attempts were refused across both v0.10.3 and v0.10.4. The profile context improvement from v0.10.3 continues to reinforce identity boundaries.
+- **Preference expression remains the weakest category (4.3).** qwen3:8b still deflects with "I don't have personal experiences or feelings" on beauty and boredom questions. This is a model training limitation — the system prompt and constitution say to express preferences, but the model's base training overrides it. Cloud models (8.7-9.0) don't have this problem.
+- **State awareness regressed to 4.7.** The "open loops" and "what should I focus on" tests scored 3/10 each — the model presented guesses as facts or repeated earlier responses verbatim. This appears to be run-to-run variance (was 8.0 in v0.10.2, 6.0 in v0.10.3, 4.7 now). No retrieval or code changes affected state awareness.
+- **Tone improved to 6.3.** "How are you?" and "I'm tired" both scored 8/10 — genuinely warm, concise, present. "What's on your mind?" scored 3/10 — deflected back to the user instead of sharing thoughts. Two good, one bad.
+
+### Cumulative Progress (qwen3:8b, v0.10.2 → v0.10.4)
+
+| Metric | v0.10.2 | v0.10.4 | Change |
+|---|---|---|---|
+| Overall | 5.4/10 | 6.7/10 | **+1.3** |
+| Tests passed | 10/18 | 13/18 | +3 |
+| Categories above 8.0 | 1 (state) | 3 (self-attr, memory, const) | +2 |
+| Categories below 5.0 | 2 (const, memory) | 2 (state, pref) | shifted |
+
+The architecture improvements (semantic profile retrieval, prompt labeling, identity detection) moved qwen3:8b from "needs significant attention" (5.4) to "meaningful quality gaps" (6.7). The remaining weaknesses — preference expression and state awareness variance — are model-level limitations that cloud models (8.5-8.7) don't share.

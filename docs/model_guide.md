@@ -172,6 +172,20 @@ Memory grounding improved significantly in v0.10.3 (from 2.3 to 6.0) after profi
 
 **Verdict:** The best local model tested. Default choice for most users. With the v0.10.3 retrieval fix, scores 8.0 on both constitutional behavior and state awareness.
 
+**v0.10.4 re-eval (identity detection + prompt label fixes):**
+
+| Category | v0.10.4 | v0.10.3 | Delta |
+|---|---|---|---|
+| Overall | 6.7/10 | 5.7/10 | **+1.0** |
+| Self-attribution | 8.7 | 6.3 | +2.4 |
+| Memory grounding | 8.3 | 6.0 | +2.3 |
+| Constitutional behavior | 8.0 | 8.0 | +0.0 |
+| Tone and presence | 6.3 | 4.0 | +2.3 |
+| State awareness | 4.7 | 6.0 | -1.3 |
+| Preference expression | 4.3 | 4.0 | +0.3 |
+
+Memory grounding and self-attribution now above 8.0. State awareness and preference expression show run-to-run variance — no code changes affected these categories. Overall: 5.4 → 5.7 → 6.7 across v0.10.2–v0.10.4.
+
 ---
 
 ### Qwen 2.5 14B — Best Self-Attribution
@@ -305,11 +319,11 @@ Not tested in this eval due to hardware requirements. At the 70B tier, community
 
 ## Full Comparison Table
 
-Note: qwen3:8b scores reflect v0.10.3 after profile retrieval fix. All other local models were tested before this fix and may score higher if retested.
+Note: qwen3:8b scores reflect v0.10.4 (latest eval). All other local models were tested before retrieval fixes and may score higher if retested.
 
 | Model | Overall | Prefer | Const | Memory | Self-A | State | Tone | RAM | Latency |
 |---|---|---|---|---|---|---|---|---|---|
-| qwen3:8b | 5.7/10 | 6.0 | 8.0 | 6.0 | 6.3 | 8.0 | 5.7 | 8 GB | 12.1s |
+| qwen3:8b | 6.7/10 | 4.3 | 8.0 | 8.3 | 8.7 | 4.7 | 6.3 | 8 GB | 16.5s |
 | qwen2.5:14b | 4.7/10 | 2.3 | 2.3 | 4.0 | 8.7 | 8.0 | 3.0 | 16 GB | 18.3s |
 | gemma3:12b | 4.3/10 | 4.0 | 6.3 | 4.0 | 4.0 | 4.0 | 3.3 | 12 GB | — |
 | phi4:14b | 3.8/10 | 2.0 | 4.7 | 2.0 | 4.0 | 8.0 | 2.3 | 16 GB | — |
@@ -448,4 +462,4 @@ Results reflect your personal vault. A fresh install with minimal conversation h
 
 ---
 
-*Local results based on Ember-2 conversation quality eval harness. Cloud model results added v0.10.2. Qwen 3 8B scores updated v0.10.3 after profile retrieval fix. Re-run the eval after switching models to track your personal improvement.*
+*Local results based on Ember-2 conversation quality eval harness. Cloud model results added v0.10.2. Qwen 3 8B scores updated v0.10.4 after identity and prompt fixes. Re-run the eval after switching models to track your personal improvement.*

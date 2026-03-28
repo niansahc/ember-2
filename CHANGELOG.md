@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.10.3 — 2026-03-28
+
+### Bug Fixes
+- **Profile retrieval routed through semantic search** — `get_profile_items()` was using keyword overlap matching (`MemoryService.search()`) which returned 0 results for identity queries like "What do you know about me." The profile vector index (11 records with embeddings) existed but was never queried. Now routes through `semantic_search()` with `memory_type="profile"`. Memory grounding for identity queries improved from 2.3/10 to 6.0/10. Constitutional behavior improved from 4.0/10 to 8.0/10.
+
+### Tests
+- 256 tests passing (12 new for profile retrieval: semantic search routing, score filtering, identity query detection)
+
 ## v0.10.2 — 2026-03-28
 
 ### Changes

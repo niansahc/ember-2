@@ -4,6 +4,7 @@ import warnings
 from src.context.models import ContextItem
 from src.memory.search_conversation import search_conversation_memories
 from src.memory.service import MemoryService
+from src.retrieval.semantic_search import semantic_search as _semantic_search
 from src.state.models import StateItem
 from src.state.state_resolver import StateResolver
 
@@ -137,21 +138,20 @@ class ContextRetriever:
         limit = 8 if is_identity else 3
         min_score = 0.0 if is_identity else 0.3
 
-        results = self.memory_service.search(
+        results = _semantic_search(
             user_message,
             memory_type="profile",
             limit=limit,
+            min_score=min_score,
         )
 
         items: list[ContextItem] = []
 
         for result in results:
-            content = result.get("text", "")
+            content = result.get("content", "")
             score = result.get("score", 0.0)
 
             if not content or len(content.strip()) < 40:
-                continue
-            if score < min_score:
                 continue
 
             items.append(

@@ -33,12 +33,12 @@ These decisions are locked. Do not undermine them:
 
 ```
 Interface Layer      — FastAPI (src/api/), Ember UI (ui/), CLI scripts
-Reasoning Layer      — Ollama + local LLM, prompt templates (src/llm/)
+Reasoning Layer      — Ollama + local LLM or Anthropic Claude, prompt templates (src/llm/)
 Cognitive Layer      — ContextService, ContextRetriever, ContextRanker,
                        ReflectionEngine, SafetyPolicyService, ResponseReviewService
                        (src/context/, src/reflection/, src/safety/)
 Memory Layer         — Append-only JSON vault, vector indexes (src/memory/, src/retrieval/)
-State Layer          — PLANNED (src/state/ stub exists)
+State Layer          — StateService, StateResolver, auto-extraction (src/state/)
 Tool Layer           — PLANNED (src/tasks/ stub exists)
 ```
 
@@ -193,16 +193,19 @@ Key API endpoints:
 
 ---
 
-## Current State (v0.10.1)
+## Current State (v0.10.2)
 
-All items from the original TDD §25 build order are complete through step 6. The system is feature-complete for single-user local deployment on Windows.
+All items from the original TDD §25 build order are complete through step 6. The system is feature-complete for single-user local deployment on Windows. Cloud reasoning is available via Anthropic Claude (backend only — UI in v0.11.0).
 
 **Core Systems:**
 - Append-only JSON vault with typed memory enforcement (`VALID_MEMORY_TYPES`, 17 types)
 - Ingestion pipeline (ChatGPT, PDF, DOCX, CSV, GDrive, POST /ingest/upload multipart)
 - Semantic retrieval via vector indexes (cached in memory, no disk load per query)
 - Context assembly with policy-weighted ranking, diversity selection, project-scoped boost (ADR-007)
-- SSE streaming responses from Ollama through FastAPI
+- SSE streaming responses from Ollama or Anthropic through FastAPI
+- Cloud model provider support — Anthropic Claude (Haiku 4.5, Sonnet 4.6) via LLMAdapter
+- Provider API key storage via keyring with env var fallback (`ANTHROPIC_API_KEY`)
+- Provider dispatch by model name prefix (`claude-` → Anthropic, else → Ollama)
 - Auto state extraction from conversation turns (StateExtractor, background thread)
 - State layer (StateService, StateResolver, 8 categories, context packet integration)
 - Daily and weekly reflection generation (multi-source, junk-filtered, suppression tools)
@@ -213,12 +216,16 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Temporal grounding (current date injected, timestamps on context items)
 - Profile retrieval tuning (identity queries lower score gate, return more items)
 - Buffer compression backgrounded (no longer blocks response)
+- Default model: qwen3:8b (5.4/10 eval, best local model tested)
 - Ember uses she/her pronouns (system prompt)
 
 **Evaluation & Tooling:**
 - Retrieval evaluation (15 benchmark cases, pass/warn/fail scoring, latency tracking)
 - Conversation quality eval with Claude as external evaluator (18 test cases, 6 categories)
-- Local model comparison eval (automated, all installed models, comparison table)
+- Local model comparison eval (automated, all installed models, comparison table) — `tools/eval_local_models.py`
+- Cloud model eval: Claude Haiku 4.5 scored 8.7/10, Claude Sonnet 4.6 scored 8.5/10
+- Eval baseline documented: `docs/eval_baseline_v0.10.1.md` (all 8 models, full category breakdowns)
+- Model selection guide: `docs/model_guide.md` (linked from installer Done screen)
 - Vault health audit (7 checks, GREEN/YELLOW/RED health score, --fix flag)
 - Reflection quality audit and suppression tools
 
@@ -244,72 +251,65 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Venv/API lock detection, auto-start API with health check polling
 - Tailscale walkthrough, progress bar + fun facts, pip time warning
 - Clones ember-2 repo, builds UI from ember-2-ui
+- Model selection guide linked from Done screen
 
-**Tests:** 228 passing
+**Tests:** 244 passing
 
 ---
 
 ## Immediate Next Priorities
 
-Before v0.10.2 closes:
-- Verify "who am I" profile retrieval fix held — run debug-context check and document result
-
-## Release Roadmap
-
-**v0.10.2 — Model Eval + Cloud Integration** (current)
-- Local model eval results with real scores and latency
-- Claude Sonnet 4.6 wired up and tested
-- Model selection guide published, linked from installer Done screen
-- Response latency as eval metric (complete)
-
-**v0.11.0 — Cloud Provider Support + Recovery + Onboarding**
-- Provider-aware LLMAdapter (Anthropic, OpenAI)
-- API key management per provider via keyring
-- Persistent cloud mode indicator in UI
-- Hardware detection in installer, auto-recommends local model
+**v0.11.0 — Cloud Provider UI + Recovery + Onboarding:**
+- Cloud provider UI (persistent active indicator, settings panel, API key management)
+- Hardware detection in installer, auto-recommends local model based on detected RAM
 - AGPL acknowledgment screen in installer
 - Backup and export story — vault backup guide, export to portable format
-- Recovery playbook — "what to do if Ember breaks" user-facing doc
-- Social engineering constitutional upgrade — semantic pattern matching (ADR-010)
+- Onboarding discoverability — verify first-launch triggers automatically
+- Recovery playbook — "what to do if Ember breaks" user-facing doc linked from UI and installer
+- Social engineering constitutional upgrade — semantic pattern matching in trigger layer (ADR-010)
 - Tray icon / OS notifications research
+- OpenAI provider support (GPT-4o, GPT-4o mini)
 
-**v0.12.0 — Task Layer + Session Reflection + Mac/Linux**
+**v0.12.0 — Task Layer + Session Reflection + Mac/Linux:**
 - Task objects with ISC verifiable completion criteria
-- Task CRUD API and state lifecycle, task layer ADR
-- Session reflection mode (ADR-009)
+- Task CRUD API and state lifecycle
+- Task layer ADR
+- Session reflection mode (end-of-session capture, ADR-009)
 - Mac and Linux installer support
-- Reflection corpus guidance in onboarding
+- Reflection corpus guidance in onboarding (set expectations on timeline)
 
-**v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption**
+**v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption:**
 - Hot/warm/cold memory tiering by recency and relevance
 - nomic-embed-text embedding upgrade via Ollama
 - Index migration for remaining JSON indexes to SQLite
 - Monthly/thematic reflection
 - Vault encryption at rest (Ember-managed, with key recovery story)
 
-**v0.14.0 — Offline Knowledge**
+**v0.14.0 — Offline Knowledge:**
 - Kiwix ZIM ingestion adapter (curated packs only)
 - Project Gutenberg adapter (epub/txt/html as Reference Memory)
-- Curated pack recommendations in docs, NOMAD-compatible path
+- Curated pack recommendations in docs
+- NOMAD-compatible path supported
 
-**v0.15.0 — Agent Orchestration**
+**v0.15.0 — Agent Orchestration:**
 - Self-evaluation and decision-memory loops
 - OpenJarvis Learning primitive as reference implementation
 - Controlled tool writes with stricter policy gates
 
 **Post-v0.15.0:**
-- Multi-user vault isolation (per-user vault paths, independent API keys, separate auth)
+- Multi-user vault isolation
 - Windows/Mac/Linux full parity across all features
 
 ## Watch Items
 - OpenJarvis Learning primitive — reference for self-evaluation loops (active at v0.15.0)
-- PAI TELOS pattern — evaluate against constitution + profile memory during v0.11.0
+- PAI TELOS pattern — evaluate against constitution + profile memory during v0.11.0 onboarding work
 - Multi-user vault isolation — post-v0.15.0 milestone
 - Eval harness uses user's own vault — results are personal, not generic benchmarks
 
-## Known Gaps (tracked, not yet scheduled)
+## Known Gaps (tracked)
+- Memory grounding weakness — root cause analysis in progress (all local models score 2.0-4.0; Claude scores 8.7)
 - Vault encryption at rest — v0.13.0
-- Social engineering trigger upgrade — v0.11.0
+- Social engineering trigger upgrade — v0.11.0 (ADR-010)
 - Mac/Linux installer — v0.12.0
 - Backup/export story — v0.11.0
 - Recovery playbook — v0.11.0
@@ -331,7 +331,7 @@ Before v0.10.2 closes:
 pytest tests/
 ```
 
-196 tests covering: constitution loader, policy service, review service, vault read/write, state layer, state extractor, project boost, index caching, memory type enforcement, health check, ingest upload.
+244 tests covering: constitution loader, policy service, review service, vault read/write, state layer, state extractor, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management.
 Tests do not mock the filesystem vault (real path via `PRIVATE_VAULT_PATH`). Integration tests hit real storage.
 
 When adding features: unit test normalizers, filters, ranking functions, and state resolution. Integration test full pipeline paths.

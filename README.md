@@ -55,9 +55,9 @@ Handles:
 ---
 
 ### Reasoning Layer
-- Local LLM runtime (Ollama)
+- Local LLM runtime (Ollama) or cloud (Anthropic Claude)
 - prompt templates
-- adapter layer
+- adapter layer with provider dispatch
 
 Handles:
 - interpretation
@@ -345,7 +345,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 
 # Current State
 
-## Working (v0.10.0)
+## Working (v0.10.2)
 - memory storage (append-only JSON vault with typed enforcement via VALID_MEMORY_TYPES)
 - ingestion pipeline (ChatGPT, PDF, DOCX, CSV, GDrive, POST /ingest/upload multipart)
 - semantic retrieval
@@ -361,7 +361,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - add_state.py CLI script
 - audit_memory.py vault health check script
 - SQLite vector store for ingested content (SqliteVectorStore, 16,728 records)
-- model configurable via EMBER_MODEL in .env (default: llama3.1:8b)
+- model configurable via EMBER_MODEL in .env (default: qwen3:8b)
 - ingested corpus searchable via semantic retrieval (migrated from 1.32 GB JSON to SQLite)
 - conversation memory write path (openai_adapter writes two records per turn; was silently broken)
 - memory_type propagation end-to-end (ContextItem field + all retriever paths)
@@ -399,14 +399,19 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - profile retrieval tuning for identity queries
 - authentic_expression constitutional principle
 - Ember uses she/her pronouns
-- 228 tests passing
+- Cloud model provider support — Anthropic Claude (Haiku 4.5 at 8.7/10, Sonnet 4.6 at 8.5/10) via LLMAdapter
+- Provider API key storage via keyring with env var fallback
+- Model selection guide with real eval data (docs/model_guide.md)
+- Eval baseline documented with all 8 models (docs/eval_baseline_v0.10.1.md)
+- Local model comparison eval harness (tools/eval_local_models.py)
+- Default model: qwen3:8b (5.4/10, best local model tested)
+- 244 tests passing
 
 > Note: Eval harness results reflect personal vault contents and are not generic benchmarks.
 
 ## Roadmap
 
-**v0.10.2** — Model eval results, cloud integration (Claude Sonnet 4.6), model selection guide
-**v0.11.0** — Cloud provider support (ADR-008), backup/export, recovery playbook, semantic safety triggers (ADR-010)
+**v0.11.0** — Cloud provider UI, OpenAI support, backup/export, recovery playbook, semantic safety triggers (ADR-010)
 **v0.12.0** — Task layer, session reflection (ADR-009), Mac/Linux installer
 **v0.13.0** — Memory tiering, embedding upgrade, vault encryption at rest
 **v0.14.0** — Offline knowledge (Kiwix ZIM, Project Gutenberg)
@@ -517,7 +522,7 @@ src/
 │   ├ audit_assistant_chunks.py   Audit assistant-generated chunks
 │   └ suppress_assistant_noise.py Flag low-quality ingested records
 │
-├ tests/                  Pytest suite (123 tests)
+├ tests/                  Pytest suite (244 tests)
 ├ prompts/                LLM prompt templates
 ├ logs/                   Audit logs, safety review logs (gitignored)
 ├ ui/                     Built Ember UI frontend (gitignored, built from ember-2-ui)

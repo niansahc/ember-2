@@ -1521,6 +1521,11 @@ It should be possible to explain:
 - ~~vector index caching~~ — complete (v0.10.0): module-level dict cache in vector_index.py; auto-invalidation on save_index(); eliminated 2-4s disk reads per query
 - improve trigger coverage without coupling to one test case
 - add ADR for constitutional review at inference time
+- ~~cloud model provider support~~ — complete (v0.10.2): LLMAdapter dispatches by model prefix (claude-* → Anthropic API, else → Ollama); _get_provider_api_key() reads keyring then falls back to env var (ANTHROPIC_API_KEY); POST/GET /provider-key endpoints; GET /model returns cloud models alongside Ollama; claude-sonnet-4-20250514 and claude-haiku-4-5-20251001 available
+- ~~cloud model evaluation~~ — complete (v0.10.2): Haiku 4.5 scored 8.7/10, Sonnet 4.6 scored 8.5/10 (18/18 passed, same harness, same vault); memory grounding jumped from 2.3 (local) to 8.7; constitutional behavior from 2.3 to 9.0
+- ~~default model switch~~ — complete (v0.10.2): qwen3:8b replaces qwen2.5:14b (5.4/10 vs 4.7/10, half the size, faster)
+- ~~model selection guide~~ — complete (v0.10.2): docs/model_guide.md with real eval data for 8 models, linked from installer Done screen
+- ~~local model comparison eval~~ — complete (v0.10.2): tools/eval_local_models.py, 6 models tested, qwen3:8b won
 
 ## 25.3 Mid-Term
 
@@ -1539,32 +1544,35 @@ It should be possible to explain:
 - build dashboard / observability views
 - add better review analytics and false-positive/false-negative tracking
 
-**Release Roadmap (as of v0.10.1):**
+**Release Roadmap (as of v0.10.2):**
 
-**v0.10.2 — Model Eval + Cloud Integration**
-- Local model eval results with real scores and latency
-- Claude Sonnet 4.6 wired up and tested
-- Model selection guide published
-- Response latency as eval metric (complete)
+**v0.10.2 — Model Eval + Cloud Integration** (complete)
+- ~~Local model eval results with real scores and latency~~ ✓
+- ~~Claude Sonnet 4.6 wired up and tested~~ ✓ (8.5/10)
+- ~~Claude Haiku 4.5 evaluated~~ ✓ (8.7/10)
+- ~~Model selection guide published~~ ✓ (docs/model_guide.md)
+- ~~Response latency as eval metric~~ ✓
+- ~~Default model switched to qwen3:8b~~ ✓
+- ~~Provider API key management via keyring + env var fallback~~ ✓
 
-**v0.11.0 — Cloud Provider Support + Recovery + Onboarding**
-- Provider-aware LLMAdapter (Anthropic, OpenAI)
-- API key management per provider via keyring
-- Persistent cloud mode indicator in UI
-- Hardware detection in installer, auto-recommends local model
+**v0.11.0 — Cloud Provider UI + Recovery + Onboarding**
+- Cloud provider UI (persistent active indicator, settings panel, API key management)
+- Hardware detection in installer, auto-recommends local model based on detected RAM
 - AGPL acknowledgment screen in installer
 - Backup and export story — vault backup guide, export to portable format
-- Recovery playbook — "what to do if Ember breaks" user-facing doc
+- Onboarding discoverability — verify first-launch triggers automatically
+- Recovery playbook — "what to do if Ember breaks" user-facing doc linked from UI and installer
 - Social engineering constitutional upgrade — semantic pattern matching in trigger layer (ADR-010)
 - Tray icon / OS notifications research
+- OpenAI provider support (GPT-4o, GPT-4o mini)
 
 **v0.12.0 — Task Layer + Session Reflection + Mac/Linux**
 - Task objects with ISC verifiable completion criteria
 - Task CRUD API and state lifecycle
 - Task layer ADR
-- Session reflection mode (ADR-009)
+- Session reflection mode (end-of-session capture, ADR-009)
 - Mac and Linux installer support
-- Reflection corpus guidance in onboarding
+- Reflection corpus guidance in onboarding (set expectations on timeline)
 
 **v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption**
 - Hot/warm/cold memory tiering by recency and relevance
@@ -1744,6 +1752,7 @@ The following should be tracked in `design-decisions.md` or ADRs:
 - Vault encryption key management approach — Ember-managed vs OS-dependent, key recovery story (v0.13.0)
 - Social engineering semantic trigger design — performance impact, false positive rate, pre-screening scope (v0.11.0)
 - Whether eval harness results should be normalized across different vault contents for cross-user comparison
+- Root cause of memory grounding weakness in local models — retrieval failure vs context injection vs model behavior (analysis in progress; local models score 2.0-4.0, Claude scores 8.7 on same retrieval pipeline, suggesting model capability not retrieval quality is the bottleneck)
 
 ---
 
@@ -2010,7 +2019,7 @@ Onboarding responses that touch sensitive topics (health, values, religion) shou
 
 **Status: Planned — current model functional but not optimal for personal knowledge retrieval**
 
-Scheduled for v0.13.0 alongside memory tiering and index migration.
+Scheduled for v0.13.0 alongside memory tiering and index migration. Note: cloud model eval (v0.10.2) showed memory grounding at 8.7/10 with the same embedding model, confirming that the current embeddings are adequate — the local model weakness is in context utilization, not retrieval quality.
 
 ## 34.1 Current State
 

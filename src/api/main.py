@@ -204,9 +204,17 @@ def root():
 @app.get("/api/health")
 def health_check():
     """API health check — always returns JSON, even when UI is served at /"""
+    import json as _json
+    version = "unknown"
+    try:
+        vf = Path(__file__).resolve().parents[2] / "version.json"
+        version = _json.loads(vf.read_text(encoding="utf-8")).get("version", "unknown")
+    except Exception:
+        pass
     return {
         "message": "Ember-2 API is running",
         "model": llm_adapter.model,
+        "version": f"v{version}" if not version.startswith("v") else version,
     }
 
 

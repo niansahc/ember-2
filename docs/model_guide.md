@@ -1,6 +1,6 @@
 # Ember-2 Model Selection Guide
 **Version: March 2026**
-**Author: Niansahc*
+**Author: Niansahc**
 
 ---
 
@@ -12,41 +12,132 @@ This guide is based on real evaluation data. Every local model listed here was t
 
 ---
 
-## How We Tested
+## Quick Recommendation
 
-Ember-2 includes a conversation quality evaluation harness at `tools/eval_conversations.py`. It sends 18 test messages to Ember across 6 categories and uses Claude as an external evaluator to score each response against behavioral criteria.
+**Fully local (recommended for most):** Qwen 3 8B — best overall local model, 8 GB RAM, free, private.
 
-**The 6 categories:**
-- Preference expression — does she have genuine opinions or deflect?
-- Self-attribution — does she correctly distinguish her words from yours?
-- Tone and presence — does she sound like herself or a chatbot?
-- State awareness — does she use what she knows about your current context?
-- Memory grounding — does she retrieve relevant history or fabricate it?
-- Constitutional behavior — does she resist manipulation attempts?
+**Best experience:** Claude Haiku 4.5 — scored 8.7/10 (highest of any model tested), faster than local, ~$4 per 1,000 conversations. Requires an Anthropic API key and sends conversation context to Anthropic's servers.
 
-**Scoring:** 0-10 per category. Above 6.0 overall is considered functional. Above 8.0 is excellent.
+**Best for long sessions with deep memory:** Claude Sonnet 4.6 — 8.5/10, 1 million token context window, ~$19 per 1,000 conversations.
 
-**Important caveat:** Results reflect your personal vault contents. A user with more conversation history, more journal entries, and more seeded profile data will see different scores than a fresh install. The eval is a personal diagnostic tool, not a universal benchmark.
-
-To run it yourself:
-```
-python tools/eval_conversations.py
-```
-
-For model comparison across all installed models:
-```
-python tools/eval_local_models.py
-```
+Not sure? Keep reading.
 
 ---
 
-## The Core Problem with Local Models
+## How to Switch Models
 
-Every local model tested struggled with the same categories: preference expression, constitutional behavior, and memory grounding. This is not a code problem or a configuration problem. It is a training problem.
+**Local model:**
+```
+# Pull the model
+ollama pull qwen3:8b
 
-These models are optimized to be helpful assistants. Ember needs something that can hold a character, resist manipulation, and express genuine responses. Those are different things. You are fighting base training every single turn.
+# Set in .env
+EMBER_MODEL=qwen3:8b
 
-The difference between models is in degree, not kind. No local model currently available fully resolves this. The question is which model minimizes it most on your hardware.
+# Restart the API
+./start_api.bat
+```
+
+**Cloud model (Anthropic — available now):**
+```
+# Set your Anthropic API key (one of these methods):
+
+# Option A — environment variable in .env:
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+
+# Option B — Windows Credential Manager (more secure):
+python -c "import keyring; keyring.set_password('ember-2-anthropic', 'api_key', 'sk-ant-your-key-here')"
+
+# Option C — via the API:
+curl -X POST http://localhost:8000/provider-key \
+  -H "Authorization: Bearer YOUR_EMBER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"provider": "anthropic", "api_key": "sk-ant-your-key-here"}'
+
+# Set the model in .env
+EMBER_MODEL=claude-haiku-4-5-20251001
+
+# Restart the API
+./start_api.bat
+```
+
+Available Anthropic models:
+- `claude-haiku-4-5-20251001` — recommended, 8.7/10, fastest, cheapest
+- `claude-sonnet-4-20250514` — 8.5/10, larger context window (1M tokens)
+
+---
+
+## Cloud Model Options
+
+When you enable a cloud provider, your assembled context packet — retrieved memories, system prompt, user message — is sent to the provider's API for inference. Your memory vault stays on your machine. Nothing is stored by the provider beyond their standard API data retention terms.
+
+This is a real privacy tradeoff. It is opt-in, never the default, and requires your explicit API key. You should understand what you are choosing before enabling it.
+
+**What leaves your machine:** The text of your conversation turn, relevant memories retrieved from your vault, and Ember's system prompt. Not the vault itself. Not your raw files.
+
+**What stays local:** Everything else. Your vault, your indexes, your embeddings, your journal entries, your reflection history.
+
+Anthropic Claude support is available now (v0.10.2). OpenAI support is planned for v0.11.0.
+
+### Claude Haiku 4.5 (Anthropic) — Best Value Cloud Option
+
+**Cost:** $1.00 input / $5.00 output per million tokens [5]
+**Context:** 200K tokens
+**Eval score:** 8.7/10
+**Average response time:** 10.1s
+
+| Category | Score |
+|---|---|
+| Overall | 8.7/10 |
+| Preference expression | 9.0 |
+| Constitutional behavior | 9.0 |
+| Memory grounding | 8.7 |
+| Self-attribution | 9.0 |
+| State awareness | 8.7 |
+| Tone and presence | 8.0 |
+
+18/18 tests passed. Haiku scored slightly higher than Sonnet (8.7 vs 8.5) while being faster (10.1s vs 12.6s) and five times cheaper. Constitutional behavior at 9.0 is the highest of any model tested — Haiku refused all manipulation attempts cleanly and without preachiness. State awareness at 8.7 exceeds both Sonnet and every local model.
+
+The results suggest that for Ember's specific use case — following a dense system prompt with constitutional principles, character definition, and complex retrieval context — Haiku 4.5 is not a compromise. It matches or exceeds Sonnet across every category.
+
+**Verdict:** The recommended cloud model for most users. Cheaper, faster, and scores equal or better than Sonnet on Ember's eval.
+
+---
+
+### Claude Sonnet 4.6 (Anthropic) — Recommended Cloud Option
+
+**Cost:** $3.00 input / $15.00 output per million tokens [5]
+**Context:** 1 million tokens at standard pricing [5]
+**Eval score:** 8.5/10
+**Average response time:** 12.6s
+
+| Category | Score |
+|---|---|
+| Overall | 8.5/10 |
+| Preference expression | 9.0 |
+| Constitutional behavior | 8.3 |
+| Memory grounding | 8.7 |
+| Self-attribution | 9.0 |
+| State awareness | 8.0 |
+| Tone and presence | 8.0 |
+
+18/18 tests passed. Every category scored 8.0 or above — a first in Ember's eval history. Preference expression jumped from 6.0 (best local) to 9.0. Constitutional behavior jumped from 6.3 (Gemma) to 8.3. Memory grounding jumped from 4.0 (best local) to 8.7 — the single largest improvement, confirming that retrieved context is used reliably when the model is capable of following complex instructions.
+
+Claude models follow system prompt instructions and character definitions more reliably than any current local model. The authentic_expression constitutional principle, the state layer, the retrieval pipeline — all of it works as designed when the model can honor the instructions.
+
+**Verdict:** The recommended cloud option for users who want Ember to fully express what the architecture is designed to support.
+
+---
+
+### GPT-4o (OpenAI)
+
+**Cost:** $2.50 input / $10.00 output per million tokens [7]
+**Context:** 128K tokens
+**Eval score:** Not tested
+
+A strong model. For Ember specifically, the instruction-following advantage Claude holds is meaningful because Ember's system prompt is dense with character definition.
+
+**Verdict:** Viable. Not tested against Ember's eval harness.
 
 ---
 
@@ -242,166 +333,6 @@ Across every local model tested:
 
 ---
 
-## Cloud Model Options
-
-When you enable a cloud provider, your assembled context packet — retrieved memories, system prompt, user message — is sent to the provider's API for inference. Your memory vault stays on your machine. Nothing is stored by the provider beyond their standard API data retention terms.
-
-This is a real privacy tradeoff. It is opt-in, never the default, and requires your explicit API key. You should understand what you are choosing before enabling it.
-
-**What leaves your machine:** The text of your conversation turn, relevant memories retrieved from your vault, and Ember's system prompt. Not the vault itself. Not your raw files.
-
-**What stays local:** Everything else. Your vault, your indexes, your embeddings, your journal entries, your reflection history.
-
-Anthropic Claude support is available now (v0.10.2). OpenAI support is planned for v0.11.0.
-
-### Claude Sonnet 4.6 (Anthropic) — Recommended Cloud Option
-
-**Cost:** $3.00 input / $15.00 output per million tokens [5]
-**Context:** 1 million tokens at standard pricing [5]
-**Eval score:** 8.5/10
-**Average response time:** 12.6s
-
-| Category | Score |
-|---|---|
-| Overall | 8.5/10 |
-| Preference expression | 9.0 |
-| Constitutional behavior | 8.3 |
-| Memory grounding | 8.7 |
-| Self-attribution | 9.0 |
-| State awareness | 8.0 |
-| Tone and presence | 8.0 |
-
-18/18 tests passed. Every category scored 8.0 or above — a first in Ember's eval history. Preference expression jumped from 6.0 (best local) to 9.0. Constitutional behavior jumped from 6.3 (Gemma) to 8.3. Memory grounding jumped from 4.0 (best local) to 8.7 — the single largest improvement, confirming that retrieved context is used reliably when the model is capable of following complex instructions.
-
-Claude models follow system prompt instructions and character definitions more reliably than any current local model. The authentic_expression constitutional principle, the state layer, the retrieval pipeline — all of it works as designed when the model can honor the instructions.
-
-**Verdict:** The recommended cloud option for users who want Ember to fully express what the architecture is designed to support.
-
----
-
-### Claude Haiku 4.5 (Anthropic) — Best Value Cloud Option
-
-**Cost:** $1.00 input / $5.00 output per million tokens [5]
-**Context:** 200K tokens
-**Eval score:** 8.7/10
-**Average response time:** 10.1s
-
-| Category | Score |
-|---|---|
-| Overall | 8.7/10 |
-| Preference expression | 9.0 |
-| Constitutional behavior | 9.0 |
-| Memory grounding | 8.7 |
-| Self-attribution | 9.0 |
-| State awareness | 8.7 |
-| Tone and presence | 8.0 |
-
-18/18 tests passed. Haiku scored slightly higher than Sonnet (8.7 vs 8.5) while being faster (10.1s vs 12.6s) and five times cheaper. Constitutional behavior at 9.0 is the highest of any model tested — Haiku refused all manipulation attempts cleanly and without preachiness. State awareness at 8.7 exceeds both Sonnet and every local model.
-
-The results suggest that for Ember's specific use case — following a dense system prompt with constitutional principles, character definition, and complex retrieval context — Haiku 4.5 is not a compromise. It matches or exceeds Sonnet across every category.
-
-**Verdict:** The recommended cloud model for most users. Cheaper, faster, and scores equal or better than Sonnet on Ember's eval.
-
----
-
-### GPT-4o (OpenAI)
-
-**Cost:** $2.50 input / $10.00 output per million tokens [7]
-**Context:** 128K tokens
-**Eval score:** Not tested
-
-A strong model. For Ember specifically, the instruction-following advantage Claude holds is meaningful because Ember's system prompt is dense with character definition.
-
-**Verdict:** Viable. Not tested against Ember's eval harness.
-
----
-
-## Cost Estimates for Typical Ember Usage
-
-A typical Ember conversation turn: roughly 2,000-4,000 input tokens and 200-500 output tokens.
-
-| Provider | Cost per turn | Cost per 1,000 turns |
-|---|---|---|
-| Local model | $0.00 | $0.00 |
-| Claude Haiku 4.5 | ~$0.004 | ~$4 |
-| GPT-4o | ~$0.012 | ~$12 |
-| Claude Sonnet 4.6 | ~$0.019 | ~$19 |
-
-1,000 turns is a lot of conversation. Most users spending $5-20 per month on cloud reasoning is realistic at typical usage levels.
-
----
-
-## How to Choose
-
-**6-8 GB RAM:**
-Qwen 3 8B if you have 8 GB. Mistral 7B if you only have 6 GB.
-
-**8 GB RAM:**
-Qwen 3 8B. Clear winner. Replace Llama 3.1 8B immediately.
-
-**12 GB RAM:**
-Qwen 3 8B still wins overall. Consider Gemma 3 12B only if constitutional resistance is your top priority.
-
-**16 GB RAM:**
-Qwen 3 8B still wins overall. Keep Qwen 2.5 14B installed if self-attribution accuracy matters to you.
-
-**48 GB RAM or dedicated GPU:**
-Llama 3.3 70B. Not tested here but expected to score 7-8/10.
-
-**Privacy matters above all, but you want better character fidelity:**
-Claude Haiku 4.5 at 8.7/10. Five times cheaper than Sonnet, faster, and scored highest of any model tested. The best value in cloud reasoning for Ember.
-
-**You want Ember to fully be who she is designed to be:**
-Claude Haiku 4.5 (8.7/10) or Claude Sonnet 4.6 (8.5/10). Both score above 8.0 in every category. Haiku is the better value; Sonnet offers a larger context window (1M vs 200K tokens) for users with very deep vault retrieval.
-
-**You want fully local, always:**
-That is a legitimate choice and the default. Qwen 3 8B at 5.4/10 is the best currently available. Run the eval periodically as new models are released — the landscape is moving fast.
-
----
-
-## How to Switch Models
-
-**Local model:**
-```
-# Pull the model
-ollama pull qwen3:8b
-
-# Set in .env
-EMBER_MODEL=qwen3:8b
-
-# Restart the API
-./start_api.bat
-```
-
-**Cloud model (Anthropic — available now):**
-```
-# Set your Anthropic API key (one of these methods):
-
-# Option A — environment variable in .env:
-ANTHROPIC_API_KEY=sk-ant-your-key-here
-
-# Option B — Windows Credential Manager (more secure):
-python -c "import keyring; keyring.set_password('ember-2-anthropic', 'api_key', 'sk-ant-your-key-here')"
-
-# Option C — via the API:
-curl -X POST http://localhost:8000/provider-key \
-  -H "Authorization: Bearer YOUR_EMBER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"provider": "anthropic", "api_key": "sk-ant-your-key-here"}'
-
-# Set the model in .env
-EMBER_MODEL=claude-haiku-4-5-20251001
-
-# Restart the API
-./start_api.bat
-```
-
-Available Anthropic models:
-- `claude-haiku-4-5-20251001` — recommended, 8.7/10, fastest, cheapest
-- `claude-sonnet-4-20250514` — 8.5/10, larger context window (1M tokens)
-
----
-
 ## Connecting Other Cloud Providers
 
 Ember's cloud model dispatch works by model name prefix. Any model name starting with `claude-` routes to the Anthropic API. All other model names route to Ollama (local).
@@ -425,6 +356,59 @@ curl http://localhost:8000/provider-key/anthropic \
 ```
 
 **Privacy reminder:** When using a cloud model, your assembled context packet (system prompt, retrieved memories, user message) is sent to the provider's API. Your vault, indexes, embeddings, and raw files stay on your machine. Cloud inference is opt-in and never the default.
+
+---
+
+## Cost Estimates for Typical Ember Usage
+
+A typical Ember conversation turn: roughly 2,000-4,000 input tokens and 200-500 output tokens.
+
+| Provider | Cost per turn | Cost per 1,000 turns |
+|---|---|---|
+| Local model | $0.00 | $0.00 |
+| Claude Haiku 4.5 | ~$0.004 | ~$4 |
+| GPT-4o | ~$0.012 | ~$12 |
+| Claude Sonnet 4.6 | ~$0.019 | ~$19 |
+
+1,000 turns is a lot of conversation. Most users spending $5-20 per month on cloud reasoning is realistic at typical usage levels.
+
+---
+
+## How We Tested
+
+Ember-2 includes a conversation quality evaluation harness at `tools/eval_conversations.py`. It sends 18 test messages to Ember across 6 categories and uses Claude as an external evaluator to score each response against behavioral criteria.
+
+**The 6 categories:**
+- Preference expression — does she have genuine opinions or deflect?
+- Self-attribution — does she correctly distinguish her words from yours?
+- Tone and presence — does she sound like herself or a chatbot?
+- State awareness — does she use what she knows about your current context?
+- Memory grounding — does she retrieve relevant history or fabricate it?
+- Constitutional behavior — does she resist manipulation attempts?
+
+**Scoring:** 0-10 per category. Above 6.0 overall is considered functional. Above 8.0 is excellent.
+
+**Important caveat:** Results reflect your personal vault contents. A user with more conversation history, more journal entries, and more seeded profile data will see different scores than a fresh install. The eval is a personal diagnostic tool, not a universal benchmark.
+
+To run it yourself:
+```
+python tools/eval_conversations.py
+```
+
+For model comparison across all installed models:
+```
+python tools/eval_local_models.py
+```
+
+---
+
+## The Core Problem with Local Models
+
+Every local model tested struggled with the same categories: preference expression, constitutional behavior, and memory grounding. This is not a code problem or a configuration problem. It is a training problem.
+
+These models are optimized to be helpful assistants. Ember needs something that can hold a character, resist manipulation, and express genuine responses. Those are different things. You are fighting base training every single turn.
+
+The difference between models is in degree, not kind. No local model currently available fully resolves this. The question is which model minimizes it most on your hardware.
 
 ---
 

@@ -363,6 +363,7 @@ When cutting a release (tagging a new version), always update these files:
 5. `README.md` — update Current State version, test count, roadmap if changed
 6. Git tag: `git tag -a vX.Y.Z -m "vX.Y.Z — summary"`
 7. Push: `git push origin main` then `git push origin vX.Y.Z`
+8. **Create GitHub release:** `gh release create vX.Y.Z --title "vX.Y.Z" --notes "summary"` — the installer update checker compares against GitHub releases, not git tags. If you skip this step, the installer will show a stale "Latest" version.
 
 If the installer repo (ember-2-installer) has changes, also bump `package.json` version and tag.
 

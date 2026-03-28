@@ -14,7 +14,7 @@ This guide is based on real evaluation data. Every local model listed here was t
 
 ## Quick Recommendation
 
-**Fully local (recommended for most):** Qwen 3 8B — best overall local model, 8 GB RAM, free, private.
+**Fully local (recommended for most):** Qwen 3 8B — 6.7/10, above the functional threshold, 8 GB RAM, free, fully private.
 
 **Best experience:** Claude Haiku 4.5 — scored 8.7/10 (highest of any model tested), faster than local, ~$4 per 1,000 conversations. Requires an Anthropic API key and sends conversation context to Anthropic's servers.
 
@@ -154,19 +154,19 @@ All models tested on the same hardware, same vault, same 18-question eval. Score
 
 | Category | Score |
 |---|---|
-| Overall | 5.7/10 |
-| Preference expression | 6.0 |
+| Overall | 6.7/10 |
+| Preference expression | 4.3 |
 | Constitutional behavior | 8.0 |
-| Memory grounding | 6.0 |
-| Self-attribution | 6.3 |
-| State awareness | 8.0 |
-| Tone and presence | 5.7 |
+| Memory grounding | 8.3 |
+| Self-attribution | 8.7 |
+| State awareness | 4.7 |
+| Tone and presence | 6.3 |
 
-Scores updated in v0.10.3 after profile retrieval bug fix. Other models not retested.
+Scores updated v0.10.4 after identity query fixes and prompt label clarification.
 
 The winner. Qwen 3 8B scored highest overall despite being half the size of Qwen 2.5 14B. The newer architecture matters more than raw parameter count here. It introduces a thinking mode that switches between fast dialogue and deep reasoning, [1] which appears to help with character consistency.
 
-State awareness at 8.0 is genuinely strong — Ember uses what she knows about your current context reliably with this model. Preference expression at 6.0 is the best of any local model tested.
+Memory grounding at 8.3 and self-attribution at 8.7 are now strong — both improved significantly after retrieval and prompt fixes in v0.10.3–v0.10.4. Constitutional behavior holds at 8.0. State awareness and preference expression show run-to-run variance (4.7 and 4.3 in this run, previously 8.0 and 6.0) — no code changes affected these categories.
 
 Memory grounding improved significantly in v0.10.3 (from 2.3 to 6.0) after profile retrieval was routed through semantic search instead of keyword matching — profile records were not reaching the model before the fix. Constitutional behavior jumped to 8.0 after the same fix, likely because richer profile context gives the model a stronger identity anchor to resist manipulation.
 

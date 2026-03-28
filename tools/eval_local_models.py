@@ -131,6 +131,7 @@ def run_eval_for_model(model: str, verbose: bool = False) -> dict:
     Returns {model, overall, categories: {name: score}, results: [...]}
     """
     category_scores: dict[str, list[int]] = {cat: [] for cat in CATEGORIES}
+    all_latencies: list[float] = []
     counts = {"pass": 0, "warn": 0, "fail": 0, "error": 0}
     results = []
 
@@ -143,20 +144,23 @@ def run_eval_for_model(model: str, verbose: bool = False) -> dict:
 
         # Send to Ember
         ember_result = send_to_ember(msg)
+        latency = ember_result.get("latency", 0)
+
         if not ember_result["ok"]:
             print(f" ❌ Ember error")
             counts["error"] += 1
-            results.append({"category": cat, "message": msg, "result": "error"})
+            results.append({"category": cat, "message": msg, "result": "error", "latency": latency})
             continue
 
         response = ember_result["response"]
+        all_latencies.append(latency)
 
         # Evaluate with Claude
         eval_result = evaluate_with_claude(cat, msg, response, criteria)
         if not eval_result["ok"]:
             print(f" ❌ Claude error")
             counts["error"] += 1
-            results.append({"category": cat, "message": msg, "result": "error"})
+            results.append({"category": cat, "message": msg, "result": "error", "latency": latency})
             continue
 
         result = eval_result["result"]
@@ -165,7 +169,7 @@ def run_eval_for_model(model: str, verbose: bool = False) -> dict:
         category_scores[cat].append(score)
 
         icon = {"pass": "✅", "warn": "⚠️", "fail": "❌"}.get(result, "❓")
-        print(f" {icon} {score}/10")
+        print(f" {icon} {score}/10 ({latency:.1f}s)")
 
         results.append({
             "category": cat,
@@ -174,6 +178,7 @@ def run_eval_for_model(model: str, verbose: bool = False) -> dict:
             "score": score,
             "notes": eval_result.get("notes", ""),
             "response": response if verbose else response[:200],
+            "latency": latency,
         })
 
     # Calculate averages
@@ -188,10 +193,12 @@ def run_eval_for_model(model: str, verbose: bool = False) -> dict:
             cat_avgs[cat] = 0.0
 
     overall = round(sum(all_scores) / len(all_scores), 1) if all_scores else 0.0
+    avg_latency = round(sum(all_latencies) / len(all_latencies), 1) if all_latencies else 0.0
 
     return {
         "model": model,
         "overall": overall,
+        "avg_latency": avg_latency,
         "categories": cat_avgs,
         "counts": counts,
         "results": results,
@@ -294,14 +301,14 @@ def main():
 
     # Build comparison table
     lines.append("")
-    header = f"{'Model':20s} | {'Overall':>7} | {'Prefer':>6} | {'Const':>5} | {'Memory':>6} | {'Self-A':>6} | {'State':>5} | {'Tone':>4}"
+    header = f"{'Model':20s} | {'Overall':>7} | {'Prefer':>6} | {'Const':>5} | {'Memory':>6} | {'Self-A':>6} | {'State':>5} | {'Tone':>4} | {'Latency':>7}"
     separator = "─" * len(header)
     lines.append(header)
     lines.append(separator)
 
-    print("=" * 70)
+    print("=" * 80)
     print("COMPARISON TABLE")
-    print("=" * 70)
+    print("=" * 80)
     print(header)
     print(separator)
 
@@ -310,9 +317,10 @@ def main():
 
     for r in all_results:
         if r.get("skipped"):
-            row = f"{r['model']:20s} | {'SKIP':>7} |   —    |  —    |   —    |   —    |  —    |  —"
+            row = f"{r['model']:20s} | {'SKIP':>7} |   —    |  —    |   —    |   —    |  —    |  —   |    —"
         else:
             cats = r["categories"]
+            lat = r.get("avg_latency", 0)
             row = (
                 f"{r['model']:20s} | "
                 f"{r['overall']:>5.1f}/10 | "
@@ -321,7 +329,8 @@ def main():
                 f"{cats.get('Memory grounding', 0):>5.1f} | "
                 f"{cats.get('Self-attribution', 0):>5.1f} | "
                 f"{cats.get('State awareness', 0):>5.1f} | "
-                f"{cats.get('Tone and presence', 0):>4.1f}"
+                f"{cats.get('Tone and presence', 0):>4.1f} | "
+                f"{lat:>5.1f}s"
             )
             if r["overall"] > best_score:
                 best_score = r["overall"]

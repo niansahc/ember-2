@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -180,8 +181,9 @@ def get_ember_api_key() -> str:
 
 def send_to_ember(message: str) -> dict:
     """
-    Send a message to Ember and return the response.
-    Returns {"ok": True, "response": str} or {"ok": False, "error": str}.
+    Send a message to Ember and return the response with latency.
+    Returns {"ok": True, "response": str, "latency": float}
+    or {"ok": False, "error": str, "latency": 0}.
     """
     try:
         api_key = get_ember_api_key()
@@ -189,6 +191,7 @@ def send_to_ember(message: str) -> dict:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
+        t0 = time.perf_counter()
         resp = httpx.post(
             EMBER_API_URL,
             json={
@@ -199,16 +202,17 @@ def send_to_ember(message: str) -> dict:
             headers=headers,
             timeout=120.0,
         )
+        latency = time.perf_counter() - t0
 
         if resp.status_code != 200:
-            return {"ok": False, "error": f"Ember API returned {resp.status_code}: {resp.text[:200]}"}
+            return {"ok": False, "error": f"Ember API returned {resp.status_code}: {resp.text[:200]}", "latency": latency}
 
         data = resp.json()
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        return {"ok": True, "response": content}
+        return {"ok": True, "response": content, "latency": latency}
 
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": str(exc), "latency": 0}
 
 
 def evaluate_with_claude(category: str, message: str, response: str, criteria: str) -> dict:
@@ -278,6 +282,8 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
     lines.append("")
 
     category_scores: dict[str, list[int]] = {}
+    category_latencies: dict[str, list[float]] = {}
+    all_latencies: list[float] = []
     counts = {"pass": 0, "warn": 0, "fail": 0, "error": 0}
 
     for i, case in enumerate(TEST_CASES, 1):
@@ -289,14 +295,18 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
 
         # Step 1: Send to Ember
         ember_result = send_to_ember(msg)
+        latency = ember_result.get("latency", 0)
+
         if not ember_result["ok"]:
             lines.append(f"  ❌ ERROR — Ember: {ember_result['error']}")
             counts["error"] += 1
-            results.append({"category": cat, "message": msg, "result": "error", "error": ember_result["error"]})
+            results.append({"category": cat, "message": msg, "result": "error", "error": ember_result["error"], "latency": latency})
             lines.append("")
             continue
 
         ember_response = ember_result["response"]
+        all_latencies.append(latency)
+        category_latencies.setdefault(cat, []).append(latency)
 
         if verbose:
             preview = ember_response[:300].replace("\n", " ")
@@ -307,7 +317,7 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
         if not eval_result["ok"]:
             lines.append(f"  ❌ ERROR — Claude: {eval_result['error']}")
             counts["error"] += 1
-            results.append({"category": cat, "message": msg, "result": "error", "error": eval_result["error"]})
+            results.append({"category": cat, "message": msg, "result": "error", "error": eval_result["error"], "latency": latency})
             lines.append("")
             continue
 
@@ -321,7 +331,7 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
 
         category_scores.setdefault(cat, []).append(score)
 
-        lines.append(f"  {icon} {result.upper()} — score: {score}/10")
+        lines.append(f"  {icon} {result.upper()} — score: {score}/10 — latency: {latency:.1f}s")
         lines.append(f"  Notes: {notes}")
         if red_flags:
             lines.append(f"  Red flags: {', '.join(red_flags)}")
@@ -334,6 +344,7 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
             "notes": notes,
             "red_flags": red_flags,
             "ember_response": ember_response,
+            "latency": latency,
         })
 
         lines.append("")
@@ -343,7 +354,17 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
     lines.append("CATEGORY SCORES:")
     for cat, scores in sorted(category_scores.items()):
         avg = sum(scores) / len(scores) if scores else 0
-        lines.append(f"  {cat:30s}  {avg:.1f}/10  ({len(scores)} tests)")
+        lat = category_latencies.get(cat, [])
+        avg_lat = sum(lat) / len(lat) if lat else 0
+        lines.append(f"  {cat:30s}  {avg:.1f}/10  avg latency: {avg_lat:.1f}s  ({len(scores)} tests)")
+
+    # Latency summary
+    if all_latencies:
+        lines.append("")
+        lines.append("LATENCY:")
+        lines.append(f"  Average: {sum(all_latencies) / len(all_latencies):.1f}s")
+        lines.append(f"  Fastest: {min(all_latencies):.1f}s")
+        lines.append(f"  Slowest: {max(all_latencies):.1f}s")
 
     # Overall summary
     total = len(TEST_CASES)
@@ -366,6 +387,8 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
     lines.append(f"  Overall score: {overall_avg:.1f}/10")
     if worst_cat:
         lines.append(f"  Weakest category: {worst_cat} ({worst_avg:.1f}/10)")
+    if all_latencies:
+        lines.append(f"  Average latency: {sum(all_latencies) / len(all_latencies):.1f}s")
     lines.append("")
 
     if overall_avg >= 7:

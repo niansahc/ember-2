@@ -185,3 +185,5 @@ Average latency: 17.6s (up from 12.1s — profile embedding adds overhead on fir
 - **Preference expression and tone regressed.** Both dropped ~2 points. This appears to be model variance across eval runs rather than a regression caused by the fix — the profile retrieval change does not affect preference or tone behavior. Qwen 3 8B shows run-to-run variance of 1-2 points in these categories.
 - **State awareness dropped from 8.0 to 6.0.** One test case ("open loops") scored 2/10 due to the model presenting inferences with false certainty. Again likely run variance — the fix does not modify state retrieval.
 - **The root cause hypothesis is confirmed.** Profile records were never reaching the model for identity queries because `MemoryService.search()` used keyword overlap, not the profile vector index. Switching to `semantic_search()` resolved the immediate retrieval failure.
+
+Additional fix applied after v0.10.3 eval: prompt builder label clarified to prevent model from merging user profile with Ember's identity. Ember now correctly answers identity questions as herself. This fix was not re-evaluated formally — manual testing confirmed correct behavior.

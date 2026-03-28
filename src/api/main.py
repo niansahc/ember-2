@@ -20,7 +20,7 @@ from src.api.limiter import limiter
 from src.api.openai_adapter import router as openai_adapter_router, llm_adapter
 from src.api.routes.ingest import router as ingest_router
 from src.context.service import ContextService
-from src.core.config import get_ember_api_key
+from src.core.config import get_ember_api_key, get_cloud_models
 from src.memory.service import MemoryService
 from src.memory.session import (
     list_sessions,
@@ -427,7 +427,8 @@ def get_model_endpoint():
         available = [m["model"] for m in ollama.list()["models"]]
     except Exception:
         available = []
-    return {"model": llm_adapter.model, "available": available}
+    cloud = get_cloud_models()
+    return {"model": llm_adapter.model, "available": available, "cloud": cloud}
 
 
 @app.post("/model")
@@ -435,6 +436,36 @@ def set_model_endpoint(request: ModelRequest):
     llm_adapter.set_model(request.model)
     llm_adapter.prompt_builder.conversation_buffer.set_context_window(request.model)
     return {"model": llm_adapter.model}
+
+
+class ProviderKeyRequest(BaseModel):
+    provider: str
+    api_key: str
+
+
+@app.post("/provider-key")
+def store_provider_key(body: ProviderKeyRequest):
+    """Store a cloud provider API key in the credential manager."""
+    allowed_providers = {"anthropic"}
+    if body.provider not in allowed_providers:
+        raise HTTPException(status_code=400, detail=f"Unknown provider '{body.provider}'. Allowed: {sorted(allowed_providers)}")
+    try:
+        import keyring
+        keyring.set_password(f"ember-2-{body.provider}", "api_key", body.api_key)
+        return {"status": "stored", "provider": body.provider}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to store key: {exc}")
+
+
+@app.get("/provider-key/{provider}")
+def check_provider_key(provider: str):
+    """Check if a cloud provider API key is configured. Never returns the actual key."""
+    try:
+        import keyring
+        key = keyring.get_password(f"ember-2-{provider}", "api_key")
+        return {"provider": provider, "configured": bool(key)}
+    except Exception:
+        return {"provider": provider, "configured": False}
 
 
 # ── UI static file serving ─────────────────────────────────────────────

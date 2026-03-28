@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 import threading
 
+import httpx
 import ollama
 
 from src.context.models import ContextPacket
 from src.core.config import get_ember_model, get_ember_vision_model
+
+logger = logging.getLogger("ember.llm")
 from src.llm.prompt_builder import PromptBuilder
 from src.memory.service import MemoryService
 from src.reflection.session_summary import write_session_summary
@@ -188,6 +192,24 @@ class LLMAdapter:
         )
         threading.Thread(target=self._maybe_compress_buffer, daemon=True).start()
 
+    # ------------------------------------------------------------------
+    # Provider dispatch
+    # ------------------------------------------------------------------
+
+    def _is_cloud_model(self, model: str) -> bool:
+        """Check if the model is a cloud provider model."""
+        return model.startswith("claude-")
+
+    @staticmethod
+    def _get_provider_api_key(provider: str) -> str | None:
+        """Read a cloud provider API key from the credential manager.
+        Returns None if not found, never raises."""
+        try:
+            import keyring
+            return keyring.get_password(f"ember-2-{provider}", "api_key")
+        except Exception:
+            return None
+
     def _chat(
         self,
         system_prompt: str,
@@ -196,6 +218,33 @@ class LLMAdapter:
         model_override: str | None = None,
     ) -> str:
         model = model_override or self.model
+        if self._is_cloud_model(model):
+            return self._chat_anthropic(system_prompt, user_message, temperature=0.7)
+        return self._chat_ollama(system_prompt, user_message, image_data, model)
+
+    def _chat_stream(
+        self,
+        system_prompt: str,
+        user_message: str,
+        image_data: list[str] | None = None,
+        model_override: str | None = None,
+    ):
+        """Stream chat response. Dispatches to Ollama or Anthropic."""
+        model = model_override or self.model
+        if self._is_cloud_model(model):
+            yield from self._chat_anthropic_stream(system_prompt, user_message, temperature=0.7)
+        else:
+            yield from self._chat_ollama_stream(system_prompt, user_message, image_data, model)
+
+    # ------------------------------------------------------------------
+    # Ollama (local)
+    # ------------------------------------------------------------------
+
+    def _chat_ollama(
+        self, system_prompt: str, user_message: str,
+        image_data: list[str] | None = None, model: str | None = None,
+    ) -> str:
+        model = model or self.model
         user_msg: dict = {"role": "user", "content": user_message}
         if image_data:
             user_msg["images"] = image_data
@@ -206,22 +255,16 @@ class LLMAdapter:
                 {"role": "system", "content": system_prompt},
                 user_msg,
             ],
-            options={
-                "temperature": 0.7,
-            },
+            options={"temperature": 0.7},
         )
-
         return response["message"]["content"]
 
-    def _chat_stream(
-        self,
-        system_prompt: str,
-        user_message: str,
-        image_data: list[str] | None = None,
-        model_override: str | None = None,
+    def _chat_ollama_stream(
+        self, system_prompt: str, user_message: str,
+        image_data: list[str] | None = None, model: str | None = None,
     ):
-        """Stream chat response from Ollama. Yields string chunks."""
-        model = model_override or self.model
+        """Stream from Ollama. Yields string chunks."""
+        model = model or self.model
         user_msg: dict = {"role": "user", "content": user_message}
         if image_data:
             user_msg["images"] = image_data
@@ -235,11 +278,96 @@ class LLMAdapter:
             options={"temperature": 0.7},
             stream=True,
         )
-
         for chunk in stream:
             content = chunk.get("message", {}).get("content", "")
             if content:
                 yield content
+
+    # ------------------------------------------------------------------
+    # Anthropic (cloud)
+    # ------------------------------------------------------------------
+
+    def _chat_anthropic(
+        self, system_prompt: str, user_message: str, temperature: float = 0.7,
+    ) -> str:
+        """Non-streaming call to Anthropic Claude API."""
+        api_key = self._get_provider_api_key("anthropic")
+        if not api_key:
+            raise ValueError("No Anthropic API key configured. Store one via POST /provider-key.")
+
+        logger.info("[CLOUD] Anthropic %s — non-streaming", self.model)
+
+        resp = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "max_tokens": 4096,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_message}],
+                "temperature": temperature,
+            },
+            timeout=120.0,
+        )
+
+        if resp.status_code != 200:
+            raise ValueError(f"Anthropic API error {resp.status_code}: {resp.text[:300]}")
+
+        data = resp.json()
+        return data["content"][0]["text"]
+
+    def _chat_anthropic_stream(
+        self, system_prompt: str, user_message: str, temperature: float = 0.7,
+    ):
+        """Streaming call to Anthropic Claude API. Yields text chunks."""
+        api_key = self._get_provider_api_key("anthropic")
+        if not api_key:
+            raise ValueError("No Anthropic API key configured. Store one via POST /provider-key.")
+
+        logger.info("[CLOUD] Anthropic %s — streaming", self.model)
+
+        with httpx.stream(
+            "POST",
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "max_tokens": 4096,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_message}],
+                "temperature": temperature,
+                "stream": True,
+            },
+            timeout=120.0,
+        ) as resp:
+            if resp.status_code != 200:
+                error_text = resp.read().decode()
+                raise ValueError(f"Anthropic API error {resp.status_code}: {error_text[:300]}")
+
+            for line in resp.iter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str == "[DONE]":
+                    return
+
+                import json
+                try:
+                    event = json.loads(data_str)
+                    if event.get("type") == "content_block_delta":
+                        text = event.get("delta", {}).get("text", "")
+                        if text:
+                            yield text
+                except (json.JSONDecodeError, KeyError):
+                    continue
 
     def _maybe_compress_buffer(self) -> None:
         """Summarize and compress the oldest half of the buffer when it exceeds 70% of the context window."""

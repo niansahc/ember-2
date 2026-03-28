@@ -54,13 +54,27 @@ def get_ember_vision_model() -> str | None:
 
 def get_ember_model() -> str:
     """
-    Returns the Ollama model name to use for Ember-2.
+    Returns the model name to use for Ember-2.
 
     Reads EMBER_MODEL from .env. Defaults to "qwen3:8b" if not set.
 
-    To change the model, set EMBER_MODEL in your .env file:
-      EMBER_MODEL=qwen3:8b
-      EMBER_MODEL=qwen2.5:14b
-      EMBER_MODEL=llama3.1:8b
+    Supports both local (Ollama) and cloud (Anthropic) models:
+      EMBER_MODEL=qwen3:8b               # local via Ollama
+      EMBER_MODEL=claude-sonnet-4-20250514  # cloud via Anthropic API
     """
     return os.getenv("EMBER_MODEL", "qwen3:8b")
+
+
+# Cloud model providers and their available models.
+# Keys are provider names matching keyring service "ember-2-{provider}".
+CLOUD_MODELS: dict[str, list[str]] = {
+    "anthropic": [
+        "claude-sonnet-4-20250514",
+        "claude-haiku-4-5-20251001",
+    ],
+}
+
+
+def get_cloud_models() -> dict[str, list[str]]:
+    """Return the cloud model catalog."""
+    return CLOUD_MODELS

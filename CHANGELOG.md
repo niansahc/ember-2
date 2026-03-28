@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.10.2 — 2026-03-28
+
+### Changes
+- **Default model changed to qwen3:8b** — scores 5.4/10 vs 4.7/10 for qwen2.5:14b in conversation quality eval, while being faster and half the size (~4.9 GB vs ~9 GB)
+- Local model comparison eval completed across 6 models
+- Response latency tracking added to eval harness
+- Conversation quality eval harness with Claude as external evaluator
+- Reflection quality audit and suppression tools
+- Comprehensive documentation audit and roadmap through v0.15.0
+- ADR-009 (Session Reflection), ADR-010 (Semantic Safety Triggers)
+
 ## v0.10.1 — 2026-03-27
 
 ### Bug Fixes

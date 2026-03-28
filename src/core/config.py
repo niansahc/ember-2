@@ -56,11 +56,11 @@ def get_ember_model() -> str:
     """
     Returns the Ollama model name to use for Ember-2.
 
-    Reads EMBER_MODEL from .env. Defaults to "llama3.1:8b" if not set.
+    Reads EMBER_MODEL from .env. Defaults to "qwen3:8b" if not set.
 
     To change the model, set EMBER_MODEL in your .env file:
-      EMBER_MODEL=mistral-nemo
       EMBER_MODEL=qwen3:8b
+      EMBER_MODEL=qwen2.5:14b
       EMBER_MODEL=llama3.1:8b
     """
-    return os.getenv("EMBER_MODEL", "llama3.1:8b")
+    return os.getenv("EMBER_MODEL", "qwen3:8b")

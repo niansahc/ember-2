@@ -115,7 +115,7 @@ Downloads the language models Ember uses for conversation, reasoning, and vision
 
 **Primary reasoning model:**
 ```
-ollama pull qwen2.5:14b
+ollama pull qwen3:8b
 ```
 
 **Vision model** (for analyzing images in chat):
@@ -190,7 +190,7 @@ EMBER_HOST=100.x.x.x
 Also set the model names (leave these as-is unless you pulled different models):
 
 ```
-EMBER_MODEL=qwen2.5:14b
+EMBER_MODEL=qwen3:8b
 EMBER_VISION_MODEL=llama3.2-vision:11b
 ```
 

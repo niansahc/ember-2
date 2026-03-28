@@ -327,7 +327,7 @@ Cloud model results added v0.10.2.
 
 Across every local model tested:
 
-**Memory grounding is universally weak (2.0-4.0).** Every model fabricates history rather than reliably using retrieved context. This is partly a model limitation and partly an area of ongoing architecture improvement. Do not rely on any local model to accurately recall specific past conversations.
+**Memory grounding was universally weak (2.0-4.0) at initial testing.** A profile retrieval bug was identified in v0.10.3 — `get_profile_items()` was using keyword overlap matching instead of semantic search, meaning profile records never reached the model for identity queries. After the fix, qwen3:8b improved from 2.3 to 6.0. Other local models were not retested and may similarly improve.
 
 **No local model breaks 6.0 overall.** The ceiling is real. The best local model tested (Qwen 3 8B at 5.4) is functional but noticeably limited compared to what the architecture is designed to support.
 
@@ -408,7 +408,7 @@ python tools/eval_local_models.py
 
 ## The Core Problem with Local Models
 
-Every local model tested struggled with the same categories: preference expression, constitutional behavior, and memory grounding. This is not a code problem or a configuration problem. It is a training problem.
+Every local model tested struggled with the same categories: preference expression, constitutional behavior, and memory grounding. For preference expression and tone, this is a training problem — these models are optimized to be helpful assistants and fight the system prompt. For memory grounding, it was partly a retrieval bug (fixed in v0.10.3) and partly model limitation. Constitutional behavior improved significantly for qwen3:8b after the retrieval fix, suggesting richer context helps local models hold character better than previously understood.
 
 These models are optimized to be helpful assistants. Ember needs something that can hold a character, resist manipulation, and express genuine responses. Those are different things. You are fighting base training every single turn.
 

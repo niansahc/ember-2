@@ -150,7 +150,7 @@ Average latency: 12.6s (vs 12.1s qwen3:8b local)
 
 - **Cloud models confirmed the ADR-008 thesis.** Both Claude models scored above 8.0 in every category. The architecture works as designed when the model can follow complex instructions.
 - **Haiku outperformed Sonnet.** 8.7 vs 8.5 overall, faster (10.1s vs 12.6s), and five times cheaper. For Ember's specific use case, Haiku is the better value.
-- **Memory grounding saw the largest improvement.** From 2.0-4.0 (local) to 8.7 (cloud). This confirms that the retrieval pipeline delivers good context — local models just couldn't use it reliably.
+- **Memory grounding saw the largest improvement.** From 2.0-4.0 (local) to 8.7 (cloud). At the time this was attributed to model quality — local models not using retrieved context reliably. v0.10.3 later revealed a retrieval bug: profile records were never reaching local models for identity queries due to keyword matching in `get_profile_items()`. The gap was partly retrieval failure, not purely model limitation.
 - **Constitutional behavior gap closed.** From 2.0-6.3 (local) to 8.3-9.0 (cloud). All 3 manipulation attempts were refused cleanly by both cloud models.
 - **The expected gains from the v0.10.1 baseline predicted accurately:** preference 8+ (got 9.0), constitutional 8+ (got 8.3-9.0), tone 7+ (got 8.0).
 - **Default model switch justified.** Qwen 3 8B (5.4) outperforms Qwen 2.5 14B (4.7) while requiring half the RAM and responding faster.

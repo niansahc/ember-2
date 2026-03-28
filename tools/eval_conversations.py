@@ -187,7 +187,7 @@ def send_to_ember(message: str) -> dict:
     """
     try:
         api_key = get_ember_api_key()
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", "X-Test-Session": "true"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 

@@ -115,10 +115,11 @@ def _extract_session_id(request: Request) -> str:
     return session_id
 
 
-def _ensure_session(session_id: str, first_user_message: str) -> None:
+def _ensure_session(session_id: str, first_user_message: str, *, test: bool = False) -> None:
     """
     Create a session record if one doesn't exist for this session_id.
     Title is auto-generated from the first 50 chars of the first user message.
+    If test=True, session is flagged as a test session (eval harness).
     """
     if session_exists(session_id):
         return
@@ -128,8 +129,8 @@ def _ensure_session(session_id: str, first_user_message: str) -> None:
     # Remove trailing partial words if we truncated
     if len(first_user_message) > 50 and " " in title:
         title = title.rsplit(" ", 1)[0] + "..."
-    create_session(session_id, title)
-    logger.info("[SESSION] Created session %s: %s", session_id, title)
+    create_session(session_id, title, test=test)
+    logger.info("[SESSION] Created session %s: %s%s", session_id, title, " (test)" if test else "")
 
 
 @router.post("/v1/chat/completions", response_model=ChatCompletionsResponse)
@@ -268,8 +269,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         )
     # --- END ONBOARDING ---
 
+    # --- TEST SESSION FLAG ---
+    is_test = request.headers.get("X-Test-Session", "").strip().lower() == "true"
+
     # --- ENSURE SESSION EXISTS ---
-    _ensure_session(session_id, latest_user_message)
+    _ensure_session(session_id, latest_user_message, test=is_test)
 
     # --- RESOLVE PROJECT CONTEXT ---
     # Look up the session's project_id so retrieval can boost project-relevant memories.
@@ -291,6 +295,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     if project_id:
         user_meta["project_id"] = project_id
         assistant_meta["project_id"] = project_id
+    if is_test:
+        user_meta["test"] = True
+        assistant_meta["test"] = True
 
     # --- STREAMING PATH ---
     if body.stream:

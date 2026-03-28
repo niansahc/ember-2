@@ -86,10 +86,11 @@ def _scan_conversation_turns() -> dict[str, list[dict]]:
     return grouped
 
 
-def list_sessions(limit: int = 50) -> list[dict]:
+def list_sessions(limit: int = 50, include_test: bool = False) -> list[dict]:
     """
     List all active sessions, newest first.
     Derives updated_at and turn_count from conversation records.
+    By default, excludes sessions flagged as test sessions (eval harness).
     """
     all_records = _read_all_session_records()
     resolved = _resolve_sessions(all_records)
@@ -99,6 +100,9 @@ def list_sessions(limit: int = 50) -> list[dict]:
     for sid, rec in resolved.items():
         # Skip soft-deleted sessions
         if rec.get("metadata", {}).get("deleted", False):
+            continue
+        # Skip test sessions unless explicitly requested
+        if not include_test and rec.get("metadata", {}).get("test", False):
             continue
 
         turns = turn_groups.get(sid, [])
@@ -160,9 +164,16 @@ def session_exists(session_id: str) -> bool:
     return False
 
 
-def create_session(session_id: str, title: str) -> Path:
+def create_session(session_id: str, title: str, *, test: bool = False) -> Path:
     """Write a new session record. Returns the file path."""
     now = datetime.now(timezone.utc)
+    meta: dict = {
+        "session_id": session_id,
+        "created_at": now.isoformat(),
+        "deleted": False,
+    }
+    if test:
+        meta["test"] = True
     record = {
         "id": _now_id(),
         "timestamp": now.isoformat(),
@@ -170,11 +181,7 @@ def create_session(session_id: str, title: str) -> Path:
         "text": title,
         "source": "api",
         "tags": ["session"],
-        "metadata": {
-            "session_id": session_id,
-            "created_at": now.isoformat(),
-            "deleted": False,
-        },
+        "metadata": meta,
     }
     file_path = _session_dir() / f"{record['id']}.json"
     storage.write_json(file_path, record)

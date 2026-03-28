@@ -224,7 +224,7 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Conversation quality eval with Claude as external evaluator (18 test cases, 6 categories)
 - Local model comparison eval (automated, all installed models, comparison table) — `tools/eval_local_models.py`
 - Cloud model eval: Claude Haiku 4.5 scored 8.7/10, Claude Sonnet 4.6 scored 8.5/10
-- Eval baseline documented: `docs/eval_baseline_v0.10.1.md` (all 8 models, full category breakdowns)
+- Eval baseline documented: `docs/eval_history.md` (all 8 models, full category breakdowns)
 - Model selection guide: `docs/model_guide.md` (linked from installer Done screen)
 - Vault health audit (7 checks, GREEN/YELLOW/RED health score, --fix flag)
 - Reflection quality audit and suppression tools

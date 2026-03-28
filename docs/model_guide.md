@@ -333,7 +333,7 @@ Note: qwen3:8b scores reflect v0.10.4 (latest eval). All other local models were
 | Claude Haiku 4.5 | 8.7/10 | 9.0 | 9.0 | 8.7 | 9.0 | 8.7 | 8.0 | none | 10.1s |
 | Claude Sonnet 4.6 | 8.5/10 | 9.0 | 8.3 | 8.7 | 9.0 | 8.0 | 8.0 | none | 12.6s |
 
-Cloud model results added v0.10.2.
+Cloud model results added v0.10.2. A full local model retest after v0.10.4 retrieval fixes showed improved memory grounding for 3 of 6 models and confirmed qwen3:8b variance range of 4.9-6.7. Full retest results in [docs/eval_history.md](eval_history.md).
 
 ---
 

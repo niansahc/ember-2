@@ -21,7 +21,7 @@ Conversation quality evaluation (v0.10.1 baseline) scored qwen2.5:14b at
 awareness (6.3). Remaining failures are model-ceiling problems: preference
 expression (2.3), constitutional behavior (2.3), memory grounding (2.0),
 tone (4.0). This eval provides quantitative justification for cloud model
-support. See `docs/eval_baseline_v0.10.1.md` for full results.
+support. See `docs/eval_history.md` for full results.
 
 ## The Tension
 

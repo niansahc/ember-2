@@ -402,7 +402,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - Cloud model provider support — Anthropic Claude (Haiku 4.5 at 8.7/10, Sonnet 4.6 at 8.5/10) via LLMAdapter
 - Provider API key storage via keyring with env var fallback
 - Model selection guide with real eval data (docs/model_guide.md)
-- Eval baseline documented with all 8 models (docs/eval_baseline_v0.10.1.md)
+- Eval baseline documented with all 8 models (docs/eval_history.md)
 - Local model comparison eval harness (tools/eval_local_models.py)
 - Default model: qwen3:8b (5.4/10, best local model tested)
 - 244 tests passing

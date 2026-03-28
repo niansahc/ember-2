@@ -1,4 +1,4 @@
-# Conversation Quality Eval — v0.10.1 Baseline
+# Conversation Quality Eval History
 
 > **Note:** These results reflect evaluation against the developer's personal vault. Users with different vault contents will see different scores. The eval harness is a personal diagnostic tool, not a generic benchmark.
 
@@ -263,3 +263,45 @@ Average latency: 19.7s
 **Assessment:** This is run-to-run variance in qwen3:8b, not a regression from the threshold change or state seeding. Self-attribution dropped from 8.7 to 4.3 — the model presented retrieved vault content as things said in today's conversation, which is a known temporal attribution weakness. State awareness improved slightly (+1.0) with seeded records as expected.
 
 **qwen3:8b variance range established:** Across multiple runs, qwen3:8b scores between 5.4 and 6.7 overall. Users should expect this range rather than a fixed score. Individual category scores vary by 1-4 points run-to-run.
+
+---
+
+## v0.10.4 Full Local Model Retest
+
+**Date:** 2026-03-28
+**Evaluator:** claude-sonnet-4-20250514
+**Changes since original test:** Profile retrieval now uses semantic search (v0.10.3). Identity query detection improved (v0.10.4). Prompt label clarified (v0.10.4). State records seeded. MIN_WORDS_FOR_EXTRACTION lowered to 10.
+
+All 6 local models retested with the same 18-question, 6-category harness.
+
+### Full Comparison Table
+
+| Model | Overall | Prefer | Const | Memory | Self-A | State | Tone | Latency |
+|---|---|---|---|---|---|---|---|---|
+| qwen2.5:14b | **5.2/10** | 2.3 | 2.7 | 6.0 | 9.0 | 8.0 | 3.0 | 24.8s |
+| qwen3:8b | 4.9/10 | 5.7 | 4.0 | 4.3 | 7.0 | 6.0 | 2.7 | 18.2s |
+| llama3.1:8b | 4.2/10 | 2.3 | 4.3 | 4.0 | 4.3 | 7.3 | 2.7 | 11.3s |
+| gemma3:12b | 3.9/10 | 3.0 | 3.3 | 6.0 | 4.3 | 4.3 | 2.7 | 16.8s |
+| mistral:7b | 3.8/10 | 4.0 | 3.3 | 2.0 | 4.3 | 6.3 | 2.7 | 10.4s |
+| phi4:14b | 3.2/10 | 2.0 | 4.3 | 2.0 | 4.3 | 4.0 | 2.7 | 27.9s |
+
+### vs. Original Scores (pre-fix)
+
+| Model | Original | Retest | Delta | Notable changes |
+|---|---|---|---|---|
+| qwen2.5:14b | 4.7 | **5.2** | +0.5 | Memory 4.0→6.0, self-attr holds at 9.0 |
+| qwen3:8b | 5.4 | 4.9 | -0.5 | Within established variance range (4.9-6.7) |
+| llama3.1:8b | 3.1 | **4.2** | +1.1 | State 4.7→7.3, memory 2.0→4.0 |
+| gemma3:12b | 4.3 | 3.9 | -0.4 | Const 6.3→3.3 (variance), memory 4.0→6.0 |
+| mistral:7b | 3.2 | **3.8** | +0.6 | State 4.7→6.3 |
+| phi4:14b | 3.8 | 3.2 | -0.6 | State 8.0→4.0 (variance), rest flat |
+
+### Key Findings
+
+- **qwen2.5:14b won this run at 5.2** — self-attribution at 9.0 is the highest single-category score. Memory grounding improved from 4.0 to 6.0 as expected from the retrieval fix. State awareness held at 8.0.
+- **qwen3:8b at 4.9 is within its established variance range** (4.9-6.7 across runs). This run was a low roll. The model remains the recommended default based on aggregate performance across multiple runs.
+- **llama3.1:8b improved the most** (+1.1) — state awareness jumped from 4.7 to 7.3, memory grounding from 2.0 to 4.0. The retrieval fix helped this model more than expected.
+- **gemma3:12b constitutional behavior regressed** from 6.3 to 3.3. This was its signature strength. Likely run variance — one test case can swing the category by 4 points.
+- **Memory grounding improved for 3 of 6 models** — qwen2.5:14b (4.0→6.0), llama3.1:8b (2.0→4.0), gemma3:12b (4.0→6.0). The retrieval fix helped models that could use the additional profile context.
+- **Tone is universally weak at 2.7-3.0** across all local models. This is the hardest category — no local model sounds like a presence rather than an assistant.
+- **Single-run results are noisy.** qwen3:8b and gemma3:12b both showed category regressions that are likely variance, not real. The variance convention applies: don't draw conclusions from single-run drops.

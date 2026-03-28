@@ -410,7 +410,7 @@ python tools/eval_local_models.py
 
 Every local model tested struggled with the same categories: preference expression, constitutional behavior, and memory grounding. For preference expression and tone, this is a training problem — these models are optimized to be helpful assistants and fight the system prompt. For memory grounding, it was partly a retrieval bug (fixed in v0.10.3) and partly model limitation. Constitutional behavior improved significantly for qwen3:8b after the retrieval fix, suggesting richer context helps local models hold character better than previously understood.
 
-These models are optimized to be helpful assistants. Ember needs something that can hold a character, resist manipulation, and express genuine responses. Those are different things. You are fighting base training every single turn.
+Ember needs something that can hold a character, resist manipulation, and express genuine responses. Those are different things. You are fighting base training every single turn.
 
 The difference between models is in degree, not kind. No local model currently available fully resolves this. The question is which model minimizes it most on your hardware.
 

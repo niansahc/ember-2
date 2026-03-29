@@ -1587,8 +1587,12 @@ It should be possible to explain:
 **v0.14.0 — Offline Knowledge**
 - Kiwix ZIM ingestion adapter (curated packs only)
 - Project Gutenberg adapter (epub/txt/html as Reference Memory)
+- GitHub ingestion adapter — pull READMEs, issues, and repository content as reference memory; same pipeline pattern as Kiwix/Gutenberg adapters
 - Curated pack recommendations in docs
 - NOMAD-compatible path supported
+
+**Deferred (depends on task layer stability, post-v0.12.0):**
+- GitHub Issues as task source — sync open issues as task records in the task layer
 
 **v0.15.0 — Agent Orchestration**
 - Self-evaluation and decision-memory loops

@@ -269,6 +269,7 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Social engineering constitutional upgrade — semantic pattern matching in trigger layer (ADR-010)
 - Tray icon / OS notifications research
 - OpenAI provider support (GPT-4o, GPT-4o mini)
+- Vault path masking in UI (ADR-012 Phase 1)
 
 **v0.12.0 — Task Layer + Session Reflection + Mac/Linux:**
 - Task objects with ISC verifiable completion criteria
@@ -277,6 +278,7 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Session reflection mode (end-of-session capture, ADR-009)
 - Mac and Linux installer support
 - Reflection corpus guidance in onboarding (set expectations on timeline)
+- Local PIN/passphrase lock for UI (ADR-012 Phase 2)
 
 **v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption:**
 - Hot/warm/cold memory tiering by recency and relevance

@@ -1565,6 +1565,7 @@ It should be possible to explain:
 - Social engineering constitutional upgrade — semantic pattern matching in trigger layer (ADR-010)
 - Tray icon / OS notifications research
 - OpenAI provider support (GPT-4o, GPT-4o mini)
+- Vault path masking in UI (ADR-012 Phase 1)
 
 **v0.12.0 — Task Layer + Session Reflection + Mac/Linux**
 - Task objects with ISC verifiable completion criteria
@@ -1573,6 +1574,7 @@ It should be possible to explain:
 - Session reflection mode (end-of-session capture, ADR-009)
 - Mac and Linux installer support
 - Reflection corpus guidance in onboarding (set expectations on timeline)
+- Local PIN/passphrase lock for UI (ADR-012 Phase 2)
 
 **v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption**
 - Hot/warm/cold memory tiering by recency and relevance
@@ -1753,6 +1755,8 @@ The following should be tracked in `design-decisions.md` or ADRs:
 - Social engineering semantic trigger design — performance impact, false positive rate, pre-screening scope (v0.11.0)
 - Whether eval harness results should be normalized across different vault contents for cross-user comparison
 - Root cause of memory grounding weakness in local models — retrieval failure vs context injection vs model behavior (analysis in progress; local models score 2.0-4.0, Claude scores 8.7 on same retrieval pipeline, suggesting model capability not retrieval quality is the bottleneck)
+- UI session security phasing — vault masking (v0.11.0), PIN lock (v0.12.0/v0.13.0), full auth (post-v0.15.0). See ADR-012.
+- PIN/passphrase hash storage approach — keyring vs local file, inactivity timeout default, passphrase recovery mechanism
 
 ---
 

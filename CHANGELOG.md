@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.11.0 — 2026-03-29
+
+### Cloud Provider Support
+- Anthropic Claude (Haiku, Sonnet) and OpenAI (gpt-4o-mini, gpt-4o, gpt-4-turbo, gpt-3.5-turbo) added as opt-in providers
+- API keys stored in system credential store via keyring — never in .env
+- gpt-* and claude-* model names route to respective providers automatically
+- Local Ollama remains the default — cloud is always opt-in
+
+### UI
+- Collapsible sidebar with icon row (new conversation, search, collapse)
+- Model indicator in top bar — muted for local, glowing for cloud
+- Local/Cloud model selector tabs in Settings
+- Secure API key entry — masked input, credential store disclosure, remove key with confirmation
+- Vault path masking with timed reveal (ADR-012 Phase 1)
+- Vision toggle defaults to on
+- Version read from API at runtime
+- Project detail view now includes new conversation button and search bar
+
+### Backend
+- OpenAI and Anthropic provider dispatch in LLMAdapter
+- Social engineering safety triggers — 5 attack families, 39 patterns (ADR-010)
+- .txt file ingestion added to pipeline
+- Model selection persists across API restarts
+- set_provider_key.py CLI and DELETE /provider-key endpoint
+
+### Installer
+- Hardware detection — RAM and GPU detected at setup; model pre-selected based on available RAM
+- AGPL acknowledgment screen before setup completion
+
+### Docs
+- BACKUP_AND_EXPORT.md — vault backup and export guide
+- RECOVERY_PLAYBOOK.md — step-by-step recovery for common failure scenarios
+- ADR-010 filed — social engineering semantic triggers
+
+### Bug Fixes
+- Conversation turns under 40 chars (short replies like "Yes", "Thanks") were silently dropped — conversation type now bypasses length filter
+- Bulk session operations colliding on same-second filenames — microsecond precision added to `_now_id()` in session.py and project.py
+- Model selection lost on API restart or page refresh — now persisted to vault/model_override.json
+- State extractor 15-word threshold too aggressive — lowered to 10 words
+- Credential store language hardcoded to Windows — now platform-agnostic
+- Project detail view missing icon row when sidebar collapsed
+- Playwright project test timing out at 2s — increased to 5s
+
+### Tests
+- pytest: 300 passing
+- Playwright: 37 passing, 2 skipped
+
 ## v0.10.4 — 2026-03-28
 
 ### Bug Fixes

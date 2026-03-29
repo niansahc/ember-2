@@ -1815,6 +1815,8 @@ That is the durable path.
 
 **Status: Complete for single-user deployment (v0.8.3–v0.11.0)**
 
+**Platform note:** The security posture documented in this section reflects the current Windows deployment. The `keyring` library used for credential storage is cross-platform (Windows Credential Manager, macOS Keychain, Linux Secret Service) -- the code works on all platforms. OS-level encryption equivalents (FileVault on Mac, LUKS on Linux) and Mac/Linux startup scripts are addressed in the v0.12.0 Mac/Linux installer milestone.
+
 Ember's local-first architecture provides a natural baseline: data never leaves the machine by default. This section documents the current implemented security posture and what remains for multi-user deployment.
 
 ## 31.1 Threat Model

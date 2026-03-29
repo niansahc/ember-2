@@ -405,7 +405,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - Eval baseline documented with all 8 models (docs/eval_history.md)
 - Local model comparison eval harness (tools/eval_local_models.py)
 - Default model: qwen3:8b (5.4/10, best local model tested)
-- 244 tests passing
+- 285 pytest tests passing, 35 Playwright e2e tests passing (2 skipped)
 
 > Note: Eval harness results reflect personal vault contents and are not generic benchmarks.
 
@@ -522,7 +522,7 @@ src/
 │   ├ audit_assistant_chunks.py   Audit assistant-generated chunks
 │   └ suppress_assistant_noise.py Flag low-quality ingested records
 │
-├ tests/                  Pytest suite (244 tests)
+├ tests/                  Pytest suite (285 tests)
 ├ prompts/                LLM prompt templates
 ├ logs/                   Audit logs, safety review logs (gitignored)
 ├ ui/                     Built Ember UI frontend (gitignored, built from ember-2-ui)

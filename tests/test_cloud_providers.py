@@ -116,3 +116,49 @@ class TestCloudModelsConfig:
 
     def test_cloud_models_matches_constant(self):
         assert get_cloud_models() is CLOUD_MODELS
+
+    def test_openai_models_listed(self):
+        models = get_cloud_models()
+        assert "openai" in models
+        assert "gpt-4o-mini" in models["openai"]
+        assert "gpt-4o" in models["openai"]
+
+
+class TestOpenAIDispatch:
+    """OpenAI model routing."""
+
+    def test_gpt_model_is_cloud(self):
+        adapter = LLMAdapter(model="gpt-4o-mini")
+        assert adapter._is_cloud_model("gpt-4o-mini")
+
+    def test_gpt4o_is_cloud(self):
+        adapter = LLMAdapter(model="gpt-4o")
+        assert adapter._is_cloud_model("gpt-4o")
+
+    def test_chat_dispatches_to_openai_for_gpt(self):
+        adapter = LLMAdapter(model="gpt-4o-mini")
+        with patch.object(adapter, '_chat_openai', return_value="Hello from GPT") as mock:
+            result = adapter._chat("system", "hello")
+            mock.assert_called_once()
+            assert result == "Hello from GPT"
+
+    def test_stream_dispatches_to_openai_for_gpt(self):
+        adapter = LLMAdapter(model="gpt-4o-mini")
+        with patch.object(adapter, '_chat_openai_stream', return_value=iter(["Hi"])) as mock:
+            chunks = list(adapter._chat_stream("system", "hello"))
+            mock.assert_called_once()
+            assert chunks == ["Hi"]
+
+    def test_openai_chat_raises_without_key(self):
+        adapter = LLMAdapter(model="gpt-4o-mini")
+        with patch.object(LLMAdapter, '_get_provider_api_key', return_value=None):
+            with pytest.raises(ValueError, match="No OpenAI API key"):
+                adapter._chat_openai("system", "hello")
+
+    def test_openai_key_falls_back_to_env_var(self):
+        mock_kr = MagicMock()
+        mock_kr.get_password.return_value = None
+        with patch.dict("sys.modules", {"keyring": mock_kr}), \
+             patch.dict("os.environ", {"OPENAI_API_KEY": "sk-openai-test"}, clear=True):
+            result = LLMAdapter._get_provider_api_key("openai")
+            assert result == "sk-openai-test"

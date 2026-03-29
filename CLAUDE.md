@@ -194,20 +194,22 @@ Key API endpoints:
 
 ---
 
-## Current State (v0.10.2)
+## Current State (v0.11.0-wip)
 
-All items from the original TDD §25 build order are complete through step 6. The system is feature-complete for single-user local deployment on Windows. Cloud reasoning is available via Anthropic Claude (backend only — UI in v0.11.0).
+All items from the original TDD §25 build order are complete through step 6. The system is feature-complete for single-user local deployment on Windows. Cloud reasoning is available via Anthropic Claude with full UI support.
 
 **Core Systems:**
 - Append-only JSON vault with typed memory enforcement (`VALID_MEMORY_TYPES`, 17 types)
-- Ingestion pipeline (ChatGPT, PDF, DOCX, CSV, GDrive, POST /ingest/upload multipart)
+- Ingestion pipeline (ChatGPT, PDF, DOCX, CSV, TXT, GDrive, POST /ingest/upload multipart)
 - Semantic retrieval via vector indexes (cached in memory, no disk load per query)
 - Context assembly with policy-weighted ranking, diversity selection, project-scoped boost (ADR-007)
 - SSE streaming responses from Ollama or Anthropic through FastAPI
 - Cloud model provider support — Anthropic Claude (Haiku 4.5, Sonnet 4.6) via LLMAdapter
 - Provider API key storage via keyring with env var fallback (`ANTHROPIC_API_KEY`)
 - Provider dispatch by model name prefix (`claude-` → Anthropic, else → Ollama)
-- Auto state extraction from conversation turns (StateExtractor, background thread)
+- DELETE /provider-key/{provider} endpoint for key removal
+- Model selection persists via vault/model_override.json (survives API restarts)
+- Auto state extraction from conversation turns (StateExtractor, background thread, threshold: 10 words)
 - State layer (StateService, StateResolver, 8 categories, context packet integration)
 - Daily and weekly reflection generation (multi-source, junk-filtered, suppression tools)
 - Constitutional review (8 principles including authentic_expression, streaming-compatible)
@@ -215,20 +217,26 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Projects backend (CRUD, conversation assignment, project-scoped retrieval)
 - Self-echo prevention (role-labeled context, metadata-aware scoring, -0.25 assistant penalty)
 - Temporal grounding (current date injected, timestamps on context items)
-- Profile retrieval tuning (identity queries lower score gate, return more items)
+- Profile retrieval via semantic search (identity queries for both user and Ember-directed)
+- Prompt label: "person Ember is talking to" (prevents identity confusion)
 - Buffer compression backgrounded (no longer blocks response)
-- Default model: qwen3:8b (5.4/10 eval, best local model tested)
+- Conversation turns never filtered by length (short messages like "Yes" are saved)
+- Test session flag (X-Test-Session header, filtered from listings, cleanup script)
+- Default model: qwen3:8b (4.9-6.7/10 eval range, best local model tested)
 - Ember uses she/her pronouns (system prompt)
+- Version field in /api/health endpoint (reads from version.json)
 
 **Evaluation & Tooling:**
 - Retrieval evaluation (15 benchmark cases, pass/warn/fail scoring, latency tracking)
 - Conversation quality eval with Claude as external evaluator (18 test cases, 6 categories)
 - Local model comparison eval (automated, all installed models, comparison table) — `tools/eval_local_models.py`
 - Cloud model eval: Claude Haiku 4.5 scored 8.7/10, Claude Sonnet 4.6 scored 8.5/10
-- Eval baseline documented: `docs/eval_history.md` (all 8 models, full category breakdowns)
-- Model selection guide: `docs/model_guide.md` (linked from installer Done screen)
+- Eval history: `docs/eval_history.md` (all models, full category breakdowns, variance documentation)
+- Model selection guide: `docs/model_guide.md` (linked from installer model selection screen)
 - Vault health audit (7 checks, GREEN/YELLOW/RED health score, --fix flag)
 - Reflection quality audit and suppression tools
+- `scripts/set_provider_key.py` CLI (--provider, --check, --remove)
+- `scripts/cleanup_test_sessions.py` for soft-deleting eval conversations
 
 **Security:**
 - API key auth via Windows Credential Manager
@@ -236,41 +244,56 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Rate limiting, path traversal protection, JSON audit logging
 - SearXNG bound to localhost only
 - Tailscale serve uses localhost binding
+- Vault path masked in UI with timed reveal (ADR-012 Phase 1)
+- Cloud API keys stored in OS credential store, never displayed in UI
 
 **UI (ember-2-ui, served from ui/):**
 - Streaming chat with markdown, copy, edit/resend, regenerate, scroll-to-bottom, export
+- Collapsible sidebar with icon row (new conversation, search, collapse) and localStorage persistence
+- Model indicator in top bar (muted dot local, pulsing accent dot cloud, click opens settings)
+- Local/Cloud model selector tabs in Settings with underline-style active indicator
+- Secure API key entry in Cloud tab (masked password input, credential store disclosure, never displayed)
+- Remove key with inline confirmation dialog
+- Vault path masked by default, eye icon reveals for 10 seconds, copy without displaying
+- Vision toggle defaults to on when vision model configured, persisted in localStorage
+- Version reads from /api/health not hardcoded
 - Sidebar with projects, conversations, search, right-click context menu, New Project button
-- Settings: 5 themes, model selector, vision toggle, web search toggle
+- Settings: 5 themes, web search toggle, conversation memory toggle
 - About panel with Ember's story, beliefs, ethos
 - Bug reports to GitHub Issues, update checker
 - PWA manifest for Android/iOS home screen installation
 - Consistent Ember-2 branding, WCAG 2.1 AA accessible
+- .txt file upload support with document context injection into chat message
 
 **Installer (ember-2-installer):**
 - Auto-install prerequisites via winget (Git, Python, Node, Ollama, Docker)
-- Curated model cards with disk sizes, Ember detection scan, disk space summary
+- Curated model cards with eval-based descriptions, disk sizes, RAM requirements
+- Default model: qwen3:8b (was qwen2.5:14b)
+- Model selection guide linked from model selection screen and Done screen
 - Venv/API lock detection, auto-start API with health check polling
+- Retry button on Done screen with warm troubleshooting hints
 - Tailscale walkthrough, progress bar + fun facts, pip time warning
 - Clones ember-2 repo, builds UI from ember-2-ui
-- Model selection guide linked from Done screen
+- git pull uses origin main explicitly (no tracking info errors)
 
-**Tests:** 244 passing
+**Tests:**
+- ember-2 backend: 285 pytest tests passing
+- ember-2-ui: 35 Playwright e2e tests passing, 2 skipped (cloud model, remove key)
 
 ---
 
 ## Immediate Next Priorities
 
-**v0.11.0 — Cloud Provider UI + Recovery + Onboarding:**
-- Cloud provider UI (persistent active indicator, settings panel, API key management)
+**v0.11.0 remaining work:**
+- OpenAI provider support (GPT-4o, GPT-4o mini)
 - Hardware detection in installer, auto-recommends local model based on detected RAM
 - AGPL acknowledgment screen in installer
 - Backup and export story — vault backup guide, export to portable format
-- Onboarding discoverability — verify first-launch triggers automatically
 - Recovery playbook — "what to do if Ember breaks" user-facing doc linked from UI and installer
 - Social engineering constitutional upgrade — semantic pattern matching in trigger layer (ADR-010)
+- Multi-record state categories for open_loop and next_action (ADR-011)
+- Mobile testing via Tailscale
 - Tray icon / OS notifications research
-- OpenAI provider support (GPT-4o, GPT-4o mini)
-- Vault path masking in UI (ADR-012 Phase 1)
 
 **v0.12.0 — Task Layer + Session Reflection + Mac/Linux:**
 - Task objects with ISC verifiable completion criteria
@@ -310,12 +333,15 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Eval harness uses user's own vault — results are personal, not generic benchmarks
 
 ## Known Gaps (tracked)
-- Memory grounding weakness — root cause analysis in progress (all local models score 2.0-4.0; Claude scores 8.7)
 - Vault encryption at rest — v0.13.0
 - Social engineering trigger upgrade — v0.11.0 (ADR-010)
 - Mac/Linux installer — v0.12.0
 - Backup/export story — v0.11.0
 - Recovery playbook — v0.11.0
+
+## Known Issues
+- qwen3:8b hallucination pattern: generates news-sounding content without web search when context is poor. Model limitation, not a code bug. classify_query() web search triggers investigated and confirmed clean. Cloud models do not exhibit this. Documented in eval_history.md.
+- Old soft-deleted conversations may still show in UI sidebar. Soft-delete filter investigation pending.
 
 ---
 

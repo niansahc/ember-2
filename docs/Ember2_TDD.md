@@ -1526,6 +1526,17 @@ It should be possible to explain:
 - ~~default model switch~~ — complete (v0.10.2): qwen3:8b replaces qwen2.5:14b (5.4/10 vs 4.7/10, half the size, faster)
 - ~~model selection guide~~ — complete (v0.10.2): docs/model_guide.md with real eval data for 8 models, linked from installer Done screen
 - ~~local model comparison eval~~ — complete (v0.10.2): tools/eval_local_models.py, 6 models tested, qwen3:8b won
+- ~~cloud provider support~~ — complete (v0.11.0): Anthropic Claude (Haiku, Sonnet) and OpenAI (gpt-4o-mini, gpt-4o, gpt-4-turbo, gpt-3.5-turbo) providers added; opt-in; API keys stored in Windows Credential Manager via keyring; gpt-* and claude-* model names route to respective providers; local Ollama remains default
+- ~~social engineering safety triggers~~ — complete (v0.11.0): SafetyPolicyService extended with social_engineering signal; 5 attack families (identity override, persona override, intimacy exploitation, false urgency, pretexting), 39 patterns; routes to constitutional review; ADR-010 filed
+- ~~collapsible sidebar with icon row~~ — complete (v0.11.0): new conversation, search, collapse controls; project detail view includes search and new conversation
+- ~~model indicator in top bar~~ — complete (v0.11.0): muted local indicator, glowing cloud indicator; distinct visual for local vs cloud model active
+- ~~secure API key entry~~ — complete (v0.11.0): masked input, credential store disclosure, remove key with confirmation dialog, vault path masking with timed reveal (ADR-012 Phase 1)
+- ~~.txt file ingestion~~ — complete (v0.11.0): plain text files now supported through the standard ingestion pipeline
+- ~~Playwright e2e test suite~~ — complete (v0.11.0): 35 passing, 2 skipped
+- ~~hardware detection in installer~~ — complete (v0.11.0): RAM and GPU detected at setup time; model recommendation pre-selects appropriate default
+- ~~AGPL acknowledgment screen in installer~~ — complete (v0.11.0): shown before Done screen; user must acknowledge license before completing setup
+- ~~backup and export guide~~ — complete (v0.11.0): docs/BACKUP_AND_EXPORT.md
+- ~~recovery playbook~~ — complete (v0.11.0): docs/RECOVERY_PLAYBOOK.md
 
 ## 25.3 Mid-Term
 

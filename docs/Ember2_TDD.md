@@ -1,8 +1,9 @@
 # Ember-2 Technical Design Document (TDD)
 
-Version: 1.0-draft  
-Status: Updated working design baseline  
-Primary environment: Local-first desktop deployment  
+Version: 1.0-draft
+Status: Updated working design baseline
+Current release: v0.10.4 (released), v0.11.0 (in progress)
+Primary environment: Local-first desktop deployment
 Repository: `ember-2`
 
 ---
@@ -232,12 +233,13 @@ Responsibilities:
 
 Components:
 
-- Ollama
-- local LLM(s)
-- prompt templates
-- adapter layer for chat completion format
+- Ollama (local models: qwen3:8b default, others available)
+- Cloud providers (opt-in): Anthropic Claude (Haiku, Sonnet), OpenAI (GPT-4o, GPT-4o Mini, etc.)
+- LLMAdapter with model-prefix dispatch: `claude-*` → Anthropic API, `gpt-*` → OpenAI API, else → Ollama
+- Prompt templates
+- Adapter layer for chat completion format
 
-Constraint:  
+Constraint:
 The reasoning layer does not own canonical truth or policy authority.
 
 ## 7.3 Cognitive Layer
@@ -498,6 +500,7 @@ system_event
 decision
 review_log
 evaluation
+session
 ```
 
 This taxonomy may evolve, but the separation principle should remain.
@@ -567,8 +570,9 @@ Near-term:
 - keep constitution in external config
 
 Mid-term:
-- move indexes to SQLite or DuckDB
-- optionally keep JSON vault as canonical source
+- ~~move ingested index to SQLite~~ — complete (v0.6.0): `ingested.db` via SqliteVectorStore
+- Remaining indexes (conversation, journal, reflection, profile, state) still JSON — migration to SQLite scheduled for v0.13.0
+- JSON vault remains canonical source
 
 Long-term:
 - consider hybrid architecture
@@ -1302,16 +1306,16 @@ flowchart TD
 
 ## 21.5 Trigger Policy
 
-The first version uses lightweight heuristics or pattern checks to decide whether review should run.
+The trigger layer uses pattern-based heuristics to decide whether review should run.
 
-This trigger layer should remain:
+This trigger layer is:
 
-- fast
-- inspectable
-- easy to tune
+- fast (no LLM call)
+- inspectable (explicit pattern lists in code)
+- easy to tune (add/remove patterns)
 - separate from retrieval
 
-It may later evolve into semantic or classifier-assisted triggering.
+As of v0.11.0, the trigger layer includes social engineering detection (ADR-010) with 39 patterns across 5 attack families: identity override, persona override, intimacy exploitation, false urgency, and pretexting. The `social_engineering` signal routes to constitutional review with `non_harm`, `system_integrity`, and `truthfulness` principles active.
 
 ## 21.6 Critique and Revision Strategy
 
@@ -1506,7 +1510,7 @@ It should be possible to explain:
 
 - implement typed memory classes formally
 - ~~add state layer~~ — complete (v0.5.2-state-complete): StateService, StateResolver, models, ContextPacket integration, prompt rendering, status_state query intent, state_boost in ContextRanker, API endpoints (GET /state, GET /state/{category}, POST /write-state), add_state.py CLI, audit_memory.py vault health checks; state flows vault → context pipeline → LLM prompt
-- ~~model configurable via .env~~ — complete (v0.5.3-configurable-model): get_ember_model() reads EMBER_MODEL from .env, defaults to llama3.1:8b
+- ~~model configurable via .env~~ — complete (v0.5.3-configurable-model): get_ember_model() reads EMBER_MODEL from .env, defaults to qwen3:8b (changed from llama3.1:8b in v0.10.2)
 - ~~conversation memory write path fixed~~ — complete (v0.7.0): openai_adapter now writes two separate records per turn (user + assistant); combined-exchange guard removed from should_skip_memory(); regression tests added in test_write_memory.py
 - ~~memory_type propagation fixed~~ — complete (v0.7.0): ContextItem dataclass now includes memory_type field; set explicitly in all three retriever paths (get_memory_items, get_reflection_items, get_conversation_items)
 - ~~reflection scoring improvements~~ — complete (v0.7.1): _should_skip_for_reflection tightened (box-drawing chars, short URL check, multi-turn detection, formatting complaint markers, ", line " fix); _reflection_priority_score improved with length gate on experience bonus, length quality bonus, and Jaccard-based diversity selection replacing candidates[:8]; 31 tests added in test_should_skip_for_reflection.py
@@ -1549,7 +1553,7 @@ It should be possible to explain:
 - ~~journal ingestion~~ — complete (v0.7.8): scripts/journal.py CLI with --text, --mood, --tags, $EDITOR support; POST /journal endpoint with text, tags, mood, date_override; write_memory() minimum length lowered to 20 chars for memory_type="journal" (was 40); both paths bypass MemoryService duplicate-check
 - ~~multi-source reflection~~ — complete (v0.7.9): generate_reflection() signature changed from memory_type: str to memory_types: list[str] | str (backwards compat); daily and weekly runners now pass ["journal", "ingested"]; candidates pooled from all sources before scoring and diversity selection; source_label stored in reflection metadata
 - ~~web search via local SearXNG~~ — complete (v0.8.0/v0.8.1): `src/tools/web_search.py` thin client to SearXNG JSON API at `localhost:8888`; `use_web_search` field on `ContextPolicy`; `web_search` intent class in `classify_query()`; apostrophe normalization (curly → straight) before all marker matching; `web_items` field on `ContextPacket`; results rendered above memory context in prompt builder; `docker-compose.yml` + `config/searxng/settings.yml` for local SearXNG instance
-- ~~vision model integration~~ — complete (v0.8.2): `EMBER_VISION_MODEL` env var + `get_ember_vision_model()` in config; `image_data: list[str]` field on `ContextPacket`; base64 extraction from `data:image/...;base64,` prefix in openai_adapter; `model_override` + `images=` kwarg in `LLMAdapter._chat()`; `use_vision = bool(image_data) and bool(vision_model)` routing in `generate_response()`; graceful fallback to text-only model when vision not configured or no image present; 18 tests in test_vision.py (123 total passing)
+- ~~vision model integration~~ — complete (v0.8.2): `EMBER_VISION_MODEL` env var + `get_ember_vision_model()` in config; `image_data: list[str]` field on `ContextPacket`; base64 extraction from `data:image/...;base64,` prefix in openai_adapter; `model_override` + `images=` kwarg in `LLMAdapter._chat()`; `use_vision = bool(image_data) and bool(vision_model)` routing in `generate_response()`; graceful fallback to text-only model when vision not configured or no image present; 18 tests in test_vision.py (123 total passing at v0.8.2; current: 300 pytest + 36 Playwright e2e)
 - add task layer
 - improve timeline reconstruction
 - build dashboard / observability views
@@ -1835,6 +1839,7 @@ Ember's local-first architecture provides a natural baseline: data never leaves 
 - Vault lives at `C:\EmberVault\` — outside OneDrive, not cloud-synced
 - Path set via `PRIVATE_VAULT_PATH` in `.env` (gitignored)
 - Vault path is never logged or echoed in API responses
+- Vault path masked in UI by default (ADR-012 Phase 1) — eye icon reveals for 10 seconds, copy without display
 - Windows NTFS access controls restrict access to the running user account
 
 ## 31.3 Encryption at Rest

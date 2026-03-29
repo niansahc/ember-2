@@ -10,7 +10,7 @@ from src.core.config import get_private_vault_path
 from src.ingest.importers.chatgpt import load_chatgpt_export
 from src.ingest.importers.csv import load_csv
 from src.ingest.importers.docx import load_docx
-from src.ingest.importers.files import load_file
+from src.ingest.importers.files import load_file, load_text_file
 from src.ingest.importers.gdrive import (
     list_drive_files,
     parse_gdrive_files,
@@ -32,6 +32,7 @@ DOCUMENT_EXTENSIONS = {
     ".docx": "docx",
     ".csv": "csv",
     ".xlsx": "csv",
+    ".txt": "txt",
 }
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
@@ -131,6 +132,8 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
             docs = load_docx(str(saved_path))
         elif doc_type == "csv":
             docs = load_csv(str(saved_path))
+        elif doc_type == "txt":
+            docs = load_text_file(str(saved_path))
         else:
             raise HTTPException(status_code=400, detail=f"No importer for {ext}")
 

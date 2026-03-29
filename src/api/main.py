@@ -476,6 +476,17 @@ def check_provider_key(provider: str):
         return {"provider": provider, "configured": False}
 
 
+@app.delete("/provider-key/{provider}")
+def remove_provider_key(provider: str):
+    """Remove a cloud provider API key from the credential store."""
+    try:
+        import keyring
+        keyring.delete_password(f"ember-2-{provider}", "api_key")
+        return {"status": "removed", "provider": provider}
+    except Exception:
+        return {"status": "not_found", "provider": provider}
+
+
 # ── UI static file serving ─────────────────────────────────────────────
 # Serves the built Ember UI from ui/ if it exists.
 # Must be registered AFTER all API routes — acts as a fallback.

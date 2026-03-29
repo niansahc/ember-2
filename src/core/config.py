@@ -25,12 +25,13 @@ def get_ember_api_key() -> str | None:
     Returns the API key required to access Ember-2 endpoints, or None if not set.
 
     Looks in this order:
-      1. Windows Credential Manager (service: ember-2, username: api_key)
-         Store with: python scripts/set_api_key.py
+      1. System credential store via keyring (Windows Credential Manager,
+         macOS Keychain, or Linux Secret Service)
+         Set with: python scripts/set_api_key.py
       2. EMBER_API_KEY env var / .env (fallback for tests and non-Windows environments)
 
     All endpoints except GET / require either:
-      Authorization: Bearer <key>   (Open WebUI / OpenAI-compatible clients)
+      Authorization: Bearer <key>   (Ember UI / OpenAI-compatible clients)
       X-API-Key: <key>              (direct API access)
     """
     try:

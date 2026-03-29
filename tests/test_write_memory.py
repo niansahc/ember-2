@@ -35,9 +35,15 @@ def test_too_short_is_skipped():
     assert should_skip_memory("Short text.") is True
 
 
-def test_39_chars_is_skipped_for_non_journal():
-    # non-journal types require 40 chars minimum
-    assert should_skip_memory("a" * 39, memory_type="conversation") is True
+def test_39_chars_is_skipped_for_non_conversation():
+    # non-journal, non-conversation types require 40 chars minimum
+    assert should_skip_memory("a" * 39, memory_type="ingested") is True
+
+
+def test_short_conversation_turn_is_not_skipped():
+    # conversation turns are never skipped for length
+    assert should_skip_memory("Yes", memory_type="conversation") is False
+    assert should_skip_memory("Go ahead", memory_type="conversation") is False
 
 
 def test_40_chars_passes_length_check_for_non_journal():

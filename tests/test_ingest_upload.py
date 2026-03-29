@@ -38,8 +38,7 @@ class TestUploadRouting:
 
     def test_unsupported_extension_not_in_maps(self):
         from src.api.routes.ingest import DOCUMENT_EXTENSIONS, IMAGE_EXTENSIONS
-        assert ".txt" not in DOCUMENT_EXTENSIONS
-        assert ".txt" not in IMAGE_EXTENSIONS
+        assert ".txt" in DOCUMENT_EXTENSIONS  # txt is now supported
         assert ".exe" not in DOCUMENT_EXTENSIONS
         assert ".exe" not in IMAGE_EXTENSIONS
 

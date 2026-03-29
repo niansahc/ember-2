@@ -56,13 +56,37 @@ def get_ember_model() -> str:
     """
     Returns the model name to use for Ember-2.
 
-    Reads EMBER_MODEL from .env. Defaults to "qwen3:8b" if not set.
+    Checks (in order):
+      1. Persisted model override (vault/model_override.json) — set by UI model switcher
+      2. EMBER_MODEL from .env
+      3. Default: "qwen3:8b"
 
-    Supports both local (Ollama) and cloud (Anthropic) models:
-      EMBER_MODEL=qwen3:8b               # local via Ollama
-      EMBER_MODEL=claude-sonnet-4-20250514  # cloud via Anthropic API
+    Supports both local (Ollama) and cloud (Anthropic) models.
     """
+    # Check persisted override first
+    try:
+        import json
+        vault = get_private_vault_path()
+        override_path = vault / "model_override.json"
+        if override_path.exists():
+            data = json.loads(override_path.read_text(encoding="utf-8"))
+            model = data.get("model")
+            if model:
+                return model
+    except Exception:
+        pass
     return os.getenv("EMBER_MODEL", "qwen3:8b")
+
+
+def set_ember_model_override(model: str) -> None:
+    """Persist a model selection so it survives API restarts."""
+    import json
+    vault = get_private_vault_path()
+    override_path = vault / "model_override.json"
+    override_path.write_text(
+        json.dumps({"model": model}, indent=2),
+        encoding="utf-8",
+    )
 
 
 # Cloud model providers and their available models.

@@ -24,9 +24,12 @@ def should_skip_memory(text: str, memory_type: str = "journal") -> bool:
     if not normalized:
         return True
 
-    min_length = 20 if memory_type == "journal" else 40
-    if len(normalized) < min_length:
-        return True
+    # Conversation turns are never skipped for length — "Yes", "Thanks",
+    # "Go ahead" are all meaningful context. Only filter journal/other types.
+    if memory_type != "conversation":
+        min_length = 20 if memory_type == "journal" else 40
+        if len(normalized) < min_length:
+            return True
 
     meta_markers = (
         "user asked:",
@@ -92,7 +95,7 @@ def write_memory(
     vault = get_private_vault_path()
     memory_dir = storage.get_memory_dir(vault, memory_type)
 
-    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
     memory_id = timestamp
     normalized = normalize_text(text)
     clean_metadata = flatten_metadata(metadata)

@@ -38,7 +38,8 @@ Cognitive Layer      — ContextService, ContextRetriever, ContextRanker,
                        ReflectionEngine, SafetyPolicyService, ResponseReviewService
                        (src/context/, src/reflection/, src/safety/)
 Memory Layer         — Append-only JSON vault, vector indexes (src/memory/, src/retrieval/)
-State Layer          — StateService, StateResolver, auto-extraction (src/state/)
+State Layer          — StateService, StateResolver, StateExtractor, auto-extraction
+                       from conversation turns, manual write via POST /write-state (src/state/)
 Tool Layer           — PLANNED (src/tasks/ stub exists)
 ```
 

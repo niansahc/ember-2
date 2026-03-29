@@ -264,6 +264,8 @@ Average latency: 19.7s
 
 **qwen3:8b variance range established:** Across multiple runs, qwen3:8b scores between 5.4 and 6.7 overall. Users should expect this range rather than a fixed score. Individual category scores vary by 1-4 points run-to-run.
 
+**Known qwen3:8b hallucination pattern:** When the model lacks sufficient grounding context, it sometimes generates text that resembles news headlines or current events without any web search being triggered. This is a model limitation, not a web search bug. The classify_query() web search trigger was investigated and confirmed clean — none of the 15 web search markers fire for conversational queries. Cloud models (Haiku, Sonnet) do not exhibit this pattern.
+
 ---
 
 ## v0.10.4 Full Local Model Retest

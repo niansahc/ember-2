@@ -1,11 +1,13 @@
 """
 scripts/set_api_key.py
 
-Stores the Ember-2 API key in Windows Credential Manager.
+Stores the Ember-2 API key in the system credential store
+(Windows Credential Manager, macOS Keychain, or Linux Secret Service
+via the keyring library).
+
 Run this once after setup, or again to rotate the key.
 
 The API key is never written to .env or any plaintext file.
-The stored credential is DPAPI-encrypted and tied to your Windows login.
 
 Usage:
     python scripts/set_api_key.py                  Interactive (default)
@@ -46,7 +48,7 @@ def generate_key_non_interactive():
 
     new_key = secrets.token_urlsafe(32)
     keyring.set_password(SERVICE, USERNAME, new_key)
-    print(f"API key stored in Windows Credential Manager.")
+    print(f"API key stored in system credential store.")
     print(f"Key: {new_key}")
 
 
@@ -71,10 +73,9 @@ def main():
 
     new_key = secrets.token_urlsafe(32)
     keyring.set_password(SERVICE, USERNAME, new_key)
-    print(f"\nAPI key stored in Windows Credential Manager.")
+    print(f"\nAPI key stored in system credential store.")
     print(f"Key: {new_key}")
-    print("\nCopy this key into Open WebUI (Settings -> Connections -> API Key).")
-    print("It will not be shown again from this script — retrieve it from Credential Manager if needed.")
+    print("\nIt will not be shown again from this script — retrieve it from your system's credential manager if needed.")
 
 
 if __name__ == "__main__":

@@ -199,7 +199,7 @@ class LLMAdapter:
 
     def _is_cloud_model(self, model: str) -> bool:
         """Check if the model is a cloud provider model."""
-        return model.startswith("claude-")
+        return model.startswith("claude-") or model.startswith("gpt-")
 
     @staticmethod
     def _get_provider_api_key(provider: str) -> str | None:
@@ -225,8 +225,10 @@ class LLMAdapter:
         model_override: str | None = None,
     ) -> str:
         model = model_override or self.model
-        if self._is_cloud_model(model):
+        if model.startswith("claude-"):
             return self._chat_anthropic(system_prompt, user_message, temperature=0.7)
+        if model.startswith("gpt-"):
+            return self._chat_openai(system_prompt, user_message, temperature=0.7)
         return self._chat_ollama(system_prompt, user_message, image_data, model)
 
     def _chat_stream(
@@ -236,10 +238,12 @@ class LLMAdapter:
         image_data: list[str] | None = None,
         model_override: str | None = None,
     ):
-        """Stream chat response. Dispatches to Ollama or Anthropic."""
+        """Stream chat response. Dispatches to Ollama, Anthropic, or OpenAI."""
         model = model_override or self.model
-        if self._is_cloud_model(model):
+        if model.startswith("claude-"):
             yield from self._chat_anthropic_stream(system_prompt, user_message, temperature=0.7)
+        elif model.startswith("gpt-"):
+            yield from self._chat_openai_stream(system_prompt, user_message, temperature=0.7)
         else:
             yield from self._chat_ollama_stream(system_prompt, user_message, image_data, model)
 
@@ -374,6 +378,94 @@ class LLMAdapter:
                         if text:
                             yield text
                 except (json.JSONDecodeError, KeyError):
+                    continue
+
+    # ------------------------------------------------------------------
+    # OpenAI (cloud)
+    # ------------------------------------------------------------------
+
+    def _chat_openai(
+        self, system_prompt: str, user_message: str, temperature: float = 0.7,
+    ) -> str:
+        """Non-streaming call to OpenAI Chat Completions API."""
+        api_key = self._get_provider_api_key("openai")
+        if not api_key:
+            raise ValueError("No OpenAI API key configured. Store one via POST /provider-key.")
+
+        logger.info("[CLOUD] OpenAI %s — non-streaming", self.model)
+
+        resp = httpx.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                "temperature": temperature,
+                "max_tokens": 4096,
+            },
+            timeout=120.0,
+        )
+
+        if resp.status_code != 200:
+            raise ValueError(f"OpenAI API error {resp.status_code}: {resp.text[:300]}")
+
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+    def _chat_openai_stream(
+        self, system_prompt: str, user_message: str, temperature: float = 0.7,
+    ):
+        """Streaming call to OpenAI Chat Completions API. Yields text chunks."""
+        api_key = self._get_provider_api_key("openai")
+        if not api_key:
+            raise ValueError("No OpenAI API key configured. Store one via POST /provider-key.")
+
+        logger.info("[CLOUD] OpenAI %s — streaming", self.model)
+
+        with httpx.stream(
+            "POST",
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                "temperature": temperature,
+                "max_tokens": 4096,
+                "stream": True,
+            },
+            timeout=120.0,
+        ) as resp:
+            if resp.status_code != 200:
+                error_text = resp.read().decode()
+                raise ValueError(f"OpenAI API error {resp.status_code}: {error_text[:300]}")
+
+            for line in resp.iter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str == "[DONE]":
+                    return
+
+                import json
+                try:
+                    event = json.loads(data_str)
+                    delta = event.get("choices", [{}])[0].get("delta", {})
+                    text = delta.get("content", "")
+                    if text:
+                        yield text
+                except (json.JSONDecodeError, KeyError, IndexError):
                     continue
 
     def _maybe_compress_buffer(self) -> None:

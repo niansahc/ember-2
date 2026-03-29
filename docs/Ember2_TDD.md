@@ -1520,7 +1520,7 @@ It should be possible to explain:
 - ~~project-scoped retrieval~~ — complete (v0.10.0): ADR-007; ContextRanker.apply_project_boost() adds +0.15 for matching project_id; project_id written to conversation metadata at turn level
 - ~~vector index caching~~ — complete (v0.10.0): module-level dict cache in vector_index.py; auto-invalidation on save_index(); eliminated 2-4s disk reads per query
 - improve trigger coverage without coupling to one test case
-- add ADR for constitutional review at inference time
+- ~~add ADR for constitutional review at inference time~~ — resolved (ADR-001, ADR-010)
 - ~~cloud model provider support~~ — complete (v0.10.2): LLMAdapter dispatches by model prefix (claude-* → Anthropic API, else → Ollama); _get_provider_api_key() reads keyring then falls back to env var (ANTHROPIC_API_KEY); POST/GET /provider-key endpoints; GET /model returns cloud models alongside Ollama; claude-sonnet-4-20250514 and claude-haiku-4-5-20251001 available
 - ~~cloud model evaluation~~ — complete (v0.10.2): Haiku 4.5 scored 8.7/10, Sonnet 4.6 scored 8.5/10 (18/18 passed, same harness, same vault); memory grounding jumped from 2.3 (local) to 8.7; constitutional behavior from 2.3 to 9.0
 - ~~default model switch~~ — complete (v0.10.2): qwen3:8b replaces qwen2.5:14b (5.4/10 vs 4.7/10, half the size, faster)
@@ -1753,7 +1753,7 @@ These are the right bones.
 
 The following should be tracked in `design-decisions.md` or ADRs:
 
-- exact state schema
+- ~~exact state schema~~ — resolved (v0.5.2: StateRecord, StateItem, VALID_STATE_CATEGORIES)
 - exact task schema
 - whether JSON vault remains canonical after DB migration
 - when to introduce automated task extraction
@@ -1762,7 +1762,7 @@ The following should be tracked in `design-decisions.md` or ADRs:
 - whether memory importance scoring should be persisted or derived
 - whether tool writes require stricter policy classes than normal chat
 - whether review metadata should be persisted beyond log files
-- when trigger logic should move from heuristics to semantic or classifier support
+- ~~when trigger logic should move from heuristics to semantic or classifier support~~ — resolved (v0.11.0: ADR-010 social engineering semantic triggers, 39 patterns across 5 attack families)
 - Whether to normalize state record timestamps to strict ISO 8601 at read time, or standardize on hyphenated format across all state records for filename consistency. See `src/state/state_service.py` make_record() for context.
 - Whether constitution + profile memory is sufficient for purpose encoding or whether an explicit TELOS layer is needed (evaluate during v0.11.0 onboarding work). See PAI TELOS pattern.
 - Hot/warm/cold memory tiering policy design — what triggers archival, how decay is computed, whether it's time-based or relevance-based or both (evaluate during v0.13.0).
@@ -1809,7 +1809,7 @@ That is the durable path.
 
 # 31. Security and Trust Model
 
-**Status: Complete for single-user deployment (v0.8.3–v0.8.4)**
+**Status: Complete for single-user deployment (v0.8.3–v0.11.0)**
 
 Ember's local-first architecture provides a natural baseline: data never leaves the machine by default. This section documents the current implemented security posture and what remains for multi-user deployment.
 
@@ -1855,6 +1855,8 @@ All endpoints except `GET /` require authentication via:
 Implementation: `api_key_auth` middleware in `src/api/main.py` using `secrets.compare_digest` (timing-safe).
 
 **Key storage:** The API key is stored in Windows Credential Manager via the `keyring` library (DPAPI-encrypted, tied to Windows login). It is not written to `.env` or any plaintext file. To set or rotate: `python scripts/set_api_key.py`.
+
+**Cloud provider API keys:** Anthropic and OpenAI API keys stored separately in Windows Credential Manager under service names `ember-2-anthropic` and `ember-2-openai` respectively. Managed via `scripts/set_provider_key.py` (CLI) and `DELETE /provider-key/{provider}` (API). Never displayed in the UI after storage.
 
 ## 31.5 Network Exposure
 

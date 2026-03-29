@@ -76,6 +76,10 @@ Ember-2 is a private, evolving system that:
 - Outcomes are allow, revise, or refuse with redirect — never silent suppression
 - Governance rules live in external config, not buried in prompts or model behavior
 - Review decisions are logged and auditable by the user
+- Social engineering detection — safety trigger layer detects identity override, intimacy exploitation, false urgency, pretexting, and persona override attempts; routes to constitutional review without interfering with normal conversation
+
+### 9. Cloud Model Support
+- Opt-in cloud model support (Anthropic Claude, OpenAI GPT) — user-controlled, API key stored in system credential manager, never required, never default; local models remain the primary path
 
 ---
 

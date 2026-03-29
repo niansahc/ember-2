@@ -45,7 +45,7 @@ def _project_dir() -> Path:
 
 def _now_id() -> str:
     """Generate a timestamp-based ID."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%f")
 
 
 def _generate_project_id() -> str:

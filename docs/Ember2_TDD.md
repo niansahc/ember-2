@@ -1575,6 +1575,7 @@ It should be possible to explain:
 - Mac and Linux installer support
 - Reflection corpus guidance in onboarding (set expectations on timeline)
 - Local PIN/passphrase lock for UI (ADR-012 Phase 2)
+- NIST AI RMF governance review — map Ember's current security posture, constitutional review, audit logging, and safety policy against NIST AI Risk Management Framework (AI RMF 1.0) and relevant SP 800-series controls; identify gaps meaningful for a local-first personal system; document findings in `docs/GOVERNANCE.md`
 
 **v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption**
 - Hot/warm/cold memory tiering by recency and relevance

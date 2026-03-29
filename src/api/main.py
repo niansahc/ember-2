@@ -456,7 +456,7 @@ class ProviderKeyRequest(BaseModel):
 @app.post("/provider-key")
 def store_provider_key(body: ProviderKeyRequest):
     """Store a cloud provider API key in the credential manager."""
-    allowed_providers = {"anthropic"}
+    allowed_providers = {"anthropic", "openai"}
     if body.provider not in allowed_providers:
         raise HTTPException(status_code=400, detail=f"Unknown provider '{body.provider}'. Allowed: {sorted(allowed_providers)}")
     try:

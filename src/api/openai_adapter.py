@@ -43,6 +43,24 @@ state_extractor = StateExtractor()
 state_service = StateService()
 
 
+def _detect_and_write_commitment(reply: str, session_id: str) -> None:
+    """Detect commitments in Ember's response and write open_loop state records (ADR-014)."""
+    try:
+        from src.state.commitment_detector import detect_commitment
+        result = detect_commitment(reply)
+        if result.detected and result.commitment_text:
+            record = state_service.make_record(
+                state_type="open_loop",
+                text=result.commitment_text,
+                source="commitment_detector",
+                metadata={"session_id": session_id, "resolved": False},
+            )
+            state_service.write(record)
+            logger.info("[COMMITMENT] Wrote open_loop: %s", result.commitment_text[:60])
+    except Exception as exc:
+        logger.warning("[COMMITMENT] Detection failed (non-fatal): %s", exc)
+
+
 def _background_state_extraction(user_message: str, reply: str) -> None:
     """Run state extraction in a background thread so it doesn't delay the HTTP response."""
     try:
@@ -361,6 +379,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 daemon=True,
             ).start()
 
+            # Commitment detection (ADR-014) — skip for test sessions
+            if not is_test:
+                threading.Thread(
+                    target=_detect_and_write_commitment,
+                    args=(full_reply, session_id),
+                    daemon=True,
+                ).start()
+
         return StreamingResponse(
             _stream_sse(),
             media_type="text/event-stream",
@@ -396,6 +422,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         args=(latest_user_message, reply),
         daemon=True,
     ).start()
+
+    # Commitment detection (ADR-014) — skip for test sessions
+    if not is_test:
+        threading.Thread(
+            target=_detect_and_write_commitment,
+            args=(reply, session_id),
+            daemon=True,
+        ).start()
 
     return ChatCompletionsResponse(
         id=f"chatcmpl-{uuid.uuid4().hex}",

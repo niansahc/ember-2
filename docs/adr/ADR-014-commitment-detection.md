@@ -1,6 +1,6 @@
 # ADR-014: Conversational Commitment Detection and State Persistence
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-03-30
 
 ## Context

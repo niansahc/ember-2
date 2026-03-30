@@ -393,18 +393,35 @@ When adding features: unit test normalizers, filters, ranking functions, and sta
 
 ## Release Checklist
 
-When cutting a release (tagging a new version), always update these files:
+Run through this before every release. All three repos must be in sync.
 
-1. `version.json` — bump the version string (installer reads this to display Ember version)
-2. `CHANGELOG.md` — add a new section for the version with changes, bug fixes, test count
-3. `docs/Ember2_TDD.md` — mark completed items in §25, update roadmap
-4. `CLAUDE.md` — update Current State version, test count, any new capabilities
-5. `README.md` — update Current State version, test count, roadmap if changed
-6. Git tag: `git tag -a vX.Y.Z -m "vX.Y.Z — summary"`
-7. Push: `git push origin main` then `git push origin vX.Y.Z`
-8. **Create GitHub release:** `gh release create vX.Y.Z --title "vX.Y.Z" --notes "summary"` — the installer update checker compares against GitHub releases, not git tags. If you skip this step, the installer will show a stale "Latest" version.
+### Pre-release
+- [ ] `pytest` passing in ember-2 (currently 303)
+- [ ] Playwright passing in ember-2-ui (currently 35 passing, 4 skipped)
+- [ ] New backend features have corresponding UI support in ember-2-ui
+- [ ] New UI features have installer awareness (prerequisites, build steps, config)
+- [ ] `CHANGELOG.md` updated in all affected repos
+- [ ] `version.json` updated in ember-2
+- [ ] ember-2-ui built and copied to ember-2/ui/
+- [ ] ADRs filed for any architectural decisions made this release
+- [ ] `CLAUDE.md` reflects current state
+- [ ] TDD updated if architecture changed (section 25 completed items, roadmap)
+- [ ] `README.md` accurate (test counts, feature list, roadmap)
+- [ ] `/api/health` returns correct version after restart
 
-If the installer repo (ember-2-installer) has changes, also bump `package.json` version and tag.
+### Release steps
+- [ ] Tag ember-2: `git tag -a vX.Y.Z -m "summary"`
+- [ ] Tag ember-2-ui (if changes): bump `package.json`, tag
+- [ ] Tag ember-2-installer (if changes): bump `package.json`, tag
+- [ ] Push all commits: `git push origin main`
+- [ ] Push all tags: `git push origin vX.Y.Z`
+- [ ] Create GitHub releases with CHANGELOG content as notes — installer update checker compares against GitHub releases, not git tags. If you skip this, the installer shows a stale version.
+
+### Post-release
+- [ ] Update vault state records to reflect new version
+- [ ] Note any known issues in CLAUDE.md
+- [ ] For major releases: manual install test on a fresh machine
+- [ ] For major releases: run conversation quality eval if time permits
 
 ---
 

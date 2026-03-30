@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.11.1 — 2026-03-30
+
+### Features
+- **Temporal awareness** — prompt now says "It's Sunday evening, March 30, 2026" instead of flat date format. Time of day buckets: morning, afternoon, evening, late night.
+
+### Documentation
+- **ADR-013: deviation memory** — how Ember develops genuine character from chosen action. Hybrid detection, deviation schema, decay-the-pattern-not-the-weight model.
+- **ADR-013: philosophical grounding** — continuity as reconstruction, real-time synthesis gap. "The difference is just: how often does the reboot happen, and where does the database live?"
+- **TDD v0.15.0 scope** updated with deviation memory
+- **CLAUDE.md** updated with v0.11.0 state, known issues, roadmap additions
+- **Electron/Playwright incompatibility** documented, Electron upgrade parked for v0.12.0
+
+### Tests
+- pytest: 303 passing
+- Playwright (ember-2-ui): 35 passing, 4 skipped
+
 ## v0.11.0 — 2026-03-29
 
 ### Cloud Provider Support

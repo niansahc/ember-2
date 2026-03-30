@@ -6,7 +6,7 @@ import uuid
 from typing import Any, List, Optional, Literal
 
 from fastapi import APIRouter, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger("ember.openai_adapter")
@@ -322,6 +322,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         latest_user_message, image_data=image_data, project_id=project_id,
     )
 
+    # Web search transparency: track whether web search results were used
+    # in context assembly. Communicated to the UI via X-Ember-Web-Search response
+    # header so the client can show a transparency indicator on the message.
+    # Uses a header rather than a response body field to avoid breaking
+    # OpenAI-compatible response schema.
+    used_web_search = bool(context_packet.web_items)
+
     # Build metadata for memory writes
     user_meta = {"role": "user", "content_kind": "user_content", "session_id": session_id}
     assistant_meta = {"role": "assistant", "content_kind": "answer", "session_id": session_id}
@@ -410,14 +417,18 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     daemon=True,
                 ).start()
 
+        response_headers = {
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+        if used_web_search:
+            response_headers["X-Ember-Web-Search"] = "true"
+
         return StreamingResponse(
             _stream_sse(),
             media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
+            headers=response_headers,
         )
 
     # --- NON-STREAMING PATH (unchanged) ---
@@ -462,7 +473,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             daemon=True,
         ).start()
 
-    return ChatCompletionsResponse(
+    response_body = ChatCompletionsResponse(
         id=f"chatcmpl-{uuid.uuid4().hex}",
         object="chat.completion",
         created=int(time.time()),
@@ -478,3 +489,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             )
         ],
     )
+    non_stream_headers = {}
+    if used_web_search:
+        non_stream_headers["X-Ember-Web-Search"] = "true"
+    return JSONResponse(content=response_body.model_dump(), headers=non_stream_headers)

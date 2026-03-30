@@ -306,6 +306,7 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Reflection corpus guidance in onboarding (set expectations on timeline)
 - Local PIN/passphrase lock for UI (ADR-012 Phase 2)
 - Guided first-run UI tour with acknowledgment — walks new users through key features with chat examples
+- Electron upgrade 28 → 29+ (unblocks Playwright e2e tests for installer, requires electron-builder compatibility testing first)
 
 **v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption:**
 - Hot/warm/cold memory tiering by recency and relevance
@@ -350,6 +351,7 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Installer Done screen not verifying UI is built before enabling Open Ember
 - qwen3:8b hallucination pattern: generates news-sounding content without web search when context is poor. Model limitation, not a code bug. classify_query() web search triggers investigated and confirmed clean. Cloud models do not exhibit this. Documented in eval_history.md.
 - Old soft-deleted conversations may still show in UI sidebar. Soft-delete filter investigation pending.
+- Installer Playwright e2e tests: blocked on Electron 28.3.3 incompatibility with Playwright 1.58+ (requires `--remote-debugging-pipe`, not supported until Electron 29). Tests written and correct. Fix: upgrade Electron to 29+ in v0.12.0 after electron-builder compatibility testing.
 
 ---
 

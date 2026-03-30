@@ -47,6 +47,9 @@
 - pytest: 300 passing
 - Playwright: 37 passing, 2 skipped
 
+### ember-2-installer (unreleased)
+- Known issue: Playwright e2e tests require Electron 29+ for `--remote-debugging-pipe` support. Current version is Electron 28.3.3. Tests are written and correct — blocked on Electron upgrade. Tracked for v0.12.0.
+
 ## v0.10.4 — 2026-03-28
 
 ### Bug Fixes

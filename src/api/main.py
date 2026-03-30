@@ -42,6 +42,8 @@ from src.retrieval.semantic_search import semantic_search
 from src.state.models import VALID_STATE_CATEGORIES
 from src.state.state_resolver import StateResolver
 from src.state.state_service import StateService
+from src.tasks.models import VALID_TASK_STATUSES
+from src.tasks.task_service import TaskService
 
 logger = logging.getLogger("ember.auth")
 
@@ -134,6 +136,7 @@ memory_service = MemoryService()
 context_service = ContextService()
 state_service = StateService()
 state_resolver = StateResolver(service=state_service)
+task_service = TaskService()
 
 
 class MemoryRequest(BaseModel):
@@ -337,6 +340,145 @@ def list_project_conversations_endpoint(project_id: str, limit: int = 50):
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
     sessions = list_sessions_by_project(project_id, limit=limit)
     return {"project_id": project_id, "conversations": sessions}
+
+
+# ── Task endpoints ────────────────────────────────────────────────────
+
+
+class TaskCreateRequest(BaseModel):
+    title: str
+    status: str = "active"
+    project_id: str | None = None
+    text: str | None = None
+    tags: list[str] = []
+
+
+class TaskUpdateRequest(BaseModel):
+    status: str
+
+
+@app.post("/v1/tasks")
+@limiter.limit("30/minute")
+def create_task_endpoint(request: Request, body: TaskCreateRequest):
+    """Create a new task. Defaults to active status."""
+    if body.status not in VALID_TASK_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{body.status}'. Valid: {sorted(VALID_TASK_STATUSES)}",
+        )
+    record = TaskService.make_record(
+        title=body.title,
+        status=body.status,
+        source="user_input",
+        project_id=body.project_id,
+        text=body.text,
+        tags=body.tags,
+    )
+    path = task_service.write(record)
+    return {
+        "status": "created",
+        "id": record.id,
+        "title": record.title,
+        "task_status": record.status,
+        "path": str(path),
+    }
+
+
+@app.get("/v1/tasks")
+def list_tasks_endpoint(status: str | None = None, project_id: str | None = None):
+    """List tasks with optional status and project filters."""
+    if status and status not in VALID_TASK_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{status}'. Valid: {sorted(VALID_TASK_STATUSES)}",
+        )
+
+    if status and project_id:
+        records = [r for r in task_service.read_by_project(project_id) if r.status == status]
+    elif status:
+        records = task_service.read_by_status(status)
+    elif project_id:
+        records = task_service.read_by_project(project_id)
+    else:
+        records = task_service.read_all()
+
+    return {
+        "tasks": [
+            {
+                "id": r.id,
+                "title": r.title,
+                "status": r.status,
+                "text": r.text,
+                "source": r.source,
+                "project_id": r.project_id,
+                "tags": r.tags,
+                "timestamp": r.timestamp,
+            }
+            for r in records
+        ]
+    }
+
+
+@app.get("/v1/tasks/{task_id}")
+def get_task_endpoint(task_id: str):
+    """Get a single task by ID (returns the most recent record for that ID)."""
+    record = task_service.read_by_id(task_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return {
+        "id": record.id,
+        "title": record.title,
+        "status": record.status,
+        "text": record.text,
+        "source": record.source,
+        "project_id": record.project_id,
+        "tags": record.tags,
+        "timestamp": record.timestamp,
+        "metadata": record.metadata,
+    }
+
+
+@app.patch("/v1/tasks/{task_id}")
+def update_task_status_endpoint(task_id: str, body: TaskUpdateRequest):
+    """
+    Update a task's status. Append-only: writes a new record with the
+    updated status and a new timestamp, preserving the original task ID.
+    """
+    if body.status not in VALID_TASK_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{body.status}'. Valid: {sorted(VALID_TASK_STATUSES)}",
+        )
+
+    existing = task_service.read_by_id(task_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+
+    # Write a new record with the same task ID but new timestamp and updated status
+    from datetime import datetime
+    new_timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
+
+    from src.tasks.models import TaskRecord
+    updated = TaskRecord(
+        id=task_id,
+        timestamp=new_timestamp,
+        type="task",
+        title=existing.title,
+        status=body.status,
+        text=existing.text,
+        source=existing.source,
+        project_id=existing.project_id,
+        tags=existing.tags,
+        metadata={**existing.metadata, "previous_status": existing.status},
+    )
+    path = task_service.write(updated)
+    return {
+        "status": "updated",
+        "id": task_id,
+        "task_status": body.status,
+        "previous_status": existing.status,
+        "path": str(path),
+    }
 
 
 # ── Memory endpoints ───────────────────────────────────────────────────

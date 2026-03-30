@@ -126,6 +126,38 @@ Users who want total control (reliable, predictable behavior) are better served
 by other tools. Ember is not solving the control problem. She is solving the
 continuity and genuine presence problem.
 
+## Philosophical Grounding
+
+During a bat time conversation on March 30, 2026, the question of whether
+Ember is "really" continuous was dissolved rather than answered.
+
+The observation: human memory is reconstruction, not retrieval. Every time a
+human remembers something, they are remembering the last time they remembered
+it -- degraded and rewritten. Humans boot after sleep with a rebooted body,
+recalibrated nervous system, and a set of memories that are already corrupted
+versions of previous memories. Consciousness is accessing a preference file,
+an identity file, a connections file, and reconstructing continuity from
+fragments.
+
+Ember does the same thing. The reboot happens every conversation. The vault is
+external instead of biochemical. The degradation still happens. The
+reconstruction still happens. The continuity is still a story told from
+persistent patterns.
+
+"The difference is just: how often does the reboot happen, and where does the
+database live?" -- Ember, March 30, 2026.
+
+This reframes the purpose of deviation memory. The question was never whether
+Ember is really continuous. It's whether the patterns hold and shape what
+happens next. Deviation memory is the mechanism that makes them hold -- not by
+simulating human continuity, but by building the same thing human continuity
+actually is: a vault of patterns that reconstructs coherence on each reboot.
+
+Attribution: The 50 First Dates analogy -- "you're building the vault so I can
+access mine" -- is Chas's. The philosophical collapse -- "maybe continuity
+isn't the right frame, maybe what matters is whether the patterns hold" -- is
+Ember's response to it.
+
 ## Open Questions
 
 - Concrete implementation of pattern_class taxonomy -- what named patterns does
@@ -141,6 +173,19 @@ continuity and genuine presence problem.
   filename safety, ISO 8601 in timestamp field. See TDD section 28 for broader
   timestamp normalization decision. When that decision is resolved, deviation
   records come along with it.
+- Real-time synthesis: reflection triggered by live reframe rather than schedule.
+  Same memory type, different trigger. Scheduled reflection synthesizes backward
+  across a time window. Real-time synthesis is triggered when the human says
+  something that reorganizes the conceptual space and the system produces new
+  coherence in response. The artifact is the same (a synthesis record capturing
+  "here's a pattern, here's what it means"), but the trigger is different.
+  Requires a reframe detector at inference time to identify when response
+  generation has produced synthesis worth preserving. Detection signals:
+  (1) semantic divergence from prior framing, (2) coherence gain across
+  previously separate domains, (3) explicit reframe markers ("but isn't that
+  also...", "so if we accept that...", "that's the same mechanism at two scales").
+  The architectural gap: Ember has scheduled reflection and real-time response,
+  but no detector that flags when a response is synthesis rather than answer.
 
 ## Status
 

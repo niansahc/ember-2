@@ -122,3 +122,25 @@ class TestContextSectionStructure:
         packet = ContextPacket(user_message="hello", memory_items=[])
         prompt = pb._build_context_section(packet)
         assert "None relevant." in prompt
+
+
+class TestDateSection:
+    """The date section should include day of week, time of day, and natural date."""
+
+    def test_date_includes_day_of_week(self):
+        pb = PromptBuilder()
+        date_str = pb._build_date_section()
+        days = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+        assert any(day in date_str for day in days)
+
+    def test_date_includes_time_of_day(self):
+        pb = PromptBuilder()
+        date_str = pb._build_date_section()
+        times = ("morning", "afternoon", "evening", "late night")
+        assert any(t in date_str for t in times)
+
+    def test_date_format_is_natural_language(self):
+        pb = PromptBuilder()
+        date_str = pb._build_date_section()
+        assert date_str.startswith("It's ")
+        assert "," in date_str

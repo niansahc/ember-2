@@ -32,8 +32,18 @@ class PromptBuilder:
         return "\n\n".join(section for section in sections if section.strip())
 
     def _build_date_section(self) -> str:
-        """Inject current date for temporal grounding."""
-        return f"TODAY: {datetime.now().strftime('%A, %B %d, %Y')}."
+        """Inject current date and time of day for temporal grounding."""
+        now = datetime.now()
+        hour = now.hour
+        if 5 <= hour < 12:
+            time_of_day = "morning"
+        elif 12 <= hour < 17:
+            time_of_day = "afternoon"
+        elif 17 <= hour < 21:
+            time_of_day = "evening"
+        else:
+            time_of_day = "late night"
+        return f"It's {now.strftime('%A')} {time_of_day}, {now.strftime('%B %d, %Y')}."
 
     def _build_state_section(self, context_packet: ContextPacket) -> str:
         """

@@ -1583,15 +1583,35 @@ It should be possible to explain:
 - OpenAI provider support (GPT-4o, GPT-4o mini)
 - Vault path masking in UI (ADR-012 Phase 1)
 
-**v0.12.0 — Task Layer + Session Reflection + Mac/Linux**
+**v0.12.0 — Tasks, Commitments, Session Reflection, Mac/Linux**
+
+State and memory:
+- Multi-record state categories for open_loop and next_action (ADR-011)
+- Commitment detection and state persistence (ADR-014) — post-generation detector writes open_loop records when Ember makes conversational commitments; eval benchmark required before ship
+
+Tasks:
 - Task objects with ISC verifiable completion criteria
 - Task CRUD API and state lifecycle
 - Task layer ADR
+- Tasks created from conversation (Ember offers, user confirms) or on direct request
+- Tasks are project-scoped if in a project, general otherwise
+- Task sidebar section in UI
+
+Reflection:
 - Session reflection mode (end-of-session capture, ADR-009)
+
+UI:
+- Multi-image upload
+- Web search transparency indicator
+- Conversational style definitions (Casual / Balanced / Thoughtful)
+- Guided first-run UI tour with acknowledgment for new users
+
+Infrastructure:
 - Mac and Linux installer support
-- Reflection corpus guidance in onboarding (set expectations on timeline)
+- Electron upgrade 28 → 29+ (unblocks installer Playwright e2e tests)
 - Local PIN/passphrase lock for UI (ADR-012 Phase 2)
-- NIST AI RMF governance review — map Ember's current security posture, constitutional review, audit logging, and safety policy against NIST AI Risk Management Framework (AI RMF 1.0) and relevant SP 800-series controls; identify gaps meaningful for a local-first personal system; document findings in `docs/GOVERNANCE.md`
+- Clean install test on a fresh machine before release
+- NIST AI RMF governance review — map current security posture against AI RMF 1.0 and SP 800-series; document in `docs/GOVERNANCE.md`
 
 **v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption**
 - Hot/warm/cold memory tiering by recency and relevance

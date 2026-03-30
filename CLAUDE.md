@@ -297,16 +297,32 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Conversational style definitions — add plain-language descriptions to Casual/Balanced/Thoughtful in Settings
 - Tray icon / OS notifications research
 
-**v0.12.0 — Task Layer + Session Reflection + Mac/Linux:**
-- Task objects with ISC verifiable completion criteria
-- Task CRUD API and state lifecycle
-- Task layer ADR
+**v0.12.0 — Tasks, Commitments, Session Reflection, Mac/Linux:**
+
+State and memory:
+- Multi-record state categories for open_loop and next_action (ADR-011) — multiple open loops persist simultaneously
+- Commitment detection and state persistence (ADR-014) — Ember writes open_loop records when she makes commitments in conversation
+
+Tasks:
+- Task layer with objects, CRUD API, state lifecycle, task layer ADR
+- Tasks created from conversation (Ember offers, user confirms) or on direct request
+- Tasks are project-scoped if in a project, general otherwise
+- Task sidebar section in UI
+
+Reflection:
 - Session reflection mode (end-of-session capture, ADR-009)
+
+UI:
+- Multi-image upload (more than one image at a time)
+- Web search transparency indicator — show what triggered search and what was sent
+- Conversational style definitions — plain-language descriptions for Casual/Balanced/Thoughtful
+- Guided first-run UI tour with acknowledgment for new users
+
+Infrastructure:
 - Mac and Linux installer support
-- Reflection corpus guidance in onboarding (set expectations on timeline)
+- Electron upgrade 28 → 29+ (unblocks Playwright e2e tests, requires electron-builder testing)
 - Local PIN/passphrase lock for UI (ADR-012 Phase 2)
-- Guided first-run UI tour with acknowledgment — walks new users through key features with chat examples
-- Electron upgrade 28 → 29+ (unblocks Playwright e2e tests for installer, requires electron-builder compatibility testing first)
+- Clean install test on a fresh machine before release
 
 **v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption:**
 - Hot/warm/cold memory tiering by recency and relevance

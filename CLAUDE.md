@@ -446,6 +446,7 @@ Run this before every release. No exceptions. Each repository versions independe
 - [ ] Handoff notes written
 - [ ] Next version scope documented in TDD roadmap
 - [ ] CLAUDE.md priorities updated to reflect next version
+- [ ] Research review completed — scan Watch Items in TDD, check arxiv/GitHub/HuggingFace for new relevant work, update Watch Items with anything new before opening next version
 
 ---
 

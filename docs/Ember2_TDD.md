@@ -1660,7 +1660,23 @@ Infrastructure:
 **Watch Items (research, not build):**
 - OpenJarvis Learning primitive (github.com/open-jarvis/OpenJarvis) — reference for self-evaluation loops; active at v0.15.0
 - PAI TELOS pattern (github.com/danielmiessler/Personal_AI_Infrastructure) — evaluate against constitution + profile memory during v0.11.0 onboarding work
-- OpenClaw (github.com/openclaw/openclaw) — reference for SKILL.md integration format and proactive heartbeat pattern; created by Peter Steinberger, 2026
+- OpenClaw (github.com/openclaw/openclaw) — reference for SKILL.md integration format and proactive heartbeat pattern; created by Peter Steinberger, 2026. Already referenced in v0.13.0 and v0.14.0 roadmap items.
+- CIMemories benchmark (ICLR 2026, Mireshghallah et al., Carnegie Mellon University) — compositional benchmark for evaluating whether LLMs respect contextual integrity when drawing on persistent memory; frontier models show up to 69% attribute-level violation rates; evaluate Ember's retrieval and context assembly against this benchmark when system is more mature; reference: simons.berkeley.edu/talks/niloofar-mireshghallah-carnegie-mellon-university-2026-03-17
+- Contextual integrity as retrieval policy concern — research converging on the finding that privacy in AI memory is not primarily a security problem but a contextual norms problem: what is appropriate to surface where. Ember's local-first approach is the right foundation; future retrieval policy work should incorporate context-awareness (e.g. do not surface health data in work project contexts). Monitor this research direction as retrieval policy matures.
+- MemX local-first memory system — low-confidence rejection pattern: when no relevant memory exists, suppress the result rather than returning the highest-scoring noise. Relevant to Ember's retrieval quality gate work in v0.13.0+. Reference: arxiv.org/html/2603.16171
+- Letta / MemGPT (letta.ai) — explicit memory blocks always injected into prompt, archival memory retrieved on demand, user-editable memory tools. Informs future memory inspector UI and user-facing memory editing. Monitor for patterns applicable to Ember's memory inspector.
+
+**Research Monitoring Practice**
+
+Ember's architecture should stay on par with or ahead of the research frontier in local-first AI, memory systems, and personal intelligence. Review the following at each major release boundary:
+
+- arxiv.org — search "local LLM memory", "personal AI agent", "contextual integrity memory"
+- github.com/trending — filter by AI/ML, watch for new local-first agent frameworks
+- Stanford Scaling Intelligence Lab (scalingintelligence.stanford.edu) — active research in on-device AI
+- Hugging Face papers (huggingface.co/papers) — daily ML papers feed
+- Key conferences to monitor: ICLR, NeurIPS, ICML, ACL for memory and agent research
+
+When new relevant research is found: add to Watch Items with full attribution, assess whether it informs any planned roadmap items, and note if it should accelerate or adjust any ADRs.
 
 ## 25.4 Long-Term
 

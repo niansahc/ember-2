@@ -88,10 +88,56 @@ Ember-2 is a private, evolving system that:
 - Task and goal tracking (state layer)
 - Proactive suggestions and nudges
 - Scheduling and reminders
-- Tool integrations (calendar, notes, etc.)
+- Tool and data integrations — email, calendar, GitHub, health trackers, notes, finance, and more. See Tool and Data Integrations section. Read-only first, write access with agent layer only.
 - Multi-modal inputs (documents, images, etc.)
 - Agent-style workflows
 - Shareability — Ember's persona, governance config, and retrieval logic are the shareable artifacts; user data never leaves the local vault; two distribution paths: (1) non-technical user path with one-click installer, no CLI required, and an onboarding conversation flow that seeds identity context through conversation rather than scripts; (2) technical user path with clean setup docs, seed_identity_template.py, and API-first configuration
+
+---
+
+## Tool and Data Integrations
+
+Ember is designed to ingest and read data from external sources. All integrations are:
+
+- **Read-only first.** Write access requires the full agent orchestration layer and constitutional review framework. It is never added before read-only is stable.
+- **Local processing only.** Data from external sources is processed on-device. Nothing leaves the machine.
+- **Explicit opt-in.** Each integration is configured individually. Nothing is connected by default.
+- **User-controlled scope.** The user decides what gets ingested into the vault permanently vs what is read as live context for a single conversation.
+- **Sensitive data governed explicitly.** Health and finance data require explicit privacy policy entries in constitution.yaml before ingestion is enabled.
+
+### Integration Categories
+
+**Communication**
+- Email — read-only IMAP access. Two modes: ingestion (pull into vault as reference memory) and live context (surface relevant threads into conversation without permanent storage). Planned v0.13.0.
+- Calendar (Google, Outlook, iCal) — read-only. Events and scheduling context. Planned v0.14.0.
+- Slack / Discord — read-only conversation history ingestion. Planned v0.15.0.
+
+**Development**
+- GitHub — read-only. Commits, PRs, issues, and activity feed. Enables coders to use Ember as a development context layer — project history, blockers, and arcs are retrievable in conversation. Live context mode supported alongside ingestion. Planned v0.13.0.
+- Linear / Jira — issue and project tracking ingestion. Planned v0.14.0.
+
+**Health & Body**
+- Fitbit — export ingestion. Activity, sleep, and health patterns. Planned v0.13.0.
+- Apple Health / Garmin — export ingestion. Activity, sleep, HRV. Planned v0.13.0.
+- Glucose monitors (Dexcom, Libre) — export or API ingestion. Time-series data. Planned v0.14.0.
+- Oura — export ingestion. Sleep and readiness data. Planned v0.14.0.
+- Diet apps (Cronometer, MyFitnessPal) — export ingestion. Nutrition logs. Planned v0.14.0.
+
+**Creativity & Knowledge**
+- Obsidian / Notion — export ingestion. Notes and knowledge base. Planned v0.14.0.
+- Readwise — highlights and reading history ingestion. Planned v0.14.0.
+- Goodreads — reading history and reviews ingestion. Planned v0.14.0.
+- Spotify — listening history ingestion. Mood and energy signals. Planned v0.14.0.
+
+**Finance**
+- Bank / credit card exports — spending pattern ingestion. Sensitive — requires explicit privacy policy in constitution.yaml before enabling. Planned v0.15.0.
+
+**Generic**
+- CSV / JSON import — any structured data export from any app. Planned v0.13.0.
+- Any app that exports — Ember reads it. The ingestion pipeline is format-agnostic by design.
+
+### Write Access
+Write access to any external system (sending email, creating GitHub issues, archiving, etc.) is out of scope until the agent orchestration layer and full constitutional review framework are in place. Planned v0.15.0.
 
 ---
 

@@ -329,6 +329,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # OpenAI-compatible response schema.
     used_web_search = bool(context_packet.web_items)
 
+    # Read conversational style preference (casual/balanced/thoughtful)
+    from src.core.preferences import get as get_pref
+    conversational_style = get_pref("conversational_style", "balanced")
+
     # Build metadata for memory writes
     user_meta = {"role": "user", "content_kind": "user_content", "session_id": session_id}
     assistant_meta = {"role": "assistant", "content_kind": "answer", "session_id": session_id}
@@ -347,7 +351,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             """Generator that yields SSE events and handles post-stream cleanup."""
             accumulated = []
 
-            for chunk in llm_adapter.generate_response_stream(context_packet):
+            for chunk in llm_adapter.generate_response_stream(context_packet, style=conversational_style):
                 accumulated.append(chunk)
                 sse_data = json.dumps({
                     "id": completion_id,
@@ -432,7 +436,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         )
 
     # --- NON-STREAMING PATH (unchanged) ---
-    reply = llm_adapter.generate_response(context_packet)
+    reply = llm_adapter.generate_response(context_packet, style=conversational_style)
 
     write_memory(
         text=latest_user_message,

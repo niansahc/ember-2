@@ -481,6 +481,25 @@ def update_task_status_endpoint(task_id: str, body: TaskUpdateRequest):
     }
 
 
+# ── Preferences endpoints ──────────────────────────────────────────────
+
+
+@app.get("/v1/preferences")
+def get_preferences_endpoint():
+    """Return current user preferences."""
+    from src.core.preferences import read as read_prefs
+    return read_prefs()
+
+
+@app.patch("/v1/preferences")
+def update_preferences_endpoint(request: Request, body: dict):
+    """Update user preferences. Accepts {key: value} pairs."""
+    from src.core.preferences import update as update_prefs
+    update_prefs(body)
+    from src.core.preferences import read as read_prefs
+    return read_prefs()
+
+
 # ── Memory endpoints ───────────────────────────────────────────────────
 
 

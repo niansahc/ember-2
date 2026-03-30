@@ -13,13 +13,14 @@ class PromptBuilder:
 
         self.conversation_buffer = ConversationBuffer()
 
-    def build_prompt(self, context_packet: ContextPacket) -> str:
+    def build_prompt(self, context_packet: ContextPacket, style: str = "balanced") -> str:
         # Section order matches TDD context packet order:
-        # system prompt → state → reflections → source memories →
+        # system prompt → style → state → reflections → source memories →
         # recent conversation → instruction rules → user query
         sections: list[str] = [
             self.system_prompt,
             self._build_date_section(),
+            self._build_style_section(style),
             self._build_state_section(context_packet),
             self._build_task_section(context_packet),
             self._build_reflection_section(context_packet),
@@ -45,6 +46,30 @@ class PromptBuilder:
         else:
             time_of_day = "late night"
         return f"It's {now.strftime('%A')} {time_of_day}, {now.strftime('%B %d, %Y')}."
+
+    STYLE_INSTRUCTIONS = {
+        "casual": (
+            "CONVERSATIONAL STYLE: CASUAL\n"
+            "Respond conversationally. Keep responses concise and informal. "
+            "Favor short answers and natural back-and-forth over long explanations. "
+            "Skip unnecessary preamble."
+        ),
+        "thoughtful": (
+            "CONVERSATIONAL STYLE: THOUGHTFUL\n"
+            "Take a considered approach. Provide fuller context and reasoning "
+            "where relevant. Responses may be longer when the topic warrants it. "
+            "Prioritize depth and clarity over brevity."
+        ),
+    }
+
+    def _build_style_section(self, style: str) -> str:
+        """
+        Inject a conversational style instruction based on user preference.
+
+        "balanced" (default) injects nothing — current behavior is already balanced.
+        Unknown values fall back to balanced (no injection).
+        """
+        return self.STYLE_INSTRUCTIONS.get(style, "")
 
     def _build_state_section(self, context_packet: ContextPacket) -> str:
         """

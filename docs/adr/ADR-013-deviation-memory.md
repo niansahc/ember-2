@@ -137,6 +137,10 @@ continuity and genuine presence problem.
   likely yes, per ethos
 - How deviation memory interacts with the OpenJarvis Learning primitive --
   reference implementation to consult at v0.15.0
+- Timestamp format follows existing vault convention -- hyphenated ID for
+  filename safety, ISO 8601 in timestamp field. See TDD section 28 for broader
+  timestamp normalization decision. When that decision is resolved, deviation
+  records come along with it.
 
 ## Status
 

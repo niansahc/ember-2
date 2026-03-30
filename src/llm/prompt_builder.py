@@ -21,6 +21,7 @@ class PromptBuilder:
             self.system_prompt,
             self._build_date_section(),
             self._build_state_section(context_packet),
+            self._build_task_section(context_packet),
             self._build_reflection_section(context_packet),
             self._build_web_search_section(context_packet),
             self._build_context_section(context_packet),
@@ -70,6 +71,30 @@ class PromptBuilder:
                 lines.append(f"- [{item.category}] {item.text.strip()}")
 
         return "CURRENT STATE:\n" + "\n".join(lines)
+
+    def _build_task_section(self, context_packet: ContextPacket) -> str:
+        """
+        Render active tasks into the ACTIVE TASKS section of the prompt.
+
+        Format: - [status] title
+                - [status] title (priority: high)
+
+        If no active tasks, shows "None." so the model always sees the header.
+        """
+        if not context_packet.task_items:
+            return "ACTIVE TASKS:\nNone."
+
+        lines: list[str] = []
+
+        for item in context_packet.task_items:
+            if item.priority:
+                lines.append(
+                    f"- [{item.status}] {item.title} (priority: {item.priority})"
+                )
+            else:
+                lines.append(f"- [{item.status}] {item.title}")
+
+        return "ACTIVE TASKS:\n" + "\n".join(lines)
 
     def _build_conversation_section(self) -> str:
         turns = self.conversation_buffer.get_recent()

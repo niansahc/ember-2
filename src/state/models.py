@@ -40,6 +40,18 @@ VALID_STATE_CATEGORIES: frozenset[str] = frozenset(
     }
 )
 
+# Categories that support multiple concurrent records (ADR-011).
+# Single-record categories use latest-wins resolution.
+# Multi-record categories return all non-deleted records, capped at 5 most recent.
+MULTI_RECORD_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "open_loop",
+        "next_action",
+    }
+)
+
+MAX_MULTI_RECORDS = 5
+
 
 # ---------------------------------------------------------------------------
 # StateRecord — canonical vault artifact

@@ -1,6 +1,6 @@
 # ADR-011: Multi-Record State Categories
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-03-28
 
 ## Context

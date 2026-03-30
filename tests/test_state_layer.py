@@ -262,3 +262,147 @@ def test_state_resolver_get_current_as_dict(tmp_path: Path) -> None:
     assert state_dict["open_loop"].text == "Follow up on eval harness."
     assert isinstance(state_dict["current_focus"], StateItem)
     assert isinstance(state_dict["open_loop"], StateItem)
+
+
+# ---------------------------------------------------------------------------
+# Multi-record state categories (ADR-011)
+# ---------------------------------------------------------------------------
+
+def test_multiple_open_loops_returned(tmp_path: Path) -> None:
+    """Two open_loop records should both appear in get_current_state()."""
+    service = make_service(tmp_path)
+
+    rec1 = StateService.make_record(
+        state_type="open_loop",
+        text="Fix the retrieval bug.",
+        source="test",
+    )
+    rec1.timestamp = "2026-03-28T10-00-00"
+    service.write(rec1)
+
+    rec2 = StateService.make_record(
+        state_type="open_loop",
+        text="Retest all local models.",
+        source="test",
+    )
+    rec2.timestamp = "2026-03-28T10-01-00"
+    service.write(rec2)
+
+    resolver = StateResolver(service=service)
+    items = resolver.get_current_state()
+
+    open_loops = [i for i in items if i.category == "open_loop"]
+    assert len(open_loops) == 2
+    texts = {i.text for i in open_loops}
+    assert "Fix the retrieval bug." in texts
+    assert "Retest all local models." in texts
+
+
+def test_multiple_next_actions_returned(tmp_path: Path) -> None:
+    """Two next_action records should both appear in get_current_state()."""
+    service = make_service(tmp_path)
+
+    rec1 = StateService.make_record(
+        state_type="next_action",
+        text="Lower extraction threshold.",
+        source="test",
+    )
+    rec1.timestamp = "2026-03-28T10-00-00"
+    service.write(rec1)
+
+    rec2 = StateService.make_record(
+        state_type="next_action",
+        text="Write commitment detector.",
+        source="test",
+    )
+    rec2.timestamp = "2026-03-28T10-01-00"
+    service.write(rec2)
+
+    resolver = StateResolver(service=service)
+    items = resolver.get_current_state()
+
+    actions = [i for i in items if i.category == "next_action"]
+    assert len(actions) == 2
+
+
+def test_single_record_categories_still_latest_wins(tmp_path: Path) -> None:
+    """current_focus should still return only the latest record."""
+    service = make_service(tmp_path)
+
+    rec1 = StateService.make_record(
+        state_type="current_focus",
+        text="Old focus.",
+        source="test",
+    )
+    rec1.timestamp = "2026-03-28T10-00-00"
+    service.write(rec1)
+
+    rec2 = StateService.make_record(
+        state_type="current_focus",
+        text="New focus.",
+        source="test",
+    )
+    rec2.timestamp = "2026-03-28T10-01-00"
+    service.write(rec2)
+
+    resolver = StateResolver(service=service)
+    items = resolver.get_current_state()
+
+    focus_items = [i for i in items if i.category == "current_focus"]
+    assert len(focus_items) == 1
+    assert focus_items[0].text == "New focus."
+
+
+def test_multi_record_capped_at_five(tmp_path: Path) -> None:
+    """More than 5 open_loop records should be capped to 5 most recent."""
+    service = make_service(tmp_path)
+
+    for i in range(7):
+        rec = StateService.make_record(
+            state_type="open_loop",
+            text=f"Loop {i}",
+            source="test",
+        )
+        rec.timestamp = f"2026-03-28T10-0{i}-00"
+        service.write(rec)
+
+    resolver = StateResolver(service=service)
+    items = resolver.get_current_state()
+
+    open_loops = [i for i in items if i.category == "open_loop"]
+    assert len(open_loops) == 5
+    # Should be the 5 most recent (Loop 6, 5, 4, 3, 2)
+    texts = {i.text for i in open_loops}
+    assert "Loop 6" in texts
+    assert "Loop 5" in texts
+    assert "Loop 0" not in texts
+    assert "Loop 1" not in texts
+
+
+def test_resolved_open_loop_excluded(tmp_path: Path) -> None:
+    """An open_loop with metadata.resolved=True should not appear."""
+    service = make_service(tmp_path)
+
+    rec1 = StateService.make_record(
+        state_type="open_loop",
+        text="Active loop.",
+        source="test",
+    )
+    rec1.timestamp = "2026-03-28T10-00-00"
+    service.write(rec1)
+
+    rec2 = StateService.make_record(
+        state_type="open_loop",
+        text="Resolved loop.",
+        source="test",
+        metadata={"resolved": True},
+    )
+    rec2.timestamp = "2026-03-28T10-01-00"
+    service.write(rec2)
+
+    resolver = StateResolver(service=service)
+    items = resolver.get_current_state()
+
+    open_loops = [i for i in items if i.category == "open_loop"]
+    assert len(open_loops) == 1
+    assert open_loops[0].text == "Active loop."

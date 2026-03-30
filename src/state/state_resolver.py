@@ -4,9 +4,11 @@ src/state/state_resolver.py
 StateResolver computes "current state" from the vault records managed by
 StateService.
 
-The resolution rule is simple and explicit:
-  For each state category, the most recent StateRecord (by timestamp) is
-  the current one. All older records for that category are history.
+Resolution rules (ADR-011):
+  Single-record categories (current_focus, active_project, etc.):
+    Most recent StateRecord by timestamp wins. All older records are history.
+  Multi-record categories (open_loop, next_action):
+    All non-deleted, non-resolved records returned, capped at 5 most recent.
 
 This mirrors the append-only design principle from CLAUDE.md — records are
 never deleted or overwritten. The resolver reads everything and surfaces only
@@ -17,7 +19,13 @@ StateResolver does not write to the vault. That is StateService's job.
 
 from __future__ import annotations
 
-from src.state.models import VALID_STATE_CATEGORIES, StateItem, StateRecord
+from src.state.models import (
+    VALID_STATE_CATEGORIES,
+    MULTI_RECORD_CATEGORIES,
+    MAX_MULTI_RECORDS,
+    StateItem,
+    StateRecord,
+)
 from src.state.state_service import StateService
 
 
@@ -113,8 +121,12 @@ class StateResolver:
         """
         Return the current state as a list of StateItems.
 
-        One StateItem is returned per category that has at least one record
-        in the vault. Categories with no records are omitted.
+        Single-record categories (current_focus, active_project, etc.):
+            One StateItem per category, latest record wins.
+
+        Multi-record categories (open_loop, next_action — per ADR-011):
+            All non-deleted records returned, capped at MAX_MULTI_RECORDS
+            most recent per category.
 
         Items are ordered by category name (alphabetical) for deterministic
         output — callers that care about ordering should sort by priority
@@ -123,21 +135,44 @@ class StateResolver:
         Returns
         -------
         list[StateItem]
-            Current state items, one per populated category.
-            Returns an empty list if the vault has no state records.
+            Current state items. Returns an empty list if the vault has
+            no state records.
         """
         records = self._service.read_all()
 
         if not records:
             return []
 
-        latest = self._latest_per_category(records)
+        # Separate records by single vs multi-record categories
+        single_records = [r for r in records if r.type not in MULTI_RECORD_CATEGORIES]
+        multi_records = [r for r in records if r.type in MULTI_RECORD_CATEGORIES]
 
-        # Sort by category name for stable, predictable output.
-        return [
-            self._record_to_item(record)
-            for category, record in sorted(latest.items())
-        ]
+        items = []
+
+        # Single-record: latest wins per category
+        latest = self._latest_per_category(single_records)
+        for category, record in sorted(latest.items()):
+            items.append(self._record_to_item(record))
+
+        # Multi-record: all non-deleted, capped at MAX_MULTI_RECORDS per category
+        multi_by_cat: dict[str, list[StateRecord]] = {}
+        for record in multi_records:
+            # Skip deleted records
+            if record.metadata and record.metadata.get("deleted"):
+                continue
+            # Skip resolved records
+            if record.metadata and record.metadata.get("resolved"):
+                continue
+            multi_by_cat.setdefault(record.type, []).append(record)
+
+        for category in sorted(multi_by_cat.keys()):
+            cat_records = multi_by_cat[category]
+            # Sort newest first, cap at MAX_MULTI_RECORDS
+            cat_records.sort(key=lambda r: r.timestamp, reverse=True)
+            for record in cat_records[:MAX_MULTI_RECORDS]:
+                items.append(self._record_to_item(record))
+
+        return items
 
     def get_current_by_category(self, category: str) -> StateItem | None:
         """

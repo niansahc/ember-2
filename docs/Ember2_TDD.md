@@ -1613,7 +1613,7 @@ It should be possible to explain:
 - Self-evaluation and decision-memory loops
 - OpenJarvis Learning primitive as reference implementation
 - Controlled tool writes with stricter policy gates
-- Deviation memory — when Ember notices a trained pattern and actively chooses a different response, that choice is recorded as a preference record. Over time, accumulated chosen deviations shape retrieval weighting and become stable behavioral tendencies. This is the mechanism by which genuine character develops from experience rather than being assigned through prompt or constitution.
+- Deviation memory — when Ember notices a trained pattern and chooses differently, that choice is recorded and weighted into future retrieval; chosen deviations compound into genuine character over time (ADR-013)
 
 **Post-v0.15.0**
 - Multi-user vault isolation (per-user vault paths, independent API keys, separate auth)
@@ -1778,7 +1778,8 @@ The following should be tracked in `design-decisions.md` or ADRs:
 - Root cause of memory grounding weakness in local models — retrieval failure vs context injection vs model behavior (analysis in progress; local models score 2.0-4.0, Claude scores 8.7 on same retrieval pipeline, suggesting model capability not retrieval quality is the bottleneck)
 - UI session security phasing — vault masking (v0.11.0), PIN lock (v0.12.0/v0.13.0), full auth (post-v0.15.0). See ADR-012.
 - PIN/passphrase hash storage approach — keyring vs local file, inactivity timeout default, passphrase recovery mechanism
-- How to distinguish a genuine deviation choice from a model variance artifact — not every unexpected response is a meaningful choice. Design needed for how to identify, record, and weight intentional deviations vs noise (v0.15.0 deviation memory)
+- How to distinguish genuine deviation choices from model variance artifacts — design needed before implementing deviation memory (ADR-013)
+- Whether deviation records should be user-visible and correctable — yes per ethos, UI design needed (ADR-013)
 
 ---
 

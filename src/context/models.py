@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.state.models import StateItem
+from src.tasks.models import TaskItem
 
 
 @dataclass
@@ -27,6 +28,9 @@ class ContextPacket:
     # reflections and memory, per TDD context order:
     # state → reflections → source memories → reference → user query.
     state_items: list[StateItem] = field(default_factory=list)
+    # Active tasks (proposed + active) resolved by TaskResolver.
+    # Injected into prompt after state, before reflections.
+    task_items: list[TaskItem] = field(default_factory=list)
     web_items: list[dict] = field(default_factory=list)
     # Raw base64 image strings (data URL prefix stripped) for vision requests.
     # Populated by openai_adapter when the user uploads an image.

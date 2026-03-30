@@ -33,7 +33,7 @@ class ContextService:
         if policy.use_web_search:
             web_items = web_search(user_message)
 
-        state_items, memory_items, reflection_items = self.retriever.retrieve(user_message)
+        state_items, task_items, memory_items, reflection_items = self.retriever.retrieve(user_message)
         state_items = self.ranker.apply_state_boost(state_items, policy)
 
         memory_items = self.ranker.apply_policy(memory_items, policy)
@@ -96,6 +96,7 @@ class ContextService:
             memory_items=selected_memory,
             reflection_items=selected_reflections,
             state_items=state_items,
+            task_items=task_items,
             web_items=web_items,
             image_data=image_data or [],
         )

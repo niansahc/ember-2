@@ -7,6 +7,8 @@ from src.memory.service import MemoryService
 from src.retrieval.semantic_search import semantic_search as _semantic_search
 from src.state.models import StateItem
 from src.state.state_resolver import StateResolver
+from src.tasks.models import TaskItem
+from src.tasks.task_resolver import TaskResolver
 
 
 class ContextRetriever:
@@ -14,11 +16,13 @@ class ContextRetriever:
         self,
         memory_service: MemoryService | None = None,
         state_resolver: StateResolver | None = None,
+        task_resolver: TaskResolver | None = None,
     ):
         self.memory_service = memory_service or MemoryService()
         # StateResolver is injected so tests can pass a resolver backed by a
         # temp vault directory without touching the real private vault.
         self.state_resolver = state_resolver or StateResolver()
+        self.task_resolver = task_resolver or TaskResolver()
 
     def get_state_items(self) -> list[StateItem]:
         """
@@ -43,6 +47,28 @@ class ContextRetriever:
             warnings.warn(
                 f"[CONTEXT_RETRIEVER] State retrieval failed, continuing without "
                 f"state context: {exc}",
+                stacklevel=2,
+            )
+            return []
+
+    def get_task_items(self) -> list[TaskItem]:
+        """
+        Return active tasks from the vault via TaskResolver.
+
+        Failures are caught and logged as warnings -- task retrieval must
+        never crash context building.
+
+        Returns
+        -------
+        list[TaskItem]
+            Active task items (proposed + active), or an empty list on error.
+        """
+        try:
+            return self.task_resolver.get_active_tasks()
+        except Exception as exc:  # noqa: BLE001
+            warnings.warn(
+                f"[CONTEXT_RETRIEVER] Task retrieval failed, continuing without "
+                f"task context: {exc}",
                 stacklevel=2,
             )
             return []
@@ -208,15 +234,16 @@ class ContextRetriever:
 
     def retrieve(
         self, user_message: str
-    ) -> tuple[list[StateItem], list[ContextItem], list[ContextItem]]:
+    ) -> tuple[list[StateItem], list[TaskItem], list[ContextItem], list[ContextItem]]:
         """
         Retrieve all context for a user message.
 
-        Returns a triple in TDD context packet order:
-          (state_items, memory_items, reflection_items)
+        Returns a 4-tuple in TDD context packet order:
+          (state_items, task_items, memory_items, reflection_items)
 
-        State items come first — they represent current operational truth and
-        should be injected into the prompt before reflections and memories.
+        State and task items come first -- they represent current operational
+        truth and should be injected into the prompt before reflections and
+        memories.
 
         Parameters
         ----------
@@ -225,16 +252,17 @@ class ContextRetriever:
 
         Returns
         -------
-        tuple[list[StateItem], list[ContextItem], list[ContextItem]]
-            (state_items, memory_items, reflection_items)
+        tuple[list[StateItem], list[TaskItem], list[ContextItem], list[ContextItem]]
+            (state_items, task_items, memory_items, reflection_items)
         """
         state_items = self.get_state_items()
+        task_items = self.get_task_items()
 
         profile_items = self.get_profile_items(user_message)
         # get_memory_items() does a full semantic_search() which already searches
         # the conversation index. get_conversation_items() would load and search
         # the same conversation index again via search_conversation_memories().
-        # Skipping get_conversation_items() to avoid the double index load —
+        # Skipping get_conversation_items() to avoid the double index load --
         # conversation results are already included in get_memory_items().
         memory_items = self.get_memory_items(user_message)
         reflection_items = self.get_reflection_items(user_message)
@@ -242,7 +270,7 @@ class ContextRetriever:
         memory_items = profile_items + memory_items
         memory_items = self._deduplicate_items(memory_items)
 
-        return state_items, memory_items, reflection_items
+        return state_items, task_items, memory_items, reflection_items
 
     def _deduplicate_items(self, items: list[ContextItem]) -> list[ContextItem]:
         seen = set()

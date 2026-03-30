@@ -61,6 +61,21 @@ def _detect_and_write_commitment(reply: str, session_id: str) -> None:
         logger.warning("[COMMITMENT] Detection failed (non-fatal): %s", exc)
 
 
+def _detect_task_in_response(reply: str, session_id: str) -> None:
+    """Detect task-worthy content in Ember's response and log it (non-blocking)."""
+    try:
+        from src.tasks.task_detector import detect_task
+        result = detect_task(reply)
+        if result.detected and result.task_title:
+            logger.info("[TASK_DETECT] Detected task: %s", result.task_title[:60])
+            # Task detection is passive for now -- it logs the detection.
+            # The suggested_response is available for future use when the UI
+            # supports inline task creation offers. Writing proposed tasks
+            # automatically would be too aggressive without user confirmation.
+    except Exception as exc:
+        logger.warning("[TASK_DETECT] Detection failed (non-fatal): %s", exc)
+
+
 def _background_state_extraction(user_message: str, reply: str) -> None:
     """Run state extraction in a background thread so it doesn't delay the HTTP response."""
     try:
@@ -387,6 +402,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     daemon=True,
                 ).start()
 
+            # Task detection — skip for test sessions
+            if not is_test:
+                threading.Thread(
+                    target=_detect_task_in_response,
+                    args=(full_reply, session_id),
+                    daemon=True,
+                ).start()
+
         return StreamingResponse(
             _stream_sse(),
             media_type="text/event-stream",
@@ -427,6 +450,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     if not is_test:
         threading.Thread(
             target=_detect_and_write_commitment,
+            args=(reply, session_id),
+            daemon=True,
+        ).start()
+
+    # Task detection — skip for test sessions
+    if not is_test:
+        threading.Thread(
+            target=_detect_task_in_response,
             args=(reply, session_id),
             daemon=True,
         ).start()

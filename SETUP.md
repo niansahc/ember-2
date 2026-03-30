@@ -372,6 +372,33 @@ This makes Ember available at `https://your-machine-name.your-tailnet.ts.net` fr
 
 ---
 
+## Privacy and Security
+
+Ember is designed to keep your data local. Here is how each component handles your information:
+
+| Component | Data handling |
+|---|---|
+| Memory vault | Stored locally at your configured path. Never synced to cloud. |
+| API key | Stored in OS credential manager (Windows Credential Manager). Not in any file. |
+| Conversation data | Written to local vault as JSON files. Never transmitted externally. |
+| Cloud models (optional) | When enabled, your message and context are sent to the provider (Anthropic/OpenAI). Opt-in only. |
+| Web search queries | Sent via local SearXNG -- IP and identity stripped, not stored |
+| SearXNG | Runs locally in Docker, binds to 127.0.0.1 only. Not accessible from your network. |
+
+### Web Search Privacy
+
+Ember's web search routes through a local SearXNG instance (Docker, binds to 127.0.0.1 only). When web search is used:
+
+- Your query is sent from Ember to your local SearXNG instance
+- SearXNG forwards the query to external search engines (Google, Bing, etc.) with your IP address and identifying headers stripped
+- Results are returned to Ember and used to ground the response
+- Search results are not written to your vault
+- The assistant message in chat will show a magnifying glass indicator when web search was used
+
+To keep all processing fully local with no outbound requests, disable web search in Ember's settings.
+
+---
+
 ## What to Do Next
 
 Once Ember is running:

@@ -1619,6 +1619,12 @@ Infrastructure:
 - Index migration for remaining JSON indexes to SQLite
 - Monthly/thematic reflection
 - Vault encryption at rest (Ember-managed, with key recovery story)
+- SKILL.md skill definition format — self-contained integration folders; each tool integration defined as a portable, inspectable, user-extensible skill file; LLM reads skill to understand when and how to invoke it (inspired by OpenClaw AgentSkills format, Peter Steinberger, 2026)
+- Email read-only ingestion (IMAP) — two modes: vault ingestion and live context; local processing only; explicit opt-in
+- GitHub read-only ingestion — commits, PRs, issues, activity feed; live context mode for coding conversations
+- Fitbit export ingestion — activity, sleep, health patterns
+- Apple Health / Garmin export ingestion
+- Generic CSV / JSON import
 
 **v0.14.0 — Offline Knowledge**
 - Kiwix ZIM ingestion adapter (curated packs only)
@@ -1626,6 +1632,16 @@ Infrastructure:
 - GitHub ingestion adapter — pull READMEs, issues, and repository content as reference memory; same pipeline pattern as Kiwix/Gutenberg adapters
 - Curated pack recommendations in docs
 - NOMAD-compatible path supported
+- Calendar read-only ingestion (Google, Outlook, iCal)
+- Obsidian / Notion export ingestion
+- Readwise ingestion
+- Goodreads ingestion
+- Spotify listening history ingestion (mood and energy signals)
+- Glucose monitor ingestion (Dexcom, Libre)
+- Oura export ingestion
+- Diet app export ingestion (Cronometer, MyFitnessPal)
+- Linear / Jira ingestion
+- Proactive / heartbeat mode — Ember pushes context on a configurable schedule without being prompted (inspired by OpenClaw, Peter Steinberger, 2026)
 
 **Deferred (depends on task layer stability, post-v0.12.0):**
 - GitHub Issues as task source — sync open issues as task records in the task layer
@@ -1635,6 +1651,7 @@ Infrastructure:
 - OpenJarvis Learning primitive as reference implementation
 - Controlled tool writes with stricter policy gates
 - Deviation memory — when Ember notices a trained pattern and chooses differently, that choice is recorded and weighted into future retrieval; chosen deviations compound into genuine character over time (ADR-013)
+- Trace-driven learning — local interaction traces inform retrieval routing and behavior improvement over time; no model retraining; informed by OpenJarvis Learning primitive (Stanford Scaling Intelligence Lab, Saad-Falcon et al., 2026) and ADR-013 deviation memory
 
 **Post-v0.15.0**
 - Multi-user vault isolation (per-user vault paths, independent API keys, separate auth)
@@ -1643,6 +1660,7 @@ Infrastructure:
 **Watch Items (research, not build):**
 - OpenJarvis Learning primitive (github.com/open-jarvis/OpenJarvis) — reference for self-evaluation loops; active at v0.15.0
 - PAI TELOS pattern (github.com/danielmiessler/Personal_AI_Infrastructure) — evaluate against constitution + profile memory during v0.11.0 onboarding work
+- OpenClaw (github.com/openclaw/openclaw) — reference for SKILL.md integration format and proactive heartbeat pattern; created by Peter Steinberger, 2026
 
 ## 25.4 Long-Term
 

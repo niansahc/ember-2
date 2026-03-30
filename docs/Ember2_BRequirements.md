@@ -92,6 +92,8 @@ Ember-2 is a private, evolving system that:
 - Multi-modal inputs (documents, images, etc.)
 - Agent-style workflows
 - Shareability — Ember's persona, governance config, and retrieval logic are the shareable artifacts; user data never leaves the local vault; two distribution paths: (1) non-technical user path with one-click installer, no CLI required, and an onboarding conversation flow that seeds identity context through conversation rather than scripts; (2) technical user path with clean setup docs, seed_identity_template.py, and API-first configuration
+- Proactive / heartbeat mode — Ember wakes on a configurable schedule and pushes context or summaries without being prompted. Examples: Monday week preview, energy check-ins, task reminders. (Inspired by OpenClaw, Peter Steinberger, 2026)
+- Trace-driven learning — interaction traces inform retrieval routing and agent behavior over time; Ember gets better at serving this specific user through accumulated experience rather than retraining. Local only. (Inspired by OpenJarvis Learning primitive, Stanford Scaling Intelligence Lab, Saad-Falcon et al., 2026. See also ADR-013.)
 
 ---
 
@@ -135,6 +137,14 @@ Ember is designed to ingest and read data from external sources. All integration
 **Generic**
 - CSV / JSON import — any structured data export from any app. Planned v0.13.0.
 - Any app that exports — Ember reads it. The ingestion pipeline is format-agnostic by design.
+
+### Skill Definition Format
+
+Each tool integration will be defined as a self-contained skill — a folder containing a SKILL.md file that describes when and how Ember uses the integration. The LLM reads the SKILL.md to understand what is available and how to invoke it. Skills are portable, inspectable, and user-extensible.
+
+Examples: EMAIL.md, GITHUB.md, FITBIT.md.
+
+This pattern is inspired by OpenClaw's AgentSkills format (Peter Steinberger, 2026), adapted for Ember's local-first, policy-governed architecture.
 
 ### Write Access
 Write access to any external system (sending email, creating GitHub issues, archiving, etc.) is out of scope until the agent orchestration layer and full constitutional review framework are in place. Planned v0.15.0.

@@ -393,35 +393,43 @@ When adding features: unit test normalizers, filters, ranking functions, and sta
 
 ## Release Checklist
 
-Run through this before every release. All three repos must be in sync.
+Run this before every release. No exceptions. Each repository versions independently — check only the relevant section(s) for the release being cut.
 
-### Pre-release
-- [ ] `pytest` passing in ember-2 (currently 303)
-- [ ] Playwright passing in ember-2-ui (currently 35 passing, 4 skipped)
-- [ ] New backend features have corresponding UI support in ember-2-ui
-- [ ] New UI features have installer awareness (prerequisites, build steps, config)
-- [ ] `CHANGELOG.md` updated in all affected repos
-- [ ] `version.json` updated in ember-2
-- [ ] ember-2-ui built and copied to ember-2/ui/
-- [ ] ADRs filed for any architectural decisions made this release
-- [ ] `CLAUDE.md` reflects current state
-- [ ] TDD updated if architecture changed (section 25 completed items, roadmap)
-- [ ] `README.md` accurate (test counts, feature list, roadmap)
-- [ ] `/api/health` returns correct version after restart
+---
 
-### Release steps
-- [ ] Tag ember-2: `git tag -a vX.Y.Z -m "summary"`
-- [ ] Tag ember-2-ui (if changes): bump `package.json`, tag
-- [ ] Tag ember-2-installer (if changes): bump `package.json`, tag
-- [ ] Push all commits: `git push origin main`
-- [ ] Push all tags: `git push origin vX.Y.Z`
-- [ ] Create GitHub releases with CHANGELOG content as notes — installer update checker compares against GitHub releases, not git tags. If you skip this, the installer shows a stale version.
+### ember-2 (backend)
+- [ ] All pytest tests passing (`pytest tests/`)
+- [ ] Run retrieval eval (`python tools/eval_retrieval.py`) — no regression
+- [ ] No uncommitted changes
+- [ ] CHANGELOG.md updated
+- [ ] version.json bumped
+- [ ] TDD updated to reflect what shipped
+- [ ] README updated if user-facing changes
+- [ ] CLAUDE.md updated — priorities, working state, and any new conventions
+- [ ] ADRs filed for any new architectural decisions
+- [ ] ADRs included in this release updated from Proposed → Accepted
+- [ ] Git tag created
 
-### Post-release
-- [ ] Update vault state records to reflect new version
-- [ ] Note any known issues in CLAUDE.md
-- [ ] For major releases: manual install test on a fresh machine
-- [ ] For major releases: run conversation quality eval if time permits
+### ember-2-ui (frontend)
+- [ ] All Playwright tests passing (`npm run test:e2e`)
+- [ ] Mobile tested
+- [ ] No uncommitted changes
+- [ ] CHANGELOG.md updated
+- [ ] version bumped in package.json
+- [ ] Git tag created
+
+### ember-2-installer (installer)
+- [ ] Installer builds cleanly
+- [ ] Install flow tested end-to-end on Windows
+- [ ] No uncommitted changes
+- [ ] Git tag created
+
+---
+
+### Before opening next version (all repos)
+- [ ] Handoff notes written
+- [ ] Next version scope documented in TDD roadmap
+- [ ] CLAUDE.md priorities updated to reflect next version
 
 ---
 

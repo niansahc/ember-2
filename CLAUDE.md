@@ -204,9 +204,10 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Semantic retrieval via vector indexes (cached in memory, no disk load per query)
 - Context assembly with policy-weighted ranking, diversity selection, project-scoped boost (ADR-007)
 - SSE streaming responses from Ollama or Anthropic through FastAPI
-- Cloud model provider support — Anthropic Claude (Haiku 4.5, Sonnet 4.6) via LLMAdapter
-- Provider API key storage via keyring with env var fallback (`ANTHROPIC_API_KEY`)
-- Provider dispatch by model name prefix (`claude-` → Anthropic, else → Ollama)
+- Cloud model provider support — Anthropic Claude (Haiku 4.5, Sonnet 4.6) and OpenAI (gpt-4o-mini, gpt-4o, gpt-4-turbo, gpt-3.5-turbo) via LLMAdapter
+- Provider API key storage via keyring with env var fallback (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`)
+- Provider dispatch by model name prefix (`claude-` → Anthropic, `gpt-` → OpenAI, else → Ollama)
+- Social engineering safety triggers — 5 attack families, 39 patterns (ADR-010)
 - DELETE /provider-key/{provider} endpoint for key removal
 - Model selection persists via vault/model_override.json (survives API restarts)
 - Auto state extraction from conversation turns (StateExtractor, background thread, threshold: 10 words)
@@ -277,22 +278,22 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - git pull uses origin main explicitly (no tracking info errors)
 
 **Tests:**
-- ember-2 backend: 285 pytest tests passing
-- ember-2-ui: 35 Playwright e2e tests passing, 2 skipped (cloud model, remove key)
+- ember-2 backend: 300 pytest tests passing
+- ember-2-ui: 37 Playwright e2e tests passing, 2 skipped (cloud model, remove key)
 
 ---
 
 ## Immediate Next Priorities
 
-**v0.11.0 remaining work:**
-- OpenAI provider support (GPT-4o, GPT-4o mini)
-- Hardware detection in installer, auto-recommends local model based on detected RAM
-- AGPL acknowledgment screen in installer
-- Backup and export story — vault backup guide, export to portable format
-- Recovery playbook — "what to do if Ember breaks" user-facing doc linked from UI and installer
-- Social engineering constitutional upgrade — semantic pattern matching in trigger layer (ADR-010)
+**v0.11.0 remaining work (bugs first):**
+- Fix: search bar loses focus after each character — must fix before release
+- Fix: installer missing Node.js prerequisite check
+- Fix: installer not running npm install and npm run build after clone
+- Fix: installer Done screen not verifying UI is built before enabling Open Ember
 - Multi-record state categories for open_loop and next_action (ADR-011)
 - Mobile testing via Tailscale
+- Web search transparency indicator — show what phrase triggered search and what was sent to SearXNG
+- Conversational style definitions — add plain-language descriptions to Casual/Balanced/Thoughtful in Settings
 - Tray icon / OS notifications research
 
 **v0.12.0 — Task Layer + Session Reflection + Mac/Linux:**
@@ -303,6 +304,7 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Mac and Linux installer support
 - Reflection corpus guidance in onboarding (set expectations on timeline)
 - Local PIN/passphrase lock for UI (ADR-012 Phase 2)
+- Guided first-run UI tour with acknowledgment — walks new users through key features with chat examples
 
 **v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption:**
 - Hot/warm/cold memory tiering by recency and relevance
@@ -310,6 +312,7 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Index migration for remaining JSON indexes to SQLite
 - Monthly/thematic reflection
 - Vault encryption at rest (Ember-managed, with key recovery story)
+- Custom theme with color picker — user-defined accent and background colors
 
 **v0.14.0 — Offline Knowledge:**
 - Kiwix ZIM ingestion adapter (curated packs only)
@@ -334,12 +337,16 @@ All items from the original TDD §25 build order are complete through step 6. Th
 
 ## Known Gaps (tracked)
 - Vault encryption at rest — v0.13.0
-- Social engineering trigger upgrade — v0.11.0 (ADR-010)
+- ~~Social engineering trigger upgrade~~ — complete (v0.11.0, ADR-010)
 - Mac/Linux installer — v0.12.0
-- Backup/export story — v0.11.0
-- Recovery playbook — v0.11.0
+- ~~Backup/export story~~ — complete (v0.11.0, docs/BACKUP_AND_EXPORT.md)
+- ~~Recovery playbook~~ — complete (v0.11.0, docs/RECOVERY_PLAYBOOK.md)
 
 ## Known Issues
+- Search bar loses focus after each character — must click to type each letter. Blocks usability.
+- Installer missing Node.js prerequisite check — partner install failed because Node wasn't installed and the installer didn't catch it
+- Installer not running npm install and npm run build after clone — UI folder empty on fresh install, user gets 404
+- Installer Done screen not verifying UI is built before enabling Open Ember
 - qwen3:8b hallucination pattern: generates news-sounding content without web search when context is poor. Model limitation, not a code bug. classify_query() web search triggers investigated and confirmed clean. Cloud models do not exhibit this. Documented in eval_history.md.
 - Old soft-deleted conversations may still show in UI sidebar. Soft-delete filter investigation pending.
 

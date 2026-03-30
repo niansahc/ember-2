@@ -1,6 +1,6 @@
 # ADR-009: Session Reflection Mode
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-03-28
 
 ## Context

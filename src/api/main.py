@@ -266,7 +266,22 @@ def update_conversation_endpoint(session_id: str, body: ConversationUpdateReques
 
 @app.delete("/v1/conversations/{session_id}")
 def delete_conversation_endpoint(session_id: str):
-    """Soft-delete a conversation session. Append-only: writes a new record with deleted: true."""
+    """Soft-delete a conversation session. Append-only: writes a new record with deleted: true.
+    Triggers session reflection if buffer has 3+ turns (ADR-009)."""
+    # Auto-trigger session reflection before delete (non-fatal)
+    try:
+        buffer = llm_adapter.prompt_builder.conversation_buffer.get_recent()
+        if buffer and len(buffer) >= 3:
+            import threading
+            from src.reflection.session_reflection import generate_session_reflection
+            threading.Thread(
+                target=generate_session_reflection,
+                args=(buffer, session_id),
+                daemon=True,
+            ).start()
+    except Exception as exc:
+        logger.warning("[SESSION_REFLECT] Auto-trigger on delete failed (non-fatal): %s", exc)
+
     result = delete_session(session_id)
     if result is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
@@ -384,6 +399,26 @@ def semantic_search_endpoint(
 @limiter.limit("10/minute")
 def reflect_endpoint(request: Request, memory_type: str = "journal", limit: int = 5):
     return generate_reflection(memory_types=[memory_type], limit=limit)
+
+
+class SessionReflectRequest(BaseModel):
+    session_id: str | None = None
+
+
+@app.post("/reflect/session")
+@limiter.limit("10/minute")
+def reflect_session_endpoint(request: Request, body: SessionReflectRequest = SessionReflectRequest()):
+    """Generate a narrative session reflection from the current conversation buffer."""
+    from src.reflection.session_reflection import generate_session_reflection
+
+    buffer = llm_adapter.prompt_builder.conversation_buffer.get_recent()
+    if not buffer or len(buffer) < 3:
+        return {"status": "skipped", "reason": f"Not enough turns ({len(buffer)}). Minimum 3."}
+
+    reflection = generate_session_reflection(buffer, session_id=body.session_id)
+    if reflection:
+        return {"status": "ok", "reflection": reflection[:200]}
+    return {"status": "error", "reason": "Reflection generation failed."}
 
 
 @app.get("/debug-context")

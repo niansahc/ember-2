@@ -346,9 +346,9 @@ All items from the original TDD §25 build order are complete through step 6. Th
 
 ## Known Issues
 - Search bar loses focus after each character — must click to type each letter. Blocks usability.
-- Installer missing Node.js prerequisite check — partner install failed because Node wasn't installed and the installer didn't catch it
-- Installer not running npm install and npm run build after clone — UI folder empty on fresh install, user gets 404
-- Installer Done screen not verifying UI is built before enabling Open Ember
+- Installer Node.js prerequisite check exists but partner bypassed it somehow — needs investigation (Node IS in the prereqs screen, Next is disabled when missing)
+- ~~Installer not running npm build after clone~~ — fixed in installer v0.4.1 (update path now pulls + rebuilds ember-2-ui)
+- ~~Installer Done screen not verifying UI built~~ — fixed in installer v0.4.1 (auto-rebuild on Done)
 - qwen3:8b hallucination pattern: generates news-sounding content without web search when context is poor. Model limitation, not a code bug. classify_query() web search triggers investigated and confirmed clean. Cloud models do not exhibit this. Documented in eval_history.md.
 - Old soft-deleted conversations may still show in UI sidebar. Soft-delete filter investigation pending.
 - Installer Playwright e2e tests: blocked on Electron 28.3.3 incompatibility with Playwright 1.58+ (requires `--remote-debugging-pipe`, not supported until Electron 29). Tests written and correct. Fix: upgrade Electron to 29+ in v0.12.0 after electron-builder compatibility testing.

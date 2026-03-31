@@ -86,3 +86,24 @@ class TestTaskPromptSection:
         state_idx = prompt.index("CURRENT STATE:")
         task_idx = prompt.index("ACTIVE TASKS:")
         assert task_idx > state_idx
+
+
+class TestCapabilitiesSection:
+    """Tests for _build_capabilities_section in PromptBuilder."""
+
+    def test_capabilities_content(self, builder):
+        section = builder._build_capabilities_section()
+        assert "CAPABILITIES:" in section
+        assert "create tasks directly" in section
+        assert "Do not tell the user to add tasks themselves" in section
+        assert "Do not confirm task creation unless the write actually succeeded" in section
+
+    def test_capabilities_in_full_prompt(self, builder):
+        packet = ContextPacket(user_message="test")
+        prompt = builder.build_prompt(packet)
+        assert "CAPABILITIES:" in prompt
+        # Should appear after tasks, before reflections
+        task_idx = prompt.index("ACTIVE TASKS:")
+        cap_idx = prompt.index("CAPABILITIES:")
+        ref_idx = prompt.index("REFLECTION CONTEXT:")
+        assert task_idx < cap_idx < ref_idx

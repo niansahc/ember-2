@@ -23,6 +23,7 @@ class PromptBuilder:
             self._build_style_section(style),
             self._build_state_section(context_packet),
             self._build_task_section(context_packet),
+            self._build_capabilities_section(),
             self._build_reflection_section(context_packet),
             self._build_web_search_section(context_packet),
             self._build_context_section(context_packet),
@@ -120,6 +121,20 @@ class PromptBuilder:
                 lines.append(f"- [{item.status}] {item.title}")
 
         return "ACTIVE TASKS:\n" + "\n".join(lines)
+
+    def _build_capabilities_section(self) -> str:
+        """Inject capability statements so Ember knows what she can do."""
+        return (
+            "CAPABILITIES:\n"
+            "You can create tasks directly in the user's task list. "
+            "When the user asks you to create, add, track, or remind them of something, create the task. "
+            "Tasks you create appear in the sidebar immediately.\n"
+            "You can create single tasks or multiple tasks in one message.\n"
+            "Tasks are stored in the user's local vault. You have write access. "
+            "Do not tell the user to add tasks themselves.\n"
+            "If you have created tasks, confirm what was created. "
+            "Do not confirm task creation unless the write actually succeeded."
+        )
 
     def _build_conversation_section(self) -> str:
         turns = self.conversation_buffer.get_recent()

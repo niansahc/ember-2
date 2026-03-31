@@ -460,6 +460,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     args=(full_reply, session_id),
                     daemon=True,
                 ).start()
+            else:
+                logger.warning("[TASK] Skipped task detection (test session)")
 
         response_headers = {
             "Cache-Control": "no-cache",
@@ -516,6 +518,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             args=(reply, session_id),
             daemon=True,
         ).start()
+    else:
+        logger.warning("[TASK] Skipped task detection (test session)")
 
     response_body = ChatCompletionsResponse(
         id=f"chatcmpl-{uuid.uuid4().hex}",

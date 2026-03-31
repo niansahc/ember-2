@@ -21,41 +21,93 @@ from src.tasks.task_service import TaskService
 class TestExplicitTaskDetection:
     """Detect explicit task creation requests in user messages."""
 
+    # --- Basic patterns ---
+
     def test_create_a_task_for(self):
-        title = detect_explicit_task_request("Create a task for updating the README")
-        assert title == "updating the README"
+        titles = detect_explicit_task_request("Create a task for updating the README")
+        assert titles == ["updating the README"]
 
     def test_add_a_task_called(self):
-        title = detect_explicit_task_request("Add a task called fix login bug")
-        assert title == "fix login bug"
+        titles = detect_explicit_task_request("Add a task called fix login bug")
+        assert titles == ["fix login bug"]
 
     def test_make_a_task_to(self):
-        title = detect_explicit_task_request("Make a task to review the PR")
-        assert title == "review the PR"
+        titles = detect_explicit_task_request("Make a task to review the PR")
+        assert titles == ["review the PR"]
 
     def test_track_as_a_task(self):
-        title = detect_explicit_task_request("Track this as a task: deploy new version")
-        assert title == "deploy new version"
+        titles = detect_explicit_task_request("Track deploy new version as a task")
+        assert titles == ["deploy new version"]
 
     def test_new_task_for(self):
-        title = detect_explicit_task_request("New task for running the eval harness")
-        assert title == "running the eval harness"
+        titles = detect_explicit_task_request("New task for running the eval harness")
+        assert titles == ["running the eval harness"]
+
+    # --- Polite/natural variations ---
+
+    def test_can_you_create(self):
+        titles = detect_explicit_task_request("Can you create a task for updating the docs")
+        assert titles == ["updating the docs"]
+
+    def test_please_add(self):
+        titles = detect_explicit_task_request("Please add a task for running tests")
+        assert titles == ["running tests"]
+
+    def test_can_you_add(self):
+        titles = detect_explicit_task_request("Can you add a task for the migration")
+        assert titles == ["the migration"]
+
+    def test_i_need_a_task(self):
+        titles = detect_explicit_task_request("I need a task for reviewing the architecture")
+        assert titles == ["reviewing the architecture"]
+
+    def test_add_to_task_list(self):
+        titles = detect_explicit_task_request("Add weeding to my task list")
+        assert titles == ["weeding"]
+
+    def test_put_on_task_list(self):
+        titles = detect_explicit_task_request("Put mowing on my task list")
+        assert titles == ["mowing"]
+
+    def test_remind_me_to(self):
+        titles = detect_explicit_task_request("Remind me to water the plants")
+        assert titles == ["water the plants"]
+
+    def test_need_to_remember(self):
+        titles = detect_explicit_task_request("I need to remember to call the dentist")
+        assert titles == ["call the dentist"]
+
+    # --- Multi-item lists ---
+
+    def test_comma_separated_list(self):
+        titles = detect_explicit_task_request("Create tasks for weeding, mowing, and picking up sticks")
+        assert titles == ["weeding", "mowing", "picking up sticks"]
+
+    def test_two_items_with_and(self):
+        titles = detect_explicit_task_request("Create tasks for weeding and mowing")
+        assert titles == ["weeding", "mowing"]
+
+    def test_comma_no_and(self):
+        titles = detect_explicit_task_request("Add tasks for laundry, dishes, vacuuming")
+        assert titles == ["laundry", "dishes", "vacuuming"]
+
+    # --- Non-matches ---
 
     def test_not_a_task_request(self):
-        title = detect_explicit_task_request("What tasks do I have?")
-        assert title is None
+        titles = detect_explicit_task_request("What tasks do I have?")
+        assert titles == []
 
     def test_short_message_ignored(self):
-        title = detect_explicit_task_request("hi")
-        assert title is None
+        titles = detect_explicit_task_request("hi")
+        assert titles == []
 
     def test_empty_message_ignored(self):
-        title = detect_explicit_task_request("")
-        assert title is None
+        titles = detect_explicit_task_request("")
+        assert titles == []
 
     def test_strips_trailing_punctuation(self):
-        title = detect_explicit_task_request("Create a task for updating docs.")
-        assert title == "updating docs"
+        titles = detect_explicit_task_request("Create a task for updating docs.")
+        assert titles == ["updating docs"]
 
 
 class TestCreateTask:

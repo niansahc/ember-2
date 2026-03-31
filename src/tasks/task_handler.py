@@ -29,12 +29,24 @@ _pending_offers: dict[str, str] = {}
 # Explicit task creation patterns
 # ---------------------------------------------------------------------------
 
+# Each pattern has one capture group for the task title/list.
+# Ordered most specific first. All case-insensitive.
 EXPLICIT_TASK_PATTERNS = (
-    r"create a task (?:for |to |called |named |about )?(.+)",
-    r"add a task (?:for |to |called |named |about )?(.+)",
-    r"track (?:this |that )?as a task(?:: ?(.+))?",
-    r"make a task (?:for |to |called |named |about )?(.+)",
-    r"new task(?:: ?| (?:for |to |called |named |about ))(.+)",
+    # Direct creation: "create a task for/called/to X"
+    r"(?:can you |please |could you )?create (?:a )?tasks? (?:for |to |called |named |about )(.+)",
+    r"(?:can you |please |could you )?add (?:a )?tasks? (?:for |to |called |named |about )(.+)",
+    r"(?:can you |please |could you )?make (?:a )?tasks? (?:for |to |called |named |about )(.+)",
+    # "I need a task for X"
+    r"i need (?:a )?tasks? (?:for |to |called |named |about )(.+)",
+    # "new task: X" or "new task for X"
+    r"new tasks?(?:: ?| (?:for |to |called |named |about ))(.+)",
+    # "track X as a task"
+    r"track (.+?) as (?:a )?tasks?",
+    # "add X to my task list" / "put X on my task list"
+    r"(?:add|put) (.+?) (?:to|on) my task list",
+    # "remind me to X" / "I need to remember to X"
+    r"remind me to (.+)",
+    r"i need to remember to (.+)",
 )
 
 # Compile once
@@ -65,27 +77,51 @@ class TaskCreationResult:
     error: str | None = None
 
 
-def detect_explicit_task_request(user_message: str) -> str | None:
+def detect_explicit_task_request(user_message: str) -> list[str]:
     """
     Check if the user message is an explicit task creation request.
 
-    Returns the extracted task title, or None if not a task request.
+    Returns a list of extracted task titles. Empty list if not a task request.
+    Handles comma/and-separated lists: "create tasks for X, Y, and Z" -> ["X", "Y", "Z"]
     """
     if not user_message or len(user_message.strip()) < 10:
-        return None
+        return []
 
     text = user_message.strip()
     for pattern in _EXPLICIT_PATTERNS:
         match = pattern.search(text)
         if match:
-            # Get the first non-None capture group
-            title = next((g for g in match.groups() if g), None)
-            if title:
-                title = title.strip().rstrip('.!?')
-                if len(title) > 80:
-                    title = title[:77] + '...'
-                return title
-    return None
+            raw = next((g for g in match.groups() if g), None)
+            if raw:
+                titles = _split_task_list(raw)
+                return [_clean_title(t) for t in titles if _clean_title(t)]
+    return []
+
+
+def _split_task_list(raw: str) -> list[str]:
+    """
+    Split a comma/and-separated task list into individual titles.
+
+    "weeding, mowing, and picking up sticks" -> ["weeding", "mowing", "picking up sticks"]
+    "fix the bug" -> ["fix the bug"]
+    """
+    # Split on comma or " and " (but not "and" inside a phrase like "salt and pepper")
+    # Strategy: split on ", and ", then on ", ", then on " and " only if result has 2+ items
+    parts = re.split(r',\s*and\s+|,\s*', raw)
+    if len(parts) == 1:
+        # Try splitting on standalone " and " only if it looks like a list
+        and_parts = re.split(r'\s+and\s+', raw)
+        if len(and_parts) >= 2 and all(len(p.strip()) < 60 for p in and_parts):
+            parts = and_parts
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _clean_title(title: str) -> str:
+    """Clean and truncate a task title."""
+    title = title.strip().rstrip('.!?')
+    if len(title) > 80:
+        title = title[:77] + '...'
+    return title
 
 
 def create_task(

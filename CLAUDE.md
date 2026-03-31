@@ -368,6 +368,7 @@ Infrastructure:
 - qwen3:8b hallucination pattern: generates news-sounding content without web search when context is poor. Model limitation, not a code bug. classify_query() web search triggers investigated and confirmed clean. Cloud models do not exhibit this. Documented in eval_history.md.
 - Old soft-deleted conversations may still show in UI sidebar. Soft-delete filter investigation pending.
 - Installer Playwright e2e tests: blocked on Electron 28.3.3 incompatibility with Playwright 1.58+ (requires `--remote-debugging-pipe`, not supported until Electron 29). Tests written and correct. Fix: upgrade Electron to 29+ in v0.12.0 after electron-builder compatibility testing.
+- The API must be restarted after any backend code changes for them to take effect. Changes to task detection, prompt building, or any src/ file do not hot-reload in production mode. Run `./start_api.bat` or kill and restart uvicorn after deploying changes.
 
 ---
 

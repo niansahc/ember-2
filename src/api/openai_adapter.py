@@ -325,24 +325,27 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         create_task as create_task_record,
     )
 
-    explicit_task_title = detect_explicit_task_request(latest_user_message)
-    if explicit_task_title:
-        logger.info("[TASK] Explicit request: '%s' (session=%s)", explicit_task_title[:60], session_id)
-        result = create_task_record(
-            title=explicit_task_title,
-            source="user_input",
-            session_id=session_id,
-            project_id=project_id,
-        )
-        if not result.created:
-            logger.warning("[TASK] Write failed: %s", result.error)
-        if result.created:
-            confirmation = f'Done. I\'ve created the task: "{result.task_title}"'
-        else:
-            confirmation = f"I tried to create that task but something went wrong: {result.error}"
-        # Still run normal pipeline but prepend the confirmation context
-        # so Ember knows she created it and can respond naturally
-        latest_user_message = f"[System: task created - \"{explicit_task_title}\"] {latest_user_message}"
+    explicit_task_titles = detect_explicit_task_request(latest_user_message)
+    if explicit_task_titles:
+        created_titles = []
+        failed_titles = []
+        for task_title in explicit_task_titles:
+            result = create_task_record(
+                title=task_title,
+                source="user_input",
+                session_id=session_id,
+                project_id=project_id,
+            )
+            if result.created:
+                created_titles.append(task_title)
+            else:
+                logger.warning("[TASK] Write failed for '%s': %s", task_title, result.error)
+                failed_titles.append(task_title)
+
+        # Inject system context so Ember confirms naturally
+        if created_titles:
+            titles_str = ", ".join(f'"{t}"' for t in created_titles)
+            latest_user_message = f"[System: tasks created - {titles_str}] {latest_user_message}"
 
     pending_result = check_pending_confirmation(
         session_id=session_id,

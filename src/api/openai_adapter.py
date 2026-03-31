@@ -62,16 +62,14 @@ def _detect_and_write_commitment(reply: str, session_id: str) -> None:
 
 
 def _detect_task_in_response(reply: str, session_id: str) -> None:
-    """Detect task-worthy content in Ember's response and log it (non-blocking)."""
+    """Detect task-worthy content in Ember's response and store as pending offer."""
     try:
         from src.tasks.task_detector import detect_task
+        from src.tasks.task_handler import store_pending_offer
         result = detect_task(reply)
         if result.detected and result.task_title:
-            logger.info("[TASK_DETECT] Detected task: %s", result.task_title[:60])
-            # Task detection is passive for now -- it logs the detection.
-            # The suggested_response is available for future use when the UI
-            # supports inline task creation offers. Writing proposed tasks
-            # automatically would be too aggressive without user confirmation.
+            store_pending_offer(session_id, result.task_title)
+            logger.info("[TASK_DETECT] Stored pending offer: %s", result.task_title[:60])
     except Exception as exc:
         logger.warning("[TASK_DETECT] Detection failed (non-fatal): %s", exc)
 
@@ -317,6 +315,42 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             project_id = session_rec.get("metadata", {}).get("project_id")
     except Exception:
         pass  # Non-fatal — proceed without project context
+
+    # --- TASK CREATION (pre-generation) ---
+    # Path 1: Explicit task request ("create a task for X")
+    # Path 2: Pending offer confirmation ("yes" after Ember offered a task)
+    from src.tasks.task_handler import (
+        detect_explicit_task_request,
+        check_pending_confirmation,
+        create_task as create_task_record,
+    )
+
+    explicit_task_title = detect_explicit_task_request(latest_user_message)
+    if explicit_task_title:
+        result = create_task_record(
+            title=explicit_task_title,
+            source="user_input",
+            session_id=session_id,
+            project_id=project_id,
+        )
+        if result.created:
+            confirmation = f'Done. I\'ve created the task: "{result.task_title}"'
+        else:
+            confirmation = f"I tried to create that task but something went wrong: {result.error}"
+        # Still run normal pipeline but prepend the confirmation context
+        # so Ember knows she created it and can respond naturally
+        latest_user_message = f"[System: task created - \"{explicit_task_title}\"] {latest_user_message}"
+
+    pending_result = check_pending_confirmation(
+        session_id=session_id,
+        user_message=latest_user_message,
+        project_id=project_id,
+    )
+    if pending_result is not None:
+        if pending_result.created:
+            latest_user_message = f'[System: task created - "{pending_result.task_title}"] {latest_user_message}'
+        else:
+            latest_user_message = f'[System: user declined task creation] {latest_user_message}'
 
     context_packet = context_service.build_context(
         latest_user_message, image_data=image_data, project_id=project_id,

@@ -361,7 +361,7 @@ Infrastructure:
 - ~~Recovery playbook~~ — complete (v0.11.0, docs/RECOVERY_PLAYBOOK.md)
 
 ## Known Issues
-- Search bar loses focus after each character — must click to type each letter. Blocks usability.
+- ~~Search bar loses focus after each character~~ — fixed (dangling SearchBar component reference replaced with inline JSX)
 - Installer Node.js prerequisite check exists but partner bypassed it somehow — needs investigation (Node IS in the prereqs screen, Next is disabled when missing)
 - ~~Installer not running npm build after clone~~ — fixed in installer v0.4.1 (update path now pulls + rebuilds ember-2-ui)
 - ~~Installer Done screen not verifying UI built~~ — fixed in installer v0.4.1 (auto-rebuild on Done)
@@ -406,6 +406,8 @@ When adding features: unit test normalizers, filters, ranking functions, and sta
 - If the human says **STOP** — drop the topic entirely
 - The human has ADHD and Autism — minimize cognitive overhead, be explicit about what is changing and why before touching anything
 - Before editing any file, state: what file, what change, and what the commit message will be
+- After making backend changes that affect the running API, restart it automatically — kill existing uvicorn process(es) and start a new one. Do not ask. The human should not have to manage API restarts during development.
+- After making UI changes, rebuild (npm run build in ember-2-ui) and copy dist/ to ember-2/ui/ automatically. Do not ask.
 
 ## Release Checklist
 

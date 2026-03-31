@@ -327,12 +327,15 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
     explicit_task_title = detect_explicit_task_request(latest_user_message)
     if explicit_task_title:
+        logger.info("[TASK] Explicit request: '%s' (session=%s)", explicit_task_title[:60], session_id)
         result = create_task_record(
             title=explicit_task_title,
             source="user_input",
             session_id=session_id,
             project_id=project_id,
         )
+        if not result.created:
+            logger.warning("[TASK] Write failed: %s", result.error)
         if result.created:
             confirmation = f'Done. I\'ve created the task: "{result.task_title}"'
         else:

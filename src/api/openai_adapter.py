@@ -353,9 +353,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         project_id=project_id,
     )
     if pending_result is not None:
-        if pending_result.created:
-            latest_user_message = f'[System: task created - "{pending_result.task_title}"] {latest_user_message}'
-        else:
+        if pending_result.created and pending_result.task_titles:
+            titles_str = ", ".join(f'"{t}"' for t in pending_result.task_titles)
+            latest_user_message = f'[System: tasks created - {titles_str}] {latest_user_message}'
+        elif not pending_result.created:
             latest_user_message = f'[System: user declined task creation] {latest_user_message}'
 
     context_packet = context_service.build_context(

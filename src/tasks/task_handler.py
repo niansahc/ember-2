@@ -21,8 +21,8 @@ logger = logging.getLogger("ember.task_handler")
 
 
 # Module-level pending offer storage, keyed by session_id.
-# Each entry is a task title string. Cleared after use or on next turn.
-_pending_offers: dict[str, str] = {}
+# Each entry is a list of task titles. Cleared after use or on next turn.
+_pending_offers: dict[str, list[str]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -58,9 +58,17 @@ _EXPLICIT_PATTERNS = [re.compile(p, re.IGNORECASE) for p in EXPLICIT_TASK_PATTER
 # ---------------------------------------------------------------------------
 
 CONFIRM_PATTERNS = (
-    "yes", "yeah", "yep", "yup", "sure", "please", "do it",
-    "go ahead", "add it", "create it", "yes please", "yes create it",
-    "sounds good", "ok", "okay",
+    "yes", "yeah", "yep", "yup",
+    "sure", "sure thing",
+    "please", "please do", "yes please",
+    "ok", "okay", "ok go ahead",
+    "go ahead", "go for it",
+    "do it", "do them",
+    "add it", "just add it", "add them", "just add them", "add them all",
+    "create it", "create them", "yes create it", "yes create them",
+    "sounds good", "that works",
+    "just add them if that's okay", "just add them if that's ok",
+    "add those", "yes add those", "add all of those",
 )
 
 DECLINE_PATTERNS = (
@@ -74,6 +82,7 @@ class TaskCreationResult:
     """Result of a task creation attempt."""
     created: bool
     task_title: str | None = None
+    task_titles: list[str] | None = None
     error: str | None = None
 
 
@@ -155,9 +164,12 @@ def create_task(
 
 
 def store_pending_offer(session_id: str, task_title: str) -> None:
-    """Store a pending task offer for the next turn."""
-    _pending_offers[session_id] = task_title
-    logger.info("[TASK_HANDLER] Stored pending offer for session %s: %s", session_id, task_title[:60])
+    """Store a pending task offer for the next turn. Appends to existing list."""
+    if session_id not in _pending_offers:
+        _pending_offers[session_id] = []
+    _pending_offers[session_id].append(task_title)
+    logger.info("[TASK_HANDLER] Stored pending offer for session %s: %s (total: %d)",
+                session_id, task_title[:60], len(_pending_offers[session_id]))
 
 
 def check_pending_confirmation(
@@ -166,35 +178,54 @@ def check_pending_confirmation(
     project_id: str | None = None,
 ) -> TaskCreationResult | None:
     """
-    Check if the user is confirming or declining a pending task offer.
+    Check if the user is confirming or declining pending task offer(s).
 
     Returns:
-        TaskCreationResult if confirmed (created=True) or declined (created=False)
+        TaskCreationResult with task_titles list if confirmed
+        TaskCreationResult(created=False) if declined
         None if no pending offer exists for this session
     """
     if session_id not in _pending_offers:
         return None
 
-    task_title = _pending_offers.pop(session_id)
+    task_titles = _pending_offers.pop(session_id)
     lower = user_message.strip().lower()
 
     # Check for decline first
-    if any(lower == p or lower.startswith(p + " ") or lower.startswith(p + ",") for p in DECLINE_PATTERNS):
-        logger.info("[TASK_HANDLER] User declined task: %s", task_title[:60])
-        return TaskCreationResult(created=False, task_title=task_title)
+    if _matches_any(lower, DECLINE_PATTERNS):
+        logger.info("[TASK_HANDLER] User declined %d task(s)", len(task_titles))
+        return TaskCreationResult(created=False, task_titles=task_titles)
 
     # Check for confirmation
-    if any(lower == p or lower.startswith(p + " ") or lower.startswith(p + ",") or lower.startswith(p + ".") for p in CONFIRM_PATTERNS):
-        return create_task(
-            title=task_title,
-            source="task_detector",
-            session_id=session_id,
-            project_id=project_id,
-        )
+    if _matches_any(lower, CONFIRM_PATTERNS):
+        created = []
+        failed = []
+        for title in task_titles:
+            result = create_task(
+                title=title,
+                source="task_detector",
+                session_id=session_id,
+                project_id=project_id,
+            )
+            if result.created:
+                created.append(title)
+            else:
+                failed.append(title)
+        if created:
+            return TaskCreationResult(created=True, task_titles=created)
+        return TaskCreationResult(created=False, task_titles=task_titles, error="All writes failed")
 
     # Ambiguous -- not clearly a confirm or decline. Clear the offer silently.
-    logger.info("[TASK_HANDLER] Ambiguous response, clearing pending offer: %s", task_title[:60])
+    logger.info("[TASK_HANDLER] Ambiguous response, clearing %d pending offer(s)", len(task_titles))
     return None
+
+
+def _matches_any(text: str, patterns: tuple[str, ...]) -> bool:
+    """Check if text matches any pattern (exact match or starts with pattern + separator)."""
+    return any(
+        text == p or text.startswith(p + " ") or text.startswith(p + ",") or text.startswith(p + ".")
+        for p in patterns
+    )
 
 
 def clear_pending_offer(session_id: str) -> None:

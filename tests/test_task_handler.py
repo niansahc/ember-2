@@ -149,7 +149,7 @@ class TestOfferConfirmFlow:
         """Clear pending offers between tests."""
         _pending_offers.clear()
 
-    def test_store_and_confirm(self, tmp_path):
+    def test_store_and_confirm_single(self, tmp_path):
         store_pending_offer("sess-1", "Fix the retrieval bug")
 
         result = check_pending_confirmation(
@@ -159,7 +159,22 @@ class TestOfferConfirmFlow:
         )
         assert result is not None
         assert result.created is True
-        assert result.task_title == "Fix the retrieval bug"
+        assert result.task_titles == ["Fix the retrieval bug"]
+
+    def test_store_and_confirm_multiple(self, tmp_path):
+        store_pending_offer("sess-1", "Meal plan")
+        store_pending_offer("sess-1", "Grocery list")
+        store_pending_offer("sess-1", "Prep food")
+
+        result = check_pending_confirmation("sess-1", "just add them")
+        assert result is not None
+        assert result.created is True
+        assert result.task_titles == ["Meal plan", "Grocery list", "Prep food"]
+
+    def test_pending_stores_list(self):
+        store_pending_offer("sess-1", "Task A")
+        store_pending_offer("sess-1", "Task B")
+        assert _pending_offers["sess-1"] == ["Task A", "Task B"]
 
     def test_confirm_with_please(self, tmp_path):
         store_pending_offer("sess-1", "Run the eval")
@@ -179,12 +194,36 @@ class TestOfferConfirmFlow:
         assert result is not None
         assert result.created is True
 
+    def test_confirm_with_just_add_them(self, tmp_path):
+        store_pending_offer("sess-1", "Task X")
+        result = check_pending_confirmation("sess-1", "just add them")
+        assert result is not None
+        assert result.created is True
+
+    def test_confirm_with_yeah(self, tmp_path):
+        store_pending_offer("sess-1", "Task Y")
+        result = check_pending_confirmation("sess-1", "yeah")
+        assert result is not None
+        assert result.created is True
+
+    def test_confirm_with_go_for_it(self, tmp_path):
+        store_pending_offer("sess-1", "Task Z")
+        result = check_pending_confirmation("sess-1", "go for it")
+        assert result is not None
+        assert result.created is True
+
+    def test_confirm_with_that_works(self, tmp_path):
+        store_pending_offer("sess-1", "Task W")
+        result = check_pending_confirmation("sess-1", "that works")
+        assert result is not None
+        assert result.created is True
+
     def test_decline_with_no(self, tmp_path):
         store_pending_offer("sess-1", "Some task")
         result = check_pending_confirmation("sess-1", "no")
         assert result is not None
         assert result.created is False
-        assert result.task_title == "Some task"
+        assert result.task_titles == ["Some task"]
 
     def test_decline_with_skip(self, tmp_path):
         store_pending_offer("sess-1", "Some task")
@@ -205,7 +244,6 @@ class TestOfferConfirmFlow:
     def test_offer_consumed_after_check(self):
         store_pending_offer("sess-1", "One-time offer")
         check_pending_confirmation("sess-1", "yes")
-        # Second check should find nothing
         result = check_pending_confirmation("sess-1", "yes")
         assert result is None
 
@@ -216,15 +254,15 @@ class TestOfferConfirmFlow:
 
 
 class TestConfirmWritesToVault:
-    """Confirm that the offer/confirm path actually writes a TaskRecord."""
+    """Confirm that the offer/confirm path actually writes TaskRecords."""
 
     def setup_method(self):
         _pending_offers.clear()
 
-    def test_confirmed_task_in_vault(self, tmp_path):
+    def test_confirmed_tasks_written(self, tmp_path):
         store_pending_offer("sess-1", "Review the architecture")
+        store_pending_offer("sess-1", "Update the TDD")
 
-        # Patch create_task to use tmp_path
         from unittest.mock import patch
         with patch("src.tasks.task_handler.TaskService") as MockService:
             mock_instance = MockService.return_value
@@ -237,13 +275,14 @@ class TestConfirmWritesToVault:
             )
 
         assert result.created is True
-        # Verify make_record was called with correct source
-        MockService.make_record.assert_called_once()
-        call_kwargs = MockService.make_record.call_args[1]
-        assert call_kwargs["source"] == "task_detector"
-        assert call_kwargs["title"] == "Review the architecture"
+        assert result.task_titles == ["Review the architecture", "Update the TDD"]
+        # make_record called twice -- once per task
+        assert MockService.make_record.call_count == 2
+        # Both should use task_detector source
+        for call in MockService.make_record.call_args_list:
+            assert call[1]["source"] == "task_detector"
 
-    def test_declined_task_not_in_vault(self, tmp_path):
+    def test_declined_tasks_not_written(self, tmp_path):
         store_pending_offer("sess-1", "Skip this one")
 
         from unittest.mock import patch

@@ -91,6 +91,11 @@ async def api_key_auth(request: Request, call_next):
     if not any(path.startswith(p) for p in API_PREFIXES):
         return await call_next(request)
 
+    # PIN verify and status endpoints bypass API key auth (they are the UI auth)
+    PIN_PUBLIC_PATHS = ("/v1/security/pin/verify", "/v1/security/pin/status")
+    if path in PIN_PUBLIC_PATHS:
+        return await call_next(request)
+
     expected_key = get_ember_api_key()
     if not expected_key:
         # No key configured — open access (warn once at startup instead)
@@ -480,6 +485,74 @@ def update_task_status_endpoint(task_id: str, body: TaskUpdateRequest):
         "previous_status": existing.status,
         "path": str(path),
     }
+
+
+# ── Security / PIN endpoints ───────────────────────────────────────────
+
+
+class PinSetRequest(BaseModel):
+    pin: str
+    recovery_passphrase: str
+
+
+class PinVerifyRequest(BaseModel):
+    pin: str
+
+
+class PinRecoverRequest(BaseModel):
+    recovery_passphrase: str
+    new_pin: str
+
+
+@app.get("/v1/security/pin/status")
+def pin_status_endpoint():
+    """Check if a PIN has been configured. No auth required."""
+    from src.security.pin_service import pin_is_set
+    return {"pin_set": pin_is_set()}
+
+
+@app.post("/v1/security/pin/set")
+def pin_set_endpoint(body: PinSetRequest):
+    """Set PIN and recovery passphrase. Requires API key auth."""
+    from src.security.pin_service import set_pin, set_recovery_passphrase
+    if len(body.pin) < 4:
+        raise HTTPException(status_code=400, detail="PIN must be at least 4 characters")
+    if len(body.recovery_passphrase) < 20:
+        raise HTTPException(status_code=400, detail="Recovery passphrase must be at least 20 characters")
+    set_pin(body.pin)
+    set_recovery_passphrase(body.recovery_passphrase)
+    return {"status": "set"}
+
+
+@app.post("/v1/security/pin/verify")
+@limiter.limit("5/minute")
+def pin_verify_endpoint(request: Request, body: PinVerifyRequest):
+    """Verify a PIN. No API key auth — this IS the UI auth. Rate-limited."""
+    from src.security.pin_service import verify_pin, check_rate_limit, record_failed_attempt, get_remaining_attempts
+    client_ip = request.client.host
+    if not check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Too many attempts. Try again in 5 minutes.")
+    if verify_pin(body.pin):
+        return {"valid": True}
+    remaining = record_failed_attempt(client_ip)
+    return {"valid": False, "remaining_attempts": remaining}
+
+
+@app.post("/v1/security/pin/recover")
+@limiter.limit("5/minute")
+def pin_recover_endpoint(request: Request, body: PinRecoverRequest):
+    """Recover access with passphrase and set new PIN. Rate-limited."""
+    from src.security.pin_service import verify_recovery_passphrase, set_pin, check_rate_limit, record_failed_attempt
+    client_ip = request.client.host
+    if not check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Too many attempts. Try again in 5 minutes.")
+    if not verify_recovery_passphrase(body.recovery_passphrase):
+        record_failed_attempt(client_ip)
+        raise HTTPException(status_code=403, detail="Invalid recovery passphrase")
+    if len(body.new_pin) < 4:
+        raise HTTPException(status_code=400, detail="PIN must be at least 4 characters")
+    set_pin(body.new_pin)
+    return {"status": "recovered"}
 
 
 # ── Preferences endpoints ──────────────────────────────────────────────

@@ -36,3 +36,4 @@ typer
 
 # Testing
 pytest
+bcrypt>=4.0.0

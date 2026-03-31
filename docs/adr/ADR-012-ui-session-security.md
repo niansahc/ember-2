@@ -1,6 +1,6 @@
 # ADR-012: UI Session Security
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-03-28
 
 ## Context

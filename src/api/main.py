@@ -413,6 +413,7 @@ def list_tasks_endpoint(status: str | None = None, project_id: str | None = None
                 "project_id": r.project_id,
                 "tags": r.tags,
                 "timestamp": r.timestamp,
+                "metadata": r.metadata,
             }
             for r in records
         ]

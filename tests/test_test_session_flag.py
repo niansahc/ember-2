@@ -11,7 +11,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.memory.session import create_session, list_sessions
+from src.memory.session import create_session, list_sessions, delete_session
 from src.memory.storage import MemoryStorage
 
 
@@ -73,6 +73,45 @@ class TestListSessionsFiltering:
         session_ids = {s["id"] for s in sessions}
         assert "normal-1" in session_ids
         assert "test-1" in session_ids
+
+
+class TestSoftDeleteFiltering:
+    """Soft-deleted sessions must not appear in list_sessions()."""
+
+    def test_soft_deleted_session_excluded_from_list(self, temp_vault):
+        _create_spaced(temp_vault, "keep-1", "Kept conversation")
+        _create_spaced(temp_vault, "delete-me", "Will be deleted")
+        _create_spaced(temp_vault, "keep-2", "Another kept conversation")
+
+        with patch("src.memory.session.get_private_vault_path", return_value=temp_vault):
+            # Before deletion, all three should appear
+            sessions = list_sessions()
+            session_ids = {s["id"] for s in sessions}
+            assert "keep-1" in session_ids
+            assert "delete-me" in session_ids
+            assert "keep-2" in session_ids
+
+            # Soft-delete one
+            delete_session("delete-me")
+
+            # After deletion, only two should appear
+            sessions = list_sessions()
+            session_ids = {s["id"] for s in sessions}
+            assert "keep-1" in session_ids
+            assert "keep-2" in session_ids
+            assert "delete-me" not in session_ids
+
+    def test_soft_deleted_session_not_in_api_response(self, temp_vault):
+        """Verify the GET /v1/conversations endpoint filters soft-deleted sessions."""
+        _create_spaced(temp_vault, "visible", "Visible conversation")
+        _create_spaced(temp_vault, "hidden", "Hidden conversation")
+
+        with patch("src.memory.session.get_private_vault_path", return_value=temp_vault):
+            delete_session("hidden")
+            sessions = list_sessions()
+            session_ids = {s["id"] for s in sessions}
+            assert "visible" in session_ids
+            assert "hidden" not in session_ids
 
 
 class TestCleanupScriptIdentification:

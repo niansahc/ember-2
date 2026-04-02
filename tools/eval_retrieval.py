@@ -231,6 +231,7 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8")
     verbose = "--verbose" in sys.argv
 
     print("Running retrieval evaluation...\n")

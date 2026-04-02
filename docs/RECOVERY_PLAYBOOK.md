@@ -220,6 +220,34 @@ Ember-2 does not use axios and was not affected. If you run other Node.js projec
 
 ---
 
+## API Restart Requirement
+
+The API must be restarted after any backend code changes for them to take effect. Hot-reload is not active in production mode.
+
+- **Windows:** `./start_api.bat`
+- **Mac/Linux:** `./start_api.sh`
+
+Or kill the existing uvicorn process and start a new one. Changes to task detection, prompt building, or any `src/` file require a restart.
+
+---
+
+## Task Creation Troubleshooting
+
+If Ember confirms creating tasks but they don't appear in the sidebar:
+
+1. **Restart the API** — the most common cause is stale code running after an update
+2. Check `private_vault/memory/task/` for JSON files — if empty, the write path is not firing
+3. Check the API console for `[TASK]` log lines — the task handler logs every write attempt
+4. If tasks exist in the vault but don't show in the sidebar, hard-refresh the UI (Ctrl+Shift+R)
+
+---
+
+## Clean Install Testing (v0.12.0 known gap)
+
+A clean install test (fresh machine, no prior Ember installation) was not completed before v0.12.0 due to hardware constraints — both developers are on gaming machines with limited disk space for full clean install testing. Scheduled before v0.13.0 release when test hardware is available.
+
+---
+
 ## General principles
 
 - **The vault is append-only.** You can't corrupt it by restarting, crashing, or killing the process mid-write. The worst that happens is one incomplete JSON file, which Ember skips on read.

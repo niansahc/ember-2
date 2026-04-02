@@ -1,6 +1,6 @@
 # ADR-008: Cloud Model Provider Support
 
-**Status:** Proposed (not yet accepted)
+**Status:** Accepted
 **Date:** 2026-03-27
 
 ## Context

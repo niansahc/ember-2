@@ -122,15 +122,14 @@ Characteristics:
 
 ---
 
-### Tool Layer (Planned)
+### Tool Layer
 Handles:
-- web lookup
-- document search
-- calendars, tasks, contacts
-- local automations
-- future controlled action-taking workflows
+- task creation and tracking
+- web search
+- future: calendars, email, health data integrations
+- future: controlled action-taking workflows
 
-Tool usage should remain observable and policy-driven.
+Tool usage remains observable and policy-driven.
 
 ---
 
@@ -275,11 +274,14 @@ Reflection transforms memory into higher-level insight.
 - consolidates progress
 - surfaces blockers and broader trends
 
+## Session Reflection
+- end-of-session capture before context is lost
+- auto-triggers on session delete if 3+ turns in buffer
+
 ## Future Reflection Modes
 - monthly synthesis
 - thematic reflection
 - strategic review
-- session reflection (end-of-session capture before context is lost)
 
 Reflections are stored as first-class Derived Memory and remain traceable to source windows.
 
@@ -345,77 +347,63 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 
 # Current State
 
-## Working (v0.10.2)
-- memory storage (append-only JSON vault with typed enforcement via VALID_MEMORY_TYPES)
-- ingestion pipeline (ChatGPT, PDF, DOCX, CSV, GDrive, POST /ingest/upload multipart)
-- semantic retrieval
-- context assembly
-- reflection engine
-- API + Ember UI (served from FastAPI)
-- constitutional review flow
-- safety review logging
-- state layer (StateService, StateResolver, models, ContextPacket integration, prompt rendering)
-- status_state query intent with state_boost routing
-- ContextRanker state_boost wiring
-- state API endpoints (GET /state, GET /state/{category}, POST /write-state)
-- add_state.py CLI script
-- audit_memory.py vault health check script
-- SQLite vector store for ingested content (SqliteVectorStore, 16,728 records)
-- model configurable via EMBER_MODEL in .env (default: qwen3:8b)
-- ingested corpus searchable via semantic retrieval (migrated from 1.32 GB JSON to SQLite)
-- conversation memory write path (openai_adapter writes two records per turn; was silently broken)
-- memory_type propagation end-to-end (ContextItem field + all retriever paths)
-- profile memory retrieval (guaranteed context slots; profile records always reach the LLM)
-- corpus quality suppression (3,574 of 16,728 ingested records suppressed; quality flag in SQLite)
-- reflection scoring and filter improvements (length gate, diversity selection, skip filter tightened)
-- prompt perspective fix (MEMORY CONTEXT split into user self-description and context sub-sections)
-- profile retrieval score-gated at 0.3 (no more unconditional slot guarantee; irrelevant records excluded)
-- runtime model switching (GET /model, POST /model; qwen2.5:14b and mistral:7b available)
-- mid-conversation context compression (token-based, 70% threshold, LLM summarization, session summaries persisted to vault)
-- journal ingestion (scripts/journal.py CLI + POST /journal endpoint; 20-char minimum; mood and tags metadata)
-- multi-source reflection (daily + weekly reflection now blend journal and ingested content in a single pass)
-- payload interference hardening (empty message guard; `### Task:` RAG injection guard; type-aware payload logging) — v0.7.10
-- web search via local SearXNG (intent-gated; `web_items` in ContextPacket; results above memory context in prompt; apostrophe normalization) — v0.8.0/v0.8.1
-- vision model integration (`EMBER_VISION_MODEL` in .env; `image_data` pipeline from openai_adapter → ContextPacket → Ollama `images=` kwarg; graceful text-only fallback) — v0.8.2
-- security hardening: Tailscale-only API binding, API key auth middleware, Windows Credential Manager key storage (keyring), BitLocker encryption at rest, rate limiting (slowapi), path traversal protection on ingest endpoints, JSON audit logging to `logs/audit/`, Tailscale HTTPS via Serve, ACL restricted to `autogroup:member` — v0.8.3/v0.8.4
-- auto state extraction from conversation turns (StateExtractor, background thread)
-- conversation session system (session_id, project_id, rename, soft-delete)
-- projects backend (CRUD, conversation assignment, project-scoped retrieval boost ADR-007)
-- vector index in-memory caching (cache hit/miss logging, auto-invalidation on write)
-- retrieval evaluation harness (15 benchmark cases, pass/warn/fail scoring)
-- vault health audit (scripts/audit_memory.py — 7 checks, GREEN/YELLOW/RED)
-- PWA manifest for Android/iOS home screen installation
-- **streaming responses** — SSE from Ollama through FastAPI; first token in 1-2s
-- **auto state extraction** — background detection of focus, blockers, goals from conversation
-- **project-scoped retrieval** (ADR-007) — +0.15 boost for matching project_id
-- **typed memory enforcement** — VALID_MEMORY_TYPES validates all writes
-- **vault health audit** — scripts/audit_memory.py with 7 checks and health score
-- **buffer compression backgrounded** — no longer blocks response
-- self-echo prevention (role-labeled context, metadata-aware scoring)
-- conversation quality eval with Claude as external evaluator (18 tests, 6 categories)
-- local model comparison eval (automated, all installed models)
-- reflection quality audit and suppression tools
-- temporal grounding (date injection, timestamps on context items)
-- profile retrieval tuning for identity queries
-- authentic_expression constitutional principle
-- Ember uses she/her pronouns
-- Cloud model provider support — Anthropic Claude (Haiku 4.5 at 8.7/10, Sonnet 4.6 at 8.5/10) via LLMAdapter
-- Provider API key storage via keyring with env var fallback
+## Working (v0.12.0)
+
+**Core systems:**
+- Append-only JSON vault with typed memory enforcement (17 types validated at write time)
+- Ingestion pipeline (ChatGPT, PDF, DOCX, CSV, TXT, GDrive, POST /ingest/upload multipart)
+- Semantic retrieval via vector indexes (cached in memory, no disk load per query)
+- Context assembly with policy-weighted ranking, diversity selection, project-scoped boost
+- SSE streaming responses from Ollama or Anthropic through FastAPI
+- Cloud model provider support — Anthropic Claude and OpenAI via LLMAdapter
+- Provider API key storage via OS credential store (Windows, macOS, Linux)
+- Auto state extraction from conversation turns (background thread)
+- State layer (StateService, StateResolver, 8 categories, context packet integration)
+- Multi-record state categories for open_loop and next_action (capped at 5)
+- Commitment detection — post-generation detector writes open_loop state records
+- Daily, weekly, and session reflection generation
+- Constitutional review (8 principles, streaming-compatible)
+- Conversation sessions with projects, rename, soft-delete, auto-title
+- Task layer — create and track tasks through conversation or direct request
+- Task sidebar tray in the UI with checkbox completion
+- Temporal awareness — staleness penalties, age labels, hedging rules for old memories
+- Self-echo prevention (role-labeled context, metadata-aware scoring)
+- Web search via local SearXNG with transparency indicator
+- Vision model support with graceful text-only fallback
+- Default model: qwen3:8b (best local model tested)
+
+**User-facing features (v0.12.0):**
+- Task creation and tracking through natural conversation
+- PIN/passphrase lock — secure Ember with bcrypt, idle timeout, and recovery
+- Conversational style settings — Casual, Balanced, or Thoughtful
+- Multi-image upload — send multiple images in a single message
+- Web search transparency indicator — see when web search was used
+- Guided first-run tour for new users
+- Mac/Linux installer support — platform-aware setup for all three platforms
+
+**Security:**
+- API key auth via OS credential store (Windows Credential Manager, macOS Keychain, Linux SecretService)
+- PIN/passphrase lock with rate limiting, idle timeout, and recovery
+- Rate limiting, path traversal protection, JSON audit logging
+- Dependency security policy — native fetch, no axios
+- SearXNG and API bound to localhost
+
+**Evaluation & Tooling:**
+- Retrieval evaluation (15 benchmark cases, pass/warn/fail scoring)
+- Conversation quality eval with Claude as external evaluator
 - Model selection guide with real eval data (docs/model_guide.md)
-- Eval baseline documented with all 8 models (docs/eval_history.md)
-- Local model comparison eval harness (tools/eval_local_models.py)
-- Default model: qwen3:8b (5.4/10, best local model tested)
-- 285 pytest tests passing, 35 Playwright e2e tests passing (2 skipped)
+- Vault health audit (7 checks, GREEN/YELLOW/RED health score)
+- 485 pytest tests passing
 
 > Note: Eval harness results reflect personal vault contents and are not generic benchmarks.
 
 ## Roadmap
 
-**v0.11.0** — Cloud provider UI, OpenAI support, backup/export, recovery playbook, semantic safety triggers (ADR-010)
-**v0.12.0** — Task layer, session reflection (ADR-009), Mac/Linux installer
-**v0.13.0** — Memory tiering, embedding upgrade, vault encryption at rest
-**v0.14.0** — Offline knowledge (Kiwix ZIM, Project Gutenberg)
-**v0.15.0** — Agent orchestration, self-evaluation loops
+**v0.11.0** — Cloud provider UI, OpenAI support, backup/export, recovery playbook, semantic safety triggers ✓
+**v0.12.0** — Task layer, session reflection, PIN lock, Mac/Linux installer, temporal awareness ✓
+**v0.13.0** — Memory tiering, embedding upgrade, vault encryption at rest, integrations (email, GitHub, health)
+**v0.14.0** — Offline knowledge (Kiwix ZIM, Project Gutenberg), calendar/notes ingestion, proactive mode
+**v0.15.0** — Agent orchestration, self-evaluation loops, deviation memory
 **Post-v0.15.0** — Multi-user vault isolation, full platform parity
 
 ---
@@ -522,7 +510,7 @@ src/
 │   ├ audit_assistant_chunks.py   Audit assistant-generated chunks
 │   └ suppress_assistant_noise.py Flag low-quality ingested records
 │
-├ tests/                  Pytest suite (285 tests)
+├ tests/                  Pytest suite (485 tests)
 ├ prompts/                LLM prompt templates
 ├ logs/                   Audit logs, safety review logs (gitignored)
 ├ ui/                     Built Ember UI frontend (gitignored, built from ember-2-ui)
@@ -532,6 +520,7 @@ src/
 ├ .env.example            Environment variable template
 ├ docker-compose.yml      SearXNG container
 ├ start_api.bat           Windows API startup script
+├ start_api.sh            Mac/Linux API startup script
 └ private_vault/          Excluded from git — all memory data lives here
 ```
 

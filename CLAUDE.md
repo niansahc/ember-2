@@ -315,14 +315,16 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Index migration for remaining JSON indexes to SQLite
 - Monthly/thematic reflection
 - Vault encryption at rest (Ember-managed, with key recovery story)
-- Custom theme with color picker — user-defined accent and background colors
-- SKILL.md skill definition format — self-contained integration folders (inspired by OpenClaw AgentSkills)
-- Email read-only ingestion (IMAP) — vault ingestion and live context modes
-- GitHub read-only ingestion — commits, PRs, issues, activity feed
+- Custom theme with color picker
+- Email read-only ingestion (IMAP) — two modes: vault ingestion and live context
+- GitHub read-only ingestion — commits, PRs, issues, activity feed; live context for coding conversations
 - Fitbit export ingestion — activity, sleep, health patterns
 - Apple Health / Garmin export ingestion
 - Generic CSV / JSON import
-- Clean install test on a fresh machine (deferred from v0.12.0)
+- SKILL.md skill definition format for tool integrations
+- Task completion summary — "what did I complete today/this week?" (requires requirements mapping before build)
+- Task settings panel — ⚙️ icon in TASKS header, task-specific configuration (requires requirements mapping before build)
+- Clean install test on fresh Windows machine (deferred from v0.12.0 — hardware constraints)
 
 **v0.14.0 — Offline Knowledge + Integrations:**
 - Kiwix ZIM ingestion adapter (curated packs only)
@@ -356,6 +358,7 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - PAI TELOS pattern — evaluate against constitution + profile memory during onboarding work
 - Multi-user vault isolation — post-v0.15.0 milestone
 - Eval harness uses user's own vault — results are personal, not generic benchmarks
+- "Memory in the Age of AI Agents" (arxiv.org/abs/2512.13564, Zhang et al., December 2025) — survey proposing factual/experiential/working memory taxonomy; relevant to Ember's memory class design and v0.13.0 tiering work
 
 ## Known Gaps (tracked)
 - Vault encryption at rest — v0.13.0

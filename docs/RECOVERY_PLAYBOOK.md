@@ -208,6 +208,18 @@ Step-by-step fixes for common Ember-2 problems. Start with the scenario that mat
 
 ---
 
+## Supply Chain Security (March 2026)
+
+If you installed npm packages on March 31, 2026 between 00:21 and 03:29 UTC, check your lockfiles for the compromised axios versions:
+
+```bash
+grep -r "1.14.1\|0.30.4\|plain-crypto-js" package-lock.json
+```
+
+Ember-2 does not use axios and was not affected. If you run other Node.js projects on the same machine, check those environments separately.
+
+---
+
 ## General principles
 
 - **The vault is append-only.** You can't corrupt it by restarting, crashing, or killing the process mid-write. The worst that happens is one incomplete JSON file, which Ember skips on read.

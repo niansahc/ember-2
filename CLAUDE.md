@@ -364,6 +364,18 @@ Infrastructure:
 
 ---
 
+## Dependency Security
+
+Ember-2 uses native fetch for all HTTP requests in the frontend and installer — no axios dependency. This was a protective decision confirmed during the March 31, 2026 axios npm supply chain attack (compromised versions 1.14.1 and 0.30.4 contained a RAT; Ember was not affected).
+
+When adding new npm dependencies:
+- Prefer native browser/Node APIs over third-party packages where feasible
+- Pin exact versions in package.json rather than using ^ or ~ ranges for production dependencies
+- Check new packages against known vulnerability databases before adding
+- Run `grep -r "plain-crypto-js" package-lock.json` after any npm install as a sanity check during active supply chain attack windows
+
+---
+
 ## What Not to Touch
 
 - `private_vault/` — never commit, never rewrite in place, never treat index files as source of truth

@@ -1554,8 +1554,18 @@ It should be possible to explain:
 - ~~multi-source reflection~~ — complete (v0.7.9): generate_reflection() signature changed from memory_type: str to memory_types: list[str] | str (backwards compat); daily and weekly runners now pass ["journal", "ingested"]; candidates pooled from all sources before scoring and diversity selection; source_label stored in reflection metadata
 - ~~web search via local SearXNG~~ — complete (v0.8.0/v0.8.1): `src/tools/web_search.py` thin client to SearXNG JSON API at `localhost:8888`; `use_web_search` field on `ContextPolicy`; `web_search` intent class in `classify_query()`; apostrophe normalization (curly → straight) before all marker matching; `web_items` field on `ContextPacket`; results rendered above memory context in prompt builder; `docker-compose.yml` + `config/searxng/settings.yml` for local SearXNG instance
 - ~~vision model integration~~ — complete (v0.8.2): `EMBER_VISION_MODEL` env var + `get_ember_vision_model()` in config; `image_data: list[str]` field on `ContextPacket`; base64 extraction from `data:image/...;base64,` prefix in openai_adapter; `model_override` + `images=` kwarg in `LLMAdapter._chat()`; `use_vision = bool(image_data) and bool(vision_model)` routing in `generate_response()`; graceful fallback to text-only model when vision not configured or no image present; 18 tests in test_vision.py (123 total passing at v0.8.2; current: 300 pytest + 36 Playwright e2e)
-- commitment detection and state persistence (ADR-014) — post-generation detector writes `open_loop` state records when Ember makes a conversational commitment; requires evaluation benchmark before ship; model-agnostic; uses existing state layer; resolved records are tiering candidates at v0.13.0
-- add task layer
+- ~~commitment detection and state persistence (ADR-014)~~ — complete (v0.12.0): post-generation detector writes open_loop state records; 32 patterns, precision 1.00, recall 0.93; eval benchmark at tools/eval_commitment_detector.py
+- ~~task layer MVP~~ — complete (v0.12.0): TaskService, TaskResolver, dual creation paths (explicit request + offer/confirm), task detector, context injection, truth-gated confirmation; POST/GET/PATCH/GET-by-id /v1/tasks
+- ~~multi-record state categories (ADR-011)~~ — complete (v0.12.0): open_loop and next_action support multiple simultaneous active records, capped at 5; resolved records excluded
+- ~~session reflection (ADR-009)~~ — complete (v0.12.0): narrative end-of-session capture via POST /reflect/session; auto-triggers on session delete if 3+ turns in buffer
+- ~~PIN/passphrase lock (ADR-012 Phase 2)~~ — complete (v0.12.0): bcrypt factor 12, keyring storage, rate limiting, idle timeout, recovery via hashed passphrase
+- ~~Mac/Linux installer support~~ — complete (v0.12.0): platform-aware prerequisite checks, default paths, startup scripts; Homebrew soft check on Mac; Gatekeeper note
+- ~~Electron upgrade 28 → 33~~ — complete (v0.12.0): unblocks Playwright e2e tests; 12 installer tests passing
+- ~~web search transparency indicator~~ — complete (v0.12.0): X-Ember-Web-Search header; magnifying glass icon on messages
+- ~~conversational style setting~~ — complete (v0.12.0): casual/balanced/thoughtful; preferences API; prompt injection
+- ~~guided first-run UI tour~~ — complete (v0.12.0): Shepherd.js, 6 steps, triggers once via preferences API
+- ~~multi-image upload~~ — complete (v0.12.0): select and send multiple images in a single message
+- ~~temporal awareness~~ — complete (v0.12.0): staleness penalties, age labels, hedging rules for old memories
 - improve timeline reconstruction
 - build dashboard / observability views
 - add better review analytics and false-positive/false-negative tracking

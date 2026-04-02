@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.12.0 — 2026-04-02
+
+### State and Memory
+- **ADR-011: multi-record state categories** — open_loop and next_action now support multiple simultaneous active records, capped at 5; resolved records excluded
+- **ADR-014: commitment detection** — post-generation detector writes open_loop state records when Ember makes conversational commitments; precision 1.00, recall 0.93; eval script at tools/eval_commitment_detector.py
+- **Temporal awareness** — staleness penalties for conversation items older than 30 days; age labels injected into prompt; hedging rules for memories older than 7 days
+
+### Tasks
+- **Task layer MVP** — TaskService, TaskResolver, dual creation paths (explicit request and offer/confirm), task detector, context injection, truth-gated confirmation
+- **Task API endpoints** — POST/GET/PATCH/GET-by-id /v1/tasks
+- **Broadened task detection** — natural language variations, multi-task list parsing
+
+### Reflection
+- **ADR-009: session reflection** — narrative end-of-session capture via POST /reflect/session; auto-triggers on session delete if 3+ turns in buffer
+
+### UI Support
+- **Web search signal** — X-Ember-Web-Search response header when web items used
+- **Conversational style** — GET/PATCH /v1/preferences; casual/balanced/thoughtful prompt injection
+- **User preferences store** — private_vault/preferences.json; preferences API
+
+### Security
+- **ADR-012 Phase 2: PIN/passphrase lock** — bcrypt factor 12, keyring storage, rate limiting, idle timeout, recovery via hashed passphrase
+- **Dependency security policy** — native fetch used throughout, no axios dependency; documented after March 2026 supply chain attack
+
+### Infrastructure
+- **Mac/Linux installer support** — platform-aware prerequisite checks, paths, and startup scripts
+- start_api.sh added for Mac/Linux
+- Soft-deleted conversations confirmed working — 2 regression tests added
+
+### Bug Fixes
+- Ember no longer states stale memories as current fact (temporal awareness)
+- Task write path — tasks now actually written to vault with truth-gated confirmation
+- Task detection patterns broadened to cover natural language variations
+
+### Tests
+- pytest: 485 passing (up from 303 at v0.11.1)
+- Playwright (ember-2-ui): 40 passing, 3 skipped
+- Playwright (ember-2-installer): 12 passing (was blocked on Electron 28)
+
 ## v0.11.1 — 2026-03-30
 
 ### Features

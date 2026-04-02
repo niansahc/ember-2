@@ -195,9 +195,9 @@ Key API endpoints:
 
 ---
 
-## Current State (v0.11.0-wip)
+## Current State (v0.12.0)
 
-All items from the original TDD §25 build order are complete through step 6. The system is feature-complete for single-user local deployment on Windows. Cloud reasoning is available via Anthropic Claude with full UI support.
+All items from the original TDD §25 build order are complete through step 6. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support. Task layer, session reflection, commitment detection, and PIN lock shipped in v0.12.0.
 
 **Core Systems:**
 - Append-only JSON vault with typed memory enforcement (`VALID_MEMORY_TYPES`, 17 types)
@@ -227,6 +227,15 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Default model: qwen3:8b (4.9-6.7/10 eval range, best local model tested)
 - Ember uses she/her pronouns (system prompt)
 - Version field in /api/health endpoint (reads from version.json)
+- Multi-record state categories for open_loop and next_action (ADR-011, capped at 5)
+- Commitment detection (ADR-014) — post-generation, writes open_loop state records
+- Session reflection (ADR-009) — narrative end-of-session capture, auto-triggers on delete
+- Task layer MVP — TaskService, TaskResolver, task detector, dual creation paths, context injection
+- Task API endpoints (POST/GET/PATCH/GET-by-id /v1/tasks)
+- Temporal awareness — staleness penalties, age labels, hedging rules for old memories
+- User preferences store (private_vault/preferences.json, GET/PATCH /v1/preferences)
+- Conversational style (casual/balanced/thoughtful) via preferences API
+- Web search signal (X-Ember-Web-Search response header)
 
 **Evaluation & Tooling:**
 - Retrieval evaluation (15 benchmark cases, pass/warn/fail scoring, latency tracking)
@@ -241,13 +250,15 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - `scripts/cleanup_test_sessions.py` for soft-deleting eval conversations
 
 **Security:**
-- API key auth via Windows Credential Manager
+- API key auth via OS credential store (Windows Credential Manager, macOS Keychain, Linux SecretService)
 - Auth only on API routes — UI static files are public
 - Rate limiting, path traversal protection, JSON audit logging
 - SearXNG bound to localhost only
 - Tailscale serve uses localhost binding
 - Vault path masked in UI with timed reveal (ADR-012 Phase 1)
 - Cloud API keys stored in OS credential store, never displayed in UI
+- PIN/passphrase lock (ADR-012 Phase 2) — bcrypt, keyring, rate limiting, idle timeout, recovery
+- Dependency security policy — native fetch, no axios; documented after March 2026 supply chain attack
 
 **UI (ember-2-ui, served from ui/):**
 - Streaming chat with markdown, copy, edit/resend, regenerate, scroll-to-bottom, export
@@ -266,9 +277,19 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - PWA manifest for Android/iOS home screen installation
 - Consistent Ember-2 branding, WCAG 2.1 AA accessible
 - .txt file upload support with document context injection into chat message
+- Multi-image upload — select and send multiple images in a single message
+- Web search transparency indicator — magnifying glass icon on messages that used web search
+- Conversational style selector — Casual/Balanced/Thoughtful card selector in settings
+- Task sidebar tray — bottom-anchored, checkbox to complete, internal scroll, 30s polling
+- Guided first-run tour (Shepherd.js, 6 steps, triggers once via preferences API)
+- PIN/passphrase lock screen with idle timeout and recovery
+- Restore active conversation on page refresh via localStorage
+- Timestamp parsing fix — hyphenated vault timestamps no longer show Invalid Date
+- Regenerate button on assistant messages
 
 **Installer (ember-2-installer):**
-- Auto-install prerequisites via winget (Git, Python, Node, Ollama, Docker)
+- Auto-install prerequisites via winget on Windows (Git, Python, Node, Ollama, Docker)
+- Mac/Linux support — platform-aware prereqs, paths, Homebrew soft check, Gatekeeper note
 - Curated model cards with eval-based descriptions, disk sizes, RAM requirements
 - Default model: qwen3:8b (was qwen2.5:14b)
 - Model selection guide linked from model selection screen and Done screen
@@ -277,52 +298,16 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Tailscale walkthrough, progress bar + fun facts, pip time warning
 - Clones ember-2 repo, builds UI from ember-2-ui
 - git pull uses origin main explicitly (no tracking info errors)
+- Electron 33 (upgraded from 28.3.3, unblocks Playwright e2e tests)
 
 **Tests:**
-- ember-2 backend: 300 pytest tests passing
-- ember-2-ui: 37 Playwright e2e tests passing, 2 skipped (cloud model, remove key)
+- ember-2 backend: 485 pytest tests passing
+- ember-2-ui: 40 Playwright e2e tests passing, 3 skipped
+- ember-2-installer: 12 Playwright e2e tests passing
 
 ---
 
 ## Immediate Next Priorities
-
-**v0.11.0 remaining work (bugs first):**
-- Fix: search bar loses focus after each character — must fix before release
-- Fix: installer missing Node.js prerequisite check
-- Fix: installer not running npm install and npm run build after clone
-- Fix: installer Done screen not verifying UI is built before enabling Open Ember
-- Multi-record state categories for open_loop and next_action (ADR-011)
-- Mobile testing via Tailscale
-- Web search transparency indicator — show what phrase triggered search and what was sent to SearXNG
-- Conversational style definitions — add plain-language descriptions to Casual/Balanced/Thoughtful in Settings
-- Tray icon / OS notifications research
-
-**v0.12.0 — Tasks, Commitments, Session Reflection, Mac/Linux:**
-
-State and memory:
-- Multi-record state categories for open_loop and next_action (ADR-011) — multiple open loops persist simultaneously
-- Commitment detection and state persistence (ADR-014) — Ember writes open_loop records when she makes commitments in conversation
-
-Tasks:
-- Task layer with objects, CRUD API, state lifecycle, task layer ADR
-- Tasks created from conversation (Ember offers, user confirms) or on direct request
-- Tasks are project-scoped if in a project, general otherwise
-- Task sidebar section in UI
-
-Reflection:
-- Session reflection mode (end-of-session capture, ADR-009)
-
-UI:
-- Multi-image upload (more than one image at a time)
-- Web search transparency indicator — show what triggered search and what was sent
-- Conversational style definitions — plain-language descriptions for Casual/Balanced/Thoughtful
-- Guided first-run UI tour with acknowledgment for new users
-
-Infrastructure:
-- Mac and Linux installer support
-- Electron upgrade 28 → 29+ (unblocks Playwright e2e tests, requires electron-builder testing)
-- Local PIN/passphrase lock for UI (ADR-012 Phase 2)
-- Clean install test on a fresh machine before release
 
 **v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption:**
 - Hot/warm/cold memory tiering by recency and relevance
@@ -331,17 +316,35 @@ Infrastructure:
 - Monthly/thematic reflection
 - Vault encryption at rest (Ember-managed, with key recovery story)
 - Custom theme with color picker — user-defined accent and background colors
+- SKILL.md skill definition format — self-contained integration folders (inspired by OpenClaw AgentSkills)
+- Email read-only ingestion (IMAP) — vault ingestion and live context modes
+- GitHub read-only ingestion — commits, PRs, issues, activity feed
+- Fitbit export ingestion — activity, sleep, health patterns
+- Apple Health / Garmin export ingestion
+- Generic CSV / JSON import
+- Clean install test on a fresh machine (deferred from v0.12.0)
 
-**v0.14.0 — Offline Knowledge:**
+**v0.14.0 — Offline Knowledge + Integrations:**
 - Kiwix ZIM ingestion adapter (curated packs only)
 - Project Gutenberg adapter (epub/txt/html as Reference Memory)
 - Curated pack recommendations in docs
 - NOMAD-compatible path supported
+- Calendar read-only ingestion (Google, Outlook, iCal)
+- Obsidian / Notion export ingestion
+- Readwise ingestion
+- Goodreads ingestion
+- Spotify listening history ingestion (mood and energy signals)
+- Glucose monitor ingestion (Dexcom, Libre)
+- Oura export ingestion
+- Diet app export ingestion (Cronometer, MyFitnessPal)
+- Linear / Jira ingestion
+- Proactive / heartbeat mode — Ember pushes context on a configurable schedule (inspired by OpenClaw)
 
 **v0.15.0 — Agent Orchestration:**
 - Self-evaluation and decision-memory loops
 - OpenJarvis Learning primitive as reference implementation
 - Controlled tool writes with stricter policy gates
+- Trace-driven learning — local interaction traces inform retrieval routing (informed by OpenJarvis, ADR-013)
 
 **Post-v0.15.0:**
 - Multi-user vault isolation
@@ -349,7 +352,8 @@ Infrastructure:
 
 ## Watch Items
 - OpenJarvis Learning primitive — reference for self-evaluation loops (active at v0.15.0)
-- PAI TELOS pattern — evaluate against constitution + profile memory during v0.11.0 onboarding work
+- OpenClaw (github.com/openclaw/openclaw) — reference for SKILL.md integration format and proactive heartbeat pattern (Peter Steinberger, 2026)
+- PAI TELOS pattern — evaluate against constitution + profile memory during onboarding work
 - Multi-user vault isolation — post-v0.15.0 milestone
 - Eval harness uses user's own vault — results are personal, not generic benchmarks
 
@@ -391,7 +395,7 @@ When adding new npm dependencies:
 pytest tests/
 ```
 
-244 tests covering: constitution loader, policy service, review service, vault read/write, state layer, state extractor, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management.
+485 tests covering: constitution loader, policy service, review service, vault read/write, state layer, state extractor, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management, task layer, commitment detection, session reflection, PIN/passphrase service, soft-delete filtering, temporal awareness.
 Tests do not mock the filesystem vault (real path via `PRIVATE_VAULT_PATH`). Integration tests hit real storage.
 
 When adding features: unit test normalizers, filters, ranking functions, and state resolution. Integration test full pipeline paths.

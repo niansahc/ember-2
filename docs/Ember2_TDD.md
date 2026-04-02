@@ -2,7 +2,7 @@
 
 Version: 1.0-draft
 Status: Updated working design baseline
-Current release: v0.10.4 (released), v0.11.0 (in progress)
+Current release: v0.12.0
 Primary environment: Local-first desktop deployment
 Repository: `ember-2`
 
@@ -1593,35 +1593,33 @@ It should be possible to explain:
 - OpenAI provider support (GPT-4o, GPT-4o mini)
 - Vault path masking in UI (ADR-012 Phase 1)
 
-**v0.12.0 — Tasks, Commitments, Session Reflection, Mac/Linux**
+**v0.12.0 — Tasks, Commitments, Session Reflection, Mac/Linux** (complete)
 
 State and memory:
-- Multi-record state categories for open_loop and next_action (ADR-011)
-- Commitment detection and state persistence (ADR-014) — post-generation detector writes open_loop records when Ember makes conversational commitments; eval benchmark required before ship
+- ~~Multi-record state categories for open_loop and next_action (ADR-011)~~ ✓
+- ~~Commitment detection and state persistence (ADR-014) — post-generation detector writes open_loop records when Ember makes conversational commitments; eval benchmark required before ship~~ ✓
+- ~~Temporal awareness — staleness penalties, age labels, hedging rules for old memories~~ ✓
 
 Tasks:
-- Task objects with ISC verifiable completion criteria
-- Task CRUD API and state lifecycle
-- Task layer ADR
-- Tasks created from conversation (Ember offers, user confirms) or on direct request
-- Tasks are project-scoped if in a project, general otherwise
-- Task sidebar section in UI
+- ~~Task layer MVP — TaskService, TaskResolver, dual creation paths, task detector, context injection, truth-gated confirmation~~ ✓
+- ~~Task CRUD API (POST/GET/PATCH/GET-by-id /v1/tasks)~~ ✓
+- ~~Task sidebar section in UI~~ ✓
 
 Reflection:
-- Session reflection mode (end-of-session capture, ADR-009)
+- ~~Session reflection mode (end-of-session capture, ADR-009)~~ ✓
 
 UI:
-- Multi-image upload
-- Web search transparency indicator
-- Conversational style definitions (Casual / Balanced / Thoughtful)
-- Guided first-run UI tour with acknowledgment for new users
+- ~~Multi-image upload~~ ✓
+- ~~Web search transparency indicator~~ ✓
+- ~~Conversational style definitions (Casual / Balanced / Thoughtful)~~ ✓
+- ~~Guided first-run UI tour with acknowledgment for new users~~ ✓
 
 Infrastructure:
-- Mac and Linux installer support
-- Electron upgrade 28 → 29+ (unblocks installer Playwright e2e tests)
-- Local PIN/passphrase lock for UI (ADR-012 Phase 2)
-- Clean install test on a fresh machine before release
-- NIST AI RMF governance review — map current security posture against AI RMF 1.0 and SP 800-series; document in `docs/GOVERNANCE.md`
+- ~~Mac and Linux installer support~~ ✓
+- ~~Electron upgrade 28 → 33 (unblocks installer Playwright e2e tests)~~ ✓
+- ~~Local PIN/passphrase lock for UI (ADR-012 Phase 2)~~ ✓
+- Clean install test on a fresh machine — deferred to v0.13.0 (hardware constraints)
+- NIST AI RMF governance review — deferred to v0.13.0
 
 **v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption**
 - Hot/warm/cold memory tiering by recency and relevance
@@ -2414,7 +2412,7 @@ flowchart TD
 
 # 36. Session Reflection Mode
 
-**Status:** Planned (v0.12.0, ADR-009)
+**Status:** Complete (v0.12.0, ADR-009)
 
 ## Purpose
 
@@ -2455,11 +2453,10 @@ Ember-managed encryption — the system encrypts vault files at rest using a use
 
 # 39. Platform Support
 
-**Status:** Windows complete, Mac/Linux planned (v0.12.0)
+**Status:** Complete (v0.12.0)
 
-- Manual setup via SETUP.md works on all platforms today (Python, Docker, Ollama are cross-platform)
-- Installer (ember-2-installer) is currently Windows-only (Electron + NSIS)
-- Mac (.dmg) and Linux (.AppImage) installer builds scheduled for v0.12.0
+- Manual setup via SETUP.md works on all platforms (Python, Docker, Ollama are cross-platform)
+- Installer (ember-2-installer) supports Windows, Mac, and Linux — platform-aware prerequisite checks, default paths, startup scripts
 - Tailscale works identically on all platforms
 
 ---

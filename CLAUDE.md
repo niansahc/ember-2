@@ -309,38 +309,23 @@ All items from the original TDD §25 build order are complete through step 6. Th
 
 ## Immediate Next Priorities
 
-**v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption:**
-- Hot/warm/cold memory tiering by recency and relevance
-- nomic-embed-text embedding upgrade via Ollama
-- Index migration for remaining JSON indexes to SQLite
+**v0.13.0 — Memory Tiering + Embedding Upgrade:**
+- nomic-embed-text embedding upgrade via Ollama — ship first; run retrieval eval before and after
+- Hot/warm/cold memory tiering by recency and relevance (ADR-015) — tier assigned during reindex; nightly TieringService; cold excluded by default; append-only intact
+- Index migration: remaining JSON indexes to SQLite — conversation, profile, reflection, journal; align with reindex pass
 - Monthly/thematic reflection
-- Vault encryption at rest (Ember-managed, with key recovery story)
+- Generic CSV/JSON import — JSON importer is the delta (CSV exists)
 - Custom theme with color picker
-- Email read-only ingestion (IMAP) — two modes: vault ingestion and live context
-- GitHub read-only ingestion — commits, PRs, issues, activity feed; live context for coding conversations
-- Fitbit export ingestion — activity, sleep, health patterns
-- Apple Health / Garmin export ingestion
-- Generic CSV / JSON import
-- SKILL.md skill definition format for tool integrations
-- Task completion summary — "what did I complete today/this week?" (requires requirements mapping before build)
-- Task settings panel — ⚙️ icon in TASKS header, task-specific configuration (requires requirements mapping before build)
-- Clean install test on fresh Windows machine (deferred from v0.12.0 — hardware constraints)
+- Vault encryption at rest — DEFERRED to v0.14.0
 
-**v0.14.0 — Offline Knowledge + Integrations:**
-- Kiwix ZIM ingestion adapter (curated packs only)
-- Project Gutenberg adapter (epub/txt/html as Reference Memory)
-- Curated pack recommendations in docs
-- NOMAD-compatible path supported
-- Calendar read-only ingestion (Google, Outlook, iCal)
-- Obsidian / Notion export ingestion
-- Readwise ingestion
-- Goodreads ingestion
-- Spotify listening history ingestion (mood and energy signals)
-- Glucose monitor ingestion (Dexcom, Libre)
-- Oura export ingestion
-- Diet app export ingestion (Cronometer, MyFitnessPal)
-- Linear / Jira ingestion
-- Proactive / heartbeat mode — Ember pushes context on a configurable schedule (inspired by OpenClaw)
+**v0.14.0 — Offline Knowledge + Integrations + Encryption:**
+- Vault encryption at rest (deferred from v0.13.0)
+- Email read-only ingestion IMAP (deferred from v0.13.0)
+- GitHub read-only ingestion (deferred from v0.13.0)
+- Fitbit / Apple Health / Garmin export ingestion (deferred from v0.13.0)
+- Kiwix ZIM ingestion adapter
+- Project Gutenberg adapter
+- NOMAD-compatible path
 
 **v0.15.0 — Agent Orchestration:**
 - Self-evaluation and decision-memory loops

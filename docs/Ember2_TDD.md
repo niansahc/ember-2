@@ -1621,35 +1621,25 @@ Infrastructure:
 - Clean install test on a fresh machine — deferred to v0.13.0 (hardware constraints)
 - NIST AI RMF governance review — deferred to v0.13.0
 
-**v0.13.0 — Memory Tiering + Embedding Upgrade + Encryption**
-- Hot/warm/cold memory tiering by recency and relevance
-- nomic-embed-text embedding upgrade via Ollama
-- Index migration for remaining JSON indexes to SQLite
+**v0.13.0 — Memory Tiering + Embedding Upgrade**
+- nomic-embed-text embedding upgrade via Ollama — ships first; required before tiering; full reindex pass; run retrieval eval before and after
+- Hot/warm/cold memory tiering by recency and relevance (ADR-015) — tier assigned during reindex; nightly TieringService; cold excluded by default, accessible via include_cold flag; append-only contract unchanged
+- Index migration for remaining JSON indexes to SQLite — conversation, profile, reflection, journal; aligned with reindex to avoid double-scan
 - Monthly/thematic reflection
-- Vault encryption at rest (Ember-managed, with key recovery story)
-- SKILL.md skill definition format — self-contained integration folders; each tool integration defined as a portable, inspectable, user-extensible skill file; LLM reads skill to understand when and how to invoke it (inspired by OpenClaw AgentSkills format, Peter Steinberger, 2026)
-- Email read-only ingestion (IMAP) — two modes: vault ingestion and live context; local processing only; explicit opt-in
-- GitHub read-only ingestion — commits, PRs, issues, activity feed; live context mode for coding conversations
-- Fitbit export ingestion — activity, sleep, health patterns
-- Apple Health / Garmin export ingestion
-- Generic CSV / JSON import
+- Generic CSV/JSON import — JSON importer is the delta (CSV already exists)
+- Custom theme with color picker — user-defined accent and background colors
+- Vault encryption at rest — DEFERRED to v0.14.0; BitLocker covers current hardware; key management story requires dedicated design
 
-**v0.14.0 — Offline Knowledge**
+**v0.14.0 — Offline Knowledge + Integrations + Encryption**
+- Vault encryption at rest — deferred from v0.13.0; key derivation + documented recovery story required before implementation
+- Email read-only ingestion (IMAP) — two modes: vault ingestion and live context; deferred from v0.13.0
+- GitHub read-only ingestion — commits, PRs, issues, activity feed; live context + ingestion modes; deferred from v0.13.0
+- Fitbit export ingestion — deferred from v0.13.0; requires constitution.yaml privacy policy entry before enabling
+- Apple Health / Garmin export ingestion — deferred from v0.13.0; same privacy policy requirement
 - Kiwix ZIM ingestion adapter (curated packs only)
 - Project Gutenberg adapter (epub/txt/html as Reference Memory)
-- GitHub ingestion adapter — pull READMEs, issues, and repository content as reference memory; same pipeline pattern as Kiwix/Gutenberg adapters
 - Curated pack recommendations in docs
 - NOMAD-compatible path supported
-- Calendar read-only ingestion (Google, Outlook, iCal)
-- Obsidian / Notion export ingestion
-- Readwise ingestion
-- Goodreads ingestion
-- Spotify listening history ingestion (mood and energy signals)
-- Glucose monitor ingestion (Dexcom, Libre)
-- Oura export ingestion
-- Diet app export ingestion (Cronometer, MyFitnessPal)
-- Linear / Jira ingestion
-- Proactive / heartbeat mode — Ember pushes context on a configurable schedule without being prompted (inspired by OpenClaw, Peter Steinberger, 2026)
 
 **Deferred (depends on task layer stability, post-v0.12.0):**
 - GitHub Issues as task source — sync open issues as task records in the task layer
@@ -1671,6 +1661,7 @@ Infrastructure:
 - OpenClaw (github.com/openclaw/openclaw) — reference for SKILL.md integration format and proactive heartbeat pattern; created by Peter Steinberger, 2026. Already referenced in v0.13.0 and v0.14.0 roadmap items.
 - CIMemories benchmark (ICLR 2026, Mireshghallah et al., Carnegie Mellon University) — compositional benchmark for evaluating whether LLMs respect contextual integrity when drawing on persistent memory; frontier models show up to 69% attribute-level violation rates; evaluate Ember's retrieval and context assembly against this benchmark when system is more mature; reference: simons.berkeley.edu/talks/niloofar-mireshghallah-carnegie-mellon-university-2026-03-17
 - Contextual integrity as retrieval policy concern — research converging on the finding that privacy in AI memory is not primarily a security problem but a contextual norms problem: what is appropriate to surface where. Ember's local-first approach is the right foundation; future retrieval policy work should incorporate context-awareness (e.g. do not surface health data in work project contexts). Monitor this research direction as retrieval policy matures.
+- "Memory in the Age of AI Agents" (arxiv.org/abs/2512.13564, Zhang et al., December 2025) — survey proposing factual/experiential/working memory taxonomy; relevant to Ember's memory class design and v0.13.0 tiering work
 - MemX local-first memory system — low-confidence rejection pattern: when no relevant memory exists, suppress the result rather than returning the highest-scoring noise. Relevant to Ember's retrieval quality gate work in v0.13.0+. Reference: arxiv.org/html/2603.16171
 - Letta / MemGPT (letta.ai) — explicit memory blocks always injected into prompt, archival memory retrieved on demand, user-editable memory tools. Informs future memory inspector UI and user-facing memory editing. Monitor for patterns applicable to Ember's memory inspector.
 
@@ -1685,6 +1676,10 @@ Ember's architecture should stay on par with or ahead of the research frontier i
 - Key conferences to monitor: ICLR, NeurIPS, ICML, ACL for memory and agent research
 
 When new relevant research is found: add to Watch Items with full attribution, assess whether it informs any planned roadmap items, and note if it should accelerate or adjust any ADRs.
+
+**Research Notes (v0.13.0 planning)**
+- CIMemories (Mireshghallah et al., ICLR 2026; arxiv:2511.14937) — benchmark for contextual integrity in persistent memory systems. Frontier models show up to 69% attribute-level violations when drawing on memory in inappropriate contexts; violations accumulate across tasks and runs. Qwen-3 32B (same family as Ember's default qwen3:8b) showed 69% violation rate. Key finding: privacy-conscious prompting does not solve the problem — models overgeneralize. Validates Ember's design decision to implement retrieval policy as explicit code rather than relying on model judgment. Cite in GOVERNANCE.md. No build item.
+- Memory in the Age of AI Agents (Hu et al., Dec 2025; arxiv:2512.13564) — taxonomy of agent memory by Forms (Token-level, Parametric, Latent), Functions (Factual, Experiential, Working), and Dynamics (Formation, Evolution, Retrieval). Ember is token-level hierarchical memory with explicit retrieval dynamics. Hot/warm/cold tiering (ADR-015) maps to their Dynamics layer. No architecture changes indicated.
 
 ## 25.4 Long-Term
 
@@ -1833,9 +1828,9 @@ The following should be tracked in `design-decisions.md` or ADRs:
 - ~~when trigger logic should move from heuristics to semantic or classifier support~~ — resolved (v0.11.0: ADR-010 social engineering semantic triggers, 39 patterns across 5 attack families)
 - Whether to normalize state record timestamps to strict ISO 8601 at read time, or standardize on hyphenated format across all state records for filename consistency. See `src/state/state_service.py` make_record() for context.
 - Whether constitution + profile memory is sufficient for purpose encoding or whether an explicit TELOS layer is needed (evaluate during v0.11.0 onboarding work). See PAI TELOS pattern.
-- Hot/warm/cold memory tiering policy design — what triggers archival, how decay is computed, whether it's time-based or relevance-based or both (evaluate during v0.13.0).
+- ~~Hot/warm/cold memory tiering policy design~~ — resolved (v0.13.0, ADR-015): hybrid time-based (primary) + access-based (secondary); pure relevance/embedding decay deferred to v0.15.0; tiering is retrieval-weight metadata, not storage deletion.
 - OpenJarvis Learning primitive integration approach — whether to adopt directly, adapt the pattern, or build from scratch (evaluate during v0.15.0).
-- Vault encryption key management approach — Ember-managed vs OS-dependent, key recovery story (v0.13.0)
+- Vault encryption key management approach — deferred to v0.14.0; BitLocker remains primary mitigation; Ember-managed encryption requires dedicated key derivation + recovery design before implementation.
 - Social engineering semantic trigger design — performance impact, false positive rate, pre-screening scope (v0.11.0)
 - Whether eval harness results should be normalized across different vault contents for cross-user comparison
 - Root cause of memory grounding weakness in local models — retrieval failure vs context injection vs model behavior (analysis in progress; local models score 2.0-4.0, Claude scores 8.7 on same retrieval pipeline, suggesting model capability not retrieval quality is the bottleneck)
@@ -2168,7 +2163,7 @@ The canonical vault records (`private_vault/memory/**/*.json`) are not affected 
 
 # 35. Relevance Decay and Forgetting
 
-**Status: Planned — important for long-term vault health**
+**Status: In progress — v0.13.0; design resolved in ADR-015**
 
 ## 35.1 Problem
 
@@ -2439,7 +2434,7 @@ Not a near-term priority. The architecture supports it (vault path is configurab
 
 # 38. Vault Encryption at Rest
 
-**Status:** Planned (v0.13.0)
+**Status:** Planned (v0.14.0) — deferred from v0.13.0; BitLocker covers current single-user hardware; key management story requires dedicated design
 
 ## Current State
 

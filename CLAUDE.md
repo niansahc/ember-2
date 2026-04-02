@@ -355,19 +355,11 @@ Infrastructure:
 
 ## Known Gaps (tracked)
 - Vault encryption at rest — v0.13.0
-- ~~Social engineering trigger upgrade~~ — complete (v0.11.0, ADR-010)
-- Mac/Linux installer — v0.12.0
-- ~~Backup/export story~~ — complete (v0.11.0, docs/BACKUP_AND_EXPORT.md)
-- ~~Recovery playbook~~ — complete (v0.11.0, docs/RECOVERY_PLAYBOOK.md)
+- ~~Mac/Linux installer~~ — complete (v0.12.0, platform-aware prereqs, paths, and startup)
 
 ## Known Issues
-- ~~Search bar loses focus after each character~~ — fixed (dangling SearchBar component reference replaced with inline JSX)
 - Installer Node.js prerequisite check exists but partner bypassed it somehow — needs investigation (Node IS in the prereqs screen, Next is disabled when missing)
-- ~~Installer not running npm build after clone~~ — fixed in installer v0.4.1 (update path now pulls + rebuilds ember-2-ui)
-- ~~Installer Done screen not verifying UI built~~ — fixed in installer v0.4.1 (auto-rebuild on Done)
 - qwen3:8b hallucination pattern: generates news-sounding content without web search when context is poor. Model limitation, not a code bug. classify_query() web search triggers investigated and confirmed clean. Cloud models do not exhibit this. Documented in eval_history.md.
-- ~~Old soft-deleted conversations may still show in UI sidebar~~ — investigated and confirmed: backend `list_sessions()` correctly filters `deleted: true` records via latest-wins resolution. Frontend renders only what the API returns. No client-side caching. Tests added.
-- Installer Playwright e2e tests: blocked on Electron 28.3.3 incompatibility with Playwright 1.58+ (requires `--remote-debugging-pipe`, not supported until Electron 29). Tests written and correct. Fix: upgrade Electron to 29+ in v0.12.0 after electron-builder compatibility testing.
 - The API must be restarted after any backend code changes for them to take effect. Changes to task detection, prompt building, or any src/ file do not hot-reload in production mode. Run `./start_api.bat` or kill and restart uvicorn after deploying changes.
 
 ---

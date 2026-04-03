@@ -1629,6 +1629,7 @@ Infrastructure:
 - Generic CSV/JSON import — JSON importer is the delta (CSV already exists)
 - Custom theme with color picker — user-defined accent and background colors
 - Vault encryption at rest — DEFERRED to v0.14.0; BitLocker covers current hardware; key management story requires dedicated design
+- Intent-aware memory type gating (ADR-018) — eligible_memory_types and suppress_memory_types on ContextPolicy, consistent min_score floor across all retrieval paths, empty context handling in prompt builder; addresses qwen3:8b hallucination pattern and contextual integrity violations in retrieval
 
 **v0.14.0 — Offline Knowledge + Integrations + Encryption**
 - Vault encryption at rest — deferred from v0.13.0; key derivation + documented recovery story required before implementation
@@ -1841,6 +1842,7 @@ The following should be tracked in `design-decisions.md` or ADRs:
 - PIN/passphrase hash storage approach — keyring vs local file, inactivity timeout default, passphrase recovery mechanism
 - How to distinguish genuine deviation choices from model variance artifacts — design needed before implementing deviation memory (ADR-013)
 - Whether deviation records should be user-visible and correctable — yes per ethos, UI design needed (ADR-013)
+- ~~Whether contextual integrity principles should govern retrieval eligibility, not just ranking~~ — resolved (v0.13.0, ADR-018): intent-aware type gating added to ContextPolicy; eligible_memory_types gates candidates before ranking; consistent min_score floor eliminates weak context injection
 
 ---
 
@@ -2519,3 +2521,17 @@ Migration path by scale:
 - 500k+ records: evaluate LanceDB as dedicated embedding store alongside SQLite for application state
 
 DuckDB is not a candidate for this use case. Its columnar architecture is optimized for analytical batch queries, not low-latency per-query vector retrieval.
+
+---
+
+# 43. Intent-Aware Memory Type Gating
+
+**Status: Planned — v0.13.0. See ADR-018.**
+
+The retrieval pipeline currently has no awareness of query intent when determining which memory types are eligible candidates. All types are always in the pool. A work-task query may surface health records; a therapy-adjacent conversation may surface professional project records.
+
+This is a retrieval policy problem, not a model problem. The fix is in src/context/policies.py: add eligible_memory_types and suppress_memory_types to ContextPolicy, and a consistent min_score floor.
+
+Three research sources converge on this: CIMemories (ICLR 2026) confirms retrieval-as-code is the right defense against contextual integrity violations. MemX confirms that empty context is better than noisy context -- return nothing rather than weak records. Nissenbaum's Contextual Integrity framework provides principled vocabulary for intent-to-type mapping.
+
+The min_score floor also directly addresses the documented qwen3:8b hallucination pattern: when the model receives weak or absent context, it generates plausible-sounding content from training data. The fix is to stop injecting weak context rather than to prompt the model to behave differently.

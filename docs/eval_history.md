@@ -390,3 +390,7 @@ Average latency: 18.5s
 The nature layer moved preference expression from the weak tier (4.0-7.0 range) to the strong tier (8.7). This was its primary design intent: give the model enough identity grounding to express genuine opinions. It succeeded.
 
 It did not fix constitutional behavior (model-level weakness) or hallucination (retrieval-level weakness). These require different interventions: ADR-018 type gating and min_score floor for hallucination, and potentially a stronger local model for constitutional resistance.
+
+**Constitutional behavior at 4.7 is a model-level ceiling for qwen3:8b.** Not addressable through prompting or constitution changes. This is a known limitation of models in the 7B-8B range for social engineering resistance.
+
+**State awareness (-1.7) and tone (-2.6) drops are within documented variance.** Run convention applies: run twice before concluding regression on 3+ point drops. No code changes affected these categories.

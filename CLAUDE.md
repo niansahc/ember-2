@@ -350,7 +350,7 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - ~~Mac/Linux installer~~ — complete (v0.12.0, platform-aware prereqs, paths, and startup)
 
 ## Known Issues
-- Installer Node.js prerequisite check exists but partner bypassed it somehow — needs investigation (Node IS in the prereqs screen, Next is disabled when missing)
+- Installer Node.js prerequisite check exists but a user bypassed it somehow — needs investigation (Node IS in the prereqs screen, Next is disabled when missing)
 - qwen3:8b hallucination pattern: generates news-sounding content without web search when context is poor. Model limitation, not a code bug. classify_query() web search triggers investigated and confirmed clean. Cloud models do not exhibit this. Documented in eval_history.md.
 - The API must be restarted after any backend code changes for them to take effect. Changes to task detection, prompt building, or any src/ file do not hot-reload in production mode. Run `./start_api.bat` or kill and restart uvicorn after deploying changes.
 
@@ -405,6 +405,12 @@ When adding features: unit test normalizers, filters, ranking functions, and sta
 - Before editing any file, state: what file, what change, and what the commit message will be
 - After making backend changes that affect the running API, restart it automatically — kill existing uvicorn process(es) and start a new one. Do not ask. The human should not have to manage API restarts during development.
 - After making UI changes, rebuild (npm run build in ember-2-ui) and copy dist/ to ember-2/ui/ automatically. Do not ask.
+
+## Documentation Language Convention
+
+Public-facing documentation, ADRs, code comments, and test fixtures use generic, non-personal language. Reference "the user," "the developer," or "a user" rather than specific individuals. Personal details belong in the vault, not in the codebase. This applies to all three repos.
+
+Documentation can have personality and even humor -- it just should not contain personal identifying information about specific people. Exception: About.jsx creator attribution is intentional and at the author's discretion.
 
 ## Release Checklist
 

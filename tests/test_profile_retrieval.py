@@ -17,14 +17,14 @@ from src.context.retriever import ContextRetriever
 # ---------------------------------------------------------------------------
 
 MOCK_PROFILE_RECORDS = [
-    {"id": "p1", "content": "My name is Chastain. I go by Chas. My pronouns are they/them and she/her. I am nonbinary, femme-leaning, and queer.", "score": 0.50, "memory_type": "profile", "metadata": {}},
+    {"id": "p1", "content": "My name is [Name]. I use they/them and she/her pronouns. I am nonbinary and queer.", "score": 0.50, "memory_type": "profile", "metadata": {}},
     {"id": "p2", "content": "I am a Business Systems Analyst working in Generative AI and enterprise systems. My domains include prompt engineering and RAG.", "score": 0.33, "memory_type": "profile", "metadata": {}},
     {"id": "p3", "content": "I am autistic and have ADHD. I prefer structured, concise information. I process best with bullets, steps, and frameworks.", "score": 0.26, "memory_type": "profile", "metadata": {}},
     {"id": "p4", "content": "My current major personal project is Ember-2 — a local-first AI intelligence system I am building for long-term memory and reasoning.", "score": 0.29, "memory_type": "profile", "metadata": {}},
     {"id": "p5", "content": "I maintain a personal spiritual practice rooted in seasonal cycles, ritual, symbolism, witchcraft-adjacent frameworks.", "score": 0.17, "memory_type": "profile", "metadata": {}},
     {"id": "p6", "content": "I prefer communication that is clear, structured, concise, and dense with meaning. I dislike empty reassurance.", "score": 0.27, "memory_type": "profile", "metadata": {}},
     {"id": "p7", "content": "What I value most from an AI: pattern recognition across time, long-term synthesis, context awareness, not cheerfulness.", "score": 0.17, "memory_type": "profile", "metadata": {}},
-    {"id": "p8", "content": "I have a partner who I live with. He works in cybersecurity. He supports my work but is not a collaborator on Ember.", "score": 0.15, "memory_type": "profile", "metadata": {}},
+    {"id": "p8", "content": "I live with someone who works in a technical field. They are supportive of my projects but not a direct collaborator.", "score": 0.15, "memory_type": "profile", "metadata": {}},
 ]
 
 

@@ -2085,7 +2085,7 @@ Each question-answer pair writes a `profile` memory record:
   "id": "...",
   "timestamp": "...",
   "type": "profile",
-  "text": "User's name is Chas. They prefer they/them and she/her pronouns.",
+  "text": "User's name is [Name]. They prefer they/them and she/her pronouns.",
   "source": "onboarding_quiz",
   "tags": ["profile", "identity"],
   "metadata": {

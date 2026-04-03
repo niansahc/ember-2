@@ -18,31 +18,20 @@ Without a defined structure, prompts can drift, leading to:
 
 ## Decision
 
-Implement a structured prompt builder with explicit sections:
+Implement a structured prompt builder with explicit sections. Context assembly order (updated per ADR-016):
 
-1. System Prompt
-   - loaded from static file (ember_system_prompt.txt)
-   - defines behavior, tone, and reasoning rules
-
-2. Memory Section
-   - top-N retrieved memory items
-   - injected as plain text blocks
-   - labeled clearly as memory/context
-
-3. User Input
-   - raw user message appended at the end
-
-Final structure:
-
-[System Prompt]
-
-[Memory Context]
-- memory 1
-- memory 2
-...
-
-[User Input]
-<user message>
+1. System Prompt — loaded from static file (ember_system_prompt.txt); defines behavior, tone, and reasoning rules
+2. Date/Time — temporal grounding
+3. Conversational Style — casual/balanced/thoughtful injection
+4. Nature Block — Ember's nature (config/nature.yaml) injected into the context packet every turn via NatureLoader.to_prompt_text(). Not in the system prompt — placed in the context packet so nature tokens are always recent and not subject to attention dilution (ADR-016, PRISM/PERSIST research).
+5. State Records — current focus, open loops, tasks
+6. Capabilities — task creation, etc.
+7. Reflection Context — recent reflections
+8. Web Search Results — if web search was triggered
+9. Memory Context — retrieved records, ranked and filtered
+10. Recent Conversation — conversation buffer
+11. Instruction Rules — context priority and behavior rules
+12. User Input — raw user message
 
 ## Rationale
 

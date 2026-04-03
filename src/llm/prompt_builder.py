@@ -1,8 +1,12 @@
+import logging
 from datetime import datetime
 from pathlib import Path
 
 from src.context.models import ContextPacket
 from src.context.conversation_buffer import ConversationBuffer
+from src.safety.nature_loader import NatureLoader
+
+logger = logging.getLogger("ember.prompt_builder")
 
 
 class PromptBuilder:
@@ -13,14 +17,26 @@ class PromptBuilder:
 
         self.conversation_buffer = ConversationBuffer()
 
+        # Nature loader — singleton, loaded once at startup.
+        # Nature block is injected into the context packet every turn
+        # (not the system prompt) per ADR-016 persona stability research.
+        try:
+            self._nature_loader = NatureLoader()
+            self._nature_loader.load()
+        except Exception as exc:
+            logger.warning("[PROMPT] Could not load nature document: %s", exc)
+            self._nature_loader = None
+
     def build_prompt(self, context_packet: ContextPacket, style: str = "balanced") -> str:
-        # Section order matches TDD context packet order:
-        # system prompt → style → state → reflections → source memories →
-        # recent conversation → instruction rules → user query
+        # Section order matches ADR-016 context assembly order:
+        # system prompt → date → style → nature → state → tasks →
+        # capabilities → reflections → web → memory → conversation →
+        # instruction rules → user query
         sections: list[str] = [
             self.system_prompt,
             self._build_date_section(),
             self._build_style_section(style),
+            self._build_nature_section(),
             self._build_state_section(context_packet),
             self._build_task_section(context_packet),
             self._build_capabilities_section(),
@@ -71,6 +87,20 @@ class PromptBuilder:
         Unknown values fall back to balanced (no injection).
         """
         return self.STYLE_INSTRUCTIONS.get(style, "")
+
+    def _build_nature_section(self) -> str:
+        """
+        Render Ember's nature block for context packet injection.
+
+        Injected every turn so nature tokens are always recent — not subject
+        to attention dilution in the system prompt (ADR-016, PRISM/PERSIST).
+        """
+        if self._nature_loader is None:
+            return ""
+        try:
+            return self._nature_loader.to_prompt_text()
+        except Exception:
+            return ""
 
     def _build_state_section(self, context_packet: ContextPacket) -> str:
         """

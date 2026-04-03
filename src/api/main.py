@@ -8,7 +8,7 @@ from pathlib import Path
 
 import ollama
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from slowapi import _rate_limit_exceeded_handler
@@ -199,11 +199,34 @@ def clean_context_packet(packet_dict: dict) -> dict:
 
 _UI_DIR = Path(__file__).resolve().parents[2] / "ui"
 
+# Cache the index.html content with injected API key so we don't
+# read the file and inject on every request.
+_cached_index_html: str | None = None
+
+
+def _get_index_html() -> str:
+    """Read index.html and inject the API key for the UI."""
+    global _cached_index_html
+    if _cached_index_html is not None:
+        return _cached_index_html
+
+    html = (_UI_DIR / "index.html").read_text(encoding="utf-8")
+    api_key = get_ember_api_key()
+    if api_key:
+        # Inject before </head> so the UI can read window.__EMBER_API_KEY__
+        # without needing the key baked in at Vite build time.
+        inject = f'<script>window.__EMBER_API_KEY__="{api_key}";</script>\n  '
+        html = html.replace("</head>", inject + "</head>")
+
+    _cached_index_html = html
+    return _cached_index_html
+
+
 @app.get("/")
 def root():
     # Serve Ember UI if available, otherwise return API health check
     if _UI_DIR.is_dir() and (_UI_DIR / "index.html").is_file():
-        return FileResponse(_UI_DIR / "index.html")
+        return HTMLResponse(_get_index_html())
     return {
         "message": "Ember-2 API is running",
         "model": llm_adapter.model,
@@ -775,5 +798,5 @@ if _UI_DIR.is_dir():
         file_path = _UI_DIR / path
         if file_path.is_file():
             return FileResponse(file_path)
-        # Otherwise serve index.html for SPA client-side routing
-        return FileResponse(_UI_DIR / "index.html")
+        # Otherwise serve index.html (with injected API key) for SPA routing
+        return HTMLResponse(_get_index_html())

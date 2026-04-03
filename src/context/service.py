@@ -36,6 +36,11 @@ class ContextService:
         state_items, task_items, memory_items, reflection_items = self.retriever.retrieve(user_message)
         state_items = self.ranker.apply_state_boost(state_items, policy)
 
+        # ADR-018: Apply intent-aware type gating before ranking.
+        # Profile items bypass type gating — identity context is never suppressed.
+        memory_items = self._apply_type_gate(memory_items, policy)
+        reflection_items = self._apply_type_gate(reflection_items, policy)
+
         memory_items = self.ranker.apply_policy(memory_items, policy)
         reflection_items = self.ranker.apply_policy(reflection_items, policy)
 
@@ -100,6 +105,37 @@ class ContextService:
             web_items=web_items,
             image_data=image_data or [],
         )
+
+    def _apply_type_gate(self, items: list, policy) -> list:
+        """
+        ADR-018: Filter memory items by eligible/suppressed types and min_score.
+
+        Applied before ranking so ineligible candidates never compete for slots.
+        Profile items bypass type gating — identity context is never suppressed.
+        """
+        filtered = items
+
+        if policy.suppress_memory_types:
+            filtered = [
+                i for i in filtered
+                if getattr(i, "memory_type", None) not in policy.suppress_memory_types
+                or getattr(i, "memory_type", None) == "profile"
+            ]
+
+        if policy.eligible_memory_types is not None:
+            filtered = [
+                i for i in filtered
+                if getattr(i, "memory_type", None) in policy.eligible_memory_types
+                or getattr(i, "memory_type", None) == "profile"
+            ]
+
+        filtered = [
+            i for i in filtered
+            if getattr(i, "score", 0.0) >= policy.min_score
+            or getattr(i, "memory_type", None) == "profile"
+        ]
+
+        return filtered
 
     def _memory_limit_for_policy(self, policy_name: str) -> int:
         if policy_name == "reflective":

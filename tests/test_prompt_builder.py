@@ -117,11 +117,12 @@ class TestContextSectionStructure:
         assert "[Context about the person Ember is talking to" in prompt
         assert "[Context:]" not in prompt
 
-    def test_empty_memory_shows_none_relevant(self):
+    def test_empty_memory_shows_absence_signal(self):
         pb = PromptBuilder()
         packet = ContextPacket(user_message="hello", memory_items=[])
         prompt = pb._build_context_section(packet)
-        assert "None relevant." in prompt
+        assert "No relevant memory found for this query" in prompt
+        assert "acknowledge if you are uncertain" in prompt
 
 
 class TestDateSection:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger("ember.policies")
 
@@ -23,6 +23,13 @@ class ContextPolicy:
     # When True, ContextService will call web_search() and inject results into
     # the ContextPacket before prompt assembly.
     use_web_search: bool = False
+    # ADR-018: Intent-aware memory type gating.
+    # eligible_memory_types: which types are candidates. None = all eligible.
+    # suppress_memory_types: types excluded from candidates.
+    # min_score: floor below which candidates are excluded before ranking.
+    eligible_memory_types: list[str] | None = None
+    suppress_memory_types: list[str] = field(default_factory=list)
+    min_score: float = 0.25
 
 
 def classify_query(user_message: str) -> ContextPolicy:
@@ -128,6 +135,8 @@ def classify_query(user_message: str) -> ContextPolicy:
             diversity=False,
             prefer_active_work=True,
             state_boost=2.0,
+            # Status queries want operational context, not reference material
+            eligible_memory_types=["state", "task", "project", "profile", "conversation"],
         )
 
     if any(marker in q for marker in reflective_markers):
@@ -159,6 +168,8 @@ def classify_query(user_message: str) -> ContextPolicy:
             recency_bias=0.3,
             diversity=False,
             prefer_exact_matches=True,
+            # Factual queries want information records
+            eligible_memory_types=["ingested", "reference", "profile", "conversation"],
         )
 
     if any(marker in q for marker in recent_markers) and any(

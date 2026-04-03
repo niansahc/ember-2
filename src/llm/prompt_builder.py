@@ -216,7 +216,11 @@ class PromptBuilder:
 
     def _build_context_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.memory_items:
-            return "MEMORY CONTEXT:\nNone relevant."
+            return (
+                "MEMORY CONTEXT:\n"
+                "No relevant memory found for this query. "
+                "Answer from your own knowledge and acknowledge if you are uncertain."
+            )
 
         profile_items = [i for i in context_packet.memory_items if i.memory_type == "profile"]
         other_items = [i for i in context_packet.memory_items if i.memory_type != "profile"][:4]

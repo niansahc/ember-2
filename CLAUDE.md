@@ -466,6 +466,8 @@ Run this before every release. No exceptions. Each repository versions independe
 - [ ] ADRs filed for any new architectural decisions
 - [ ] ADRs included in this release updated from Proposed → Accepted
 - [ ] Git tag created
+- [ ] GitHub Release published with source code assets — backend releases should be published on GitHub so installer workflow can pin and download specific versions
+- [ ] Version tagged and pushed before installer build — installer must reference a specific backend tag, not main
 
 ### ember-2-ui (frontend)
 - [ ] All Playwright tests passing (`npm run test:e2e`)

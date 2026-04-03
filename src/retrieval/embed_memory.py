@@ -1,12 +1,12 @@
-from src.retrieval.embedding_model import get_embedding_model
+"""
+src/retrieval/embed_memory.py
+
+Text embedding interface for Ember-2.
+
+Delegates to embedding_model.py which uses Ollama with nomic-embed-text.
+"""
+
+from src.retrieval.embedding_model import embed_text, embed_texts
 
 
-def embed_text(text: str) -> list[float]:
-    model = get_embedding_model()
-
-    embedding = model.encode(
-        text,
-        normalize_embeddings=True
-    )
-
-    return embedding.tolist()
+__all__ = ["embed_text", "embed_texts"]

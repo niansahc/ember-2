@@ -44,6 +44,15 @@ def get_ember_api_key() -> str | None:
     return os.getenv("EMBER_API_KEY") or None
 
 
+def get_ember_embed_model() -> str:
+    """
+    Returns the Ollama embedding model for vector indexing.
+    Set EMBER_EMBED_MODEL in .env to override the default.
+      EMBER_EMBED_MODEL=nomic-embed-text
+    """
+    return os.getenv("EMBER_EMBED_MODEL", "nomic-embed-text")
+
+
 def get_ember_vision_model() -> str | None:
     """
     Returns the Ollama vision model for image analysis, or None if not configured.

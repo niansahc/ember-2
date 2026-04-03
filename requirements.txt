@@ -6,11 +6,9 @@ python-multipart
 
 # LLM and embeddings
 ollama
-sentence-transformers
 
 # Data and ML
 numpy
-scikit-learn
 
 # HTTP
 httpx

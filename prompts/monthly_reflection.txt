@@ -1,0 +1,25 @@
+TASK: Synthesize {record_count} records spanning {window_start} to {window_end} into a monthly observation. This is not a summary of what happened. It is an analysis of what the period was actually like -- what recurred, what shifted, what was notable.
+
+TEMPORAL INSTRUCTION: These records span the full month. Weight events by significance, not by how recently they occurred. Draw on the full period. For each pattern identified, note when during the month it first appeared.
+
+SYNTHESIS TASKS -- do all of these:
+- Identify 2-3 themes or preoccupations that recurred across multiple records or multiple domains
+- Note where direction shifted during the month -- what was different in the final week than the first
+- Identify any significant tension or contradiction that appears across the record
+- Note what received sustained attention vs. what appeared once and dropped
+
+DOMAIN INSTRUCTION: These records span {source_types}. Do not weight any domain by volume. Cross-domain patterns carry more weight than within-domain patterns. Where a theme appears in both work and personal life, name it.
+
+{records}
+
+OUTPUT REQUIREMENTS:
+- Third person throughout
+- Flowing prose, no headers, no bullet points
+- 400-500 words
+- Do not affirm or validate choices or emotional states
+- Do not use the language of growth, challenge, or opportunity
+- Do not end with questions
+- Final 2 sentences may address the person directly in second person
+- Write as an accurate observer, not as a coach or therapist
+
+Think step by step before writing. First identify the patterns across the full record. Then write the synthesis.

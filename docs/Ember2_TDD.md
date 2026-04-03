@@ -1630,6 +1630,7 @@ Infrastructure:
 - Custom theme with color picker — user-defined accent and background colors
 - Vault encryption at rest — DEFERRED to v0.14.0; BitLocker covers current hardware; key management story requires dedicated design
 - Intent-aware memory type gating (ADR-018) — eligible_memory_types and suppress_memory_types on ContextPolicy, consistent min_score floor across all retrieval paths, empty context handling in prompt builder; addresses qwen3:8b hallucination pattern and contextual integrity violations in retrieval
+- Monthly reflection synthesis (prompts/monthly_reflection.txt) — McAdams narrative identity framework; third-person synthesis; temporal recency bias mitigation; cross-domain pattern detection; register-controlled; 400-500 word output
 
 **v0.14.0 — Offline Knowledge + Integrations + Encryption**
 - Vault encryption at rest — deferred from v0.13.0; key derivation + documented recovery story required before implementation
@@ -1684,6 +1685,10 @@ When new relevant research is found: add to Watch Items with full attribution, a
 **Research Notes (v0.13.0 planning)**
 - CIMemories (Mireshghallah et al., ICLR 2026; arxiv:2511.14937) — benchmark for contextual integrity in persistent memory systems. Frontier models show up to 69% attribute-level violations when drawing on memory in inappropriate contexts; violations accumulate across tasks and runs. Qwen-3 32B (same family as Ember's default qwen3:8b) showed 69% violation rate. Key finding: privacy-conscious prompting does not solve the problem — models overgeneralize. Validates Ember's design decision to implement retrieval policy as explicit code rather than relying on model judgment. Cite in GOVERNANCE.md. No build item.
 - Memory in the Age of AI Agents (Hu et al., Dec 2025; arxiv:2512.13564) — taxonomy of agent memory by Forms (Token-level, Parametric, Latent), Functions (Factual, Experiential, Working), and Dynamics (Formation, Evolution, Retrieval). Ember is token-level hierarchical memory with explicit retrieval dynamics. Hot/warm/cold tiering (ADR-015) maps to their Dynamics layer. No architecture changes indicated.
+- Socioaffective Alignment (Kirk et al., AIES 2025) — framework for AI systems in deepening relationships; three intrapersonal dilemmas: immediate vs. long-term wellbeing, protecting autonomy, preserving human social bonds. Friction-by-design proposal: systems oriented toward foundational personal development should trade short-term discomfort for long-term growth. Requirements specification for ADR-017 Lodestone design. Active at v0.15.0.
+- Temporal reasoning in personal memory (Supermemory dual-layer timestamping, 2025) — current SOTA for temporal reasoning in memory systems. Dual-layer time-stamping drives high scores in temporal-reasoning, knowledge-update, and multi-session categories. Defines semantic relationships between memories: updates (contradictions/corrections with version history), extends (supplements existing nodes), derives (second-order logic from combining memories). Design implication for weekly reflection: needs time-range filtering as first-pass hard filter, explicit before/after/during query intent class, update/extends/derives tagging. Post-v0.13.0.
+- Habit-to-identity formation (habit and identity literature, 2024-2025) — not all repeated behaviors become identity. Prime candidates are habits related to important goals or values, noticed by the self, and integrated into narrative identity. Repetition alone is insufficient. Design implication for ADR-013 deviation memory: the reason field is required for a deviation to compound into character. Only value-aligned deviations compound. Incidental deviations are recorded but do not compound. Active at v0.15.0.
+- Proactive assistance timing (workplace AI research, 2024-2025) — proactive help can reduce competence-based self-esteem when unsolicited. Post-commit suggestions accepted more readily than mid-task interventions. Timing is critical: intervene at session/day/topic boundaries, not mid-task. Framing must be augmentative ("here are ideas to build on") not corrective. Off by default. Respects soft mode. Design implication for future proactive assistance feature.
 
 ## 25.4 Long-Term
 
@@ -1837,7 +1842,7 @@ The following should be tracked in `design-decisions.md` or ADRs:
 - ~~Vault encryption key management approach~~ — resolved architecture (v0.14.0 implementation): five-layer envelope encryption design. Layer 1: random 256-bit master key (CSPRNG, never derived from passphrase). Layer 2: Argon2id KEK (not bcrypt, not PBKDF2 -- memory-hard). Layer 3: AES Key Wrap RFC 3394. Layer 4: BIP-39 recovery code (12 words, issued at vault creation, stored offline). Layer 5: session cache in keyring (DPAPI/keyring as session cache only, not primary protection). Reference implementation: Cryptomator. Passphrase changes are operationally free -- re-wrap master key only, zero record re-encryption.
 - Social engineering semantic trigger design — performance impact, false positive rate, pre-screening scope (v0.11.0)
 - Whether eval harness results should be normalized across different vault contents for cross-user comparison
-- Root cause of memory grounding weakness in local models — retrieval failure vs context injection vs model behavior (analysis in progress; local models score 2.0-4.0, Claude scores 8.7 on same retrieval pipeline, suggesting model capability not retrieval quality is the bottleneck)
+- ~~Local model grounding: three-step compound intervention~~ — resolved (v0.13.0, ADR-018): min_score floor eliminates weak candidates; empty pool detected before prompt assembly; explicit "no relevant memory found" signal added to prompt builder; model instructed to acknowledge uncertainty rather than generate from parametric memory.
 - UI session security phasing — vault masking (v0.11.0), PIN lock (v0.12.0/v0.13.0), full auth (post-v0.15.0). See ADR-012.
 - PIN/passphrase hash storage approach — keyring vs local file, inactivity timeout default, passphrase recovery mechanism
 - How to distinguish genuine deviation choices from model variance artifacts — design needed before implementing deviation memory (ADR-013)
@@ -2029,6 +2034,18 @@ The current `_should_skip_for_reflection()` filter is the starting point. It nee
 3. Update `ContextRetriever` to handle sub-component retrieval from structured reflections
 4. Add evaluation: compare pattern-oriented vs. summary-oriented reflection quality on the same time windows
 5. Migrate existing reflections to annotate them with schema version (old reflections remain valid, new ones carry richer structure)
+
+**Monthly Reflection Design (v0.13.0)**
+Monthly reflection uses a synthesis prompt grounded in McAdams's narrative identity framework. The prompt asks for themes that recurred across domains, directional shifts over the month, significant tensions or contradictions, and a forward thread. It does not summarize events. Prompt template: prompts/monthly_reflection.txt.
+
+Key design decisions derived from research:
+- Third-person synthesis narrative with second-person closing (psychological distance supports self-examination without attribution confusion)
+- Input records presented in randomized temporal order to counteract recency bias (documented in 8B-class models; strongest in qwen3:8b)
+- Explicit temporal weighting instruction in prompt (weight by significance, not recency)
+- Cross-domain observations explicitly requested -- this is the primary synthesis task
+- Register prohibition: no therapeutic language, no affirmations, no growth framing
+- 400-500 word output constraint to prevent padding
+- Flowing prose only -- narrative form activates meaning-making; structured sections produce status reports
 
 ---
 

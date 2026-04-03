@@ -48,6 +48,8 @@ Three failure modes are well-documented in the psychological and AI literature. 
 
 The differentiation test is the operational safeguard against all three: every Lodestone entry must answer yes to "does this represent what this person needs from this relationship?" and no to "does this represent Ember becoming what this person wants?" The first is healthy relational development. The second is enmeshment.
 
+Socioaffective alignment (Kirk et al., 2025, AIES): Kirk et al. describe how AI systems within deepening relationships co-create social and psychological ecosystems where preferences and perceptions evolve through mutual influence. They identify three intrapersonal dilemmas relevant to Lodestone design: immediate vs. long-term wellbeing (what the person wants now vs. what serves them over time), protecting autonomy (systems that adapt too well to user preferences may undermine the user's capacity for independent judgment), and preserving human social bonds (AI companionship that substitutes for rather than supports human relationships). Kirk et al. explicitly propose friction-by-design for systems oriented toward foundational personal development goals: trading short-term discomfort for long-term growth, implementing barriers that nudge away from AI-enabled assistance to prevent capacity atrophy. This is the requirements specification for Lodestone's design intent.
+
 ## Decision
 
 Introduce a Lodestone layer as a per-relationship orientation store, implemented as a specialized memory type with its own retrieval path, update rules, and safeguard mechanisms.
@@ -132,6 +134,8 @@ Does this represent what this person needs from this relationship, or does it re
 
 The first is healthy relational development. The second is enmeshment.
 
+The Kirk et al. socioaffective alignment framework adds a second test alongside the differentiation test: does this orientation support the person's autonomy and competence, or does it deepen dependence? An orientation that helps Ember know when to hold space is healthy. An orientation that Ember has learned that the person prefers Ember to do their thinking for them is not -- even if the person expressed that preference. The Lodestone layer should be oriented toward the person's flourishing, which sometimes means resisting patterns the person themselves has established.
+
 ### Retrieval Integration
 
 Lodestone records are injected into the context packet after the nature block and before state records:
@@ -209,3 +213,4 @@ ADR-016 (nature layer) ships in v0.13.0. ADR-017 (Lodestone) is scheduled for v0
 - ADR-013: Deviation Memory
 - ADR-016: Nature Layer
 - ADR-014: Commitment Detection
+- Kirk, H.R. et al. (2025), "The Socioaffective Alignment Problem" (AIES 2025) -- requirements specification for relational AI orientation; intrapersonal dilemmas framework; friction-by-design proposal

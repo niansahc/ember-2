@@ -412,6 +412,41 @@ Public-facing documentation, ADRs, code comments, and test fixtures use generic,
 
 Documentation can have personality and even humor -- it just should not contain personal identifying information about specific people. Exception: About.jsx creator attribution is intentional and at the author's discretion.
 
+## Prompt Writing Standards
+
+When writing prompts for Ember's inference-time tasks (reflection, review, synthesis, detection), follow these standards. Derived from research. Not preference.
+
+**Register**
+- Do not use the word "reflection" as a task frame -- it activates therapeutic register. Use "synthesis," "analysis," or "observation."
+- Explicitly prohibit therapeutic language in the prompt: no affirmations, no growth/challenge framing, no validating emotional states, no closing questions.
+- Target register is "accurate observer," not "coach or therapist." Frame it that way explicitly in the prompt.
+- Do not inject aesthetic or literary language ("shape," "texture," "landscape," "journey") -- write functionally.
+
+**Synthesis vs. Summary**
+- A summary prompt asks "what happened." A synthesis prompt asks "what recurred," "what shifted," "what tension is visible."
+- Name the synthesis tasks explicitly. Small models default to summarization under ambiguity.
+- Explicitly prohibit summary behavior: "Do not narrate what happened."
+
+**Multi-domain prompts**
+- Tag input records by domain before passing to the prompt.
+- Explicitly instruct equal domain weighting: "Do not weight any domain by volume."
+- Ask for cross-domain observations explicitly -- this is the most important instruction for multi-domain synthesis.
+
+**Temporal framing**
+- Randomize or reverse input record order to counteract recency bias (documented across all 8B-class models).
+- Include explicit temporal weighting instruction: "Weight events by significance, not by how recently they occurred."
+- Require temporal spread: "Each pattern identified should note when during the month it first appeared."
+
+**Person of voice**
+- Third person for synthesis narrative.
+- Second person only for final forward-facing sentences.
+- First person is never correct for Ember-generated synthesis -- it creates attribution confusion.
+
+**Format**
+- Specify length explicitly. Without a constraint, 8B models pad. 400-500 words for monthly synthesis.
+- Flowing prose outperforms structured sections for meaning-making tasks. No headers, no bullet points unless the task is explicitly a list.
+- For qwen3:8b: prepend "Think step by step before writing. First identify the patterns. Then write the synthesis."
+
 ## Release Checklist
 
 Run this before every release. No exceptions. Each repository versions independently — check only the relevant section(s) for the release being cut.

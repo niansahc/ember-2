@@ -120,6 +120,7 @@ def _apply_type_gate(self, items, policy):
 ## Open Questions
 
 - Should suppression rules be configurable in .env or config/ rather than hardcoded? For v0.13.0 hardcode with clear comments. Make configurable in a future version.
+- The explicit "no relevant memory found" signal in the prompt builder is required, not optional. When the filtered candidate pool is empty after type gating and min_score floor, the prompt builder must render an explicit absence message rather than silently passing empty context. The model should be instructed to acknowledge uncertainty rather than generate from parametric memory. This is the third step of the compound intervention for qwen3:8b hallucination: min_score floor (eliminates weak candidates) + empty detection (catches empty pool) + explicit absence signal (tells model to say it doesn't know).
 - Should eval harness include type gating correctness test cases? Yes -- add at least two cases per suppressed type.
 - How does type gating interact with nature block injection? It doesn't -- nature is injected unconditionally outside the retrieval pipeline.
 

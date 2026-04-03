@@ -9,9 +9,14 @@ from src.retrieval.vector_index import VectorIndex
 vector_index = VectorIndex()
 
 _sqlite_store: SqliteVectorStore | None = None
+_memory_store: SqliteVectorStore | None = None
+
+# Memory types stored in memory.db (migrated from JSON indexes)
+SQLITE_MEMORY_TYPES = {"conversation", "profile", "reflection", "journal"}
 
 
 def _get_sqlite_store() -> SqliteVectorStore | None:
+    """Singleton for ingested.db (ingested content)."""
     global _sqlite_store
     if _sqlite_store is not None:
         return _sqlite_store
@@ -21,6 +26,19 @@ def _get_sqlite_store() -> SqliteVectorStore | None:
         return None
     _sqlite_store = SqliteVectorStore(db_path)
     return _sqlite_store
+
+
+def _get_memory_store() -> SqliteVectorStore | None:
+    """Singleton for memory.db (conversation, profile, reflection, journal)."""
+    global _memory_store
+    if _memory_store is not None:
+        return _memory_store
+    vault = get_private_vault_path()
+    db_path = vault / "embeddings" / "memory.db"
+    if not db_path.exists():
+        return None
+    _memory_store = SqliteVectorStore(db_path)
+    return _memory_store
 
 
 def semantic_search(
@@ -39,29 +57,73 @@ def semantic_search(
     normalized_query = normalize_text(query)
     query_terms = extract_query_terms(normalized_query)
 
-    if memory_type:
-        memory_types = [memory_type]
-    else:
-        memory_types = [
-            index_file.stem.replace("_index", "")
-            for index_file in embeddings_dir.glob("*_index.json")
-        ]
-        # ingested content is now in SQLite — exclude it from JSON glob
-        # to avoid attempting to load the old oversized JSON file
-        memory_types = [t for t in memory_types if t != "ingested"]
-
     per_type_limit = max(limit * 4, 10)
     results = []
 
-    for mem_type in memory_types:
+    # Search memory.db for migrated types (conversation, profile, reflection, journal)
+    memory_store = _get_memory_store()
+    if memory_store is not None:
+        if memory_type and memory_type in SQLITE_MEMORY_TYPES:
+            # Search a specific migrated type
+            sqlite_results = memory_store.search(
+                query_embedding=query_embedding,
+                limit=per_type_limit,
+                memory_type=memory_type,
+            )
+            for result in sqlite_results:
+                content = result.get("content", "")
+                normalized_content = normalize_text(content)
+
+                if should_exclude_result(normalized_content):
+                    continue
+
+                metadata = result.get("metadata", {})
+                mem_type = result.get("memory_type", memory_type)
+                score = float(result.get("score", 0.0))
+                score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
+                score += memory_type_adjustment(mem_type)
+                score += source_quality_adjustment(normalized_content, metadata)
+                score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
+
+                result["score"] = score
+                result["memory_type"] = mem_type
+                results.append(result)
+
+        elif memory_type is None:
+            # Search all migrated types
+            for mem_type in SQLITE_MEMORY_TYPES:
+                sqlite_results = memory_store.search(
+                    query_embedding=query_embedding,
+                    limit=per_type_limit,
+                    memory_type=mem_type,
+                )
+                for result in sqlite_results:
+                    content = result.get("content", "")
+                    normalized_content = normalize_text(content)
+
+                    if should_exclude_result(normalized_content):
+                        continue
+
+                    metadata = result.get("metadata", {})
+                    score = float(result.get("score", 0.0))
+                    score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
+                    score += memory_type_adjustment(mem_type)
+                    score += source_quality_adjustment(normalized_content, metadata)
+                    score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
+
+                    result["score"] = score
+                    result["memory_type"] = mem_type
+                    results.append(result)
+
+    # Fallback: search any remaining JSON indexes for non-migrated, non-ingested types
+    if memory_type and memory_type not in SQLITE_MEMORY_TYPES and memory_type != "ingested":
         index_results = vector_index.search(
             vault_path=vault,
-            memory_type=mem_type,
+            memory_type=memory_type,
             query_embedding=query_embedding,
             top_k=per_type_limit,
             min_score=min_score,
         )
-
         for result in index_results:
             content = result.get("content", "")
             normalized_content = normalize_text(content)
@@ -71,14 +133,47 @@ def semantic_search(
 
             score = float(result.get("score", 0.0))
             score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
-            score += memory_type_adjustment(mem_type)
+            score += memory_type_adjustment(memory_type)
             metadata = result.get("metadata", {})
             score += source_quality_adjustment(normalized_content, metadata)
-            score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
+            score += query_intent_adjustment(normalized_query, memory_type, normalized_content)
 
             result["score"] = score
-            result["memory_type"] = mem_type
+            result["memory_type"] = memory_type
             results.append(result)
+    elif memory_type is None:
+        # Search any remaining JSON indexes (non-migrated, non-ingested)
+        json_types = [
+            index_file.stem.replace("_index", "")
+            for index_file in embeddings_dir.glob("*_index.json")
+        ]
+        json_types = [t for t in json_types if t != "ingested" and t not in SQLITE_MEMORY_TYPES]
+
+        for mem_type in json_types:
+            index_results = vector_index.search(
+                vault_path=vault,
+                memory_type=mem_type,
+                query_embedding=query_embedding,
+                top_k=per_type_limit,
+                min_score=min_score,
+            )
+            for result in index_results:
+                content = result.get("content", "")
+                normalized_content = normalize_text(content)
+
+                if should_exclude_result(normalized_content):
+                    continue
+
+                score = float(result.get("score", 0.0))
+                score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
+                score += memory_type_adjustment(mem_type)
+                metadata = result.get("metadata", {})
+                score += source_quality_adjustment(normalized_content, metadata)
+                score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
+
+                result["score"] = score
+                result["memory_type"] = mem_type
+                results.append(result)
 
     # Search ingested content via SQLite store
     if memory_type is None or memory_type == "ingested":
@@ -142,7 +237,6 @@ def source_quality_adjustment(content: str, metadata: dict | None = None) -> flo
     score = 0.0
     metadata = metadata or {}
 
-    # Check metadata.role first (reliable), then fall back to content prefix (legacy)
     role = metadata.get("role", "")
     if role == "user":
         score += 0.16

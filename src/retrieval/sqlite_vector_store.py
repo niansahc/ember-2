@@ -69,6 +69,7 @@ class SqliteVectorStore:
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._create_table()
+        self._has_quality_column = self._check_column_exists("quality")
 
     # ------------------------------------------------------------------
     # Schema
@@ -162,15 +163,20 @@ class SqliteVectorStore:
                 "metadata":    dict,
             }
         """
+        quality_filter = " AND (quality IS NULL OR quality != 'suppressed')" if self._has_quality_column else ""
+
         if memory_type:
             cursor = self._conn.execute(
-                "SELECT * FROM vectors WHERE memory_type = ? AND (quality IS NULL OR quality != 'suppressed')",
+                f"SELECT * FROM vectors WHERE memory_type = ?{quality_filter}",
                 (memory_type,),
             )
         else:
-            cursor = self._conn.execute(
-                "SELECT * FROM vectors WHERE quality IS NULL OR quality != 'suppressed'"
-            )
+            if self._has_quality_column:
+                cursor = self._conn.execute(
+                    "SELECT * FROM vectors WHERE quality IS NULL OR quality != 'suppressed'"
+                )
+            else:
+                cursor = self._conn.execute("SELECT * FROM vectors")
 
         scored: list[tuple[float, sqlite3.Row]] = []
 
@@ -216,6 +222,12 @@ class SqliteVectorStore:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _check_column_exists(self, column_name: str) -> bool:
+        """Check if a column exists in the vectors table."""
+        cursor = self._conn.execute("PRAGMA table_info(vectors)")
+        columns = {row["name"] for row in cursor}
+        return column_name in columns
 
     def _unpack_embedding(self, blob: bytes) -> list[float]:
         """

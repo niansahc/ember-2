@@ -1,15 +1,32 @@
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from src.core.config import get_private_vault_path
 from src.memory.storage import MemoryStorage
 from src.retrieval.embed_memory import embed_text
+from src.retrieval.sqlite_vector_store import SqliteVectorStore
 from src.retrieval.vector_index import VectorIndex
 
 
 storage = MemoryStorage()
 vector_index = VectorIndex()
+
+# Memory types stored in SQLite (memory.db) rather than JSON indexes
+SQLITE_MEMORY_TYPES = {"conversation", "profile", "reflection", "journal"}
+
+_write_memory_store: SqliteVectorStore | None = None
+
+
+def _get_write_memory_store(vault: Path) -> SqliteVectorStore:
+    """Singleton for memory.db write path."""
+    global _write_memory_store
+    if _write_memory_store is not None:
+        return _write_memory_store
+    db_path = vault / "embeddings" / "memory.db"
+    _write_memory_store = SqliteVectorStore(db_path)
+    return _write_memory_store
 
 
 def normalize_text(text: str) -> str:
@@ -114,26 +131,46 @@ def write_memory(
     file_path = memory_dir / f"{timestamp}.json"
     storage.write_json(file_path, memory)
 
-    index_path = vector_index.get_index_path(vault, memory_type)
-    index_data = vector_index.load_index(index_path)
-
     embedding = embed_text(text)
 
-    index_data.append(
-        {
+    if memory_type in SQLITE_MEMORY_TYPES:
+        # Write to SQLite (memory.db) for migrated types
+        store = _get_write_memory_store(vault)
+        store.insert({
             "id": memory_id,
-            "timestamp": timestamp,
-            "type": memory_type,
             "text": text,
-            "normalized_text": normalized,
-            "source": source,
-            "tags": tags or [],
-            "file_path": str(file_path),
             "embedding": embedding,
-            "metadata": clean_metadata,
-        }
-    )
+            "source": source,
+            "memory_type": memory_type,
+            "created_at": timestamp,
+            "metadata": {
+                **clean_metadata,
+                "file_path": str(file_path),
+                "normalized_text": normalized,
+                "tags": tags or [],
+                "source_field": source,
+            },
+        })
+    else:
+        # Fallback to JSON index for non-migrated types
+        index_path = vector_index.get_index_path(vault, memory_type)
+        index_data = vector_index.load_index(index_path)
 
-    vector_index.save_index(index_path, index_data)
+        index_data.append(
+            {
+                "id": memory_id,
+                "timestamp": timestamp,
+                "type": memory_type,
+                "text": text,
+                "normalized_text": normalized,
+                "source": source,
+                "tags": tags or [],
+                "file_path": str(file_path),
+                "embedding": embedding,
+                "metadata": clean_metadata,
+            }
+        )
+
+        vector_index.save_index(index_path, index_data)
 
     return file_path

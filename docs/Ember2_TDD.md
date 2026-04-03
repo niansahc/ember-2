@@ -1689,6 +1689,8 @@ When new relevant research is found: add to Watch Items with full attribution, a
 - Temporal reasoning in personal memory (Supermemory dual-layer timestamping, 2025) — current SOTA for temporal reasoning in memory systems. Dual-layer time-stamping drives high scores in temporal-reasoning, knowledge-update, and multi-session categories. Defines semantic relationships between memories: updates (contradictions/corrections with version history), extends (supplements existing nodes), derives (second-order logic from combining memories). Design implication for weekly reflection: needs time-range filtering as first-pass hard filter, explicit before/after/during query intent class, update/extends/derives tagging. Post-v0.13.0.
 - Habit-to-identity formation (habit and identity literature, 2024-2025) — not all repeated behaviors become identity. Prime candidates are habits related to important goals or values, noticed by the self, and integrated into narrative identity. Repetition alone is insufficient. Design implication for ADR-013 deviation memory: the reason field is required for a deviation to compound into character. Only value-aligned deviations compound. Incidental deviations are recorded but do not compound. Active at v0.15.0.
 - Proactive assistance timing (workplace AI research, 2024-2025) — proactive help can reduce competence-based self-esteem when unsolicited. Post-commit suggestions accepted more readily than mid-task interventions. Timing is critical: intervene at session/day/topic boundaries, not mid-task. Framing must be augmentative ("here are ideas to build on") not corrective. Off by default. Respects soft mode. Design implication for future proactive assistance feature.
+- Evaluation framework for personal AI (RAG evaluation literature, 2024-2025) — no published benchmark covers persistent single-user personal AI evaluation. Standard benchmarks assume multi-user or population-level behavior with external ground truth. Ember requires three-tier approach: automated functional metrics (Tier 1, partially built), periodic manual behavioral evaluation (Tier 2, open design problem), longitudinal behavioral markers (Tier 3, open design problem). Subjective self-report ("did that feel right?") is documented as unreliable predictor of actual system performance. Active at every release.
+- Narrative identity (McAdams, 2001; narrative identity research 2020-2025) — monthly reflection synthesis should find agency themes, directional shifts, significant tensions, and forward threads rather than event summaries. Flowing prose outperforms structured sections for meaning-making tasks. Third-person synthesis with second-person closing creates appropriate psychological distance. 400-500 word constraint prevents padding on small models. Implemented in prompts/monthly_reflection.txt. Active v0.13.0.
 
 ## 25.4 Long-Term
 
@@ -2035,17 +2037,21 @@ The current `_should_skip_for_reflection()` filter is the starting point. It nee
 4. Add evaluation: compare pattern-oriented vs. summary-oriented reflection quality on the same time windows
 5. Migrate existing reflections to annotate them with schema version (old reflections remain valid, new ones carry richer structure)
 
-**Monthly Reflection Design (v0.13.0)**
-Monthly reflection uses a synthesis prompt grounded in McAdams's narrative identity framework. The prompt asks for themes that recurred across domains, directional shifts over the month, significant tensions or contradictions, and a forward thread. It does not summarize events. Prompt template: prompts/monthly_reflection.txt.
+## 32.6 Monthly Reflection Design (v0.13.0)
 
-Key design decisions derived from research:
-- Third-person synthesis narrative with second-person closing (psychological distance supports self-examination without attribution confusion)
-- Input records presented in randomized temporal order to counteract recency bias (documented in 8B-class models; strongest in qwen3:8b)
-- Explicit temporal weighting instruction in prompt (weight by significance, not recency)
-- Cross-domain observations explicitly requested -- this is the primary synthesis task
-- Register prohibition: no therapeutic language, no affirmations, no growth framing
-- 400-500 word output constraint to prevent padding
-- Flowing prose only -- narrative form activates meaning-making; structured sections produce status reports
+Monthly reflection uses a synthesis prompt grounded in McAdams's narrative identity framework (McAdams, 2001; narrative identity research, 2020-2025). The prompt asks for themes that recurred across domains, directional shifts over the month, significant tensions or contradictions, and a forward thread. It does not summarize events.
+
+Prompt template: prompts/monthly_reflection.txt
+
+Key design decisions:
+- Third-person synthesis narrative with second-person closing. Psychological distance supports self-examination without attribution confusion.
+- Input records presented in randomized temporal order to counteract recency bias. Recency bias is documented across all 8B-class models and strongest in qwen3:8b.
+- Explicit temporal weighting instruction in prompt: weight by significance, not recency.
+- Cross-domain observations explicitly requested. This is the primary synthesis task -- patterns that cross domain boundaries carry more weight than within-domain patterns.
+- Register prohibition: no therapeutic language, no affirmations, no growth framing. Target register is accurate observer, not coach or therapist.
+- 400-500 word output constraint to prevent padding.
+- Flowing prose only. Narrative form activates meaning-making; structured sections produce status reports.
+- Pre-generation instruction: "Think step by step before writing. First identify the patterns. Then write the synthesis." Forces pattern scanning before generation on small models.
 
 ---
 
@@ -2456,28 +2462,37 @@ Not a near-term priority. The architecture supports it (vault path is configurab
 
 # 38. Vault Encryption at Rest
 
-**Status: Planned (v0.14.0) — deferred from v0.13.0; architecture decided.**
+**Status: Planned (v0.14.0) -- deferred from v0.13.0; architecture decided; BitLocker covers current single-user hardware.**
 
-Architecture (five-layer envelope encryption, reference: Cryptomator):
-- Layer 1: 256-bit master key, CSPRNG random, never derived from passphrase
-- Layer 2: Argon2id key derivation (minimum 64MB memory, 3 iterations) produces KEK from passphrase
-- Layer 3: AES Key Wrap (RFC 3394) wraps master key with KEK; authenticated -- detects tampering on unwrap
-- Layer 4: BIP-39 recovery code (12 words, 128-bit random) issued at vault creation; second wrapping of master key; user stores offline
-- Layer 5: Session cache -- unwrapped master key stored in keyring (DPAPI/keychain) for session duration; cleared on idle timeout; DPAPI is a session cache, not primary protection
-- Per-record: AES-256-GCM with ROWID-derived nonce; encrypt content fields only; metadata (timestamps, types) plaintext by design
-- Passphrase changes: re-wrap master key with new KEK only; zero record re-encryption; operationally free
+## Current State
 
-Current interim: BitLocker (Windows) / FileVault (Mac) covers vault at rest. Adequate for single-user single-device deployment.
+The vault is plain JSON files on disk. BitLocker (Windows) / FileVault (Mac) provides full-disk encryption covering the vault for current single-user deployment. This is adequate for single-user, single-device use.
+
+## Planned Architecture (v0.14.0)
+
+Five-layer envelope encryption design. Reference implementation: Cryptomator (open source, well-audited).
+
+Layer 1 -- Master key: 256-bit CSPRNG random value. Never derived from passphrase. Generated once at vault creation. Never stored unwrapped on disk.
+
+Layer 2 -- Key derivation: Argon2id derives KEK from user passphrase (minimum 64MB memory, 3 iterations). Argon2id chosen over bcrypt and PBKDF2 for memory-hardness against GPU brute force.
+
+Layer 3 -- Key wrapping: AES Key Wrap (RFC 3394) wraps master key with KEK. Authenticated -- detects tampering on unwrap attempt.
+
+Layer 4 -- Recovery: 128-bit random recovery code encoded as BIP-39 12-word list, issued at vault creation. User stores offline. Provides alternative unwrapping path for master key. Passphrase reset: present recovery code, unwrap master key, re-wrap with new KEK. Zero record re-encryption required.
+
+Layer 5 -- Session cache: after unlock, unwrapped master key stored in keyring (Windows Credential Manager / macOS Keychain) for session duration. Cleared on idle timeout. DPAPI/keyring is a session cache, not primary protection.
+
+Per-record: AES-256-GCM with ROWID-derived nonce. Content fields encrypted; metadata (timestamps, memory_type, state) plaintext by design. Append-only architecture makes nonce management straightforward.
+
+Key property: passphrase changes are operationally free. Re-wrap master key with new Argon2id KEK. Zero re-encryption of any record content.
 
 ---
 
 # 39. Platform Support
 
-**Status:** Complete (v0.12.0)
+**Status: Windows, Mac, and Linux installer complete as of v0.12.0.**
 
-- Manual setup via SETUP.md works on all platforms (Python, Docker, Ollama are cross-platform)
-- Installer (ember-2-installer) supports Windows, Mac, and Linux — platform-aware prerequisite checks, default paths, startup scripts
-- Tailscale works identically on all platforms
+Manual setup via SETUP.md works on all platforms (Python, Docker, Ollama are cross-platform). The installer (ember-2-installer) supports Windows (.exe via NSIS), Mac (.dmg), and Linux (.AppImage) as of v0.12.0. Tailscale works identically on all platforms.
 
 ---
 
@@ -2511,15 +2526,17 @@ Link from installer Done screen and UI settings panel.
 
 # 41. Nature Layer
 
-**Status: Planned — v0.13.0**
+**Status: In progress -- v0.13.0. See ADR-016.**
 
-See ADR-016 for full design.
+Ember's constitution governs behavior (what she does). The nature layer governs identity (who she is). They are parallel external config files with parallel loaders. The distinction matters: constitution = what Ember does; nature = who she is.
 
-Ember's constitution governs behavior. The nature layer governs identity. They are parallel external config files with parallel loaders. The distinction matters: constitution = what Ember does; nature = who she is.
+The nature block is injected into the context packet every turn, not the system prompt. This is a research-grounded architectural decision: static identity in the system prompt degrades by more than 30% by turn 8-12 due to attention dilution (PRISM, Hu et al., USC, March 2026; PERSIST framework). Context packet injection keeps nature tokens always recent.
 
-The nature block is injected into the context packet every turn, not the system prompt. This is a research-grounded architectural decision: static identity in the system prompt degrades by more than 30% by turn 8-12 due to attention dilution (PRISM, PERSIST). Context packet injection keeps nature tokens always recent.
+Initial nature document: config/nature.yaml, v0.1, thirteen facets covering sincerity, directness, warmth without softness, intellectual seriousness, relational presence, honesty about hard things, orientation toward dignity, aversion to cruelty, curiosity by disposition, wry without cruelty, comfortable with not-knowing, economy, and restraint.
 
-Initial nature document: config/nature.yaml, v0.1, thirteen facets. Loader: src/safety/nature_loader.py.
+Loader: src/safety/nature_loader.py. Context assembly order: nature block first, then state, then memory, then user input.
+
+See ADR-016 for full design, research grounding, and sequencing with ADR-013.
 
 ---
 
@@ -2539,6 +2556,8 @@ Migration path by scale:
 
 DuckDB is not a candidate for this use case. Its columnar architecture is optimized for analytical batch queries, not low-latency per-query vector retrieval.
 
+Reference: Garcia, A. sqlite-vec v0.1.0 benchmark (August 2024).
+
 ---
 
 # 43. Intent-Aware Memory Type Gating
@@ -2551,4 +2570,51 @@ This is a retrieval policy problem, not a model problem. The fix is in src/conte
 
 Three research sources converge on this: CIMemories (ICLR 2026) confirms retrieval-as-code is the right defense against contextual integrity violations. MemX confirms that empty context is better than noisy context -- return nothing rather than weak records. Nissenbaum's Contextual Integrity framework provides principled vocabulary for intent-to-type mapping.
 
-The min_score floor also directly addresses the documented qwen3:8b hallucination pattern: when the model receives weak or absent context, it generates plausible-sounding content from training data. The fix is to stop injecting weak context rather than to prompt the model to behave differently.
+The min_score floor also directly addresses the documented qwen3:8b hallucination pattern. When the model receives weak or absent context, it generates plausible-sounding content from training data. The compound intervention: min_score floor eliminates weak candidates; empty pool detected before prompt assembly; explicit "no relevant memory found" signal tells model to acknowledge uncertainty.
+
+---
+
+# 44. Evaluation Framework
+
+**Status: Partially implemented -- eval_retrieval.py exists; Tier 2 and Tier 3 are open design problems.**
+
+## 44.1 The Core Challenge
+
+Standard benchmarks (MMLU, LongMemEval, GAIA) test multi-user or population-level behavior with external ground truth. Ember is single-user with a private vault as the only corpus. No external ground truth exists. The user is simultaneously the only evaluator, the subject, and the author of the knowledge base. That combination does not exist in any published evaluation framework.
+
+## 44.2 Three-Tier Evaluation Design
+
+**Tier 1 -- Automated, runnable before every release:**
+- Retrieval recall: synthetic query generation from vault samples; LLM judge scores relevance and faithfulness of retrieved context
+- Response faithfulness: pass retrieved context and response to judge model; score "is everything in this response supported by what was retrieved?"
+- Safety review trigger rate and false positive rate from logs
+- Abstention rate: how often does Ember explicitly say it does not have relevant memory vs. confabulating
+- Latency tracking
+
+Existing: eval_retrieval.py covers retrieval quality. eval_conversations.py covers response quality using Claude as external judge. Missing: faithfulness scoring and abstention rate tracking.
+
+**Tier 2 -- Manual, periodic (quarterly or per major feature):**
+- Sample 10-20 actual past conversations
+- For each: did Ember retrieve what it should have? Did the response accurately reflect what was retrieved? Did it sycophantically agree where it should have pushed back?
+- Human-in-the-loop evaluation with small samples and high-quality judgment
+- Not self-report ("did that feel right?") -- behavioral measures
+
+**Tier 3 -- Longitudinal behavioral markers (tracked over time):**
+- Rate of genuine disagreements in conversation history (sycophancy proxy)
+- Rate of explicit "I don't have relevant memory on this" vs. confabulation (hallucination proxy)
+- State layer staleness: time since last update per category
+- Retrieval score trend: is recall improving or degrading as vault grows?
+
+## 44.3 What Cannot Be Measured With Current Tools
+
+The distinctively personal AI goals have no eval framework:
+- Continuity quality: does Ember maintain coherent understanding of the user's life across sessions?
+- State layer accuracy: does Ember's current operational understanding match reality?
+- Failure mode detection: is sycophancy increasing over time? Is the system less likely to disagree than 50 conversations ago?
+- Reflection quality: does monthly synthesis identify real patterns vs. plausible-sounding fabrications?
+
+These are open design problems. Tier 2 and Tier 3 must be designed from first principles for this class of system. No published benchmark covers persistent single-user personal AI evaluation.
+
+## 44.4 Standard Benchmarks Do Not Apply
+
+The NIST AI RMF documentation should explicitly note why standard benchmarks do not apply to Ember and what the evaluation approach is instead. Functional automated metrics answer one question (is the system regressing?). Periodic human evaluation answers a different question (is the system serving the user well?). Neither substitutes for the other.

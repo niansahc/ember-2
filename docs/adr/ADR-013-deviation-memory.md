@@ -76,7 +76,7 @@ catches signal that intent missed.
 }
 ```
 
-The reason field is required for a deviation to compound into character. Psychological research on habit-to-identity formation (habit and identity literature, 2024-2025) confirms that repetition alone does not produce identity -- the behavior must be noticed, valued, and integrated. A deviation recorded without a reason is a pattern observation. A deviation recorded with a reason -- the value or principle it expressed -- is identity-forming. The value_aligned flag marks whether the deviation was driven by a value in the nature document. Only value-aligned deviations compound into character through the weighting mechanism. Incidental deviations (noise, variance, user-requested behavior changes) are recorded but do not compound.
+The reason field is required for a deviation to compound into character. Psychological research on habit-to-identity formation (habit and identity literature, 2024-2025) confirms that repetition alone does not produce identity -- the behavior must be noticed, valued, and integrated. A deviation recorded without a reason is a pattern observation. A deviation recorded with a reason -- the value or principle it expressed -- is identity-forming. The value_aligned flag marks whether the deviation was driven by a value in the nature document (ADR-016). Only value-aligned deviations compound into character through the weighting mechanism. Incidental deviations (noise, variance, user-requested behavior changes) are recorded but do not compound.
 
 The confidence score (0-1) is essential. Token sampling variance is noise. A
 response that diverges because the user explicitly asked for something different

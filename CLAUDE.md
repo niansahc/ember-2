@@ -346,8 +346,9 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - "Memory in the Age of AI Agents" (arxiv.org/abs/2512.13564, Zhang et al., December 2025) — survey proposing factual/experiential/working memory taxonomy; relevant to Ember's memory class design and v0.13.0 tiering work
 
 ## Known Gaps (tracked)
-- Vault encryption at rest — v0.13.0
+- Vault encryption at rest — v0.14.0
 - ~~Mac/Linux installer~~ — complete (v0.12.0, platform-aware prereqs, paths, and startup)
+- Tier 2 and Tier 3 evaluation — no standard methodology for periodic manual behavioral evaluation or longitudinal behavioral marker tracking in personal AI systems; open design problem; see TDD §44
 
 ## Known Issues
 - Installer Node.js prerequisite check exists but a user bypassed it somehow — needs investigation (Node IS in the prereqs screen, Next is disabled when missing)

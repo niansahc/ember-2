@@ -344,6 +344,7 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Multi-user vault isolation — post-v0.15.0 milestone
 - Eval harness uses user's own vault — results are personal, not generic benchmarks
 - "Memory in the Age of AI Agents" (arxiv.org/abs/2512.13564, Zhang et al., December 2025) — survey proposing factual/experiential/working memory taxonomy; relevant to Ember's memory class design and v0.13.0 tiering work
+- qwen3.5:9b with thinking mode disabled — timed out at 120s during eval due to thinking mode overhead; hardware-limited not model-limited; worth retesting on faster hardware or with /no_think flag
 
 ## Known Gaps (tracked)
 - Vault encryption at rest — v0.14.0

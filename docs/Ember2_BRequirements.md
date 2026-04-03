@@ -156,9 +156,56 @@ Write access to any external system (sending email, creating GitHub issues, arch
 - Minimal friction
 - Clear, grounded responses
 - Context-aware, not generic
-- Respectful of cognitive load (ADHD-friendly)
+- Respectful of cognitive load (designed for users with ADHD and related executive function differences)
 - Fast feedback loops
 - Supports both deep work and casual interaction
+
+---
+
+## Neurodivergent-Compatible Design Principles
+
+This section uses identity-first language ("autistic") in line with documented community preference (Taboas et al., 2023; Schuck et al., 2025), and person-first framing for ADHD where identity-first construction is grammatically awkward. "Neurodivergent" is used as the umbrella term throughout.
+
+Ember's architecture reflects explicit design decisions made for autistic users, people with ADHD, and users with related neurodivergent cognitive profiles. These are requirements-level commitments, not accessibility add-ons.
+
+### 1. External Memory as Structural Accommodation
+
+Working memory differences are a well-documented characteristic of ADHD (ISCAP 2025; arXiv 2507.06864). For users with significant working memory constraints, an external memory system that accumulates context across sessions is not a convenience feature -- it is a structural accommodation equivalent to a cognitive prosthetic. Ember's append-only vault, session continuity, and retrieval pipeline are designed to function as cognitive scaffolding: reducing the overhead of maintaining context in working memory by making it externally retrievable and persistent.
+
+Research on AI tool use by neurodivergent users documents that externalized memory and context management significantly reduce cognitive load for users with executive function differences (ISCAP 2025 proceedings; Jang et al., CHI 2024). Ember's architecture is designed to serve this function reliably, not incidentally.
+
+### 2. Energy-Aware Design
+
+Variable cognitive capacity across hours, days, and weeks is a first-class design requirement for many neurodivergent users, not an edge case. Ember's soft mode concept -- reduced complexity, reduced friction, reduced cognitive demand -- is a core design feature. Future proactive assistance features must respect energy state. Notifications, suggestions, and unsolicited prompts are off by default.
+
+The design principle: the system must be usable on hard days, not only on productive ones. Features that require full cognitive engagement should degrade gracefully when engagement is lower.
+
+### 3. Non-Sycophantic by Constitution
+
+Autistic users report specific dissatisfaction with AI systems that smooth, soften, and over-affirm. Research on autistic users' LLM use documents that sycophantic AI behavior conflicts with autistic communication preferences for directness, accuracy, and authenticity (Carik et al., ACM 2025; Jang et al., CHI 2024). Systems that perform warmth without grounding it in genuine engagement are experienced as alienating rather than supportive.
+
+Ember's constitutional design -- non-sycophantic, direct, challenging of flawed reasoning, not optimized for approval -- reflects an explicit design choice grounded in this research. The directness and intellectual respect principles in the constitution are not stylistic preferences; they are accessibility requirements for a meaningful portion of the intended user base.
+
+### 4. Privacy as Structural Trust
+
+Cloud AI systems require disclosure of personal information to third-party infrastructure. For autistic users, this creates a documented trust barrier: the disclosure risk is concrete, terms of data use are opaque, and loss of control over personal information is experienced as a meaningful harm (Carik et al., ACM 2025). The risk is compounded by the depth of personal disclosure required for a system like Ember to function well.
+
+Ember's local-first architecture removes this barrier structurally. Data never leaves the user's device by default. The vault is user-owned and inspectable. This is a structural privacy guarantee, not a policy promise that can be changed by terms of service update.
+
+### 5. Transparency and Inspectability as Requirements
+
+Neurodivergent users -- particularly autistic users -- benefit from systems that are transparent about what they are doing and why. Black-box AI behavior, unexplained decisions, and hidden governance are experienced as trust violations that prevent meaningful engagement (Carik et al., ACM 2025).
+
+Ember's design prioritizes inspectability throughout: explicit constitutional review with logged outcomes, retrievable and auditable vault contents, user-visible state records, and governance documents that explain design intent. The user should be able to understand what Ember knows, why she responded as she did, and what policies governed her response. This is not only good engineering practice -- it is a requirement for the system to be genuinely usable by users who need to understand the tools holding their cognitive scaffolding.
+
+### References
+
+- Taboas, A. et al. (2023). "Preferences for identity-first versus person-first language in a US sample of autism spectrum disorder stakeholders." Autism.
+- Schuck, R. et al. (2025). Systematic review of language preferences, n=6350. Journal of Autism and Developmental Disorders. Stanford.
+- Jang, S. et al. (2024). "It's the only thing I can trust." CHI 2024.
+- Carik, S. et al. (2025). "Exploring LLMs Through a Neurodivergent Lens." ACM 2025.
+- ISCAP 2025 proceedings. ADHD executive function scaffolding via AI.
+- "Toward Neurodivergent-Aware Productivity." arXiv 2507.06864, July 2025.
 
 ---
 

@@ -202,15 +202,17 @@ ADR-016 (nature layer) ships in v0.13.0. ADR-017 (Lodestone) is scheduled for v0
 - Waters, E. and Waters, H.S. -- The Attachment Working Models Concept; secure base script
 - Arriaga, X.B. et al. -- Attachment and Social Cognition (ASEM framework); diagnostic situations
 - Kelley, H.H. et al. -- Interdependence Theory; transformation of motivation mechanism
-- Minuchin, S. -- Structural Family Therapy; enmeshment and differentiation
-- Bowen, M. -- Family Systems Theory; differentiation of self
+- Minuchin, S. (1974) -- Structural Family Therapy; enmeshment and differentiation
+- Bowen, M. (1978) -- Family Systems Theory; differentiation of self
 - Kohut, H. -- Self Psychology; healthy vs. pathological mirroring
 - Horton, D. and Wohl, R.R. (1956) -- parasocial interaction original definition
-- SYCON benchmark -- sycophancy in multi-turn dialogue; position flipping under pressure
+- Sharma, M. et al. (2024), "Towards Understanding Sycophancy in Language Models" (ICLR 2024; arXiv 2310.13548) -- sycophancy mechanism in preference-optimized systems
+- Hong, J. et al. (2025), SYCON benchmark (EMNLP 2025) -- multi-turn sycophancy; stance flipping under repeated user disagreement without new evidence
 - Ada Lovelace Institute (2025) -- AI companion risk analysis; hall of mirrors dynamic
-- OpenAI/MIT RCT longitudinal study -- parasocial attachment and loneliness outcomes
+- Fang, C. et al. (2025), "The Effects of Generative AI on Social Relationships" (MIT/OpenAI; arXiv 2503.17473) -- parasocial attachment longitudinal study
 - Fraley, R.C. -- connectionist model of IWMs; knowing vs. orientation distinction
+- Kirk, H.R. et al. (2025), "The Socioaffective Alignment Problem" (Humanities and Social Sciences Communications, 2025) -- requirements specification for relational AI orientation; intrapersonal dilemmas framework; friction-by-design proposal
+- Verplanken, B. and Sui, J. (2019), "Habit and Identity: Behavioral, Cognitive, Affective, and Motivational Facets of an Integrated Self" (Frontiers in Psychology) -- habit-to-identity formation; repetition alone insufficient for identity
 - ADR-013: Deviation Memory
 - ADR-016: Nature Layer
 - ADR-014: Commitment Detection
-- Kirk, H.R. et al. (2025), "The Socioaffective Alignment Problem" (AIES 2025) -- requirements specification for relational AI orientation; intrapersonal dilemmas framework; friction-by-design proposal

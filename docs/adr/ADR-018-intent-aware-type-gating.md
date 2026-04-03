@@ -133,7 +133,7 @@ def _apply_type_gate(self, items, policy):
 ## References
 
 - Mireshghallah, N. et al. "CIMemories." ICLR 2026. https://arxiv.org/abs/2511.14937
-- MemX -- low-confidence rejection; https://github.com/memxlab/memx
-- Nissenbaum, H. (2004) -- Contextual Integrity framework
+- MemX (Sun et al., arXiv 2603.16171, March 2026) -- low-confidence rejection; stability-over-recall
+- Nissenbaum, H. (2004) -- Contextual Integrity framework; Washington Law Review
 - ADR-005: Multi-Stage Context Retrieval and Ranking Strategy
 - ADR-007: Project-Scoped Retrieval

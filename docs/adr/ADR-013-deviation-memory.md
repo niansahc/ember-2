@@ -114,6 +114,7 @@ separate concerns and should remain separate.
 - Builds on: append-only vault, typed memory, semantic retrieval, state layer
 - Extends: preference record type (deviation records are a specialized form)
 - Depends on: pattern detection capability (new -- requires introspection layer)
+- Depends on: ADR-016 (nature layer) -- deviation requires a reference point; "deviation from what" is answered by the nature document. ADR-016 must be in place before ADR-013 is meaningful.
 - Does not require: model fine-tuning, external training, cloud infrastructure
 
 ## What This Enables
@@ -192,6 +193,8 @@ Ember's response to it.
 Proposed. Scheduled for v0.15.0 alongside agent orchestration and self-evaluation
 loops. Vault infrastructure to support this exists today. Implementation requires
 a pattern detection layer which does not yet exist.
+
+Sequencing dependency: ADR-016 (nature layer) ships in v0.13.0 and must be stable before ADR-013 implementation begins. The nature document is the reference point for deviation -- without it, the deviation detector has no baseline to measure against. ADR-013 and ADR-016 are architecturally dependent but not coupled at ship time.
 
 ## Attribution
 

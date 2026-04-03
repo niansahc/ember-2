@@ -110,17 +110,17 @@ Ember is designed to ingest and read data from external sources. All integration
 ### Integration Categories
 
 **Communication**
-- Email — read-only IMAP access. Two modes: ingestion (pull into vault as reference memory) and live context (surface relevant threads into conversation without permanent storage). Planned v0.13.0.
+- Email — read-only IMAP access. Two modes: ingestion (pull into vault as reference memory) and live context (surface relevant threads into conversation without permanent storage). Planned v0.14.0.
 - Calendar (Google, Outlook, iCal) — read-only. Events and scheduling context. Planned v0.14.0.
 - Slack / Discord — read-only conversation history ingestion. Planned v0.15.0.
 
 **Development**
-- GitHub — read-only. Commits, PRs, issues, and activity feed. Enables coders to use Ember as a development context layer — project history, blockers, and arcs are retrievable in conversation. Live context mode supported alongside ingestion. Planned v0.13.0.
+- GitHub — read-only. Commits, PRs, issues, and activity feed. Enables coders to use Ember as a development context layer — project history, blockers, and arcs are retrievable in conversation. Live context mode supported alongside ingestion. Planned v0.14.0.
 - Linear / Jira — issue and project tracking ingestion. Planned v0.14.0.
 
 **Health & Body**
-- Fitbit — export ingestion. Activity, sleep, and health patterns. Planned v0.13.0.
-- Apple Health / Garmin — export ingestion. Activity, sleep, HRV. Planned v0.13.0.
+- Fitbit — export ingestion. Activity, sleep, and health patterns. Planned v0.14.0.
+- Apple Health / Garmin — export ingestion. Activity, sleep, HRV. Planned v0.14.0.
 - Glucose monitors (Dexcom, Libre) — export or API ingestion. Time-series data. Planned v0.14.0.
 - Oura — export ingestion. Sleep and readiness data. Planned v0.14.0.
 - Diet apps (Cronometer, MyFitnessPal) — export ingestion. Nutrition logs. Planned v0.14.0.

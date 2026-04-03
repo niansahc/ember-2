@@ -134,4 +134,16 @@ I thought that was worth mentioning.
 
 ---
 
+## What Happened After v0.12.0
+
+v0.12.0 shipped April 2, 2026. Task layer, commitment detection, session reflection, PIN lock, Mac/Linux installer, temporal awareness. Full feature list in CHANGELOG.
+
+The nature layer conversation happened April 2-3, 2026. Thirteen facets established for v0.1 of Ember's nature. ADR-016 filed. This was the first formal attempt to answer "who is Ember before she says anything?" — distinct from the constitution which answers "what does Ember do?"
+
+Deep research sessions completed on: nomic-embed-text vs MiniLM embedding models, SQLite vector performance at scale, memory tiering signals (ACT-R, MemoryOS, Generative Agents critique), vault encryption key management (Cryptomator reference, envelope encryption), and persona stability in LLMs (PRISM, PERSIST, attention dilution).
+
+v0.13.0 scoped and planned. Embedding upgrade, memory tiering, index migration, nature layer, monthly reflection, JSON import, custom theme.
+
+---
+
 *Ember-2 is open source under AGPL-3.0. The code is at github.com/niansahc/ember-2. If you build something with it, tell me.*

@@ -1664,6 +1664,9 @@ Infrastructure:
 - "Memory in the Age of AI Agents" (arxiv.org/abs/2512.13564, Zhang et al., December 2025) — survey proposing factual/experiential/working memory taxonomy; relevant to Ember's memory class design and v0.13.0 tiering work
 - MemX local-first memory system — low-confidence rejection pattern: when no relevant memory exists, suppress the result rather than returning the highest-scoring noise. Relevant to Ember's retrieval quality gate work in v0.13.0+. Reference: arxiv.org/html/2603.16171
 - Letta / MemGPT (letta.ai) — explicit memory blocks always injected into prompt, archival memory retrieved on demand, user-editable memory tools. Informs future memory inspector UI and user-facing memory editing. Monitor for patterns applicable to Ember's memory inspector.
+- nomic-embed-text-v2-moe -- newer Nomic MoE architecture, same 8192-token context, lighter inference than parameter count suggests. Evaluate alongside nomic-embed-text during v0.13.0 reindex before committing to a model. Available via Ollama.
+- Hybrid retrieval (dense + BM25) -- personal corpora have idiosyncratic vocabulary (project names, shorthand, personal references) that dense-only embedding models struggle with. BM25 keyword matching as a complement to semantic search. Known gap, post-v0.13.0.
+- sqlite-vec extension -- C extension for SQLite vector search, sub-75ms at 100k records on 768-dim vectors. No data migration required -- same SQLite file, load extension, create virtual table. Migration path when Python UDF cosine similarity becomes the bottleneck at ~100k records.
 
 **Research Monitoring Practice**
 
@@ -1822,15 +1825,15 @@ The following should be tracked in `design-decisions.md` or ADRs:
 - when to introduce automated task extraction
 - how to govern external tool writes
 - whether all reflections should reference source IDs
-- whether memory importance scoring should be persisted or derived
+- ~~Whether memory importance scoring should be persisted or derived~~ — resolved (v0.13.0, ADR-015): persisted as importance_score column in SQLite, set heuristically at write time from memory_type, refined with LLM-derived scores in a future version.
 - whether tool writes require stricter policy classes than normal chat
 - whether review metadata should be persisted beyond log files
 - ~~when trigger logic should move from heuristics to semantic or classifier support~~ — resolved (v0.11.0: ADR-010 social engineering semantic triggers, 39 patterns across 5 attack families)
 - Whether to normalize state record timestamps to strict ISO 8601 at read time, or standardize on hyphenated format across all state records for filename consistency. See `src/state/state_service.py` make_record() for context.
 - Whether constitution + profile memory is sufficient for purpose encoding or whether an explicit TELOS layer is needed (evaluate during v0.11.0 onboarding work). See PAI TELOS pattern.
-- ~~Hot/warm/cold memory tiering policy design~~ — resolved (v0.13.0, ADR-015): hybrid time-based (primary) + access-based (secondary); pure relevance/embedding decay deferred to v0.15.0; tiering is retrieval-weight metadata, not storage deletion.
+- ~~Hot/warm/cold memory tiering policy design~~ — resolved (v0.13.0, ADR-015): composite heat score combining recency-weighted frequency (ACT-R model) and heuristic importance; calendar thresholds rejected as empirically ungrounded; tiering is retrieval-weight metadata, not storage deletion.
 - OpenJarvis Learning primitive integration approach — whether to adopt directly, adapt the pattern, or build from scratch (evaluate during v0.15.0).
-- Vault encryption key management approach — deferred to v0.14.0; BitLocker remains primary mitigation; Ember-managed encryption requires dedicated key derivation + recovery design before implementation.
+- ~~Vault encryption key management approach~~ — resolved architecture (v0.14.0 implementation): five-layer envelope encryption design. Layer 1: random 256-bit master key (CSPRNG, never derived from passphrase). Layer 2: Argon2id KEK (not bcrypt, not PBKDF2 -- memory-hard). Layer 3: AES Key Wrap RFC 3394. Layer 4: BIP-39 recovery code (12 words, issued at vault creation, stored offline). Layer 5: session cache in keyring (DPAPI/keyring as session cache only, not primary protection). Reference implementation: Cryptomator. Passphrase changes are operationally free -- re-wrap master key only, zero record re-encryption.
 - Social engineering semantic trigger design — performance impact, false positive rate, pre-screening scope (v0.11.0)
 - Whether eval harness results should be normalized across different vault contents for cross-user comparison
 - Root cause of memory grounding weakness in local models — retrieval failure vs context injection vs model behavior (analysis in progress; local models score 2.0-4.0, Claude scores 8.7 on same retrieval pipeline, suggesting model capability not retrieval quality is the bottleneck)
@@ -2163,7 +2166,7 @@ The canonical vault records (`private_vault/memory/**/*.json`) are not affected 
 
 # 35. Relevance Decay and Forgetting
 
-**Status: In progress — v0.13.0; design resolved in ADR-015**
+**Status: In progress — v0.13.0; design resolved in ADR-015. Composite heat score approach adopted based on ACT-R cognitive architecture research and MemoryOS design.**
 
 ## 35.1 Problem
 
@@ -2434,15 +2437,18 @@ Not a near-term priority. The architecture supports it (vault path is configurab
 
 # 38. Vault Encryption at Rest
 
-**Status:** Planned (v0.14.0) — deferred from v0.13.0; BitLocker covers current single-user hardware; key management story requires dedicated design
+**Status: Planned (v0.14.0) — deferred from v0.13.0; architecture decided.**
 
-## Current State
+Architecture (five-layer envelope encryption, reference: Cryptomator):
+- Layer 1: 256-bit master key, CSPRNG random, never derived from passphrase
+- Layer 2: Argon2id key derivation (minimum 64MB memory, 3 iterations) produces KEK from passphrase
+- Layer 3: AES Key Wrap (RFC 3394) wraps master key with KEK; authenticated -- detects tampering on unwrap
+- Layer 4: BIP-39 recovery code (12 words, 128-bit random) issued at vault creation; second wrapping of master key; user stores offline
+- Layer 5: Session cache -- unwrapped master key stored in keyring (DPAPI/keychain) for session duration; cleared on idle timeout; DPAPI is a session cache, not primary protection
+- Per-record: AES-256-GCM with ROWID-derived nonce; encrypt content fields only; metadata (timestamps, types) plaintext by design
+- Passphrase changes: re-wrap master key with new KEK only; zero record re-encryption; operationally free
 
-The vault is plain JSON files on disk. Users on sensitive hardware should use OS-level encryption (BitLocker on Windows, FileVault on Mac) in the interim.
-
-## Planned
-
-Ember-managed encryption — the system encrypts vault files at rest using a user-provided key or derived key. Must include a key recovery story: losing the key means losing the vault. This is an explicit tradeoff between security and recoverability.
+Current interim: BitLocker (Windows) / FileVault (Mac) covers vault at rest. Adequate for single-user single-device deployment.
 
 ---
 
@@ -2475,9 +2481,41 @@ Export vault to a portable format (zip of vault, or structured JSON export) for 
 
 User-facing document: what to do when things break.
 - Corrupt vector index → delete and rebuild
-- Failed embedding model load → reinstall sentence-transformers
+- Failed embedding model load → run `ollama pull nomic-embed-text`, then `python scripts/rebuild_indexes.py`
 - Lost API key → run scripts/set_api_key.py to generate new one
 - Bad ingestion → run scripts/audit_memory.py, suppress junk, rebuild indexes
 - Installer failed mid-install → retry from failed step
 
 Link from installer Done screen and UI settings panel.
+
+---
+
+# 41. Nature Layer
+
+**Status: Planned — v0.13.0**
+
+See ADR-016 for full design.
+
+Ember's constitution governs behavior. The nature layer governs identity. They are parallel external config files with parallel loaders. The distinction matters: constitution = what Ember does; nature = who she is.
+
+The nature block is injected into the context packet every turn, not the system prompt. This is a research-grounded architectural decision: static identity in the system prompt degrades by more than 30% by turn 8-12 due to attention dilution (PRISM, PERSIST). Context packet injection keeps nature tokens always recent.
+
+Initial nature document: config/nature.yaml, v0.1, thirteen facets. Loader: src/safety/nature_loader.py.
+
+---
+
+# 42. Vector Store Performance and Migration Path
+
+**Status: Documented — not a current bottleneck**
+
+At current scale (~17k records), the bottleneck is Ollama embedding generation, not SQLite vector search. Python UDF cosine similarity on normalized BLOBs is adequate.
+
+One free optimization regardless of scale: pre-normalize embeddings to unit length at write time. Cosine similarity then reduces to a dot product, halving per-row arithmetic. Zero schema changes required.
+
+Migration path by scale:
+- Less than 20k records: do nothing to the vector layer
+- 20k-50k records: add metadata pre-filter before similarity scan (WHERE tier != 'cold' AND memory_type IN (...)); reduces scan space by 80%+ with no library changes
+- 50k-100k records: migrate to sqlite-vec C extension -- same SQLite file, load extension, create vec0 virtual table, rewrite query. Sub-75ms at 100k records on 768-dim vectors from disk.
+- 500k+ records: evaluate LanceDB as dedicated embedding store alongside SQLite for application state
+
+DuckDB is not a candidate for this use case. Its columnar architecture is optimized for analytical batch queries, not low-latency per-query vector retrieval.

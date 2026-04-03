@@ -202,9 +202,9 @@ Step-by-step fixes for common Ember-2 problems. Start with the scenario that mat
    ```
    python scripts/set_api_key.py
    ```
-   This creates a new key and stores it in Credential Manager. Copy it immediately.
+   This creates a new key and stores it in Credential Manager.
 
-3. Update the key in your UI settings or `.env` if needed.
+3. Restart the API. The frontend receives the key via runtime injection from the backend — no manual `.env` editing required.
 
 ---
 

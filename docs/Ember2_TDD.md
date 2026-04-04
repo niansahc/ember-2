@@ -2618,3 +2618,49 @@ These are open design problems. Tier 2 and Tier 3 must be designed from first pr
 ## 44.4 Standard Benchmarks Do Not Apply
 
 The NIST AI RMF documentation should explicitly note why standard benchmarks do not apply to Ember and what the evaluation approach is instead. Functional automated metrics answer one question (is the system regressing?). Periodic human evaluation answers a different question (is the system serving the user well?). Neither substitutes for the other.
+
+---
+
+# 45. Identity Rules Layer
+
+**Status: Shipped v0.13.0.** See config/identity_rules.yaml and src/safety/identity_rules_loader.py.
+
+Ember's behavioral governance has three parallel config files:
+- config/constitution.yaml -- what Ember does (behavioral policy, post-generation review)
+- config/nature.yaml -- who Ember is (character, injected into context packet)
+- config/identity_rules.yaml -- how Ember holds identity under pressure (behavioral edge case rules, injected into system prompt)
+
+The identity rules file is a stable defensive layer -- four rules covering AI identity questions, preference questions, personality challenges, and closing question restraint. It is not a living document like nature.yaml. It is authored once and rarely changed.
+
+Research basis: Qwen2.5-7B is documented as "insensitive to all 162 personas tested" in persona prompting research. Descriptive character labels produce minimal effect. Behavioral rules for specific edge cases are required as a second layer. See ADR-016 amendment 2026-04-04.
+
+---
+
+# 46. Grounding Verification Layer
+
+**Status: Shipped v0.13.0.** See src/safety/grounding_check.py and ADR-019.
+
+A post-generation epistemic fidelity check, separate from constitutional review.
+
+Constitutional review asks: is this response behaviorally appropriate?
+Grounding check asks: is this response factually grounded in what was retrieved?
+
+The check runs after generation and before streaming for factual_recall, status_state, reflective, and web_search intent classes. It uses a second lightweight Ollama call (num_predict=50, temperature=0) to ask YES/NO: does the response contain factual claims about the user not present in retrieved context?
+
+If YES: revision pass runs. If NO: response streams immediately.
+
+Casual and social intent classes are exempt -- no personal factual claims at risk, no latency overhead.
+
+Research basis: Up to 57% of LLM citations are post-rationalized. Retrieval-side interventions cannot catch post-rationalization. A separate post-generation check is the only reliable mitigation. See ADR-019.
+
+---
+
+# 47. Buffer-Then-Stream Architecture
+
+**Status: Shipped v0.13.0.**
+
+For grounding-check-triggered intent classes, the streaming pipeline switches from stream=True to stream=False. Full response is buffered, grounding check runs, verified response is re-streamed word-by-word via existing SSE infrastructure.
+
+A typing indicator is emitted immediately so the user sees activity during buffering. Additional status events: "searching" when web search triggers, "verifying" when grounding check runs, "refining" if revision pass fires.
+
+Non-grounding intent classes (casual, activity, default) retain stream=True and existing fast streaming behavior. No latency overhead for casual queries.

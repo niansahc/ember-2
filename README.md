@@ -393,7 +393,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - Conversation quality eval with Claude as external evaluator
 - Model selection guide with real eval data (docs/model_guide.md)
 - Vault health audit (7 checks, GREEN/YELLOW/RED health score)
-- 485 pytest tests passing
+- 610 pytest tests passing
 
 > Note: Eval harness results reflect personal vault contents and are not generic benchmarks.
 
@@ -401,9 +401,9 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 
 **v0.11.0** — Cloud provider UI, OpenAI support, backup/export, recovery playbook, semantic safety triggers ✓
 **v0.12.0** — Task layer, session reflection, PIN lock, Mac/Linux installer, temporal awareness ✓
-**v0.13.0** — Memory tiering, embedding upgrade, vault encryption at rest, integrations (email, GitHub, health)
-**v0.14.0** — Offline knowledge (Kiwix ZIM, Project Gutenberg), calendar/notes ingestion, proactive mode
-**v0.15.0** — Agent orchestration, self-evaluation loops, deviation memory
+**v0.13.0** — Embedding upgrade (nomic-embed-text 768-dim), SQLite index migration, memory tiering (ADR-015), nature layer (ADR-016), grounding verification (ADR-019), intent-aware type gating (ADR-018), XML context sections, monthly reflection, JSON import, identity rules layer ✓
+**v0.14.0** — Vault encryption at rest, email IMAP ingestion, GitHub ingestion, Release Please automation
+**v0.15.0** — Agent orchestration, self-evaluation loops, deviation memory, Lodestone layer
 **Post-v0.15.0** — Multi-user vault isolation, full platform parity
 
 ---

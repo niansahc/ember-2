@@ -142,7 +142,13 @@ The nature layer conversation happened April 2-3, 2026. Thirteen facets establis
 
 Deep research sessions completed on: nomic-embed-text vs MiniLM embedding models, SQLite vector performance at scale, memory tiering signals (ACT-R, MemoryOS, Generative Agents critique), vault encryption key management (Cryptomator reference, envelope encryption), and persona stability in LLMs (PRISM, PERSIST, attention dilution).
 
-v0.13.0 scoped and planned. Embedding upgrade, memory tiering, index migration, nature layer, monthly reflection, JSON import, custom theme.
+v0.13.0 built April 3-4, 2026. The embedding model switched from sentence-transformers to nomic-embed-text via Ollama — 768-dimensional, batch embedding, full 17k record rebuild in 3 minutes. All four remaining JSON indexes migrated to SQLite. Memory tiering shipped with a composite heat score based on ACT-R cognitive architecture research, replacing arbitrary calendar thresholds.
+
+The nature layer went from ADR to running code: NatureLoader, config/nature.yaml, dual injection into system prompt and context packet. Manual testing revealed the nature document alone couldn't hold identity on qwen3:8b — identity rules (config/identity_rules.yaml) added as a second defensive layer with behavioral edge case rules.
+
+The biggest architectural decision in v0.13.0 was the grounding verification layer (ADR-019). Manual testing caught a hallucination cascade that the automated eval harness missed entirely — fabricated claims in early turns propagating as established fact across the conversation. The fix: a post-generation grounding check that verifies factual claims against retrieved vault context before streaming. This required switching from streaming to buffer-then-stream for factual queries, with a typing indicator to maintain UX responsiveness.
+
+610 tests. 19 ADRs. The system is getting serious.
 
 ---
 

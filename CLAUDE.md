@@ -195,9 +195,9 @@ Key API endpoints:
 
 ---
 
-## Current State (v0.12.0)
+## Current State (v0.13.0 in progress)
 
-All items from the original TDD §25 build order are complete through step 6. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support. Task layer, session reflection, commitment detection, and PIN lock shipped in v0.12.0.
+All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support. v0.13.0 adds embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring.
 
 **Core Systems:**
 - Append-only JSON vault with typed memory enforcement (`VALID_MEMORY_TYPES`, 17 types)
@@ -301,7 +301,7 @@ All items from the original TDD §25 build order are complete through step 6. Th
 - Electron 33 (upgraded from 28.3.3, unblocks Playwright e2e tests)
 
 **Tests:**
-- ember-2 backend: 485 pytest tests passing
+- ember-2 backend: 610 pytest tests passing
 - ember-2-ui: 40 Playwright e2e tests passing, 3 skipped
 - ember-2-installer: 12 Playwright e2e tests passing
 
@@ -385,7 +385,7 @@ When adding new npm dependencies:
 pytest tests/
 ```
 
-485 tests covering: constitution loader, policy service, review service, vault read/write, state layer, state extractor, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management, task layer, commitment detection, session reflection, PIN/passphrase service, soft-delete filtering, temporal awareness.
+610 tests covering: constitution loader, policy service, review service, vault read/write, state layer, state extractor, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management, task layer, commitment detection, session reflection, PIN/passphrase service, soft-delete filtering, temporal awareness, nature loader, identity rules loader, type gating, memory tiering, SQLite migration, grounding check, JSON import, SSE events, model filter, monthly reflection, index.html cache, manual eval.
 Tests do not mock the filesystem vault (real path via `PRIVATE_VAULT_PATH`). Integration tests hit real storage.
 
 When adding features: unit test normalizers, filters, ranking functions, and state resolution. Integration test full pipeline paths.

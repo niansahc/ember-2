@@ -42,6 +42,19 @@ class ContextRanker:
                     queryish_bonus += 0.03
                 score += queryish_bonus
 
+            # ADR-015: Tier scoring modifier.
+            # Profile bypasses tier scoring entirely.
+            tier = getattr(item, "tier", "hot") or "hot"
+            mem_type = getattr(item, "memory_type", "")
+
+            if mem_type == "profile":
+                pass  # profile bypasses tier scoring
+            elif tier == "cold":
+                score = 0.0
+            elif tier == "warm":
+                score *= 0.7
+            # hot: no change
+
             item.score = score
             adjusted.append(item)
 

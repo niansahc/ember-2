@@ -782,6 +782,50 @@ def remove_provider_key(provider: str):
         return {"status": "not_found", "provider": provider}
 
 
+# ── Tiering ───────────────────────────────────────────────────────────
+
+
+@app.post("/tiering/run")
+@limiter.limit("10/minute")
+def run_tiering(request: Request):
+    """Manual trigger for memory tiering (ADR-015). Returns transition counts."""
+    from src.tiering.tiering_service import TieringService
+    transitions = TieringService().run()
+    return {"status": "complete", "transitions": transitions}
+
+
+# ── Nightly tiering scheduler ─────────────────────────────────────────
+# Daemon thread fires TieringService.run() once at 00:05 daily.
+# Simple sleep loop — no new dependencies.
+
+import threading
+import time as _time
+
+
+def _nightly_tiering_loop():
+    """Sleep until 00:05, run tiering, repeat."""
+    while True:
+        now = datetime.now()
+        # Next 00:05
+        tomorrow = now.replace(hour=0, minute=5, second=0, microsecond=0)
+        if tomorrow <= now:
+            tomorrow = tomorrow.replace(day=tomorrow.day + 1)
+        sleep_seconds = (tomorrow - now).total_seconds()
+        _time.sleep(sleep_seconds)
+
+        try:
+            from src.tiering.tiering_service import TieringService
+            TieringService().run()
+        except Exception as exc:
+            logging.getLogger("ember.tiering").warning(
+                "[TIERING] Nightly run failed: %s", exc
+            )
+
+
+_tiering_thread = threading.Thread(target=_nightly_tiering_loop, daemon=True)
+_tiering_thread.start()
+
+
 # ── UI static file serving ─────────────────────────────────────────────
 # Serves the built Ember UI from ui/ if it exists.
 # Must be registered AFTER all API routes — acts as a fallback.

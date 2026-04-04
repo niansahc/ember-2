@@ -69,6 +69,7 @@ class SqliteVectorStore:
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._create_table()
+        self._migrate_tiering_columns()
         self._has_quality_column = self._check_column_exists("quality")
 
     # ------------------------------------------------------------------
@@ -194,6 +195,13 @@ class SqliteVectorStore:
             except (json.JSONDecodeError, TypeError):
                 metadata = {}
 
+            # Include tier if the column exists (ADR-015)
+            tier = "hot"
+            try:
+                tier = row["tier"] or "hot"
+            except (IndexError, KeyError):
+                pass
+
             results.append(
                 {
                     "content": row["text"],
@@ -201,6 +209,7 @@ class SqliteVectorStore:
                     "path": metadata.get("file_path"),
                     "memory_type": row["memory_type"],
                     "metadata": metadata,
+                    "tier": tier,
                 }
             )
 
@@ -222,6 +231,45 @@ class SqliteVectorStore:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _migrate_tiering_columns(self) -> None:
+        """Add tiering columns if they don't exist (ADR-015)."""
+        import sqlite3 as _sqlite3
+        for col_def in [
+            "ALTER TABLE vectors ADD COLUMN tier TEXT DEFAULT 'hot'",
+            "ALTER TABLE vectors ADD COLUMN last_retrieved_at TEXT",
+            "ALTER TABLE vectors ADD COLUMN retrieval_count INTEGER DEFAULT 0",
+            "ALTER TABLE vectors ADD COLUMN importance_score REAL DEFAULT 0.5",
+            "ALTER TABLE vectors ADD COLUMN heat_score REAL DEFAULT 1.0",
+        ]:
+            try:
+                self._conn.execute(col_def)
+            except _sqlite3.OperationalError:
+                pass  # column already exists
+        self._conn.commit()
+
+    def update_retrieval_stats(self, record_ids: list[str]) -> None:
+        """
+        Increment retrieval_count and set last_retrieved_at for selected records.
+
+        Called after final context packet assembly — only records that were
+        actually selected for the prompt get their stats updated.
+        """
+        if not record_ids:
+            return
+        from datetime import datetime
+        now = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        for record_id in record_ids:
+            self._conn.execute(
+                """
+                UPDATE vectors
+                SET retrieval_count = COALESCE(retrieval_count, 0) + 1,
+                    last_retrieved_at = ?
+                WHERE id = ?
+                """,
+                (now, record_id),
+            )
+        self._conn.commit()
 
     def _check_column_exists(self, column_name: str) -> bool:
         """Check if a column exists in the vectors table."""

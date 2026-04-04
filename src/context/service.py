@@ -96,6 +96,11 @@ class ContextService:
             for item in selected_memory:
                 print(f"[CTX] {item.item_type}: {item.content[:120]}")
 
+        # ADR-015: Update retrieval stats on selected records only.
+        # Only records that made it into the final context packet get
+        # their retrieval_count incremented and last_retrieved_at set.
+        self._update_retrieval_stats(selected_memory + selected_reflections)
+
         return self.formatter.format(
             user_message=user_message,
             memory_items=selected_memory,
@@ -105,6 +110,41 @@ class ContextService:
             web_items=web_items,
             image_data=image_data or [],
         )
+
+    def _update_retrieval_stats(self, items: list) -> None:
+        """
+        ADR-015: Update retrieval_count and last_retrieved_at for selected records.
+
+        Only called on records that made it into the final context packet.
+        Runs in a try/except so retrieval stat failures never crash context building.
+        """
+        try:
+            from src.retrieval.semantic_search import _get_memory_store, _get_sqlite_store
+
+            # Collect record IDs by store
+            memory_ids = []
+            ingested_ids = []
+
+            for item in items:
+                record_id = getattr(item, "id", "")
+                mem_type = getattr(item, "memory_type", "")
+                if not record_id:
+                    continue
+                if mem_type == "ingested":
+                    ingested_ids.append(record_id)
+                elif mem_type in {"conversation", "profile", "reflection", "journal"}:
+                    memory_ids.append(record_id)
+
+            memory_store = _get_memory_store()
+            if memory_store and memory_ids:
+                memory_store.update_retrieval_stats(memory_ids)
+
+            sqlite_store = _get_sqlite_store()
+            if sqlite_store and ingested_ids:
+                sqlite_store.update_retrieval_stats(ingested_ids)
+
+        except Exception:
+            pass  # retrieval stats are best-effort, never crash context building
 
     def _apply_type_gate(self, items: list, policy) -> list:
         """

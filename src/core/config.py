@@ -53,6 +53,26 @@ def get_ember_embed_model() -> str:
     return os.getenv("EMBER_EMBED_MODEL", "nomic-embed-text")
 
 
+def get_tier_recency_halflife_days() -> int:
+    """Halflife in days for recency decay in tiering (ADR-015)."""
+    return int(os.getenv("TIER_RECENCY_HALFLIFE_DAYS", "30"))
+
+
+def get_tier_access_ceiling() -> int:
+    """Retrieval count at which access_score saturates at 1.0 (ADR-015)."""
+    return int(os.getenv("TIER_ACCESS_CEILING", "10"))
+
+
+def get_tier_hot_threshold() -> float:
+    """Heat score >= this value = hot tier (ADR-015)."""
+    return float(os.getenv("TIER_HOT_THRESHOLD", "0.5"))
+
+
+def get_tier_warm_threshold() -> float:
+    """Heat score >= this value = warm tier; below = cold (ADR-015)."""
+    return float(os.getenv("TIER_WARM_THRESHOLD", "0.2"))
+
+
 def get_ember_vision_model() -> str | None:
     """
     Returns the Ollama vision model for image analysis, or None if not configured.

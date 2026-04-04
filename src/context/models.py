@@ -16,6 +16,9 @@ class ContextItem:
     timestamp: str | None = None
     tags: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    # ADR-015: Memory tier (hot/warm/cold). Defaults to "hot" for
+    # backward compatibility with items that predate tiering.
+    tier: str = "hot"
 
 
 @dataclass

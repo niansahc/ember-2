@@ -742,7 +742,9 @@ def write_state_endpoint(request: StateRequest):
 @app.get("/model")
 def get_model_endpoint():
     try:
-        available = [m["model"] for m in ollama.list()["models"]]
+        all_models = [m["model"] for m in ollama.list()["models"]]
+        # Filter out embedding models — not chat models, should not appear in selector
+        available = [m for m in all_models if not any(p in m.lower() for p in ("embed", "embedding"))]
     except Exception:
         available = []
     cloud = get_cloud_models()

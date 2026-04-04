@@ -749,11 +749,19 @@ At minimum, queries should be classified into:
 - research/reference
 - operational/debugging
 
+- general_knowledge (implicit) -- detected via relevance gate: if max raw semantic similarity across all candidates is below RETRIEVAL_MIN_RAW_SCORE (default 0.5) on the default policy, personal vault memory is suppressed and the model answers from its own knowledge. Profile records are exempt.
+
 Intent influences:
 
 - which memory classes are searched
 - weighting strategy
 - context packet composition
+
+## 13.8 Relevance Gate
+
+**Status: Shipped v0.13.0.**
+
+When no retrieved record is semantically relevant to the query (max raw cosine similarity below RETRIEVAL_MIN_RAW_SCORE, default 0.5), personal vault memory is suppressed for the default policy. The model answers from its own knowledge. This prevents vault coaching on general knowledge questions. Configurable via RETRIEVAL_MIN_RAW_SCORE in .env. Profile records bypass this gate -- identity queries always surface profile content.
 
 ## 13.4 Generic Retrieval Policy
 
@@ -1109,12 +1117,20 @@ Owns:
 - review result normalization
 - constitutional review metadata
 
-### State Service (Planned)
+### State Service (Complete)
 Owns:
 
 - current state writes
 - active state resolution
 - state query helpers
+
+### State Record Staleness (v0.13.0)
+
+StateResolver applies staleness filtering at resolution time. Records older than STATE_STALENESS_DAYS (default 7, configurable via .env) are excluded from the active state packet for next_action and open_loop categories. current_focus and active_project categories are exempt -- these are single-record categories where the latest record wins regardless of age.
+
+Rationale: next_action and open_loop records for completed or abandoned tasks remain unresolved in the vault because users do not explicitly resolve them. Without staleness filtering, old records contaminate the current state context and cause hallucination when the model embellishes noisy state with fabricated narrative.
+
+Known limitation: staleness threshold is a blunt instrument. A next_action created 8 days ago may still be current. Future improvement: user-facing state review UI that allows explicit resolution, and Supermemory-style temporal tagging that distinguishes one-time tasks from ongoing commitments.
 
 ### Task Service (Planned)
 Owns:

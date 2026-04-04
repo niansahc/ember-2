@@ -338,22 +338,42 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - Windows/Mac/Linux full parity across all features
 
 ## Watch Items
-- OpenJarvis Learning primitive — reference for self-evaluation loops (active at v0.15.0)
-- OpenClaw (github.com/openclaw/openclaw) — reference for SKILL.md integration format and proactive heartbeat pattern (Peter Steinberger, 2026)
-- PAI TELOS pattern — evaluate against constitution + profile memory during onboarding work
-- Multi-user vault isolation — post-v0.15.0 milestone
-- Eval harness uses user's own vault — results are personal, not generic benchmarks
-- "Memory in the Age of AI Agents" (arxiv.org/abs/2512.13564, Zhang et al., December 2025) — survey proposing factual/experiential/working memory taxonomy; relevant to Ember's memory class design and v0.13.0 tiering work
-- qwen3.5:9b with thinking mode disabled — timed out at 120s during eval due to thinking mode overhead; hardware-limited not model-limited; worth retesting on faster hardware or with /no_think flag
+
+**Active (research, not build):**
+- OpenJarvis Learning primitive (github.com/open-jarvis/OpenJarvis) -- reference for self-evaluation loops; active at v0.15.0
+- Supermemory dual-layer timestamping (2025) -- temporal reasoning SOTA; update/extends/derives tagging pattern; design implication for weekly reflection; post-v0.13.0
+- Memory-T1 (arXiv December 2025) -- RL-based temporal retrieval; watch for future temporal reasoning work
+- Kirk et al. socioaffective alignment (AIES 2025) -- requirements basis for ADR-017 Lodestone; active at v0.15.0
+- nomic-embed-text-v2-moe -- next generation embedding model; evaluate when available on Ollama
+- qwen3.5:9b with /no_think flag -- timed out at 120s in eval due to thinking mode overhead; worth retesting on faster hardware or with thinking disabled
+- Letta/MemGPT core memory pattern -- informed ADR-016 amendment (nature block as pinned core memory, conversation compression); not yet implemented as full pattern; active at v0.15.0
+- Grounding verification effectiveness -- ADR-019 shipped v0.13.0; longitudinal data needed to confirm real-world improvement; track via eval_history.md across versions
+- Identity rules effectiveness -- partial improvement in manual battery post-architecture; preference expression still partially deflecting; watch across more conversations before concluding model capability ceiling
+- State staleness threshold -- STATE_STALENESS_DAYS=7 implemented v0.13.0; Supermemory temporal tagging is the deeper architectural fix; monitor whether threshold is sufficient in practice
+- llama3.1:8b -- tested 5.4/10 automated eval, below competitive threshold; revisit with faster hardware or after architecture changes mature further
+
+**Graduated (researched and implemented):**
+- ~~nomic-embed-text~~ -- shipped v0.13.0
+- ~~CIMemories (ICLR 2026)~~ -- researched, implemented as ADR-018 intent-aware type gating
+- ~~MemX low-confidence rejection~~ -- researched, implemented as min_score floor in ADR-018
+- ~~Contextual integrity as retrieval policy~~ -- researched, implemented as ADR-018
+- ~~PAI TELOS pattern~~ -- evaluated, diverged into Lodestone (ADR-017); different design
+- ~~PRISM / PERSIST persona stability~~ -- researched, informed ADR-016 amendment (nature reminder injection, conversation summarization)
 
 ## Known Gaps (tracked)
-- Vault encryption at rest — v0.14.0
-- ~~Mac/Linux installer~~ — complete (v0.12.0, platform-aware prereqs, paths, and startup)
+- Vault encryption at rest — deferred to v0.14.0, architecture decided (five-layer envelope encryption, documented in GOVERNANCE.md)
+- ~~Mac/Linux installer~~ — complete (v0.12.0)
 - Tier 2 and Tier 3 evaluation — no standard methodology for periodic manual behavioral evaluation or longitudinal behavioral marker tracking in personal AI systems; open design problem; see TDD §44
+- Conversation summarization Ollama call — adds latency at turn 8+; monitor whether noticeable in practice; may need optimization
+- Template response collapse — qwen3:8b returns near-identical responses to semantically distinct emotional inputs; partial mitigation via identity rules and specificity forcing; model capability ceiling for some patterns; revisit with model swap
+- State record expiry UX — STATE_STALENESS_DAYS=7 filters old records from retrieval but no UI for users to review and resolve stale state records; users cannot easily see what state Ember holds
+- General knowledge routing — relevance gate (RETRIEVAL_MIN_RAW_SCORE=0.5) handles the case but a dedicated general_knowledge intent class would be more explicit; deferred
+- Eval test leakage into state — StateExtractor extracted eval test questions as real state records; X-Test-Session suppression exists but contaminated records already in vault required manual cleanup; consider a vault cleanup tool
 
 ## Known Issues
 - Installer Node.js prerequisite check exists but a user bypassed it somehow — needs investigation (Node IS in the prereqs screen, Next is disabled when missing)
-- qwen3:8b hallucination pattern: generates news-sounding content without web search when context is poor. Model limitation, not a code bug. classify_query() web search triggers investigated and confirmed clean. Cloud models do not exhibit this. Documented in eval_history.md.
+- State awareness hallucinations — model embellishes when state records are noisy or stale; partially addressed by STATE_STALENESS_DAYS filter; longitudinal monitoring needed
+- Preference expression partial deflection — identity rules reduced "I'm an AI" deflection but did not eliminate it; model capability ceiling on qwen3:8b for some identity questions
 - The API must be restarted after any backend code changes for them to take effect. Changes to task detection, prompt building, or any src/ file do not hot-reload in production mode. Run `./start_api.bat` or kill and restart uvicorn after deploying changes.
 
 ---

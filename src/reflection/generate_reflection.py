@@ -13,6 +13,7 @@ def generate_reflection(
     limit: int = 50,
     store: bool = True,
     cadence: str = "daily",
+    prompt_template: str | None = None,
 ):
     # backwards compat: single string wrapped in list
     if isinstance(memory_types, str):
@@ -67,9 +68,14 @@ def generate_reflection(
         }
 
     selected_texts = [item["text"] for item in selected]
-    combined_text = " | ".join(selected_texts)
 
-    summary = f"Recent themes: {combined_text[:1000]}"
+    if prompt_template:
+        # LLM synthesis path — format the template and call the model
+        summary = _llm_synthesize(selected, prompt_template, source_label)
+    else:
+        # Legacy concatenation path (daily/weekly)
+        combined_text = " | ".join(selected_texts)
+        summary = f"Recent themes: {combined_text[:1000]}"
 
     reflection = {
         "summary": summary,
@@ -91,6 +97,60 @@ def generate_reflection(
         )
 
     return reflection
+
+
+def _llm_synthesize(selected: list[dict], prompt_template: str, source_label: str) -> str:
+    """
+    Format selected records into the prompt template and call the LLM
+    for synthesis. Used by monthly reflection (ADR-016 prompt standards).
+
+    Records are shuffled to counteract recency bias before formatting.
+    """
+    import random
+    import ollama
+    from src.core.config import get_ember_model
+
+    # Shuffle to counteract recency bias (CLAUDE.md prompt writing standards)
+    shuffled = list(selected)
+    random.shuffle(shuffled)
+
+    # Format records for the prompt
+    record_lines = []
+    for item in shuffled:
+        source = item.get("source", "unknown")
+        timestamp = item.get("timestamp", "")
+        text = item["text"]
+        record_lines.append(f"[{source} | {timestamp}] {text}")
+
+    records_text = "\n\n".join(record_lines)
+
+    # Compute window dates
+    timestamps = [item.get("timestamp", "") for item in selected if item.get("timestamp")]
+    sorted_ts = sorted(timestamps)
+    window_start = sorted_ts[0][:10] if sorted_ts else "unknown"
+    window_end = sorted_ts[-1][:10] if sorted_ts else "unknown"
+
+    # Format the prompt
+    prompt = prompt_template.format(
+        record_count=len(selected),
+        window_start=window_start,
+        window_end=window_end,
+        source_types=source_label,
+        records=records_text,
+    )
+
+    # Call the LLM
+    try:
+        response = ollama.chat(
+            model=get_ember_model(),
+            messages=[{"role": "user", "content": prompt}],
+            options={"temperature": 0.4, "num_predict": 800},
+        )
+        return response["message"]["content"].strip()
+    except Exception as exc:
+        # Fallback to concatenation if LLM fails
+        combined = " | ".join(item["text"] for item in selected)
+        return f"Monthly synthesis failed ({exc}). Records: {combined[:800]}"
 
 
 def _select_diverse_candidates(

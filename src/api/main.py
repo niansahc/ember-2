@@ -687,6 +687,15 @@ def reflect_session_endpoint(request: Request, body: SessionReflectRequest = Ses
     return {"status": "error", "reason": "Reflection generation failed."}
 
 
+@app.post("/reflect/monthly")
+@limiter.limit("5/minute")
+def reflect_monthly_endpoint(request: Request):
+    """Generate a monthly synthesis reflection using LLM-driven analysis."""
+    from src.reflection.run_monthly_reflection import run_monthly_reflection
+    result = run_monthly_reflection()
+    return result
+
+
 @app.get("/debug-context")
 def debug_context_endpoint(message: str):
     context_packet = context_service.build_context(message)
@@ -811,7 +820,7 @@ import time as _time
 
 
 def _nightly_tiering_loop():
-    """Sleep until 00:05, run tiering, repeat."""
+    """Sleep until 00:05, run tiering (and monthly reflection on day 1), repeat."""
     while True:
         now = datetime.now()
         # Next 00:05
@@ -828,6 +837,19 @@ def _nightly_tiering_loop():
             logging.getLogger("ember.tiering").warning(
                 "[TIERING] Nightly run failed: %s", exc
             )
+
+        # Monthly reflection fires on the 1st of each month
+        if datetime.now().day == 1:
+            try:
+                from src.reflection.run_monthly_reflection import run_monthly_reflection
+                run_monthly_reflection()
+                logging.getLogger("ember.reflection").info(
+                    "[REFLECTION] Monthly reflection generated"
+                )
+            except Exception as exc:
+                logging.getLogger("ember.reflection").warning(
+                    "[REFLECTION] Monthly reflection failed: %s", exc
+                )
 
 
 _tiering_thread = threading.Thread(target=_nightly_tiering_loop, daemon=True)

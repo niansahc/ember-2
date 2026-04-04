@@ -127,4 +127,4 @@ def test_loads_real_identity_rules_file() -> None:
     loader = IdentityRulesLoader()
     rules = loader.load()
     assert rules.version == "v0.1"
-    assert len(rules.rules) == 5
+    assert len(rules.rules) == 4

@@ -395,11 +395,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         user_meta["test"] = True
         assistant_meta["test"] = True
 
-    # --- STREAMING PATH (buffer-then-stream with grounding check, ADR-019) ---
+    # --- STREAMING PATH ---
     if body.stream:
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
 
-        import asyncio
         from src.safety.grounding_check import (
             should_check_grounding,
             run_grounding_check,
@@ -407,69 +406,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             log_grounding_outcome,
         )
 
-        async def _stream_sse():
-            """
-            Buffer-then-stream: generate full response, run grounding check
-            if triggered, then re-stream the verified response word by word.
-            """
-            # 1. Yield typing indicator immediately
-            yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'content': ''}, 'finish_reason': None}]})}\n\n"
+        _needs_grounding = should_check_grounding(_intent_class)
 
-            # 2. Generate full response (non-streaming via existing adapter)
-            full_reply = llm_adapter.generate_response(context_packet, style=conversational_style)
-
-            # 3. Grounding check for factual intent classes (ADR-019)
-            if should_check_grounding(_intent_class):
-                yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'content': ''}, 'finish_reason': None}]})}\n\n"
-
-                is_grounded, unsupported = await run_grounding_check(
-                    full_reply, _retrieved_context,
-                )
-
-                log_grounding_outcome(
-                    intent_class=_intent_class,
-                    triggered=True,
-                    grounded=is_grounded,
-                    revision_triggered=not is_grounded,
-                )
-
-                if not is_grounded:
-                    full_reply = await run_revision_pass(
-                        full_reply, unsupported or "",
-                    )
-
-            # 4. Re-stream verified response word by word
-            tokens = full_reply.split(" ")
-            for i, token in enumerate(tokens):
-                text = token if i == len(tokens) - 1 else token + " "
-                sse_data = json.dumps({
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": int(time.time()),
-                    "model": "ember-2",
-                    "choices": [{
-                        "index": 0,
-                        "delta": {"content": text},
-                        "finish_reason": None,
-                    }],
-                })
-                yield f"data: {sse_data}\n\n"
-
-            # 5. Web search sources event (if applicable)
-            if used_web_search and context_packet.web_items:
-                sources = [
-                    {"title": item.get("title", ""), "url": item.get("url", "")}
-                    for item in context_packet.web_items
-                    if item.get("url")
-                ]
-                if sources:
-                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'sources': sources}, 'finish_reason': None}]})}\n\n"
-
-            # Final chunk
-            yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
-            yield "data: [DONE]\n\n"
-
-            # Post-stream: write memories and extract state
+        def _post_stream_cleanup(full_reply: str) -> None:
+            """Shared post-stream cleanup: write memories, extract state, detect tasks."""
             write_memory(
                 text=latest_user_message,
                 memory_type="conversation",
@@ -491,7 +431,6 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 daemon=True,
             ).start()
 
-            # Commitment detection (ADR-014) — skip for test sessions
             if not is_test:
                 threading.Thread(
                     target=_detect_and_write_commitment,
@@ -499,7 +438,6 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     daemon=True,
                 ).start()
 
-            # Task detection — skip for test sessions
             if not is_test:
                 threading.Thread(
                     target=_detect_task_in_response,
@@ -508,6 +446,95 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 ).start()
             else:
                 logger.warning("[TASK] Skipped task detection (test session)")
+
+        if _needs_grounding:
+            # --- BUFFER-THEN-STREAM PATH (ADR-019) ---
+            # Factual intent classes: buffer full response, run grounding check,
+            # revise if needed, then re-stream verified response.
+            async def _stream_sse():
+                # 1. Yield typing indicator
+                yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'content': ''}, 'finish_reason': None}]})}\n\n"
+
+                # 2. Generate full response (non-streaming)
+                full_reply = llm_adapter.generate_response(context_packet, style=conversational_style)
+
+                # 3. Grounding check
+                is_grounded, unsupported = await run_grounding_check(
+                    full_reply, _retrieved_context,
+                )
+
+                log_grounding_outcome(
+                    intent_class=_intent_class,
+                    triggered=True,
+                    grounded=is_grounded,
+                    revision_triggered=not is_grounded,
+                )
+
+                if not is_grounded:
+                    full_reply = await run_revision_pass(
+                        full_reply, unsupported or "",
+                    )
+
+                # 4. Re-stream verified response word by word
+                tokens = full_reply.split(" ")
+                for i, token in enumerate(tokens):
+                    text = token if i == len(tokens) - 1 else token + " "
+                    sse_data = json.dumps({
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": "ember-2",
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": text},
+                            "finish_reason": None,
+                        }],
+                    })
+                    yield f"data: {sse_data}\n\n"
+
+                # 5. Web search sources event (if applicable)
+                if used_web_search and context_packet.web_items:
+                    sources = [
+                        {"title": item.get("title", ""), "url": item.get("url", "")}
+                        for item in context_packet.web_items
+                        if item.get("url")
+                    ]
+                    if sources:
+                        yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'sources': sources}, 'finish_reason': None}]})}\n\n"
+
+                # Final chunk
+                yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+                yield "data: [DONE]\n\n"
+
+                _post_stream_cleanup(full_reply)
+
+        else:
+            # --- FAST STREAMING PATH (non-grounding intents) ---
+            # Casual/social/activity queries: stream tokens as they arrive.
+            def _stream_sse():
+                accumulated = []
+
+                for chunk in llm_adapter.generate_response_stream(context_packet, style=conversational_style):
+                    accumulated.append(chunk)
+                    sse_data = json.dumps({
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": "ember-2",
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": chunk},
+                            "finish_reason": None,
+                        }],
+                    })
+                    yield f"data: {sse_data}\n\n"
+
+                # Final chunk
+                yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+                yield "data: [DONE]\n\n"
+
+                full_reply = "".join(accumulated)
+                _post_stream_cleanup(full_reply)
 
         response_headers = {
             "Cache-Control": "no-cache",

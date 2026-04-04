@@ -1,6 +1,6 @@
 # ADR-016: Nature Layer -- Ember's Baseline Self
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-04-03
 **Version:** v0.13.0
 

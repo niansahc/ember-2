@@ -1,6 +1,6 @@
 # ADR-015: Memory Tiering
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-04-02
 **Version:** v0.13.0
 

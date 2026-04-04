@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.13.0 — 2026-04-04
+
+### Embedding & Retrieval
+- nomic-embed-text embedding upgrade (768-dim, replacing all-MiniLM-L6-v2 384-dim) — full 17k record rebuild in 3 minutes via batch embedding
+- SQLite index migration — conversation, profile, reflection, journal indexes migrated from JSON to SQLite (memory.db)
+- Intent-aware memory type gating (ADR-018) — eligible_memory_types and suppress_memory_types on ContextPolicy, consistent min_score floor
+- Relevance gate for default policy — suppress vault memory when max raw cosine similarity < 0.5; prevents general knowledge queries from getting vault-based coaching
+
+### Memory Tiering
+- Hot/warm/cold memory tiering (ADR-015) — composite heat score (recency × 0.5 + access × 0.3 + importance × 0.2), nightly TieringService, POST /tiering/run manual trigger
+- StateResolver staleness filtering — next_action/open_loop records older than STATE_STALENESS_DAYS (default 7) excluded from active state
+
+### Identity & Governance
+- Nature layer (ADR-016) — config/nature.yaml v0.1 with 13 facets, NatureLoader, dual injection (system prompt + context packet)
+- Constitution v0.3 — removed authentic_expression (moved to nature layer), added relational_honesty, reordered for primacy/recency salience
+- Identity rules layer (ADR-016 amendment) — config/identity_rules.yaml, behavioral edge case rules for identity pressure situations
+- XML context sections — vault_memory, current_state, conversation_history, web_search_results, authority_rules tags for qwen3:8b structure tracking
+
+### Grounding & Safety
+- Grounding verification layer (ADR-019) — post-generation epistemic fidelity check, intent-class triggered, revision pass for unsupported claims
+- Buffer-then-stream pipeline — factual intent classes buffer full response for grounding check, then re-stream; casual queries use fast streaming
+- SSE status events — searching, verifying, refining activity signals for UI
+- Inline web search source URLs — emitted as SSE event for UI citation display
+
+### Reflection & Import
+- Monthly reflection cadence — LLM-driven synthesis via prompts/monthly_reflection.txt, McAdams narrative identity framework, scheduler on day 1 at 00:05
+- Generic JSON import — POST /ingest/json endpoint, .json file upload support
+
+### Infrastructure
+- API key runtime injection — backend injects window.__EMBER_API_KEY__ into served index.html; eliminates build-time dependency
+- index.html cache invalidation on mtime change — UI rebuilds take effect without API restart
+- PIN endpoint defensive error handling — never 500 on keyring backend issues
+- Embedding model filter — nomic-embed-text hidden from model selector
+- Nature reminder injection at turn 8+ — places nature tokens in recency position
+- Conversation buffer summarization at turn 8+ — prevents cascade and attention dilution
+- Interactive manual eval CLI (tools/eval_manual.py) — 19-question sequential battery
+- --model parameter for eval_conversations.py
+
+### Bug Fixes
+- Memory grounding regression — removed memory_gap identity rule that fired even when vault memory was present
+- State awareness contamination — eval test questions leaked into vault state via auto-extraction; X-Test-Session now suppresses state extraction on all paths
+- Conditional streaming — buffer-then-stream only for grounding check intents; fast stream for casual queries
+
+### Tests
+621 pytest passing (up from 485 at v0.12.0)
+
 ## v0.12.0 — 2026-04-02
 
 ### State and Memory

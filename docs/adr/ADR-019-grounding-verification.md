@@ -1,6 +1,6 @@
 # ADR-019: Grounding Verification Layer
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-04-04
 **Version:** v0.13.0
 

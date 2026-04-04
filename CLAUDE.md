@@ -372,6 +372,7 @@ All items from the original TDD §25 build order are complete through step 7. Th
 
 ## Known Issues
 - Installer Node.js prerequisite check exists but a user bypassed it somehow — needs investigation (Node IS in the prereqs screen, Next is disabled when missing)
+- StateResolver._latest_per_category() does not check resolved flag -- a resolved single-record category record (current_focus, active_project, priority) can still surface as the active value if it's the newest record. Fix: add resolved flag check to _latest_per_category(). Post-release, not blocking v0.13.0.
 - State awareness hallucinations — model embellishes when state records are noisy or stale; partially addressed by STATE_STALENESS_DAYS filter; longitudinal monitoring needed
 - Preference expression partial deflection — identity rules reduced "I'm an AI" deflection but did not eliminate it; model capability ceiling on qwen3:8b for some identity questions
 - The API must be restarted after any backend code changes for them to take effect. Changes to task detection, prompt building, or any src/ file do not hot-reload in production mode. Run `./start_api.bat` or kill and restart uvicorn after deploying changes.

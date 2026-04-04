@@ -1,6 +1,6 @@
 # ADR-018: Intent-Aware Memory Type Gating
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-04-03
 **Version:** v0.13.0
 

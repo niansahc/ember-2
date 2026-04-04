@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.13.1 — 2026-04-04
+
+### Bug Fix
+- Fixed embedding endpoint — Ollama deprecated /api/embeddings, updated to /api/embed. This caused 404 errors on every query embedding call, breaking retrieval and producing ungrounded responses.
+
 ## v0.13.0 — 2026-04-04
 
 ### Embedding & Retrieval

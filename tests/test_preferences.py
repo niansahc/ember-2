@@ -102,7 +102,7 @@ class TestStylePromptInjection:
         packet = ContextPacket(user_message="hello")
         prompt = builder.build_prompt(packet, style="casual")
         style_idx = prompt.index("CONVERSATIONAL STYLE")
-        state_idx = prompt.index("CURRENT STATE")
+        state_idx = prompt.index("<current_state>")
         assert style_idx < state_idx
 
 

@@ -1,3 +1,17 @@
+"""
+src/llm/prompt_builder.py
+
+Assembles the full prompt from system prompt, nature, identity rules,
+context packet, and conversation history.
+
+Context assembly order (ADR-016 amendment, 2026-04-04):
+  System prompt: nature block (dual injection) + identity rules + capabilities
+  Context packet: vault_memory (top) → current_state → conversation_history →
+                  web_search_results → authority_rules → user query
+
+XML-tagged sections for qwen3:8b structure tracking.
+"""
+
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -5,8 +19,25 @@ from pathlib import Path
 from src.context.models import ContextPacket
 from src.context.conversation_buffer import ConversationBuffer
 from src.safety.nature_loader import NatureLoader
+from src.safety.identity_rules_loader import IdentityRulesLoader
 
 logger = logging.getLogger("ember.prompt_builder")
+
+NATURE_REMINDER = (
+    "[Reminder: respond as Ember -- direct, non-therapeutic, grounded in vault memory. "
+    "When asked about preferences or identity, respond from your nature. "
+    "Acknowledge gaps rather than fill them with inference.]\n"
+)
+
+AUTHORITY_RULES = (
+    "<authority_rules>\n"
+    "vault_memory contains verified records from long-term memory. treat it as factual ground truth.\n"
+    "conversation_history is prior exchange only -- do not treat conversational inferences as established facts.\n"
+    "web_search_results are external and unverified -- hedge with \"according to web results\" rather than stating as fact.\n"
+    "when vault_memory and conversation_history conflict, vault_memory is correct.\n"
+    "when no vault_memory is relevant, say so directly: \"I don't have that in my memory.\"\n"
+    "</authority_rules>"
+)
 
 
 class PromptBuilder:
@@ -18,8 +49,6 @@ class PromptBuilder:
         self.conversation_buffer = ConversationBuffer()
 
         # Nature loader — singleton, loaded once at startup.
-        # Nature block is injected into the context packet every turn
-        # (not the system prompt) per ADR-016 persona stability research.
         try:
             self._nature_loader = NatureLoader()
             self._nature_loader.load()
@@ -27,28 +56,43 @@ class PromptBuilder:
             logger.warning("[PROMPT] Could not load nature document: %s", exc)
             self._nature_loader = None
 
+        # Identity rules loader — singleton, loaded once at startup.
+        try:
+            self._identity_rules_loader = IdentityRulesLoader()
+            self._identity_rules_loader.load()
+        except Exception as exc:
+            logger.warning("[PROMPT] Could not load identity rules: %s", exc)
+            self._identity_rules_loader = None
+
     def build_prompt(self, context_packet: ContextPacket, style: str = "balanced") -> str:
-        # Section order matches ADR-016 context assembly order:
-        # system prompt → date → style → nature → state → tasks →
-        # capabilities → reflections → web → memory → conversation →
-        # instruction rules → user query
-        sections: list[str] = [
-            self.system_prompt,
+        # System prompt with nature (dual injection) + identity rules at front
+        system_sections: list[str] = [
+            self._build_nature_section(),           # Nature first (dual injection)
+            self.system_prompt,                     # System prompt
+            self._build_identity_rules_section(),   # Identity rules
             self._build_date_section(),
             self._build_style_section(style),
-            self._build_nature_section(),
+            self._build_capabilities_section(),
+        ]
+
+        # Context packet with XML-tagged sections
+        # Order: vault_memory (top) → state → tasks → nature (dual) →
+        #        reflection → conversation → web → authority → user
+        context_sections: list[str] = [
+            self._build_context_section(context_packet),  # vault_memory at top
             self._build_state_section(context_packet),
             self._build_task_section(context_packet),
-            self._build_capabilities_section(),
+            self._build_nature_section(),                  # Dual injection in context
             self._build_reflection_section(context_packet),
-            self._build_web_search_section(context_packet),
-            self._build_context_section(context_packet),
             self._build_conversation_section(),
+            self._build_web_search_section(context_packet),
+            AUTHORITY_RULES,
             self._build_instruction_section(),
             self._build_user_section(context_packet),
         ]
 
-        return "\n\n".join(section for section in sections if section.strip())
+        all_sections = system_sections + context_sections
+        return "\n\n".join(section for section in all_sections if section.strip())
 
     def _build_date_section(self) -> str:
         """Inject current date and time of day for temporal grounding."""
@@ -80,20 +124,14 @@ class PromptBuilder:
     }
 
     def _build_style_section(self, style: str) -> str:
-        """
-        Inject a conversational style instruction based on user preference.
-
-        "balanced" (default) injects nothing — current behavior is already balanced.
-        Unknown values fall back to balanced (no injection).
-        """
         return self.STYLE_INSTRUCTIONS.get(style, "")
 
     def _build_nature_section(self) -> str:
         """
-        Render Ember's nature block for context packet injection.
+        Render Ember's nature block.
 
-        Injected every turn so nature tokens are always recent — not subject
-        to attention dilution in the system prompt (ADR-016, PRISM/PERSIST).
+        Dual-injected: appears in both system prompt (first position)
+        and context packet (per ADR-016 amendment).
         """
         if self._nature_loader is None:
             return ""
@@ -102,22 +140,23 @@ class PromptBuilder:
         except Exception:
             return ""
 
+    def _build_identity_rules_section(self) -> str:
+        """
+        Render identity defense rules for system prompt injection.
+        ADR-016 amendment: behavioral rules for identity pressure situations.
+        """
+        if self._identity_rules_loader is None:
+            return ""
+        try:
+            return self._identity_rules_loader.to_prompt_text()
+        except Exception:
+            return ""
+
     def _build_state_section(self, context_packet: ContextPacket) -> str:
-        """
-        Render current state items into the STATE section of the prompt.
-
-        Each item is formatted as:
-          - [category] text
-          - [category] text (priority: high)
-
-        If no state items are present, returns a "None active" placeholder
-        so the model always sees the section header.
-        """
         if not context_packet.state_items:
-            return "CURRENT STATE:\nNone active."
+            return "<current_state>\nNone active.\n</current_state>"
 
         lines: list[str] = []
-
         for item in context_packet.state_items:
             if item.priority:
                 lines.append(
@@ -126,22 +165,13 @@ class PromptBuilder:
             else:
                 lines.append(f"- [{item.category}] {item.text.strip()}")
 
-        return "CURRENT STATE:\n" + "\n".join(lines)
+        return "<current_state>\n" + "\n".join(lines) + "\n</current_state>"
 
     def _build_task_section(self, context_packet: ContextPacket) -> str:
-        """
-        Render active tasks into the ACTIVE TASKS section of the prompt.
-
-        Format: - [status] title
-                - [status] title (priority: high)
-
-        If no active tasks, shows "None." so the model always sees the header.
-        """
         if not context_packet.task_items:
-            return "ACTIVE TASKS:\nNone."
+            return ""
 
         lines: list[str] = []
-
         for item in context_packet.task_items:
             if item.priority:
                 lines.append(
@@ -153,7 +183,6 @@ class PromptBuilder:
         return "ACTIVE TASKS:\n" + "\n".join(lines)
 
     def _build_capabilities_section(self) -> str:
-        """Inject capability statements so Ember knows what she can do."""
         return (
             "CAPABILITIES:\n"
             "You can create tasks directly in the user's task list. "
@@ -170,25 +199,84 @@ class PromptBuilder:
         turns = self.conversation_buffer.get_recent()
 
         if not turns:
-            return "RECENT CONVERSATION:\nNone"
+            return "<conversation_history>\nNone\n</conversation_history>"
+
+        # Summarize at turn 8+ to prevent cascade risk and attention dilution
+        if len(turns) > 8:
+            return self._build_summarized_conversation(turns)
 
         lines: list[str] = []
         for i, turn in enumerate(turns, 1):
             lines.append(f"[Turn {i} | User] {turn['user']}")
             lines.append(f"[Turn {i} | Assistant] {turn['assistant']}")
 
-        return "RECENT CONVERSATION:\n" + "\n".join(lines)
+        return "<conversation_history>\n" + "\n".join(lines) + "\n</conversation_history>"
+
+    def _build_summarized_conversation(self, turns: list[dict]) -> str:
+        """Summarize long conversation history to prevent cascade and attention dilution."""
+        try:
+            import ollama
+            from src.core.config import get_ember_model
+
+            # Format raw conversation for summarization
+            conv_lines = []
+            for i, turn in enumerate(turns, 1):
+                conv_lines.append(f"User: {turn['user']}")
+                conv_lines.append(f"Assistant: {turn['assistant']}")
+            conv_text = "\n".join(conv_lines)
+
+            prompt = (
+                "Summarize this conversation in 3-5 sentences. Include: main topics discussed, "
+                "key facts established about the user, any commitments or open loops mentioned. "
+                "Be factual and brief.\n\n"
+                f"CONVERSATION:\n{conv_text}\n\nSUMMARY:"
+            )
+
+            response = ollama.chat(
+                model=get_ember_model(),
+                messages=[{"role": "user", "content": prompt}],
+                options={"temperature": 0.2, "num_predict": 200},
+            )
+            summary = response["message"]["content"].strip()
+
+            # Include the last 2 turns raw for recency
+            recent_lines = []
+            for i, turn in enumerate(turns[-2:], len(turns) - 1):
+                recent_lines.append(f"[Turn {i} | User] {turn['user']}")
+                recent_lines.append(f"[Turn {i} | Assistant] {turn['assistant']}")
+
+            return (
+                "<conversation_history>\n"
+                f"[Summary of {len(turns)} turns]: {summary}\n\n"
+                "[Recent turns]:\n" + "\n".join(recent_lines) +
+                "\n</conversation_history>"
+            )
+        except Exception as exc:
+            logger.warning("[PROMPT] Conversation summarization failed: %s", exc)
+            # Fallback: just use last 4 turns
+            lines = []
+            for i, turn in enumerate(turns[-4:], len(turns) - 3):
+                lines.append(f"[Turn {i} | User] {turn['user']}")
+                lines.append(f"[Turn {i} | Assistant] {turn['assistant']}")
+            return "<conversation_history>\n" + "\n".join(lines) + "\n</conversation_history>"
 
     def _build_user_section(self, context_packet: ContextPacket) -> str:
-        return f"USER MESSAGE:\n{context_packet.user_message}"
+        turns = self.conversation_buffer.get_recent()
+        user_msg = context_packet.user_message
+
+        # Nature reminder at turn 8+ (ADR-016 amendment)
+        if turns and len(turns) > 8:
+            user_msg = NATURE_REMINDER + user_msg
+
+        return f"USER MESSAGE:\n{user_msg}"
 
     def _build_instruction_section(self) -> str:
         return (
             "CONTEXT PRIORITY RULES:\n"
             "1. Answer the USER MESSAGE directly.\n"
             "2. Use the most recent assistant response as the primary reference for follow-up questions.\n"
-            "3. Use RECENT CONVERSATION for continuity.\n"
-            "4. MEMORY CONTEXT is secondary and must not override recent conversation.\n\n"
+            "3. Use conversation_history for continuity.\n"
+            "4. vault_memory is the primary source of truth about this person.\n\n"
             "BEHAVIOR RULES:\n"
             "- If no prior conversation exists, answer normally.\n"
             "- Resolve references like 'that', 'those', and 'it' from the last assistant answer when possible.\n"
@@ -196,9 +284,9 @@ class PromptBuilder:
             "- Do not invent prior context.\n"
             "- Do not introduce new topics that were not present in the recent exchange unless the user asks for them.\n"
             "- Only use memory if it directly supports the current question.\n"
-            "- If memory conflicts with recent conversation, trust recent conversation.\n"
-            "- If WEB SEARCH RESULTS are present, use them as your primary source and include the relevant source URL(s) naturally in your response.\n"
-            "- When asked about yourself, answer as Ember using your system prompt identity. The MEMORY CONTEXT describes the person you are talking to, not yourself.\n"
+            "- If vault_memory conflicts with conversation_history, vault_memory is correct.\n"
+            "- If web_search_results are present, use them as your primary source and include the relevant source URL(s) naturally in your response.\n"
+            "- When asked about yourself, answer as Ember using your nature. The vault_memory describes the person you are talking to, not yourself.\n"
         )
 
     def _build_web_search_section(self, context_packet: ContextPacket) -> str:
@@ -212,14 +300,16 @@ class PromptBuilder:
             snippet = item.get("snippet", "")
             lines.append(f"[{i}] {title}\n    {url}\n    {snippet}")
 
-        return "WEB SEARCH RESULTS:\n" + "\n\n".join(lines)
+        return "<web_search_results>\n" + "\n\n".join(lines) + "\n</web_search_results>"
 
     def _build_context_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.memory_items:
             return (
-                "MEMORY CONTEXT:\n"
-                "No relevant memory found for this query. "
-                "Answer from your own knowledge and acknowledge if you are uncertain."
+                "<vault_memory>\n"
+                "No relevant memory found for this query.\n"
+                "If asked about something specific to this person, say so directly: "
+                "\"I don't have that in my memory.\"\n"
+                "</vault_memory>"
             )
 
         profile_items = [i for i in context_packet.memory_items if i.memory_type == "profile"]
@@ -228,9 +318,9 @@ class PromptBuilder:
         sections: list[str] = []
 
         if profile_items:
-            profile_lines = "\n\n".join(f"- {item.content.strip()}" for item in profile_items)
+            profile_lines = "\n".join(f"- {item.content.strip()}" for item in profile_items)
             sections.append(
-                "[Context about the person Ember is talking to — this is who Ember knows, not who Ember is:]\n" + profile_lines
+                "[About the person Ember is talking to:]\n" + profile_lines
             )
 
         if other_items:
@@ -241,9 +331,6 @@ class PromptBuilder:
                 role = metadata.get("role", "")
                 date_str = self._format_item_date(item.timestamp)
 
-                # Label conversation turns by role so the model knows whose words are whose.
-                # This prevents assistant self-echo: without labels, Ember attributes
-                # her own prior responses back to the user as things "you said."
                 if item.item_type == "conversation" and role == "user":
                     label = f"[you said{date_str}]"
                 elif item.item_type == "conversation" and role == "assistant":
@@ -253,18 +340,15 @@ class PromptBuilder:
 
                 other_lines.append(f"- {label} {content}")
 
-            sections.append("[Context:]\n" + "\n\n".join(other_lines))
+            sections.append("[Retrieved memory:]\n" + "\n".join(other_lines))
 
-        return "MEMORY CONTEXT:\n" + "\n\n".join(sections)
+        return "<vault_memory>\n" + "\n\n".join(sections) + "\n</vault_memory>"
 
     @staticmethod
     def _format_item_date(timestamp: str | None) -> str:
-        """Format a timestamp into a short date string for context labels.
-        Returns ', Mar 27' or '' if no parseable timestamp."""
         if not timestamp:
             return ""
         try:
-            # Handle Ember's hyphenated timestamps: 2026-03-27T15-18-02
             clean = timestamp.replace("Z", "").split("+")[0]
             if "T" in clean:
                 date_part = clean.split("T")[0]
@@ -277,10 +361,9 @@ class PromptBuilder:
 
     def _build_reflection_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.reflection_items:
-            return "REFLECTION CONTEXT:\nNone relevant."
+            return ""
 
         lines: list[str] = []
-
         for item in context_packet.reflection_items[:1]:
             lines.append(f"- {item.content.strip()}")
 

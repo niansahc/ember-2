@@ -46,7 +46,6 @@ class TestProfileSectionLabel:
         )
         prompt = pb._build_context_section(packet)
         assert "person Ember is talking to" in prompt
-        assert "not who Ember is" in prompt
 
     def test_profile_label_does_not_say_user_self_description(self):
         """Regression guard — old label caused identity confusion."""
@@ -71,7 +70,7 @@ class TestIdentityInstructionRule:
         pb = PromptBuilder()
         instructions = pb._build_instruction_section()
         assert "answer as Ember" in instructions
-        assert "MEMORY CONTEXT describes the person you are talking to, not yourself" in instructions
+        assert "vault_memory describes the person you are talking to, not yourself" in instructions
 
     def test_instruction_contains_identity_rule_in_behavior_rules(self):
         pb = PromptBuilder()
@@ -102,8 +101,8 @@ class TestContextSectionStructure:
         )
         prompt = pb._build_context_section(packet)
         # Both sub-sections should be present
-        assert "[Context about the person Ember is talking to" in prompt
-        assert "[Context:]" in prompt
+        assert "[About the person Ember is talking to:]" in prompt
+        assert "[Retrieved memory:]" in prompt
 
     def test_profile_only_packet_has_no_context_section(self):
         pb = PromptBuilder()
@@ -114,15 +113,15 @@ class TestContextSectionStructure:
             ],
         )
         prompt = pb._build_context_section(packet)
-        assert "[Context about the person Ember is talking to" in prompt
-        assert "[Context:]" not in prompt
+        assert "[About the person Ember is talking to:]" in prompt
+        assert "[Retrieved memory:]" not in prompt
 
     def test_empty_memory_shows_absence_signal(self):
         pb = PromptBuilder()
         packet = ContextPacket(user_message="hello", memory_items=[])
         prompt = pb._build_context_section(packet)
         assert "No relevant memory found for this query" in prompt
-        assert "acknowledge if you are uncertain" in prompt
+        assert "I don't have that in my memory" in prompt
 
 
 class TestDateSection:

@@ -215,7 +215,7 @@ def test_get_nature_caches_after_first_load(tmp_path: Path) -> None:
 
 
 def test_nature_block_appears_before_state_in_prompt(tmp_path: Path) -> None:
-    """Nature block must appear before CURRENT STATE in the assembled prompt."""
+    """Nature block must appear before current_state in the assembled prompt."""
     nature_file = _write_nature_file(tmp_path, VALID_NATURE_YAML)
 
     from src.llm.prompt_builder import PromptBuilder
@@ -239,7 +239,7 @@ def test_nature_block_appears_before_state_in_prompt(tmp_path: Path) -> None:
     prompt = builder.build_prompt(packet)
 
     nature_pos = prompt.find("Ember's nature:")
-    state_pos = prompt.find("CURRENT STATE:")
+    state_pos = prompt.find("<current_state>")
 
     assert nature_pos != -1, "Nature block not found in prompt"
     assert state_pos != -1, "State section not found in prompt"

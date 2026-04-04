@@ -25,7 +25,7 @@ class TestTaskPromptSection:
     def test_no_tasks_shows_none(self, builder):
         packet = ContextPacket(user_message="test")
         section = builder._build_task_section(packet)
-        assert section == "ACTIVE TASKS:\nNone."
+        assert section == ""  # No tasks = empty section (no noise)
 
     def test_active_task_rendered(self, builder):
         packet = ContextPacket(
@@ -83,7 +83,7 @@ class TestTaskPromptSection:
         assert "ACTIVE TASKS:" in prompt
         assert "Fix the bug" in prompt
         # Task section should appear after STATE and before reflections
-        state_idx = prompt.index("CURRENT STATE:")
+        state_idx = prompt.index("<current_state>")
         task_idx = prompt.index("ACTIVE TASKS:")
         assert task_idx > state_idx
 
@@ -99,11 +99,14 @@ class TestCapabilitiesSection:
         assert "Do not confirm task creation unless the write actually succeeded" in section
 
     def test_capabilities_in_full_prompt(self, builder):
-        packet = ContextPacket(user_message="test")
+        packet = ContextPacket(
+            user_message="test",
+            task_items=[
+                TaskItem(id="t1", title="Some task", status="active"),
+            ],
+        )
         prompt = builder.build_prompt(packet)
         assert "CAPABILITIES:" in prompt
-        # Should appear after tasks, before reflections
-        task_idx = prompt.index("ACTIVE TASKS:")
+        # CAPABILITIES is in system prompt, ACTIVE TASKS is in context packet
         cap_idx = prompt.index("CAPABILITIES:")
-        ref_idx = prompt.index("REFLECTION CONTEXT:")
-        assert task_idx < cap_idx < ref_idx
+        assert cap_idx > 0

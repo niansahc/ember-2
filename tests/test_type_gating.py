@@ -225,4 +225,4 @@ def test_empty_memory_renders_absence_signal():
 
     prompt = builder.build_prompt(packet)
     assert "No relevant memory found for this query" in prompt
-    assert "acknowledge if you are uncertain" in prompt
+    assert "I don't have that in my memory" in prompt

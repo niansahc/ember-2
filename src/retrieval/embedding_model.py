@@ -35,8 +35,8 @@ def embed_text(text: str) -> list[float]:
     Returns a list of floats (768-dimensional for nomic-embed-text).
     """
     model = get_ember_embed_model()
-    response = ollama.embeddings(model=model, prompt=_truncate(text))
-    return response["embedding"]
+    response = ollama.embed(model=model, input=_truncate(text))
+    return response["embeddings"][0]
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:

@@ -537,15 +537,22 @@ class PinRecoverRequest(BaseModel):
 
 @app.get("/v1/security/pin/status")
 def pin_status_endpoint():
-    """Check if a PIN has been configured. No auth required."""
-    from src.security.pin_service import pin_is_set
-    return {"pin_set": pin_is_set()}
+    """Check if a PIN has been configured. No auth required.
+    Defensively wrapped — this is called on every page load and must never 500."""
+    try:
+        from src.security.pin_service import pin_is_set
+        return {"pin_set": pin_is_set()}
+    except Exception:
+        return {"pin_set": False}
 
 
 @app.post("/v1/security/pin/set")
 def pin_set_endpoint(body: PinSetRequest):
     """Set PIN and recovery passphrase. Requires API key auth."""
-    from src.security.pin_service import set_pin, set_recovery_passphrase
+    try:
+        from src.security.pin_service import set_pin, set_recovery_passphrase
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"PIN service unavailable: {exc}")
     if len(body.pin) < 4:
         raise HTTPException(status_code=400, detail="PIN must be at least 4 characters")
     if len(body.recovery_passphrase) < 20:
@@ -559,7 +566,10 @@ def pin_set_endpoint(body: PinSetRequest):
 @limiter.limit("5/minute")
 def pin_verify_endpoint(request: Request, body: PinVerifyRequest):
     """Verify a PIN. No API key auth — this IS the UI auth. Rate-limited."""
-    from src.security.pin_service import verify_pin, check_rate_limit, record_failed_attempt, get_remaining_attempts
+    try:
+        from src.security.pin_service import verify_pin, check_rate_limit, record_failed_attempt, get_remaining_attempts
+    except Exception:
+        return {"valid": False, "error": "PIN service unavailable"}
     client_ip = request.client.host
     if not check_rate_limit(client_ip):
         raise HTTPException(status_code=429, detail="Too many attempts. Try again in 5 minutes.")
@@ -573,7 +583,10 @@ def pin_verify_endpoint(request: Request, body: PinVerifyRequest):
 @limiter.limit("5/minute")
 def pin_recover_endpoint(request: Request, body: PinRecoverRequest):
     """Recover access with passphrase and set new PIN. Rate-limited."""
-    from src.security.pin_service import verify_recovery_passphrase, set_pin, check_rate_limit, record_failed_attempt
+    try:
+        from src.security.pin_service import verify_recovery_passphrase, set_pin, check_rate_limit, record_failed_attempt
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"PIN service unavailable: {exc}")
     client_ip = request.client.host
     if not check_rate_limit(client_ip):
         raise HTTPException(status_code=429, detail="Too many attempts. Try again in 5 minutes.")

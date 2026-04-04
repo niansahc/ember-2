@@ -1,12 +1,16 @@
 import base64
+import json
 import logging
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from pydantic import BaseModel
 
 from src.api.limiter import limiter
 from src.core.config import get_private_vault_path
+from src.memory.write_memory import write_memory
 from src.ingest.importers.chatgpt import load_chatgpt_export
 from src.ingest.importers.csv import load_csv
 from src.ingest.importers.docx import load_docx
@@ -33,6 +37,7 @@ DOCUMENT_EXTENSIONS = {
     ".csv": "csv",
     ".xlsx": "csv",
     ".txt": "txt",
+    ".json": "json",
 }
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
@@ -126,7 +131,17 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
     try:
         doc_type = DOCUMENT_EXTENSIONS[ext]
 
-        if doc_type == "pdf":
+        if doc_type == "json":
+            # JSON files go through the JSON import path
+            json_data = json.loads(saved_path.read_text(encoding="utf-8"))
+            result = _import_json_records(json_data)
+            return {
+                "status": "ingested",
+                "filename": filename,
+                "imported": result["imported"],
+                "errors": result["errors"],
+            }
+        elif doc_type == "pdf":
             docs = load_pdf(str(saved_path))
         elif doc_type == "docx":
             docs = load_docx(str(saved_path))
@@ -151,6 +166,100 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
     except Exception as e:
         logger.error("[UPLOAD] Failed to ingest %s: %s", filename, e)
         raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(e)}")
+
+
+# -----------------------------
+# Generic JSON Import
+# -----------------------------
+
+def _import_json_records(data: Any) -> dict:
+    """
+    Import JSON records into the vault using write_memory.
+
+    Accepts a list of records or a single record object.
+    Each record must have a "text" field. Optional: type, tags, source, timestamp.
+
+    Returns {"imported": N, "errors": [...]}
+    """
+    if isinstance(data, dict):
+        data = [data]
+
+    if not isinstance(data, list):
+        raise HTTPException(
+            status_code=422,
+            detail="Expected a JSON array of records or a single JSON object.",
+        )
+
+    imported = 0
+    errors = []
+
+    for i, record in enumerate(data):
+        if not isinstance(record, dict):
+            errors.append({"index": i, "error": "Record must be a JSON object."})
+            continue
+
+        text = record.get("text")
+        if not text or not isinstance(text, str) or not text.strip():
+            errors.append({"index": i, "error": "Missing or empty 'text' field."})
+            continue
+
+        memory_type = record.get("type", "ingested")
+        source = record.get("source", "json_import")
+        tags = record.get("tags", [])
+        if not isinstance(tags, list):
+            tags = []
+
+        metadata = {}
+        # Pass through optional fields to metadata
+        for key in ("content_kind", "timestamp", "source_file"):
+            if key in record:
+                metadata[key] = record[key]
+
+        result = write_memory(
+            text=text.strip(),
+            memory_type=memory_type,
+            source=source,
+            tags=tags,
+            metadata=metadata,
+        )
+
+        if result:
+            imported += 1
+        else:
+            errors.append({"index": i, "error": "Record skipped by write_memory filters."})
+
+    return {"imported": imported, "errors": errors}
+
+
+@router.post("/ingest/json")
+@limiter.limit("10/minute")
+async def ingest_json(request: Request):
+    """
+    Import structured JSON data into the vault.
+
+    Accepts a JSON array of records or a single JSON object.
+    Each record must have at minimum a "text" field.
+
+    Optional fields:
+      - type: memory type (defaults to "ingested")
+      - tags: list of string tags
+      - source: source identifier (defaults to "json_import")
+      - content_kind: content classification
+      - timestamp: original timestamp
+
+    Returns count of records imported and any validation errors.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="Invalid JSON in request body.")
+
+    result = _import_json_records(body)
+    return {
+        "status": "complete",
+        "imported": result["imported"],
+        "errors": result["errors"],
+    }
 
 
 # -----------------------------

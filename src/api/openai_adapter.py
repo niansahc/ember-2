@@ -447,11 +447,17 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             else:
                 logger.warning("[TASK] Skipped task detection (test session)")
 
+        def _status_event(status: str) -> str:
+            """Format a status SSE event for the UI."""
+            return f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'status': status}, 'finish_reason': None}]})}\n\n"
+
         if _needs_grounding:
             # --- BUFFER-THEN-STREAM PATH (ADR-019) ---
-            # Factual intent classes: buffer full response, run grounding check,
-            # revise if needed, then re-stream verified response.
             async def _stream_sse():
+                # Searching indicator for web search intent
+                if _intent_class == "web_search":
+                    yield _status_event("searching")
+
                 # 1. Yield typing indicator
                 yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'content': ''}, 'finish_reason': None}]})}\n\n"
 
@@ -459,6 +465,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 full_reply = llm_adapter.generate_response(context_packet, style=conversational_style)
 
                 # 3. Grounding check
+                yield _status_event("verifying")
                 is_grounded, unsupported = await run_grounding_check(
                     full_reply, _retrieved_context,
                 )
@@ -471,6 +478,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 )
 
                 if not is_grounded:
+                    yield _status_event("refining")
                     full_reply = await run_revision_pass(
                         full_reply, unsupported or "",
                     )
@@ -500,7 +508,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                         if item.get("url")
                     ]
                     if sources:
-                        yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'sources': sources}, 'finish_reason': None}]})}\n\n"
+                        yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
 
                 # Final chunk
                 yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"

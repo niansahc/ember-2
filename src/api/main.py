@@ -199,26 +199,34 @@ def clean_context_packet(packet_dict: dict) -> dict:
 
 _UI_DIR = Path(__file__).resolve().parents[2] / "ui"
 
-# Cache the index.html content with injected API key so we don't
-# read the file and inject on every request.
+# Cache the index.html content with injected API key. Invalidated
+# automatically when ui/index.html is modified (mtime check).
 _cached_index_html: str | None = None
+_cached_index_mtime: float = 0.0
 
 
 def _get_index_html() -> str:
-    """Read index.html and inject the API key for the UI."""
-    global _cached_index_html
-    if _cached_index_html is not None:
+    """Read index.html and inject the API key for the UI.
+
+    Caches the result and invalidates when the file's mtime changes,
+    so UI rebuilds take effect without an API restart.
+    """
+    global _cached_index_html, _cached_index_mtime
+
+    index_path = _UI_DIR / "index.html"
+    current_mtime = index_path.stat().st_mtime
+
+    if _cached_index_html is not None and current_mtime == _cached_index_mtime:
         return _cached_index_html
 
-    html = (_UI_DIR / "index.html").read_text(encoding="utf-8")
+    html = index_path.read_text(encoding="utf-8")
     api_key = get_ember_api_key()
     if api_key:
-        # Inject before </head> so the UI can read window.__EMBER_API_KEY__
-        # without needing the key baked in at Vite build time.
         inject = f'<script>window.__EMBER_API_KEY__="{api_key}";</script>\n  '
         html = html.replace("</head>", inject + "</head>")
 
     _cached_index_html = html
+    _cached_index_mtime = current_mtime
     return _cached_index_html
 
 

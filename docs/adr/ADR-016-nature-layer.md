@@ -118,3 +118,44 @@ The nature document is versioned independently (v0.1, v0.2, etc.). Version is st
 - ADR-013: Deviation Memory
 - ADR-006: Structured Prompt Construction
 - ETHOS.md -- Ember's founding principles; nature layer gives ETHOS.md a technical home
+
+---
+
+## Amendment — 2026-04-04
+
+### Gap 1: Nature Document Format
+
+Research and manual testing showed descriptive facet labels produce minimal effect on qwen3:8b under conversational pressure. Qwen2.5-7B is documented as "insensitive to all 162 personas tested" in the deeply contextualised persona prompting literature. The nature document describes character correctly but cannot hold identity under adversarial pressure alone.
+
+Decision: introduce a parallel config file `config/identity_rules.yaml` containing behavioral edge case rules for specific identity pressure situations. Loaded by a new `IdentityRulesLoader`, injected into the system prompt by the prompt builder.
+
+Deliberate file split: nature.yaml is a living document that grows as Ember develops -- facets earned through observation. identity_rules.yaml is a stable defensive layer authored once and rarely changed. Different lifecycles, different files.
+
+nature.yaml: unchanged at v0.1. No changes to facet content or format.
+
+### Gap 2: Persona Stability Across Long Conversations
+
+Persona drift research (PRISM, NeurIPS 2025) documents 30%+ degradation in persona self-consistency by turn 8-12 regardless of injection strategy. Context packet injection alone is insufficient for long conversations.
+
+Three changes:
+
+1. Dual injection: nature block appears in both system prompt (first position) AND context packet (every turn, as before).
+
+2. Nature reminder injection at turn 8+: condensed 3-5 line reminder prepended to human turn when conversation history exceeds 8 turns. Places nature content in recency position.
+
+3. Conversation buffer summarization at turn 8+: raw conversation history beyond 8 turns is a cascade risk and attention dilution risk. Summarize rather than pass raw at the threshold.
+
+### Gap 3: Context Packet Position
+
+Lost-in-the-middle research confirms vault memory was sitting in the lowest-attention zone of the context window. Revised context assembly order:
+
+1. System prompt: nature block (dual injection) + identity rules + authority hierarchy
+2. Context packet: authority rules reminder → vault memory (top) → current state → conversation history (summarized at turn 8+) → current query (recency position)
+
+### References
+
+- Deeply contextualised persona prompting literature -- behavioral rules outperform descriptive labels for 7B-9B models
+- PRISM study, Hu et al., USC, March 2026 -- persona drift at turn 8-12
+- Lost-in-the-middle research (Liu et al.) -- attention at first and last positions
+- MemGPT/Letta -- core memory pinning, conversation compression
+- Manual test battery results 2026-04-04 -- persona collapse observed at turn 3-4 on qwen3:8b

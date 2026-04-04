@@ -137,3 +137,23 @@ def _apply_type_gate(self, items, policy):
 - Nissenbaum, H. (2004) -- Contextual Integrity framework; Washington Law Review
 - ADR-005: Multi-Stage Context Retrieval and Ranking Strategy
 - ADR-007: Project-Scoped Retrieval
+
+---
+
+## Amendment — 2026-04-04
+
+### Change: "No Memory Found" Signal
+
+The original signal ("Answer from your own knowledge and acknowledge if you are uncertain") assumes the model knows when it is uncertain. A model filling retrieval gaps with parametric fabrication does not experience uncertainty -- it experiences confidence. The soft instruction does not reach the failure.
+
+Revised signal: Honest, specific, and testable. Does not prohibit confabulation (that is ADR-019's job). Gives the model a concrete fallback phrase rather than an abstract instruction.
+
+### Deferred: Sensitive Type min_score Floor
+
+Research suggested raising the min_score floor for sensitive memory types from 0.25 to 0.5. No specific sensitive type retrieval failure was observed in manual testing. Implementing without an observed failure is coding to the test, not solving a bug. Deferred until a specific failure is observed in practice.
+
+### Relationship to ADR-019
+
+ADR-018 is the pre-generation gate: prevent weak context from entering the model.
+ADR-019 is the post-generation check: catch fabrications that occur despite good retrieval.
+Both are needed. Neither substitutes for the other.

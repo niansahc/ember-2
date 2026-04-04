@@ -73,6 +73,11 @@ def get_tier_warm_threshold() -> float:
     return float(os.getenv("TIER_WARM_THRESHOLD", "0.2"))
 
 
+def get_state_staleness_days() -> int:
+    """Max age in days for next_action and open_loop state records."""
+    return int(os.getenv("STATE_STALENESS_DAYS", "7"))
+
+
 def get_retrieval_min_raw_score() -> float:
     """Minimum raw cosine similarity for default policy relevance gate."""
     return float(os.getenv("RETRIEVAL_MIN_RAW_SCORE", "0.5"))

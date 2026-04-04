@@ -425,11 +425,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 metadata=assistant_meta,
             )
 
-            threading.Thread(
-                target=_background_state_extraction,
-                args=(latest_user_message, full_reply),
-                daemon=True,
-            ).start()
+            # State extraction — skip for test sessions to prevent eval leakage
+            if not is_test:
+                threading.Thread(
+                    target=_background_state_extraction,
+                    args=(latest_user_message, full_reply),
+                    daemon=True,
+                ).start()
 
             if not is_test:
                 threading.Thread(
@@ -445,7 +447,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     daemon=True,
                 ).start()
             else:
-                logger.warning("[TASK] Skipped task detection (test session)")
+                logger.warning("[TASK] Skipped task/state/commitment detection (test session)")
 
         def _status_event(status: str) -> str:
             """Format a status SSE event for the UI."""
@@ -577,12 +579,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         metadata=assistant_meta,
     )
 
-    # Background state extraction
-    threading.Thread(
-        target=_background_state_extraction,
-        args=(latest_user_message, reply),
-        daemon=True,
-    ).start()
+    # Background state extraction — skip for test sessions to prevent eval leakage
+    if not is_test:
+        threading.Thread(
+            target=_background_state_extraction,
+            args=(latest_user_message, reply),
+            daemon=True,
+        ).start()
 
     # Commitment detection (ADR-014) — skip for test sessions
     if not is_test:

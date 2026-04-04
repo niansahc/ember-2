@@ -42,8 +42,8 @@ def make_resolver(tmp_path: Path) -> StateResolver:
 def test_state_record_valid_type() -> None:
     """StateRecord with a valid type should construct without error."""
     record = StateRecord(
-        id="2026-03-21T10-00-00",
-        timestamp="2026-03-21T10-00-00",
+        id="2026-04-04T10-00-00",
+        timestamp="2026-04-04T10-00-00",
         type="current_focus",
         text="Working on the state layer for Ember-2.",
         source="user_input",
@@ -57,8 +57,8 @@ def test_state_record_invalid_type() -> None:
     """StateRecord with an unrecognised type should raise ValueError."""
     with pytest.raises(ValueError, match="Invalid state type"):
         StateRecord(
-            id="2026-03-21T10-00-00",
-            timestamp="2026-03-21T10-00-00",
+            id="2026-04-04T10-00-00",
+            timestamp="2026-04-04T10-00-00",
             type="not_a_real_type",
             text="This should fail.",
             source="test",
@@ -74,8 +74,8 @@ def test_state_service_write_and_read(tmp_path: Path) -> None:
     service = make_service(tmp_path)
 
     record = StateRecord(
-        id="2026-03-21T10-00-00",
-        timestamp="2026-03-21T10-00-00",
+        id="2026-04-04T10-00-00",
+        timestamp="2026-04-04T10-00-00",
         type="current_focus",
         text="Building the state layer.",
         source="test",
@@ -103,8 +103,8 @@ def test_state_service_append_only(tmp_path: Path) -> None:
     service = make_service(tmp_path)
 
     record = StateRecord(
-        id="2026-03-21T10-00-00",
-        timestamp="2026-03-21T10-00-00",
+        id="2026-04-04T10-00-00",
+        timestamp="2026-04-04T10-00-00",
         type="blocker",
         text="Original blocker text.",
         source="test",
@@ -132,15 +132,15 @@ def test_state_service_read_by_category(tmp_path: Path) -> None:
     service = make_service(tmp_path)
 
     focus_record = StateRecord(
-        id="2026-03-21T10-00-00",
-        timestamp="2026-03-21T10-00-00",
+        id="2026-04-04T10-00-00",
+        timestamp="2026-04-04T10-00-00",
         type="current_focus",
         text="Focus item.",
         source="test",
     )
     blocker_record = StateRecord(
-        id="2026-03-21T11-00-00",
-        timestamp="2026-03-21T11-00-00",
+        id="2026-04-04T11-00-00",
+        timestamp="2026-04-04T11-00-00",
         type="blocker",
         text="Blocker item.",
         source="test",
@@ -172,7 +172,7 @@ def test_state_service_corrupted_file(tmp_path: Path) -> None:
     # Manually write a bad JSON file into the state directory.
     state_dir = tmp_path / "memory" / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
-    corrupt_file = state_dir / "2026-03-21T09-00-00_current_focus.json"
+    corrupt_file = state_dir / "2026-04-04T09-00-00_current_focus.json"
     corrupt_file.write_text("{ this is not valid json }", encoding="utf-8")
 
     with warnings.catch_warnings(record=True) as caught:
@@ -197,15 +197,15 @@ def test_state_resolver_latest_wins(tmp_path: Path) -> None:
     service = make_service(tmp_path)
 
     older = StateRecord(
-        id="2026-03-21T08-00-00",
-        timestamp="2026-03-21T08-00-00",
+        id="2026-04-04T08-00-00",
+        timestamp="2026-04-04T08-00-00",
         type="current_focus",
         text="Older focus.",
         source="test",
     )
     newer = StateRecord(
-        id="2026-03-21T14-00-00",
-        timestamp="2026-03-21T14-00-00",
+        id="2026-04-04T14-00-00",
+        timestamp="2026-04-04T14-00-00",
         type="current_focus",
         text="Newer focus.",
         source="test",
@@ -239,15 +239,15 @@ def test_state_resolver_get_current_as_dict(tmp_path: Path) -> None:
     service = make_service(tmp_path)
 
     service.write(StateRecord(
-        id="2026-03-21T10-00-00",
-        timestamp="2026-03-21T10-00-00",
+        id="2026-04-04T10-00-00",
+        timestamp="2026-04-04T10-00-00",
         type="current_focus",
         text="Focus on state layer.",
         source="test",
     ))
     service.write(StateRecord(
-        id="2026-03-21T11-00-00",
-        timestamp="2026-03-21T11-00-00",
+        id="2026-04-04T11-00-00",
+        timestamp="2026-04-04T11-00-00",
         type="open_loop",
         text="Follow up on eval harness.",
         source="test",
@@ -277,7 +277,7 @@ def test_multiple_open_loops_returned(tmp_path: Path) -> None:
         text="Fix the retrieval bug.",
         source="test",
     )
-    rec1.timestamp = "2026-03-28T10-00-00"
+    rec1.timestamp = "2026-04-04T10-00-00"
     service.write(rec1)
 
     rec2 = StateService.make_record(
@@ -285,7 +285,7 @@ def test_multiple_open_loops_returned(tmp_path: Path) -> None:
         text="Retest all local models.",
         source="test",
     )
-    rec2.timestamp = "2026-03-28T10-01-00"
+    rec2.timestamp = "2026-04-04T10-01-00"
     service.write(rec2)
 
     resolver = StateResolver(service=service)
@@ -307,7 +307,7 @@ def test_multiple_next_actions_returned(tmp_path: Path) -> None:
         text="Lower extraction threshold.",
         source="test",
     )
-    rec1.timestamp = "2026-03-28T10-00-00"
+    rec1.timestamp = "2026-04-04T10-00-00"
     service.write(rec1)
 
     rec2 = StateService.make_record(
@@ -315,7 +315,7 @@ def test_multiple_next_actions_returned(tmp_path: Path) -> None:
         text="Write commitment detector.",
         source="test",
     )
-    rec2.timestamp = "2026-03-28T10-01-00"
+    rec2.timestamp = "2026-04-04T10-01-00"
     service.write(rec2)
 
     resolver = StateResolver(service=service)
@@ -334,7 +334,7 @@ def test_single_record_categories_still_latest_wins(tmp_path: Path) -> None:
         text="Old focus.",
         source="test",
     )
-    rec1.timestamp = "2026-03-28T10-00-00"
+    rec1.timestamp = "2026-04-04T10-00-00"
     service.write(rec1)
 
     rec2 = StateService.make_record(
@@ -342,7 +342,7 @@ def test_single_record_categories_still_latest_wins(tmp_path: Path) -> None:
         text="New focus.",
         source="test",
     )
-    rec2.timestamp = "2026-03-28T10-01-00"
+    rec2.timestamp = "2026-04-04T10-01-00"
     service.write(rec2)
 
     resolver = StateResolver(service=service)
@@ -363,7 +363,7 @@ def test_multi_record_capped_at_five(tmp_path: Path) -> None:
             text=f"Loop {i}",
             source="test",
         )
-        rec.timestamp = f"2026-03-28T10-0{i}-00"
+        rec.timestamp = f"2026-04-04T10-0{i}-00"
         service.write(rec)
 
     resolver = StateResolver(service=service)
@@ -388,7 +388,7 @@ def test_resolved_open_loop_excluded(tmp_path: Path) -> None:
         text="Active loop.",
         source="test",
     )
-    rec1.timestamp = "2026-03-28T10-00-00"
+    rec1.timestamp = "2026-04-04T10-00-00"
     service.write(rec1)
 
     rec2 = StateService.make_record(
@@ -397,7 +397,7 @@ def test_resolved_open_loop_excluded(tmp_path: Path) -> None:
         source="test",
         metadata={"resolved": True},
     )
-    rec2.timestamp = "2026-03-28T10-01-00"
+    rec2.timestamp = "2026-04-04T10-01-00"
     service.write(rec2)
 
     resolver = StateResolver(service=service)

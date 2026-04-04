@@ -19,6 +19,8 @@ StateResolver does not write to the vault. That is StateService's job.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from src.state.models import (
     VALID_STATE_CATEGORIES,
     MULTI_RECORD_CATEGORIES,
@@ -154,7 +156,13 @@ class StateResolver:
         for category, record in sorted(latest.items()):
             items.append(self._record_to_item(record))
 
-        # Multi-record: all non-deleted, capped at MAX_MULTI_RECORDS per category
+        # Multi-record: all non-deleted, non-stale, capped at MAX_MULTI_RECORDS
+        from src.core.config import get_state_staleness_days
+        staleness_days = get_state_staleness_days()
+        staleness_cutoff = (datetime.now() - timedelta(days=staleness_days)).strftime(
+            "%Y-%m-%dT%H-%M-%S"
+        )
+
         multi_by_cat: dict[str, list[StateRecord]] = {}
         for record in multi_records:
             # Skip deleted records
@@ -162,6 +170,9 @@ class StateResolver:
                 continue
             # Skip resolved records
             if record.metadata and record.metadata.get("resolved"):
+                continue
+            # Skip stale multi-record items (next_action, open_loop)
+            if record.timestamp and record.timestamp < staleness_cutoff:
                 continue
             multi_by_cat.setdefault(record.type, []).append(record)
 

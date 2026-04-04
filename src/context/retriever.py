@@ -101,6 +101,7 @@ class ContextRetriever:
                         **metadata,
                         "path": result.get("path"),
                         "memory_type": mem_type,
+                        "raw_score": result.get("raw_score", 0.0),
                     },
                     tier=result.get("tier", "hot"),
                 )

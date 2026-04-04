@@ -36,6 +36,23 @@ class ContextService:
         state_items, task_items, memory_items, reflection_items = self.retriever.retrieve(user_message)
         state_items = self.ranker.apply_state_boost(state_items, policy)
 
+        # Relevance gate for default policy: if no non-profile items have
+        # raw cosine similarity >= threshold, suppress vault memory entirely.
+        # Prevents general knowledge queries from getting vault-based coaching.
+        # Profile items are exempt — identity queries should always surface.
+        if policy.name == "default":
+            from src.core.config import get_retrieval_min_raw_score
+            min_raw = get_retrieval_min_raw_score()
+            non_profile = [i for i in memory_items if getattr(i, "memory_type", "") != "profile"]
+            max_raw = max(
+                (getattr(i, "metadata", {}).get("raw_score", 0.0) for i in non_profile),
+                default=0.0,
+            )
+            if max_raw < min_raw:
+                # Keep only profile items — suppress everything else
+                memory_items = [i for i in memory_items if getattr(i, "memory_type", "") == "profile"]
+                reflection_items = []
+
         # ADR-018: Apply intent-aware type gating before ranking.
         # Profile items bypass type gating — identity context is never suppressed.
         memory_items = self._apply_type_gate(memory_items, policy)

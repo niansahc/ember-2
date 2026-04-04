@@ -79,13 +79,15 @@ def semantic_search(
 
                 metadata = result.get("metadata", {})
                 mem_type = result.get("memory_type", memory_type)
-                score = float(result.get("score", 0.0))
+                raw_score = float(result.get("score", 0.0))
+                score = raw_score
                 score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
                 score += memory_type_adjustment(mem_type)
                 score += source_quality_adjustment(normalized_content, metadata)
                 score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
 
                 result["score"] = score
+                result["raw_score"] = raw_score
                 result["memory_type"] = mem_type
                 results.append(result)
 
@@ -105,13 +107,15 @@ def semantic_search(
                         continue
 
                     metadata = result.get("metadata", {})
-                    score = float(result.get("score", 0.0))
+                    raw_score = float(result.get("score", 0.0))
+                    score = raw_score
                     score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
                     score += memory_type_adjustment(mem_type)
                     score += source_quality_adjustment(normalized_content, metadata)
                     score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
 
                     result["score"] = score
+                    result["raw_score"] = raw_score
                     result["memory_type"] = mem_type
                     results.append(result)
 
@@ -131,7 +135,8 @@ def semantic_search(
             if should_exclude_result(normalized_content):
                 continue
 
-            score = float(result.get("score", 0.0))
+            raw_score = float(result.get("score", 0.0))
+            score = raw_score
             score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
             score += memory_type_adjustment(memory_type)
             metadata = result.get("metadata", {})
@@ -139,6 +144,7 @@ def semantic_search(
             score += query_intent_adjustment(normalized_query, memory_type, normalized_content)
 
             result["score"] = score
+            result["raw_score"] = raw_score
             result["memory_type"] = memory_type
             results.append(result)
     elif memory_type is None:
@@ -164,7 +170,8 @@ def semantic_search(
                 if should_exclude_result(normalized_content):
                     continue
 
-                score = float(result.get("score", 0.0))
+                raw_score = float(result.get("score", 0.0))
+                score = raw_score
                 score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
                 score += memory_type_adjustment(mem_type)
                 metadata = result.get("metadata", {})
@@ -172,6 +179,7 @@ def semantic_search(
                 score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
 
                 result["score"] = score
+                result["raw_score"] = raw_score
                 result["memory_type"] = mem_type
                 results.append(result)
 
@@ -191,13 +199,15 @@ def semantic_search(
                     continue
 
                 metadata = result.get("metadata", {})
-                score = float(result.get("score", 0.0))
+                raw_score = float(result.get("score", 0.0))
+                score = raw_score
                 score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
                 score += memory_type_adjustment("ingested")
                 score += source_quality_adjustment(normalized_content, metadata)
                 score += query_intent_adjustment(normalized_query, "ingested", normalized_content)
 
                 result["score"] = score
+                result["raw_score"] = raw_score
                 result["memory_type"] = "ingested"
                 results.append(result)
 

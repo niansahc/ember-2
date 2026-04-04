@@ -73,6 +73,11 @@ def get_tier_warm_threshold() -> float:
     return float(os.getenv("TIER_WARM_THRESHOLD", "0.2"))
 
 
+def get_retrieval_min_raw_score() -> float:
+    """Minimum raw cosine similarity for default policy relevance gate."""
+    return float(os.getenv("RETRIEVAL_MIN_RAW_SCORE", "0.5"))
+
+
 def get_ember_vision_model() -> str | None:
     """
     Returns the Ollama vision model for image analysis, or None if not configured.

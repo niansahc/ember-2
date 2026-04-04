@@ -451,47 +451,64 @@ When writing prompts for Ember's inference-time tasks (reflection, review, synth
 
 ## Release Checklist
 
-Run this before every release. No exceptions. Each repository versions independently — check only the relevant section(s) for the release being cut.
+**Critical principle: CC runs the full release process. Nothing is "done" until it is publicly downloadable. Never assume the human is cutting the release unless they explicitly say so.**
 
----
+A release is not complete at commit. A release is not complete at tag. A release is complete when:
+- The GitHub Release is published (not draft)
+- Artifacts are attached (installer .exe / source)
+- latest.yml is present in release assets (installer only)
+- The release is visible and downloadable at the GitHub Releases URL
+- CC has verified the above and reported the URL
 
-### ember-2 (backend)
-- [ ] All pytest tests passing (`pytest tests/`)
-- [ ] Run retrieval eval (`python tools/eval_retrieval.py`) — no regression
-- [ ] No uncommitted changes
+### Pre-release (run before every release)
+
+**ember-2 (backend):**
+- [ ] All tests passing: pytest tests/
+- [ ] Retrieval eval passing: python tools/eval_retrieval.py -- no regression
+- [ ] Conversation eval run: python tools/eval_conversations.py -- document results
 - [ ] CHANGELOG.md updated
 - [ ] version.json bumped
-- [ ] TDD updated to reflect what shipped
-- [ ] README updated if user-facing changes
-- [ ] CLAUDE.md updated — priorities, working state, and any new conventions
-- [ ] ADRs filed for any new architectural decisions
-- [ ] ADRs included in this release updated from Proposed → Accepted
-- [ ] Git tag created
-- [ ] GitHub Release published with source code assets — backend releases should be published on GitHub so installer workflow can pin and download specific versions
-- [ ] Version tagged and pushed before installer build — installer must reference a specific backend tag, not main
+- [ ] All changes committed and pushed to main: git push origin main
+- [ ] Constitution, nature, and Lodestone layers reviewed for coherence
+- [ ] Research review: any watch items ready to graduate to roadmap?
 
-### ember-2-ui (frontend)
-- [ ] All Playwright tests passing (`npm run test:e2e`)
-- [ ] Mobile tested
-- [ ] No uncommitted changes
+**ember-2-ui (frontend):**
+- [ ] All Playwright tests passing: npm run test:e2e
 - [ ] CHANGELOG.md updated
-- [ ] version bumped in package.json
-- [ ] Git tag created
+- [ ] package.json version bumped
+- [ ] All changes committed and pushed to main: git push origin main
+- [ ] UI rebuilt from correct source: npm ci && npm run build
 
-### ember-2-installer (installer)
-- [ ] Installer builds cleanly
-- [ ] Install flow tested end-to-end on Windows
-- [ ] No uncommitted changes
-- [ ] Git tag created
+**ember-2-installer (installer):**
+- [ ] All Playwright tests passing
+- [ ] CHANGELOG.md updated
+- [ ] package.json version bumped
+- [ ] All changes committed and pushed to main: git push origin main
+- [ ] Frontend freshly built from pinned ember-2-ui tag before packaging
+- [ ] Backend version pinned and documented in release notes
+- [ ] Installer built: npm run dist
+- [ ] app-update.yml present in dist/win-unpacked/resources/ -- verify before publishing
+- [ ] latest.yml will be attached to release by electron-builder -- verify after publishing
 
----
+### Release (CC runs this, not the human)
 
-### Before opening next version (all repos)
-- [ ] Handoff notes written
-- [ ] Next version scope documented in TDD roadmap
-- [ ] CLAUDE.md priorities updated to reflect next version
-- [ ] Research review completed — scan Watch Items in TDD, check arxiv/GitHub/HuggingFace for new relevant work, update Watch Items with anything new before opening next version
-- [ ] Review constitution, nature, and Lodestone layers for coherence — confirm the three layers are not in tension with each other
+- [ ] Git tag created: git tag vX.X.X
+- [ ] Tag pushed: git push origin vX.X.X
+- [ ] GitHub Release created (NOT draft): gh release create vX.X.X --title "vX.X.X" --notes "..." --latest
+- [ ] Artifacts attached to release (installer .exe for yellow, source zip for green)
+- [ ] Release verified as published and visible: gh release view vX.X.X
+- [ ] Release URL reported to human: https://github.com/niansahc/[repo]/releases/tag/vX.X.X
+
+### Post-release verification (CC runs this)
+
+- [ ] Confirm release appears at https://github.com/niansahc/[repo]/releases
+- [ ] Confirm latest.yml is present in release assets (installer only)
+- [ ] Confirm version matches package.json / version.json
+- [ ] Report to human: "Release vX.X.X is live at [URL]. Users can download/update now."
+
+### Patch releases
+
+Patch releases follow the same checklist. There are no shortcuts for patches. A patch that is committed but not published is not a patch -- it is unpublished work. Every patch must complete the full release process before being called done.
 
 ---
 

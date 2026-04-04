@@ -406,8 +406,40 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
 # Main
 # ---------------------------------------------------------------------------
 
+def _switch_model(model: str) -> str | None:
+    """Switch active model via API. Returns previous model or None on failure."""
+    try:
+        from src.core.config import get_ember_api_key
+        api_key = get_ember_api_key() or ""
+        resp = httpx.get(
+            "http://localhost:8000/model",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10.0,
+        )
+        previous = resp.json().get("model", "")
+        httpx.post(
+            "http://localhost:8000/model",
+            json={"model": model},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            timeout=10.0,
+        )
+        print(f"Switched model to: {model}")
+        return previous
+    except Exception as exc:
+        print(f"WARNING: Could not switch model: {exc}")
+        return None
+
+
 def main():
-    verbose = "--verbose" in sys.argv
+    import argparse
+    parser = argparse.ArgumentParser(description="Ember-2 conversation quality evaluation")
+    parser.add_argument("--verbose", action="store_true", help="Show full responses per test")
+    parser.add_argument("--model", type=str, default=None, help="Model to test (switches and restores after)")
+    args = parser.parse_args()
+
+    verbose = args.verbose
+    target_model = args.model
+    original_model = None
 
     # Check requirements
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
@@ -423,7 +455,12 @@ def main():
         print("Install with: pip install anthropic")
         sys.exit(1)
 
-    print("Running conversation quality evaluation...\n")
+    # Switch model if requested
+    if target_model:
+        original_model = _switch_model(target_model)
+
+    model_label = target_model or "current default"
+    print(f"Running conversation quality evaluation (model: {model_label})...\n")
     print(f"This sends 18 test messages to Ember and evaluates each response with Claude.")
     print(f"Estimated time: 5-10 minutes (depends on Ember response speed).\n")
 
@@ -447,6 +484,11 @@ def main():
         json.dumps(results, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+
+    # Restore original model if we switched
+    if original_model and target_model:
+        _switch_model(original_model)
+        print(f"Restored model to: {original_model}")
 
 
 if __name__ == "__main__":

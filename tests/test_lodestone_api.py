@@ -128,7 +128,8 @@ class TestValueInference:
         mock_chat.assert_called_once()
         call_args = mock_chat.call_args
         assert call_args[1]["options"]["temperature"] == 0
-        assert call_args[1]["options"]["num_predict"] == 50
+        assert call_args[1]["options"]["num_predict"] == 100
+        assert call_args[1]["think"] is False
 
     @patch("ollama.chat")
     @patch("src.core.config.get_ember_model", return_value="qwen3:8b")
@@ -136,8 +137,9 @@ class TestValueInference:
         from src.api.main import _extract_lodestone_value
         mock_chat.return_value = {"message": {"content": "honesty matters"}}
         _extract_lodestone_value("I value truth", question_context="What do you care about?")
-        prompt = mock_chat.call_args[1]["messages"][0]["content"]
-        assert "What do you care about?" in prompt
+        # Question context is in the user message (messages[1])
+        user_msg = mock_chat.call_args[1]["messages"][1]["content"]
+        assert "What do you care about?" in user_msg
 
     @patch("ollama.chat")
     @patch("src.core.config.get_ember_model", return_value="qwen3:8b")
@@ -148,18 +150,18 @@ class TestValueInference:
         assert result == "creativity matters"
 
     @patch("ollama.chat", side_effect=Exception("connection refused"))
-    def test_fallback_on_ollama_failure(self, mock_chat):
+    def test_returns_none_on_ollama_failure(self, mock_chat):
         from src.api.main import _extract_lodestone_value
         result = _extract_lodestone_value("raw answer text")
-        assert result == "raw answer text"
+        assert result is None
 
     @patch("ollama.chat")
     @patch("src.core.config.get_ember_model", return_value="qwen3:8b")
-    def test_fallback_on_empty_response(self, mock_model, mock_chat):
+    def test_returns_none_on_empty_response(self, mock_model, mock_chat):
         from src.api.main import _extract_lodestone_value
         mock_chat.return_value = {"message": {"content": ""}}
         result = _extract_lodestone_value("raw answer text")
-        assert result == "raw answer text"
+        assert result is None
 
     @patch("src.api.main._extract_lodestone_value")
     def test_endpoint_stores_inferred_value(self, mock_extract, vault_dir):

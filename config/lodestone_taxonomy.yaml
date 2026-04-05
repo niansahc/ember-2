@@ -6,8 +6,18 @@
 # No match is valid output — not every pattern is a value.
 
 categories:
-  character: "what kind of person am I committed to being?"
-  relational: "how do I hold my responsibilities to people I'm connected to?"
-  directional: "what am I moving toward or guarding?"
-  ground: "what do I draw from when everything else is uncertain?"
-  beyond: "what connects me to something larger than myself?"
+  character:
+    question: "what kind of person am I committed to being?"
+    display_name: "Who you are and how you see yourself"
+  relational:
+    question: "how do I hold my responsibilities to people I'm connected to?"
+    display_name: "How you interact with people and things in your world"
+  directional:
+    question: "what am I moving toward or guarding?"
+    display_name: "What you're moving toward and what you're protecting"
+  ground:
+    question: "what do I draw from when everything else is uncertain?"
+    display_name: "What you draw from when everything else is uncertain"
+  beyond:
+    question: "what connects me to something larger than myself?"
+    display_name: "What connects you to something larger than yourself"

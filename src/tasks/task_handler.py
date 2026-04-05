@@ -142,9 +142,21 @@ def create_task(
 ) -> TaskCreationResult:
     """
     Write a task to the vault. Returns a TaskCreationResult.
+
+    Deduplicates by title: if an active or proposed task with the same
+    title (case-insensitive) already exists, the write is skipped.
     """
     try:
         service = TaskService(vault_path=vault_path)
+
+        # Dedup check: skip if an active/proposed task with same title exists
+        existing = service.read_active()
+        normalized_title = title.strip().lower()
+        for existing_task in existing:
+            if existing_task.title.strip().lower() == normalized_title:
+                logger.info("[TASK_HANDLER] Dedup: '%s' already exists, skipping", title[:60])
+                return TaskCreationResult(created=True, task_title=title)
+
         metadata = {}
         if session_id:
             metadata["session_id"] = session_id

@@ -518,6 +518,39 @@ def update_task_status_endpoint(task_id: str, body: TaskUpdateRequest):
     }
 
 
+@app.delete("/v1/tasks/{task_id}")
+def delete_task_endpoint(task_id: str):
+    """
+    Soft-delete a task by setting status to 'cancelled'.
+    Append-only: writes a new record, does not remove the original.
+    """
+    existing = task_service.read_by_id(task_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+
+    if existing.status == "cancelled":
+        return {"status": "already_cancelled", "id": task_id}
+
+    from datetime import datetime
+    new_timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
+
+    from src.tasks.models import TaskRecord
+    cancelled = TaskRecord(
+        id=task_id,
+        timestamp=new_timestamp,
+        type="task",
+        title=existing.title,
+        status="cancelled",
+        text=existing.text,
+        source=existing.source,
+        project_id=existing.project_id,
+        tags=existing.tags,
+        metadata={**existing.metadata, "previous_status": existing.status},
+    )
+    task_service.write(cancelled)
+    return {"status": "cancelled", "id": task_id}
+
+
 # ── Security / PIN endpoints ───────────────────────────────────────────
 
 

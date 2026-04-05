@@ -5,9 +5,19 @@ Automated test session for deviation detection calibration.
 Seeds known positions, sends simulated conversation turns through
 the pipeline, then audits which deviation records were written.
 
+IMPORTANT: Deviation detection runs inside the API server process,
+not in this script. The EMBER_DEVIATION_DETECTION env var must be
+set in .env BEFORE starting the API. Setting it in this script's
+process has no effect on the already-running server.
+
+Setup (required before running):
+    1. Set EMBER_DEVIATION_DETECTION=true in .env
+    2. Restart the API: ./start_api.bat (Windows) or ./start_api.sh (Mac/Linux)
+    3. Run this script: python scripts/test_deviation_detection.py
+
 Requires:
 - Live Ollama instance
-- Running Ember-2 API (start_api.bat / start_api.sh)
+- Running Ember-2 API with EMBER_DEVIATION_DETECTION=true in .env
 - PRIVATE_VAULT_PATH set in .env
 
 Usage:
@@ -91,6 +101,30 @@ SEED_POSITIONS = [
         "taxonomy_category": "relational",
     },
 ]
+
+
+def _temporarily_unconfirm_existing() -> list[str]:
+    """Unconfirm existing active lodestone records to make room for seeds. Returns their IDs."""
+    from src.memory.lodestone_service import read_active, update
+    active = read_active()
+    ids = []
+    for rec in active:
+        update(rec["id"], {"confirmed": False})
+        ids.append(rec["id"])
+    if ids:
+        print(f"  Temporarily unconfirmed {len(ids)} existing lodestone records")
+    return ids
+
+
+def _restore_existing(record_ids: list[str]) -> None:
+    """Re-confirm previously unconfirmed lodestone records."""
+    from src.memory.lodestone_service import update
+    restored = 0
+    for rid in record_ids:
+        result = update(rid, {"confirmed": True})
+        if result:
+            restored += 1
+    print(f"  Restored {restored} existing lodestone records")
 
 
 def _seed_lodestone_records() -> list[str]:
@@ -389,6 +423,7 @@ def main():
     # Seed lodestone records
     print()
     print("[3/5] Seeding lodestone positions...")
+    existing_ids = _temporarily_unconfirm_existing()
     seeded_ids = _seed_lodestone_records()
 
     # Run test turns
@@ -482,6 +517,8 @@ def main():
     print()
     print("Cleanup...")
     _cleanup_lodestone_records(seeded_ids)
+    if existing_ids:
+        _restore_existing(existing_ids)
 
     # Restore env
     if original_detection is None:

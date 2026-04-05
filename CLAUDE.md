@@ -376,6 +376,7 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - State awareness hallucinations — model embellishes when state records are noisy or stale; partially addressed by STATE_STALENESS_DAYS filter; longitudinal monitoring needed
 - Preference expression partial deflection — identity rules reduced "I'm an AI" deflection but did not eliminate it; model capability ceiling on qwen3:8b for some identity questions
 - The API must be restarted after any backend code changes for them to take effect. Changes to task detection, prompt building, or any src/ file do not hot-reload in production mode. Run `./start_api.bat` or kill and restart uvicorn after deploying changes.
+- Context packet order discrepancy: ADR-016 amendment and prompt_builder.py describe different orders. Verify which is authoritative and reconcile before v0.14.0 context packet reorder work begins.
 
 ---
 

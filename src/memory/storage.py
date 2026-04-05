@@ -35,6 +35,7 @@ VALID_MEMORY_TYPES: frozenset[str] = frozenset({
     "review_log",
     "evaluation",
     "session",
+    "lodestone",
 })
 
 

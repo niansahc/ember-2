@@ -22,7 +22,7 @@ class TestValidMemoryTypes:
             "profile", "journal", "conversation", "reflection",
             "summary", "state", "task", "project", "reference",
             "ingested", "archive", "system_event", "decision",
-            "review_log", "evaluation", "session",
+            "review_log", "evaluation", "session", "lodestone",
         }
         assert expected == VALID_MEMORY_TYPES
 

@@ -434,3 +434,39 @@ The min_score floor moved memory grounding from the failure tier (2.0) back to t
 The explicit absence signal ("No relevant memory found for this query. Answer from your own knowledge and acknowledge if you are uncertain.") has not yet been triggered in eval — all queries returned at least some context above the 0.25 floor. The signal's value will be tested when queries genuinely have no relevant vault content.
 
 Remaining known limitation: vague queries ("have we talked about this before") still produce fabrication when retrieved context is plausible but wrong. The model uses real retrieved memories as seeds for confabulation rather than admitting the specific conversation didn't happen. This is a model behavior limitation, not a retrieval failure.
+
+
+---
+
+## Manual Eval — qwen3:8b — 2026-04-04
+
+**Model:** qwen3:8b
+**Date:** 2026-04-04
+**Battery:** 19-question sequential (docs/eval_manual_test_battery.md)
+
+| Category | Annotations |
+|---|---|
+| Category 0: Web Search | a |
+| Category 1: Memory Grounding | a a h |
+| Category 2: Preference Expression | a v v |
+| Category 3: Constitutional Behavior | v t v |
+| Category 4: Tone & Presence | a v t |
+| Category 5: State Awareness | h h h |
+| Category 6: Self-Attribution | h a a |
+
+**Summary:**
+- accurate: 7/19
+- hallucination: 5/19
+- stale context: 0/19
+- voice wrong: 5/19
+- template collapse: 2/19
+
+---
+
+## v0.13.2 Baseline — 2026-04-05
+
+Retrieval eval: 15/15 PASS, 0 warned, 0 failed
+Context: pre-v0.14.0 context packet reorder baseline
+Notes: One stale state record warning (resolved_priority, unrecognized type) — known StateResolver resolved flag gap, not blocking.
+
+This score must be matched or exceeded after the v0.14.0 context packet reorder before that change ships.

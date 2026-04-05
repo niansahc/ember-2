@@ -402,9 +402,10 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 **v0.11.0** — Cloud provider UI, OpenAI support, backup/export, recovery playbook, semantic safety triggers ✓
 **v0.12.0** — Task layer, session reflection, PIN lock, Mac/Linux installer, temporal awareness ✓
 **v0.13.0** — Embedding upgrade (nomic-embed-text 768-dim), SQLite index migration, memory tiering (ADR-015), nature layer (ADR-016), grounding verification (ADR-019), intent-aware type gating (ADR-018), XML context sections, monthly reflection, JSON import, identity rules layer ✓
-**v0.14.0** — Vault encryption at rest, email IMAP ingestion, GitHub ingestion, Release Please automation
-**v0.15.0** — Agent orchestration, self-evaluation loops, deviation memory, Lodestone layer
-**Post-v0.15.0** — Multi-user vault isolation, full platform parity
+**v0.14.0** — Identity foundation: Lodestone layer, deviation engine, context packet reorder, release automation
+**v0.15.0** — Connectors + vault encryption: connector architecture, email/GitHub/calendar ingestion, vault encryption at rest
+**v0.16.0** — Health + agent orchestration: health data ingestion, self-evaluation loops, trace-driven learning
+**Post-v0.16.0** — Multi-user vault isolation, full platform parity
 
 ---
 

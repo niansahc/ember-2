@@ -309,33 +309,33 @@ All items from the original TDD §25 build order are complete through step 7. Th
 
 ## Immediate Next Priorities
 
-**v0.13.0 — Memory Tiering + Embedding Upgrade:**
-- nomic-embed-text embedding upgrade via Ollama — ship first; run retrieval eval before and after
-- Hot/warm/cold memory tiering by recency and relevance (ADR-015) — tier assigned during reindex; nightly TieringService; cold excluded by default; append-only intact
-- Index migration: remaining JSON indexes to SQLite — conversation, profile, reflection, journal; align with reindex pass
-- Monthly/thematic reflection
-- Generic CSV/JSON import — JSON importer is the delta (CSV exists)
-- Custom theme with color picker
-- Vault encryption at rest — DEFERRED to v0.14.0
+**v0.14.0 — Identity Foundation:**
+- Lodestone layer (ADR-017 revised — multi-path user values layer; replaces prior ADR-017 draft)
+- Deviation engine (ADR-013 revised — pulled forward from v0.15.0; pattern detection design complete)
+- Context packet reorder — retrieved memory to recency position (eval gate required before ship)
+- Conversation history rolling summary compression at 1,500 token threshold
+- Release Please + GitHub Actions automation (replaces manual release process across all three repos)
+- Launcher script (launch_ember.bat / launch_ember.sh)
 
-**v0.14.0 — Offline Knowledge + Integrations + Encryption:**
-- Vault encryption at rest (deferred from v0.13.0)
-- Email read-only ingestion IMAP (deferred from v0.13.0)
-- GitHub read-only ingestion (deferred from v0.13.0)
-- Fitbit / Apple Health / Garmin export ingestion (deferred from v0.13.0)
-- Kiwix ZIM ingestion adapter
-- Project Gutenberg adapter
-- NOMAD-compatible path
+**v0.15.0 — Connectors + Vault Encryption:**
+- Vault encryption at rest (five-layer envelope architecture — see TDD §38)
+- ADR-020: Connector architecture (generic pattern before any connector built)
+- Email IMAP ingestion connector (ADR-023)
+- GitHub ingestion connector (ADR-022 — CLAUDE.md as first-class document, elevated retrieval priority)
+- Calendar connector
+- Notes ingestion (Obsidian/Notion export)
+- Relational orientation layer (supersedes old ADR-017 concept — see docs/research/relational-orientation.md)
 
-**v0.15.0 — Agent Orchestration:**
+**v0.16.0 — Health + Agent Orchestration:**
+- Fitbit/Apple Health/Garmin export ingestion (ADR-024)
 - Self-evaluation and decision-memory loops
 - OpenJarvis Learning primitive as reference implementation
 - Controlled tool writes with stricter policy gates
-- Trace-driven learning — local interaction traces inform retrieval routing (informed by OpenJarvis, ADR-013)
+- Trace-driven learning
 
-**Post-v0.15.0:**
+**Post-v0.16.0:**
 - Multi-user vault isolation
-- Windows/Mac/Linux full parity across all features
+- Windows/Mac/Linux full parity
 
 ## Watch Items
 

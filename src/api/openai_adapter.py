@@ -650,7 +650,20 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             args=(reply, session_id),
             daemon=True,
         ).start()
-    else:
+
+    # Deviation detection — async, no latency impact (ADR-026)
+    if not is_test:
+        _prior = None
+        _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
+        if _buffer_turns and len(_buffer_turns) >= 2:
+            _prior = _buffer_turns[-2].get("assistant")
+        threading.Thread(
+            target=_background_deviation_detection,
+            args=(reply, _intent_class, latest_user_message, _prior),
+            daemon=True,
+        ).start()
+
+    if is_test:
         logger.warning("[TASK] Skipped task detection (test session)")
 
     response_body = ChatCompletionsResponse(

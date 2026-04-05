@@ -34,7 +34,7 @@ _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Intent classes that trigger detection ─────────────────────────────────
 
-GATED_INTENTS = {"casual", "emotional"}
+GATED_INTENTS = {"casual", "emotional", "default"}
 
 # ── Hedging phrases for indirectness_softening pre-screen ─────────────────
 

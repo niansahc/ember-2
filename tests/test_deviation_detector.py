@@ -209,6 +209,7 @@ class TestDetect:
     def test_gated_intents_match_spec(self):
         assert "casual" in GATED_INTENTS
         assert "emotional" in GATED_INTENTS
+        assert "default" in GATED_INTENTS
         assert "factual_recall" not in GATED_INTENTS
         assert "web_search" not in GATED_INTENTS
 

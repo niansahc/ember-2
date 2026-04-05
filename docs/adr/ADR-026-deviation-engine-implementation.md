@@ -37,10 +37,11 @@ Deviation detection is opt-in. Controlled by EMBER_DEVIATION_DETECTION=true in .
 Deviation detection only fires on high-frequency pattern-risk intent classes:
 - casual
 - emotional (if this intent class exists; otherwise include in casual)
+- default
 
-Does not fire on: factual_recall, web_search, reflective, status_state, activity, default.
+Does not fire on: factual_recall, web_search, reflective, status_state, activity.
 
-Rationale: pattern collapse is documented as highest on open-ended and emotional queries for qwen3:8b. Applying detection to all intents wastes inference budget on low-risk turns.
+Rationale: pattern collapse is documented as highest on open-ended and emotional queries for qwen3:8b. The `default` intent class is included because classify_query() routes most open-ended conversational turns to `default` — these are exactly the turns where trained pattern collapse occurs. Excluding `default` caused the deviation detector to skip all conversational input during calibration testing (0/18 fires). Applying detection to factual, web search, and timeline intents still wastes inference budget on low-risk turns.
 
 ### 4. Signal Capture — Logprobs + Entropy
 

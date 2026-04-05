@@ -557,6 +557,81 @@ def delete_task_endpoint(task_id: str):
     return {"status": "cancelled", "id": task_id}
 
 
+# ── Lodestone endpoints ────────────────────────────────────────────────
+
+from src.memory import lodestone_service
+
+
+class LodestoneCreateRequest(BaseModel):
+    value: str
+    taxonomy_category: str
+    source: str = "conversation"
+
+
+class LodestoneUpdateRequest(BaseModel):
+    confirmed: bool | None = None
+    user_note: str | None = None
+    flagged_as_noise: bool | None = None
+
+
+@app.get("/v1/lodestone")
+def get_lodestone():
+    """Return all lodestone records (confirmed + proposed)."""
+    records = lodestone_service.read_all()
+    return {"records": records, "count": len(records)}
+
+
+@app.post("/v1/lodestone")
+def create_lodestone(body: LodestoneCreateRequest):
+    """
+    Create an explicit lodestone record (Path 1 acquisition).
+    Starts as confirmed: true.
+    """
+    valid_categories = {"character", "relational", "directional", "ground", "beyond"}
+    if body.taxonomy_category not in valid_categories:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid taxonomy_category. Must be one of: {sorted(valid_categories)}",
+        )
+
+    try:
+        record = lodestone_service.write(
+            value=body.value,
+            taxonomy_category=body.taxonomy_category,
+            acquisition_path="explicit",
+            source=body.source,
+            confirmed=True,
+        )
+        return {"status": "created", "record": record}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/v1/lodestone/{record_id}")
+def update_lodestone(record_id: str, body: LodestoneUpdateRequest):
+    """Confirm, dismiss, or annotate a lodestone record."""
+    updates = {}
+    if body.confirmed is not None:
+        updates["confirmed"] = body.confirmed
+    if body.user_note is not None:
+        updates["user_note"] = body.user_note
+    if body.flagged_as_noise is not None:
+        updates["flagged_as_noise"] = body.flagged_as_noise
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No updates provided")
+
+    try:
+        result = lodestone_service.update(record_id, updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Lodestone record '{record_id}' not found")
+
+    return {"status": "updated", "record": result}
+
+
 # ── Security / PIN endpoints ───────────────────────────────────────────
 
 

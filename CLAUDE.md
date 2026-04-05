@@ -352,6 +352,7 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - Identity rules effectiveness -- partial improvement in manual battery post-architecture; preference expression still partially deflecting; watch across more conversations before concluding model capability ceiling
 - State staleness threshold -- STATE_STALENESS_DAYS=7 implemented v0.13.0; Supermemory temporal tagging is the deeper architectural fix; monitor whether threshold is sufficient in practice
 - llama3.1:8b -- tested 5.4/10 automated eval, below competitive threshold; revisit with faster hardware or after architecture changes mature further
+- Sketch-of-Thought (Aytes et al., arXiv:2503.05179, EMNLP 2025) -- prompting framework, 70%+ token reduction on reasoning calls, no model changes required; Expert Lexicons paradigm candidate for constitutional review second-pass; prototype as prompt engineering experiment with eval gate; target v0.14.1; do not integrate as framework
 
 **Graduated (researched and implemented):**
 - ~~nomic-embed-text~~ -- shipped v0.13.0
@@ -370,6 +371,7 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - State record expiry UX — STATE_STALENESS_DAYS=7 filters old records from retrieval but no UI for users to review and resolve stale state records; users cannot easily see what state Ember holds
 - General knowledge routing — relevance gate (RETRIEVAL_MIN_RAW_SCORE=0.5) handles the case but a dedicated general_knowledge intent class would be more explicit; deferred
 - Eval test leakage into state — StateExtractor extracted eval test questions as real state records; X-Test-Session suppression exists but contaminated records already in vault required manual cleanup; consider a vault cleanup tool
+- Relational overlap across layers — constitution (relational_honesty), nature (relational presence), and lodestone (Relational category) all touch relational behavior from different angles; decision made 2026-04-05; not a release blocker; evaluate before any v0.15.0 relational work begins to determine whether consolidation, explicit scoping, or intentional overlap is the right design
 
 ## Known Issues
 - Installer Node.js prerequisite check exists but a user bypassed it somehow — needs investigation (Node IS in the prereqs screen, Next is disabled when missing)

@@ -1,8 +1,8 @@
 # Ember-2 Technical Design Document (TDD)
 
-Version: 1.1
+Version: 1.2
 Status: Updated working design baseline
-Current release: v0.13.2
+Current release: v0.14.0
 Primary environment: Local-first desktop deployment
 Repository: `ember-2`
 
@@ -1705,6 +1705,7 @@ Infrastructure:
 - nomic-embed-text-v2-moe -- newer Nomic MoE architecture, same 8192-token context, lighter inference than parameter count suggests. Evaluate alongside nomic-embed-text during v0.13.0 reindex before committing to a model. Available via Ollama.
 - Hybrid retrieval (dense + BM25) -- personal corpora have idiosyncratic vocabulary (project names, shorthand, personal references) that dense-only embedding models struggle with. BM25 keyword matching as a complement to semantic search. Known gap, post-v0.13.0.
 - sqlite-vec extension -- C extension for SQLite vector search, sub-75ms at 100k records on 768-dim vectors. No data migration required -- same SQLite file, load extension, create virtual table. Migration path when Python UDF cosine similarity becomes the bottleneck at ~100k records.
+- Sketch-of-Thought (Aytes et al., arXiv:2503.05179, EMNLP 2025) -- prompting framework that reduces LLM reasoning token output by up to 70%+ with minimal accuracy loss. Three paradigms: Conceptual Chaining, Chunked Symbolism, Expert Lexicons. No model changes required -- pure prompt construction change. Router (DistilBERT) not needed for Ember -- call type is known at construction time, route statically. Integration candidate: apply Expert Lexicons constraint to constitutional review second-pass prompt to reduce per-session Ollama overhead. Prototype as prompt engineering experiment with eval gate before enabling. Target: v0.14.1. Do not integrate as a framework.
 
 **Research Monitoring Practice**
 
@@ -1887,6 +1888,7 @@ The following should be tracked in `design-decisions.md` or ADRs:
 - ~~Whether deviation records should be user-visible and correctable~~ — resolved (v0.14.0, ADR-013 revised): yes, user-visible; proposed by default; user confirms or marks noise
 - Whether lodestone records should have their own reflection cadence separate from weekly/monthly synthesis (evaluate during v0.14.0 implementation)
 - ~~Whether contextual integrity principles should govern retrieval eligibility, not just ranking~~ — resolved (v0.13.0, ADR-018): intent-aware type gating added to ContextPolicy; eligible_memory_types gates candidates before ranking; consistent min_score floor eliminates weak context injection
+- Relational overlap across constitution (relational_honesty), nature (relational presence), and lodestone (Relational category) — decided 2026-04-05: not a release blocker. The three layers serve different functions (behavioral governance, identity, user values) and the overlap is intentional. Evaluate whether the boundary is clear enough before any v0.15.0 relational work begins.
 
 ---
 
@@ -2706,7 +2708,7 @@ Non-grounding intent classes (casual, activity, default) retain stream=True and 
 
 # 48. Lodestone Layer
 
-**Status: Planned — v0.14.0. See ADR-017 (revised).**
+**Status: Shipped v0.14.0. See ADR-017 (revised).**
 
 Ember's multi-path solution to TELOS. Where TELOS answers "what is this AI for" with a single static user-authored statement, Lodestone discovers and holds the user's orientation through accumulated interaction — plural, evolving, and multi-path.
 
@@ -2794,7 +2796,7 @@ See ADR-017 (revised) for full design and references.
 
 # 49. Deviation Engine
 
-**Status: Planned — v0.14.0. See ADR-013 (revised).**
+**Status: Shipped v0.14.0. See ADR-013 (revised).**
 
 Post-hoc behavioral pattern detection. Detects when Ember's response matches a known trained pattern class. Records chosen deviations as vault memory that compounds into genuine character over time.
 

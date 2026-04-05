@@ -1,0 +1,13 @@
+# Lodestone taxonomy — five value categories.
+# Used by LodestoneLoader and reflection synthesis (path 2 acquisition)
+# to constrain value inference. See ADR-017, TDD §48.
+#
+# Categories are inference constraints, not required bins.
+# No match is valid output — not every pattern is a value.
+
+categories:
+  character: "what kind of person am I committed to being?"
+  relational: "how do I hold my responsibilities to people I'm connected to?"
+  directional: "what am I moving toward or guarding?"
+  ground: "what do I draw from when everything else is uncertain?"
+  beyond: "what connects me to something larger than myself?"

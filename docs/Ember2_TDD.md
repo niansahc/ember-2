@@ -1648,29 +1648,32 @@ Infrastructure:
 - Intent-aware memory type gating (ADR-018) — eligible_memory_types and suppress_memory_types on ContextPolicy, consistent min_score floor across all retrieval paths, empty context handling in prompt builder; addresses qwen3:8b hallucination pattern and contextual integrity violations in retrieval
 - Monthly reflection synthesis (prompts/monthly_reflection.txt) — McAdams narrative identity framework; third-person synthesis; temporal recency bias mitigation; cross-domain pattern detection; register-controlled; 400-500 word output
 
-**v0.14.0 — Offline Knowledge + Integrations + Encryption**
-- Vault encryption at rest — deferred from v0.13.0; key derivation + documented recovery story required before implementation
-- Email read-only ingestion (IMAP) — two modes: vault ingestion and live context; deferred from v0.13.0
-- GitHub read-only ingestion — commits, PRs, issues, activity feed; live context + ingestion modes; deferred from v0.13.0
-- Fitbit export ingestion — deferred from v0.13.0; requires constitution.yaml privacy policy entry before enabling
-- Apple Health / Garmin export ingestion — deferred from v0.13.0; same privacy policy requirement
-- Kiwix ZIM ingestion adapter (curated packs only)
-- Project Gutenberg adapter (epub/txt/html as Reference Memory)
-- Curated pack recommendations in docs
-- NOMAD-compatible path supported
+**v0.14.0 — Identity Foundation**
+- Lodestone layer (ADR-017 revised — multi-path user values layer; replaces prior ADR-017 draft)
+- Deviation engine (ADR-013 revised — pulled forward from v0.15.0; pattern detection design complete)
+- Context packet reorder — retrieved memory to recency position (eval gate required before ship)
+- Conversation history rolling summary compression at 1,500 token threshold
+- Release Please + GitHub Actions automation (replaces manual release process across all three repos)
+- Launcher script (launch_ember.bat / launch_ember.sh)
 
-**Deferred (depends on task layer stability, post-v0.12.0):**
-- GitHub Issues as task source — sync open issues as task records in the task layer
+**v0.15.0 — Connectors + Vault Encryption**
+- Vault encryption at rest (five-layer envelope architecture — see TDD §38)
+- ADR-020: Connector architecture (generic pattern before any connector built)
+- Email IMAP ingestion connector (ADR-023)
+- GitHub ingestion connector (ADR-022 — CLAUDE.md as first-class document, elevated retrieval priority)
+- Calendar connector
+- Notes ingestion (Obsidian/Notion export)
+- Relational orientation layer (supersedes old ADR-017 concept — see docs/research/relational-orientation.md)
 
-**v0.15.0 — Agent Orchestration**
+**v0.16.0 — Health + Agent Orchestration**
+- Fitbit/Apple Health/Garmin export ingestion (ADR-024)
 - Self-evaluation and decision-memory loops
 - OpenJarvis Learning primitive as reference implementation
 - Controlled tool writes with stricter policy gates
-- Deviation memory — when Ember notices a trained pattern and chooses differently, that choice is recorded and weighted into future retrieval; chosen deviations compound into genuine character over time (ADR-013)
-- Trace-driven learning — local interaction traces inform retrieval routing and behavior improvement over time; no model retraining; informed by OpenJarvis Learning primitive (Stanford Scaling Intelligence Lab, Saad-Falcon et al., 2026) and ADR-013 deviation memory
+- Trace-driven learning
 
-**Post-v0.15.0**
-- Multi-user vault isolation (per-user vault paths, independent API keys, separate auth)
+**Post-v0.16.0**
+- Multi-user vault isolation
 - Windows/Mac/Linux full parity
 
 **Watch Items (research, not build):**

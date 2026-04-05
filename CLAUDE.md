@@ -525,7 +525,14 @@ A release is not complete at commit. A release is not complete at tag. A release
 - [ ] Confirm release appears at https://github.com/niansahc/[repo]/releases
 - [ ] Confirm latest.yml is present in release assets (installer only)
 - [ ] Confirm version matches package.json / version.json
+- [ ] Sync project knowledge files to Claude project after every release (Manager Claude depends on this for architecture sessions)
+- [ ] TDD version bump at every release (current: 1.1; bump minor for feature releases, patch for hotfixes)
 - [ ] Report to human: "Release vX.X.X is live at [URL]. Users can download/update now."
+
+### Context layer change gates
+
+- [ ] Context packet token estimate validated before shipping any context layer changes — must stay under 4,000-6,000 tokens at average turn
+- [ ] Run retrieval eval before AND after any context packet order changes — confirm no regression before ship
 
 ### Patch releases
 

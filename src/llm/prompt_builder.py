@@ -4,10 +4,12 @@ src/llm/prompt_builder.py
 Assembles the full prompt from system prompt, nature, identity rules,
 context packet, and conversation history.
 
-Context assembly order (ADR-016 amendment, 2026-04-04):
-  System prompt: nature block (dual injection) + identity rules + capabilities
-  Context packet: vault_memory (top) → current_state → conversation_history →
-                  web_search_results → authority_rules → user query
+Context assembly order (verified 2026-04-05, production authoritative):
+  System prompt: nature block (dual injection) + system prompt + identity rules
+                 + date/time + conversational style + capabilities
+  Context packet: vault_memory → current_state → tasks → nature (dual injection)
+                  → reflection → conversation_history → web_search_results
+                  → authority_rules → instruction/behavior rules → user message
 
 XML-tagged sections for qwen3:8b structure tracking.
 """

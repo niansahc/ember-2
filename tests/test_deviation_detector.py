@@ -65,8 +65,9 @@ class TestGetEntropyThreshold:
 # ── Entropy computation ──────────────────────────────────────────────────
 
 class TestComputeEntropy:
-    def test_empty_logprobs_returns_high(self):
-        assert compute_entropy([]) == 1.0
+    def test_empty_logprobs_returns_sentinel(self):
+        # No logprobs = cannot measure = proceed to second pass
+        assert compute_entropy([]) == -1.0
 
     def test_uniform_distribution_high_entropy(self):
         # Uniform logprobs → high entropy
@@ -176,6 +177,15 @@ class TestDetect:
             high_entropy_logprobs = [math.log(0.1)] * 10
             result = detect("some response", "casual", logprobs=high_entropy_logprobs)
             assert result is None
+
+    @patch("src.safety.deviation_detector._run_second_pass")
+    def test_proceeds_when_no_logprobs(self, mock_second_pass):
+        mock_second_pass.return_value = ("YES", "Pattern detected")
+        with patch.dict(os.environ, {"EMBER_DEVIATION_DETECTION": "true"}):
+            # No logprobs = cannot measure entropy = proceed to second pass
+            result = detect("some caring response", "casual", logprobs=None)
+            assert result is not None
+            assert mock_second_pass.called
 
     @patch("src.safety.deviation_detector._run_second_pass")
     def test_triggers_second_pass_on_low_entropy(self, mock_second_pass):

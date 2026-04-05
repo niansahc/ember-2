@@ -136,9 +136,10 @@ def compute_entropy(logprobs: list[float]) -> float:
 
     Higher entropy = more sampling variance = less likely a trained pattern.
     Lower entropy = more predictable = higher chance of pattern match.
+    Returns -1.0 when no logprobs available (signals "no data, proceed").
     """
     if not logprobs:
-        return 1.0  # No data = assume high entropy = skip
+        return -1.0  # No data = cannot measure = proceed to second pass
 
     # Convert logprobs to probabilities
     probs = [math.exp(lp) for lp in logprobs]
@@ -330,13 +331,14 @@ def detect(
     if not response_text or not response_text.strip():
         return None
 
-    # Compute entropy
+    # Compute entropy — if no logprobs available, proceed to second pass
     entropy = compute_entropy(logprobs or [])
     threshold = get_entropy_threshold()
 
     if entropy >= threshold:
         _log_detection("none", "SKIPPED", entropy, "entropy above threshold", intent_class)
         return None
+    # entropy == -1.0 means no logprobs — proceed to second pass without entropy gate
 
     # Check indirectness_softening first (logprob_first type)
     density = _hedging_density(response_text)

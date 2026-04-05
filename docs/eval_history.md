@@ -470,3 +470,12 @@ Context: pre-v0.14.0 context packet reorder baseline
 Notes: One stale state record warning (resolved_priority, unrecognized type) — known StateResolver resolved flag gap, not blocking.
 
 This score must be matched or exceeded after the v0.14.0 context packet reorder before that change ships.
+
+---
+
+## v0.14.0 Context Packet Reorder — 2026-04-06
+
+Pre-reorder: 15/15 PASS
+Post-reorder: 15/15 PASS
+No regression. Eval gate passed.
+Change: vault_memory moved from position 1 to position 6 (recency) in context packet per lost-in-the-middle research.

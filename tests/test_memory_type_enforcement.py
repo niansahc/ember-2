@@ -23,6 +23,7 @@ class TestValidMemoryTypes:
             "summary", "state", "task", "project", "reference",
             "ingested", "archive", "system_event", "decision",
             "review_log", "evaluation", "session", "lodestone",
+            "deviation",
         }
         assert expected == VALID_MEMORY_TYPES
 

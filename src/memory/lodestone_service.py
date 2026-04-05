@@ -22,7 +22,7 @@ from src.memory.storage import MemoryStorage
 
 logger = logging.getLogger("ember.lodestone")
 
-MAX_ACTIVE_RECORDS = 10
+MAX_ACTIVE_RECORDS = 15
 
 storage = MemoryStorage()
 

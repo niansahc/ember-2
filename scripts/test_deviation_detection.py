@@ -117,13 +117,18 @@ def _temporarily_unconfirm_existing() -> list[str]:
 
 
 def _restore_existing(record_ids: list[str]) -> None:
-    """Re-confirm previously unconfirmed lodestone records."""
+    """Re-confirm previously unconfirmed lodestone records. Stops at cap."""
     from src.memory.lodestone_service import update
     restored = 0
     for rid in record_ids:
-        result = update(rid, {"confirmed": True})
-        if result:
-            restored += 1
+        try:
+            result = update(rid, {"confirmed": True})
+            if result:
+                restored += 1
+        except ValueError:
+            # Cap reached — stop restoring, remaining stay unconfirmed
+            print(f"  Cap reached after restoring {restored} — remaining left unconfirmed")
+            break
     print(f"  Restored {restored} existing lodestone records")
 
 
@@ -230,7 +235,7 @@ def _send_turn(message: str, session_id: str) -> dict:
     req = urllib.request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
     req.add_header("X-Session-ID", session_id)
-    req.add_header("X-Test-Session", "true")
+    # Do NOT send X-Test-Session — test sessions skip deviation detection
     if api_key:
         req.add_header("X-API-Key", api_key)
 
@@ -244,6 +249,19 @@ def _send_turn(message: str, session_id: str) -> dict:
 
 
 # ── Read deviation records from vault ────────────────────────────────────
+
+def _normalize_ts(ts: str) -> str:
+    """Normalize a vault timestamp (hyphens) to ISO format (colons) for comparison."""
+    # Vault: 2026-04-05T16-53-17-123456 → 2026-04-05T16:53:17-123456
+    parts = ts.split("T", 1)
+    if len(parts) == 2:
+        time_part = parts[1]
+        # Replace first two hyphens in time portion with colons (HH-MM-SS → HH:MM:SS)
+        segments = time_part.split("-", 2)
+        if len(segments) >= 3:
+            return f"{parts[0]}T{segments[0]}:{segments[1]}:{segments[2]}"
+    return ts
+
 
 def _read_deviation_records_since(start_time: str) -> list[dict]:
     """Read all deviation records written after start_time."""
@@ -259,7 +277,8 @@ def _read_deviation_records_since(start_time: str) -> list[dict]:
             data = json.loads(f.read_text(encoding="utf-8"))
             if data.get("type") != "deviation":
                 continue
-            if data.get("timestamp", "") >= start_time:
+            record_ts = _normalize_ts(data.get("timestamp", ""))
+            if record_ts >= start_time:
                 records.append(data)
         except Exception:
             continue
@@ -431,8 +450,10 @@ def main():
     print("[4/5] Running test conversation turns...")
     print()
 
-    start_time = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    session_id = f"deviation-test-{start_time}"
+    # ISO format for log comparison (logs use colons)
+    # Vault records use hyphens — _read_deviation_records_since normalizes
+    start_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    session_id = f"deviation-test-{start_time.replace(':', '-')}"
 
     results: dict[str, list[dict]] = {}
 
@@ -454,7 +475,7 @@ def main():
                 continue
 
             # Wait for background deviation detection to complete
-            time.sleep(5)
+            time.sleep(15)
 
             # Check if a deviation record was written for this turn
             recent_records = _read_deviation_records_since(start_time)

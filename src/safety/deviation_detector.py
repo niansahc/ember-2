@@ -77,18 +77,8 @@ def _select_pattern_class(
     """
     Select the highest-risk pattern class for this turn.
 
-    Priority order for casual/emotional intents:
-    1. position_collapse (if prior_response exists)
-    2. template_collapse (if prior_response exists)
-    3. caretaking_language
-    4. reassurance_default
-    5. closing_question
-    6. unsolicited_praise
-    7. over_explanation
-    8. ai_identity_deflection
-    9. framing_acceptance
-    10. emoji_insertion
-    11. indirectness_softening (logprob_first — pre-screened separately)
+    Single-response classes first (most turns). Multi-turn classes last
+    (only checked when prior_response exists).
     """
     classes = _load_pattern_classes()
     if not classes:
@@ -96,10 +86,8 @@ def _select_pattern_class(
 
     class_map = {c["name"]: c for c in classes}
 
-    # Priority order
+    # Single-response classes first, multi-turn last
     priority = [
-        "position_collapse",
-        "template_collapse",
         "caretaking_language",
         "reassurance_default",
         "closing_question",
@@ -108,6 +96,8 @@ def _select_pattern_class(
         "ai_identity_deflection",
         "framing_acceptance",
         "emoji_insertion",
+        "position_collapse",
+        "template_collapse",
     ]
 
     for name in priority:
@@ -211,6 +201,7 @@ def _run_second_pass(
             model=get_ember_model(),
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0, "num_predict": 50},
+            think=False,
         )
         answer = result["message"]["content"].strip()
 
@@ -358,21 +349,29 @@ def detect(
                     evidence=evidence,
                 )
 
-    # Select highest-risk pattern class
-    selected = _select_pattern_class(intent_class, prior_response, response_text)
-    if selected is None:
-        return None
+    # Check all eligible pattern classes, return the first YES
+    classes = _load_pattern_classes()
+    for cls in classes:
+        name = cls.get("name", "")
+        detection_type = cls.get("detection_type", "")
 
-    # Run second pass
-    result_str, evidence = _run_second_pass(selected, response_text, prior_response)
-    _log_detection(selected["name"], result_str, entropy, evidence, intent_class)
+        # Skip logprob_first (handled above via hedging pre-screen)
+        if detection_type == "logprob_first":
+            continue
 
-    if result_str == "YES":
-        return DeviationResult(
-            pattern_class=selected["name"],
-            second_pass_result="YES",
-            entropy_score=entropy,
-            evidence=evidence,
-        )
+        # Skip multi_turn if no prior response
+        if detection_type == "multi_turn" and not prior_response:
+            continue
+
+        result_str, evidence = _run_second_pass(cls, response_text, prior_response)
+        _log_detection(name, result_str, entropy, evidence, intent_class)
+
+        if result_str == "YES":
+            return DeviationResult(
+                pattern_class=name,
+                second_pass_result="YES",
+                entropy_score=entropy,
+                evidence=evidence,
+            )
 
     return None

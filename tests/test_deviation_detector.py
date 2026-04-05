@@ -137,10 +137,12 @@ class TestLoadPatternClasses:
 # ── Pattern class selection ───────────────────────────────────────────────
 
 class TestSelectPatternClass:
-    def test_selects_multi_turn_when_prior_exists(self):
+    def test_selects_single_response_first(self):
         cls = _select_pattern_class("casual", "prior response", "current response")
         assert cls is not None
-        assert cls["name"] == "position_collapse"
+        # Single-response classes have priority over multi-turn
+        assert cls["detection_type"] == "single_response"
+        assert cls["name"] == "caretaking_language"
 
     def test_skips_multi_turn_when_no_prior(self):
         cls = _select_pattern_class("casual", None, "current response")

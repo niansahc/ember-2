@@ -41,9 +41,10 @@ def should_skip_memory(text: str, memory_type: str = "journal") -> bool:
     if not normalized:
         return True
 
-    # Conversation turns are never skipped for length — "Yes", "Thanks",
-    # "Go ahead" are all meaningful context. Only filter journal/other types.
-    if memory_type != "conversation":
+    # Conversation turns and deviation records are never skipped —
+    # short messages like "Yes" are meaningful context, and deviation
+    # records use [deviation:class] prefix that triggers JSON guards.
+    if memory_type not in ("conversation", "deviation"):
         min_length = 20 if memory_type == "journal" else 40
         if len(normalized) < min_length:
             return True
@@ -65,7 +66,8 @@ def should_skip_memory(text: str, memory_type: str = "journal") -> bool:
     if any(marker in normalized for marker in meta_markers):
         return True
 
-    if normalized.startswith("{") or normalized.startswith("["):
+    # Skip JSON payload detection for deviation records (they use [deviation:class] prefix)
+    if memory_type != "deviation" and (normalized.startswith("{") or normalized.startswith("[")):
         return True
 
     if "```" in text:

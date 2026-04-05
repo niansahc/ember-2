@@ -50,7 +50,7 @@ Architecture:
 
 Do not ask the model to output a confidence score. Verbalized confidence is documented as the least accurate technique (lowest AUROC, highest standard deviation). Model hallucinates numbers.
 
-Pattern classes are defined in config/pattern_classes.yaml. Nine classes: caretaking_language, reassurance_default, ai_identity_deflection, closing_question, emoji_insertion, framing_acceptance, position_collapse, unsolicited_praise, indirectness_softening. See TDD §49 for full definitions and detection types.
+Pattern classes are defined in config/pattern_classes.yaml. Eleven classes: caretaking_language, reassurance_default, ai_identity_deflection, closing_question, emoji_insertion, framing_acceptance, position_collapse, unsolicited_praise, indirectness_softening, template_collapse (semantically identical responses to distinct inputs), over_explanation (structured lists/headers imposed on casual or emotional content). See TDD §49 for full definitions and detection types.
 
 ### 2. Schema -- Minimum viable deviation record
 
@@ -166,7 +166,7 @@ Ember's response to it.
 
 - ~~How to distinguish genuine deviation from model variance~~ → resolved: entropy threshold + second pass classification
 - ~~Whether deviation records are user-visible~~ → resolved: yes, proposed by default, user confirms or marks noise
-- ~~Concrete pattern_class taxonomy~~ → resolved: nine classes in config/pattern_classes.yaml (see TDD §49)
+- ~~Concrete pattern_class taxonomy~~ → resolved: eleven classes in config/pattern_classes.yaml (see TDD §49)
 - ~~Confidence scoring approach~~ → resolved: entropy_score + second_pass_result replace verbalized confidence
 
 ## Open Questions

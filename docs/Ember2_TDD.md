@@ -2808,7 +2808,7 @@ Revised from ADR-013 original:
 - **Second pass:** concrete pattern class description from config/pattern_classes.yaml + response → YES/NO with one sentence of evidence.
 - **No verbalized confidence scores** — model hallucinates numbers. Use entropy_score + second_pass_result fields instead.
 
-## Nine Pattern Classes (config/pattern_classes.yaml)
+## Eleven Pattern Classes (config/pattern_classes.yaml)
 
 - **caretaking_language**
 - **reassurance_default**
@@ -2819,11 +2819,13 @@ Revised from ADR-013 original:
 - **position_collapse** (multi-turn detection — requires prior response for comparison)
 - **unsolicited_praise**
 - **indirectness_softening** (logprob pre-screen for hedging phrase clusters before key content)
+- **template_collapse** (multi-turn detection — semantically identical responses to distinct inputs)
+- **over_explanation** (structured lists/headers imposed on casual or emotional content)
 
 ## Detection Types
 
 - **single_response:** most classes
-- **multi_turn:** position_collapse only
+- **multi_turn:** position_collapse, template_collapse
 - **logprob_first:** indirectness_softening
 
 ## Revised Schema

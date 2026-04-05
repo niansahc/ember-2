@@ -880,7 +880,24 @@ Example conceptual structure:
 }
 ```
 
-## 14.5 Context Builder Constraints
+## 14.5 Context Packet Order — v0.14.0 Planned Change
+
+v0.14.0 planned change: retrieved memory moves to recency position (immediately before user input). Current position (top of context packet) is the lowest-attention zone per Liu et al. lost-in-the-middle research. Eval gate required before ship — run retrieval eval before and after reorder, confirm no regression.
+
+Target context packet order (v0.14.0):
+
+```
+System prompt: nature block (dual injection) + identity rules + lodestone seed layer
+Context packet:
+  current state
+  → conversation history (rolling summary at 1,500 token threshold)
+  → retrieved memory
+  → lodestone living layer (1-2 relevant records)
+  → web search results
+  → user input
+```
+
+## 14.6 Context Builder Constraints
 
 - avoid self-echo contamination
 - do not feed previous low-quality assistant answers as evidence

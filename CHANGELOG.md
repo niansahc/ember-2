@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.13.2 — 2026-04-04
+
+### Bug Fixes
+- Task deduplication — create_task() checks for existing active task with same title before writing; prevents 45x duplication from detector firing every response
+- Task title cleaning — titles now generated as clean imperative phrases ("Take Bakr to the vet" not "me to take Bakr to the vet"); strips filler prefixes, caps at 8 words, no ellipsis
+- DELETE /v1/tasks/{id} endpoint — soft-delete by setting status to cancelled (append-only compliant)
+
 ## v0.13.1 — 2026-04-04
 
 ### Bug Fix

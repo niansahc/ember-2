@@ -2684,3 +2684,91 @@ For grounding-check-triggered intent classes, the streaming pipeline switches fr
 A typing indicator is emitted immediately so the user sees activity during buffering. Additional status events: "searching" when web search triggers, "verifying" when grounding check runs, "refining" if revision pass fires.
 
 Non-grounding intent classes (casual, activity, default) retain stream=True and existing fast streaming behavior. No latency overhead for casual queries.
+
+---
+
+# 48. Lodestone Layer
+
+**Status: Planned — v0.14.0. See ADR-017 (revised).**
+
+Ember's multi-path solution to TELOS. Where TELOS answers "what is this AI for" with a single static user-authored statement, Lodestone discovers and holds the user's orientation through accumulated interaction — plural, evolving, and multi-path.
+
+Lodestone is distinct from:
+- Nature (who Ember is)
+- Constitution (what Ember does)
+- Profile memory (facts about the user)
+- State records (current operational context)
+
+Lodestone is what the user cares about — their orientation, discovered and held by Ember over time.
+
+## Two Layers
+
+- **Seed layer:** five to seven values authored in config/lodestone.yaml. Ember's orientation defaults on a fresh vault. Stable, rarely changed.
+- **Living layer:** user values accumulated in the vault. Written via two acquisition paths. Grows over time.
+
+## Acquisition Paths
+
+- **Path 1 (explicit):** user states a value directly in onboarding or conversation. Starts confirmed.
+- **Path 2 (inferred):** reflection synthesis identifies recurring value patterns using three-stage prompt and proposes a lodestone record. Starts proposed.
+- **Path 3 (future, v0.15.0):** deviation engine detects value-aligned choices and flags lodestone candidates.
+
+## Taxonomy
+
+Five taxonomy categories (config/lodestone_taxonomy.yaml):
+
+- **Character:** what kind of person am I committed to being?
+- **Relational:** how do I hold my responsibilities to people I'm connected to?
+- **Directional:** what am I moving toward or guarding?
+- **Ground:** what do I draw from when everything else is uncertain?
+- **Beyond:** what connects me to something larger than myself?
+
+Documented taxonomy gaps: Hedonism absorbs into Directional. Epistemic values absorb into Character if held as identity commitment. Both workable.
+
+## Lodestone Record Schema
+
+```json
+{
+  "id": "...",
+  "timestamp": "...",
+  "type": "lodestone",
+  "value": "natural language statement of the value",
+  "acquisition_path": "explicit | inferred",
+  "source": "onboarding | conversation | reflection_synthesis",
+  "supporting_evidence": "quote or synthesis excerpt",
+  "recurrence_count": 1,
+  "confirmed": true,
+  "conflict_resolution": false,
+  "metadata": {
+    "user_note": null,
+    "taxonomy_category": "character | relational | directional | ground | beyond",
+    "flagged_as_noise": false
+  }
+}
+```
+
+## Conflict Handling
+
+Do not resolve at write time. Store both conflicting records with provenance. Surface tension at retrieval time with explicit framing. User states priority explicitly when needed — stored as a meta-lodestone record with conflict_resolution: true.
+
+## Injection Strategy
+
+- **Seed layer:** injected in system prompt for primacy
+- **Living layer:** 1-2 most relevant records retrieved per query, injected in recency position (immediately before user input)
+- **Token budget:** 150 tokens maximum total
+- Only confirmed records auto-inject; proposed records available but not surfaced automatically
+
+## Three-Stage Reflection Synthesis for Value Inference
+
+- **Stage 1: pattern check** — does any theme appear across multiple sessions the user initiated unprompted? Output: theme or NO_VALUE_FOUND
+- **Stage 2: taxonomy check** — is this a value or a situation/task? If value, which of the five categories? Output: category or NO_CATEGORY_MATCH
+- **Stage 3: record draft** — only if Stage 1 and 2 both pass. Natural language value statement with supporting evidence.
+
+Most runs should exit at Stage 1 or 2. That is correct behavior.
+
+## Failure Mode Protections
+
+- **False positive inflation:** taxonomy constraint + evidence required before write
+- **Value inflation:** density constraint — only write when pattern is specific enough to change Ember's behavior vs. default
+- **Taxonomy rigidity:** categories are inference constraints, not required bins; no match is valid output
+
+See ADR-017 (revised) for full design and references.

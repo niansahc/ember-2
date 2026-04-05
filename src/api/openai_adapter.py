@@ -86,6 +86,26 @@ def _background_state_extraction(user_message: str, reply: str) -> None:
         logger.warning("[STATE_EXTRACT] Background extraction failed (non-fatal): %s", exc)
 
 
+def _background_deviation_detection(
+    response_text: str, intent_class: str,
+    user_message: str, prior_response: str | None = None,
+) -> None:
+    """Run deviation detection in a background thread (ADR-026)."""
+    try:
+        from src.safety.deviation_detector import detect, write_deviation_record, is_enabled
+        if not is_enabled():
+            return
+        result = detect(
+            response_text=response_text,
+            intent_class=intent_class,
+            prior_response=prior_response,
+        )
+        if result and result.second_pass_result == "YES":
+            write_deviation_record(result, user_message, response_text)
+    except Exception as exc:
+        logger.warning("[DEVIATION] Background detection failed (non-fatal): %s", exc)
+
+
 class OpenAIMessage(BaseModel):
     role: Literal["system", "user", "assistant"]
     content: Any  # str normally; list of content parts when files are attached
@@ -449,7 +469,20 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     args=(full_reply, session_id),
                     daemon=True,
                 ).start()
-            else:
+
+            # Deviation detection — async, no latency impact (ADR-026)
+            if not is_test:
+                _prior = None
+                _buffer_turns = prompt_builder.conversation_buffer.get_recent()
+                if _buffer_turns and len(_buffer_turns) >= 2:
+                    _prior = _buffer_turns[-2].get("assistant")
+                threading.Thread(
+                    target=_background_deviation_detection,
+                    args=(full_reply, _intent_class, latest_user_message, _prior),
+                    daemon=True,
+                ).start()
+
+            if is_test:
                 logger.warning("[TASK] Skipped task/state/commitment detection (test session)")
 
         def _status_event(status: str) -> str:
@@ -487,6 +520,18 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     full_reply = await run_revision_pass(
                         full_reply, unsupported or "",
                     )
+
+                # 3.5. Deviation detection (ADR-026) — after grounding, before stream
+                if not is_test:
+                    _prior = None
+                    _buffer_turns = prompt_builder.conversation_buffer.get_recent()
+                    if _buffer_turns and len(_buffer_turns) >= 2:
+                        _prior = _buffer_turns[-2].get("assistant")
+                    threading.Thread(
+                        target=_background_deviation_detection,
+                        args=(full_reply, _intent_class, latest_user_message, _prior),
+                        daemon=True,
+                    ).start()
 
                 # 4. Re-stream verified response word by word
                 tokens = full_reply.split(" ")

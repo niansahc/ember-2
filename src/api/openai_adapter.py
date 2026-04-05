@@ -368,6 +368,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     _policy = classify_query(latest_user_message)
     _intent_class = _policy.name
 
+    # Stash intent class on request for audit log
+    request.state.intent_class = _intent_class
+
     # Build retrieved context string for grounding check
     _retrieved_context = "\n".join(
         item.content for item in context_packet.memory_items

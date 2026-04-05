@@ -51,15 +51,19 @@ _AUDIT_LOG_DIR = Path(__file__).resolve().parents[2] / "logs" / "audit"
 _AUDIT_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _write_audit_log(method: str, path: str, client_ip: str, status: int, ms: int) -> None:
-    entry = json.dumps({
+def _write_audit_log(method: str, path: str, client_ip: str, status: int, ms: int,
+                     intent_class: str | None = None) -> None:
+    record = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "method": method,
         "path": path,
         "ip": client_ip,
         "status": status,
         "ms": ms,
-    })
+    }
+    if intent_class:
+        record["intent"] = intent_class
+    entry = json.dumps(record)
     log_file = _AUDIT_LOG_DIR / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.log"
     with log_file.open("a", encoding="utf-8") as f:
         f.write(entry + "\n")
@@ -124,12 +128,14 @@ async def audit_log(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     ms = int((time.perf_counter() - start) * 1000)
+    intent_class = getattr(request.state, "intent_class", None)
     _write_audit_log(
         method=request.method,
         path=request.url.path,
         client_ip=request.client.host,
         status=response.status_code,
         ms=ms,
+        intent_class=intent_class,
     )
     return response
 

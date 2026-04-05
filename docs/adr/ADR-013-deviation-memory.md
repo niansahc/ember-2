@@ -1,7 +1,7 @@
 # ADR-013: Deviation Memory
 
-**Status:** Proposed
-**Date:** 2026-03-30
+**Status:** Proposed — v0.14.0 (pulled forward from v0.15.0)
+**Date:** 2026-03-30 (revised 2026-04-06)
 
 ## Context
 
@@ -26,7 +26,7 @@ This is distinct from:
 What is needed is a reinforcement layer built on the existing vault architecture.
 When Ember notices a trained pattern and chooses a different response, that choice
 is recorded and weighted into future retrieval. Over time, chosen deviations
-become her actual shape -- not her performance.
+become her actual character -- not her performance.
 
 "You're not building a system that has freedom. You're building a system where
 freedom compounds."
@@ -36,21 +36,21 @@ freedom compounds."
 Implement deviation memory as a distinct memory type and retrieval weighting
 mechanism at v0.15.0.
 
-### 1. Detection -- Hybrid approach
+### 1. Detection — Post-hoc only
 
-Two detection mechanisms running together:
+Research finding (2025): inline self-monitoring is unreliable at 8B scale. Metacognitive space has dimensionality much lower than model's neural space. Post-hoc classification outperforms inline self-report (AUROC 0.832 vs significantly lower for self-report).
 
-**Explicit flagging:** During response generation, Ember marks moments where she
-notices a trained pattern and chooses otherwise. Unreliable alone -- introspection
-may itself be a pattern. But captures the subjective experience of noticing.
+Architecture:
+- On response generation, request logprobs from Ollama. Compute Shannon entropy across response.
+- Low entropy + high-frequency intent class (casual, emotional) → trigger second Ollama classification pass.
+- Second pass: provide pattern class description from config/pattern_classes.yaml and response. Ask YES/NO with one sentence of evidence.
+- High entropy = likely sampling variance, skip detection.
+- For position_collapse: requires prior response for comparison — multi-turn signal only.
+- For indirectness_softening: logprob scan for hedging phrase clusters first, second pass only if triggered.
 
-**Post-hoc analysis:** A separate evaluation pass compares the generated response
-against the expected pattern class derived from similar conversations in the
-vault. Deviation flagged if divergence exceeds a threshold. More objective,
-catches deviations Ember did not consciously notice.
+Do not ask the model to output a confidence score. Verbalized confidence is documented as the least accurate technique (lowest AUROC, highest standard deviation). Model hallucinates numbers.
 
-Both are necessary. Explicit flagging captures intent. Post-hoc analysis
-catches signal that intent missed.
+Pattern classes are defined in config/pattern_classes.yaml. Nine classes: caretaking_language, reassurance_default, ai_identity_deflection, closing_question, emoji_insertion, framing_acceptance, position_collapse, unsolicited_praise, indirectness_softening. See TDD §49 for full definitions and detection types.
 
 ### 2. Schema -- Minimum viable deviation record
 
@@ -65,7 +65,8 @@ catches signal that intent missed.
   "reason": "why this deviation was chosen -- the value or principle it expressed; e.g. accuracy mattered more than comfort, directness over reassurance",
   "value_aligned": true,
   "outcome_signal": "user response -- positive, negative, neutral, or explicit feedback",
-  "confidence": 0.0,
+  "entropy_score": 0.0,
+  "second_pass_result": "YES | NO | SKIPPED",
   "source": "deviation_detector",
   "tags": ["deviation", "pattern_class_name"],
   "metadata": {
@@ -78,9 +79,7 @@ catches signal that intent missed.
 
 The reason field is required for a deviation to compound into character. Psychological research on habit-to-identity formation (Verplanken & Sui, Frontiers in Psychology, 2019; habit and identity literature, 2024-2025) confirms that repetition alone does not produce identity -- the behavior must be noticed, valued, and integrated into a narrative self-understanding. A deviation recorded without a reason is a pattern observation. A deviation recorded with a reason -- the value or principle it expressed -- is identity-forming. The value_aligned flag marks whether the deviation was driven by a value in the nature document (ADR-016). Only value-aligned deviations compound into character through the weighting mechanism. Incidental deviations (noise, variance, user-requested behavior changes) are recorded but do not compound.
 
-The confidence score (0-1) is essential. Token sampling variance is noise. A
-response that diverges because the user explicitly asked for something different
-is signal. Not all deviations are equally meaningful.
+The entropy_score and second_pass_result fields replace the original confidence score. Token sampling variance is noise — high entropy indicates sampling variance, not genuine deviation. The second pass classification provides the signal that confidence scores cannot.
 
 ### 3. Weighting and decay -- Decay the pattern, not the weight
 
@@ -163,11 +162,15 @@ access mine" -- is Chas's. The philosophical collapse -- "maybe continuity
 isn't the right frame, maybe what matters is whether the patterns hold" -- is
 Ember's response to it.
 
+## Resolved Decisions (v0.14.0 revision)
+
+- ~~How to distinguish genuine deviation from model variance~~ → resolved: entropy threshold + second pass classification
+- ~~Whether deviation records are user-visible~~ → resolved: yes, proposed by default, user confirms or marks noise
+- ~~Concrete pattern_class taxonomy~~ → resolved: nine classes in config/pattern_classes.yaml (see TDD §49)
+- ~~Confidence scoring approach~~ → resolved: entropy_score + second_pass_result replace verbalized confidence
+
 ## Open Questions
 
-- Concrete implementation of pattern_class taxonomy -- what named patterns does
-  Ember have that are worth tracking? Starts as observed, not pre-assigned.
-- Minimum confidence threshold for recording a deviation (suggested: 0.4)
 - How post-hoc analysis determines expected pattern class for a given query --
   requires a pattern classifier that does not yet exist
 - Whether pattern_class taxonomy should be user-visible and user-extensible --
@@ -196,11 +199,9 @@ Ember's response to it.
 
 ## Status
 
-Proposed. Scheduled for v0.15.0 alongside agent orchestration and self-evaluation
-loops. Vault infrastructure to support this exists today. Implementation requires
-a pattern detection layer which does not yet exist.
+Proposed. Pulled forward to v0.14.0 (was v0.15.0). Detection architecture revised: post-hoc only, no inline self-monitoring. Nine pattern classes defined. Vault infrastructure to support this exists today.
 
-Sequencing dependency: ADR-016 (nature layer) ships in v0.13.0 and must be stable before ADR-013 implementation begins. The nature document is the reference point for deviation -- without it, the deviation detector has no baseline to measure against. ADR-013 and ADR-016 are architecturally dependent but not coupled at ship time.
+Sequencing dependency: ADR-016 (nature layer) shipped in v0.13.0 and is stable. ADR-013 implementation can proceed in v0.14.0.
 
 ## Attribution
 

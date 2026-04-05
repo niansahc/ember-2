@@ -22,6 +22,7 @@ from src.context.models import ContextPacket
 from src.context.conversation_buffer import ConversationBuffer
 from src.safety.nature_loader import NatureLoader
 from src.safety.identity_rules_loader import IdentityRulesLoader
+from src.safety.lodestone_loader import LodestoneLoader
 
 logger = logging.getLogger("ember.prompt_builder")
 
@@ -66,12 +67,21 @@ class PromptBuilder:
             logger.warning("[PROMPT] Could not load identity rules: %s", exc)
             self._identity_rules_loader = None
 
+        # Lodestone seed loader — singleton, loaded once at startup.
+        try:
+            self._lodestone_loader = LodestoneLoader()
+            self._lodestone_loader.load()
+        except Exception as exc:
+            logger.warning("[PROMPT] Could not load lodestone seed: %s", exc)
+            self._lodestone_loader = None
+
     def build_prompt(self, context_packet: ContextPacket, style: str = "balanced") -> str:
         # System prompt with nature (dual injection) + identity rules at front
         system_sections: list[str] = [
             self._build_nature_section(),           # Nature first (dual injection)
             self.system_prompt,                     # System prompt
             self._build_identity_rules_section(),   # Identity rules
+            self._build_lodestone_seed_section(),   # Lodestone seed layer
             self._build_date_section(),
             self._build_style_section(style),
             self._build_capabilities_section(),
@@ -87,6 +97,7 @@ class PromptBuilder:
             self._build_nature_section(),                  # Dual injection in context
             self._build_reflection_section(context_packet),
             self._build_conversation_section(),
+            self._build_lodestone_living_section(context_packet),
             self._build_web_search_section(context_packet),
             AUTHORITY_RULES,
             self._build_instruction_section(),
@@ -152,6 +163,31 @@ class PromptBuilder:
         try:
             return self._identity_rules_loader.to_prompt_text()
         except Exception:
+            return ""
+
+    def _build_lodestone_seed_section(self) -> str:
+        """Render lodestone seed layer for system prompt injection (ADR-017)."""
+        if self._lodestone_loader is None:
+            return ""
+        try:
+            return self._lodestone_loader.to_prompt_text()
+        except Exception:
+            return ""
+
+    def _build_lodestone_living_section(self, context_packet: ContextPacket) -> str:
+        """
+        Render lodestone living layer for context packet injection (ADR-017).
+
+        Retrieves 1-2 most relevant confirmed lodestone records via semantic
+        similarity. Injected in recency position — after conversation history,
+        before web search. Only confirmed records auto-inject.
+        """
+        try:
+            from src.context.lodestone_resolver import resolve, to_prompt_text
+            records = resolve(context_packet.user_message)
+            return to_prompt_text(records)
+        except Exception as exc:
+            logger.warning("[PROMPT] Lodestone living layer failed: %s", exc)
             return ""
 
     def _build_state_section(self, context_packet: ContextPacket) -> str:

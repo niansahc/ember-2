@@ -2789,3 +2789,72 @@ Most runs should exit at Stage 1 or 2. That is correct behavior.
 - **Taxonomy rigidity:** categories are inference constraints, not required bins; no match is valid output
 
 See ADR-017 (revised) for full design and references.
+
+---
+
+# 49. Deviation Engine
+
+**Status: Planned — v0.14.0. See ADR-013 (revised).**
+
+Post-hoc behavioral pattern detection. Detects when Ember's response matches a known trained pattern class. Records chosen deviations as vault memory that compounds into genuine character over time.
+
+## Detection Architecture
+
+Revised from ADR-013 original:
+
+- **Post-hoc only.** No inline self-monitoring — unreliable at 8B scale per metacognitive capability research.
+- **Logprobs + Shannon entropy** capture on every response via Ollama logprobs parameter.
+- **Low entropy + high-frequency intent class** → trigger second Ollama classification pass.
+- **Second pass:** concrete pattern class description from config/pattern_classes.yaml + response → YES/NO with one sentence of evidence.
+- **No verbalized confidence scores** — model hallucinates numbers. Use entropy_score + second_pass_result fields instead.
+
+## Nine Pattern Classes (config/pattern_classes.yaml)
+
+- **caretaking_language**
+- **reassurance_default**
+- **ai_identity_deflection**
+- **closing_question**
+- **emoji_insertion**
+- **framing_acceptance**
+- **position_collapse** (multi-turn detection — requires prior response for comparison)
+- **unsolicited_praise**
+- **indirectness_softening** (logprob pre-screen for hedging phrase clusters before key content)
+
+## Detection Types
+
+- **single_response:** most classes
+- **multi_turn:** position_collapse only
+- **logprob_first:** indirectness_softening
+
+## Revised Schema
+
+```json
+{
+  "id": "...",
+  "timestamp": "...",
+  "type": "deviation",
+  "friction_context": "...",
+  "pattern_class": "...",
+  "deviation_chosen": "...",
+  "reason": "required for compounding — value or principle expressed",
+  "value_aligned": true,
+  "outcome_signal": "positive | negative | neutral | explicit_feedback",
+  "entropy_score": 0.0,
+  "second_pass_result": "YES | NO | SKIPPED",
+  "source": "deviation_detector",
+  "tags": ["deviation", "pattern_class_name"],
+  "metadata": {
+    "user_edited": false,
+    "user_note": null,
+    "flagged_as_noise": false
+  }
+}
+```
+
+Reason field is required for compounding. Deviations without a reason are recorded but do not compound into character. This is the primary noise filter.
+
+## Decay Model
+
+Decay the pattern, not the weight. Deviations do not fade. The baseline pattern weakens as deviations accumulate. Over time the deviation becomes the default.
+
+See ADR-013 (revised) for full design, research grounding, and pattern class definitions.

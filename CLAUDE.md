@@ -26,6 +26,7 @@ These decisions are locked. Do not undermine them:
 6. **Source quality before retrieval cleverness.** Clean ingestion and typed metadata come before ranking sophistication.
 7. **Constitutional review is orchestration, not training.** The review layer is triggered post-draft, lives in the Cognitive layer, and is governed by `config/constitution.yaml`. It must not contaminate retrieval logic.
 8. **Explicit policy over prompt folklore.** Safety, refusal, and review behavior must be visible in code and config — not buried in prompt text or model behavior assumptions.
+9. **Do not use the word "shape" in any output** — code comments, prompts, ADRs, prose, or conversation. Use a more precise alternative.
 
 ---
 
@@ -128,7 +129,7 @@ Every canonical record is a JSON file with these required fields:
 
 Valid types (taxonomy may evolve, separation principle must not):
 `profile`, `journal`, `conversation`, `reflection`, `summary`, `state`, `task`, `project`, `reference`, `ingested`, `archive`, `system_event`, `decision`, `review_log`, `evaluation`, `session`
-Planned (v0.15.0): `deviation` -- chosen behavioral deviations from trained patterns (ADR-013)
+Added v0.14.0: `lodestone` (user values, ADR-017), `deviation` (behavioral pattern deviations, ADR-013)
 
 Canonical code reference: `VALID_MEMORY_TYPES` in `src/memory/storage.py`. All writes are validated against this set.
 
@@ -195,12 +196,12 @@ Key API endpoints:
 
 ---
 
-## Current State (v0.13.0 in progress)
+## Current State (v0.13.2 — v0.14.0 next)
 
-All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support. v0.13.0 adds embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring.
+All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support. v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring. v0.14.0 adds Lodestone layer, deviation engine, and context packet reorder.
 
 **Core Systems:**
-- Append-only JSON vault with typed memory enforcement (`VALID_MEMORY_TYPES`, 17 types)
+- Append-only JSON vault with typed memory enforcement (`VALID_MEMORY_TYPES`, 19 types)
 - Ingestion pipeline (ChatGPT, PDF, DOCX, CSV, TXT, GDrive, POST /ingest/upload multipart)
 - Semantic retrieval via vector indexes (cached in memory, no disk load per query)
 - Context assembly with policy-weighted ranking, diversity selection, project-scoped boost (ADR-007)
@@ -301,9 +302,9 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - Electron 33 (upgraded from 28.3.3, unblocks Playwright e2e tests)
 
 **Tests:**
-- ember-2 backend: 610 pytest tests passing
-- ember-2-ui: 40 Playwright e2e tests passing, 3 skipped
-- ember-2-installer: 12 Playwright e2e tests passing
+- ember-2 backend: 731 pytest tests passing
+- ember-2-ui: 63 Playwright e2e tests passing, 4 skipped
+- ember-2-installer: 48 Playwright e2e tests passing (v0.5.9)
 
 ---
 
@@ -377,6 +378,8 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - Preference expression partial deflection — identity rules reduced "I'm an AI" deflection but did not eliminate it; model capability ceiling on qwen3:8b for some identity questions
 - The API must be restarted after any backend code changes for them to take effect. Changes to task detection, prompt building, or any src/ file do not hot-reload in production mode. Run `./start_api.bat` or kill and restart uvicorn after deploying changes.
 - Context packet order discrepancy: ADR-016 amendment and prompt_builder.py describe different orders. Verify which is authoritative and reconcile before v0.14.0 context packet reorder work begins.
+- Clean install testing is a known gap due to hardware constraints (documented in runbook).
+- Mac/Linux installer not yet tested on real hardware.
 
 ---
 
@@ -384,7 +387,8 @@ All items from the original TDD §25 build order are complete through step 7. Th
 
 Ember-2 uses native fetch for all HTTP requests in the frontend and installer — no axios dependency. This was a protective decision confirmed during the March 31, 2026 axios npm supply chain attack (compromised versions 1.14.1 and 0.30.4 contained a RAT; Ember was not affected).
 
-When adding new npm dependencies:
+When adding new dependencies (npm or pip):
+- All new dependencies must be reviewed before addition — no auto-approvals
 - Prefer native browser/Node APIs over third-party packages where feasible
 - Pin exact versions in package.json rather than using ^ or ~ ranges for production dependencies
 - Check new packages against known vulnerability databases before adding
@@ -407,10 +411,12 @@ When adding new npm dependencies:
 pytest tests/
 ```
 
-610 tests covering: constitution loader, policy service, review service, vault read/write, state layer, state extractor, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management, task layer, commitment detection, session reflection, PIN/passphrase service, soft-delete filtering, temporal awareness, nature loader, identity rules loader, type gating, memory tiering, SQLite migration, grounding check, JSON import, SSE events, model filter, monthly reflection, index.html cache, manual eval.
+731 tests covering: constitution loader, policy service, review service, vault read/write, state layer, state extractor, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management, task layer, commitment detection, session reflection, PIN/passphrase service, soft-delete filtering, temporal awareness, nature loader, identity rules loader, type gating, memory tiering, SQLite migration, grounding check, JSON import, SSE events, model filter, monthly reflection, index.html cache, manual eval, lodestone loader, lodestone service, lodestone resolver, lodestone API, deviation detector, deviation API.
 Tests do not mock the filesystem vault (real path via `PRIVATE_VAULT_PATH`). Integration tests hit real storage.
 
 When adding features: unit test normalizers, filters, ranking functions, and state resolution. Integration test full pipeline paths.
+
+Eval regressions require running the eval twice before concluding a 3+ point drop is real. A single run is not sufficient to call a regression.
 
 ---
 

@@ -88,15 +88,17 @@ class PromptBuilder:
         ]
 
         # Context packet with XML-tagged sections
-        # Order: vault_memory (top) → state → tasks → nature (dual) →
-        #        reflection → conversation → web → authority → user
+        # Order: state → tasks → nature (dual) → reflection → conversation →
+        #        vault_memory (recency position) → lodestone → web → authority → user
+        # vault_memory moved from top to recency position per TDD §14.5
+        # (lost-in-the-middle fix — Liu et al.)
         context_sections: list[str] = [
-            self._build_context_section(context_packet),  # vault_memory at top
             self._build_state_section(context_packet),
             self._build_task_section(context_packet),
             self._build_nature_section(),                  # Dual injection in context
             self._build_reflection_section(context_packet),
             self._build_conversation_section(),
+            self._build_context_section(context_packet),   # vault_memory in recency position
             self._build_lodestone_living_section(context_packet),
             self._build_web_search_section(context_packet),
             AUTHORITY_RULES,

@@ -430,6 +430,35 @@ When adding features: unit test normalizers, filters, ranking functions, and sta
 - After making backend changes that affect the running API, restart it automatically — kill existing uvicorn process(es) and start a new one. Do not ask. The human should not have to manage API restarts during development.
 - After making UI changes, rebuild (npm run build in ember-2-ui) and copy dist/ to ember-2/ui/ automatically. Do not ask.
 
+## Conventional Commits (Required)
+
+All three Ember-2 repos use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) and release-please for automated release PRs.
+
+**Format:** `type(scope): description`
+
+**Types:**
+- `feat` — new feature (bumps minor)
+- `fix` — bug fix (bumps patch)
+- `chore` — maintenance, version bumps, config changes
+- `docs` — documentation only
+- `refactor` — code change that neither fixes a bug nor adds a feature
+- `test` — adding or updating tests
+- `ci` — CI/CD changes
+
+**Breaking changes:** append `!` after the type — e.g., `feat!: redesign context packet`. This bumps major (or minor while pre-1.0).
+
+**Scope** is optional but encouraged — e.g., `feat(retrieval): ...`, `fix(state): ...`
+
+**Examples:**
+```
+feat(retrieval): add nomic-embed-text embedding upgrade
+fix(state): check resolved flag in _latest_per_category
+chore: bump version to v0.13.2
+docs: add conventional commit guide to CLAUDE.md
+```
+
+release-please reads these commit messages to auto-generate changelogs and determine version bumps. The release PR is created automatically but requires human approval before merging.
+
 ## Documentation Language Convention
 
 Public-facing documentation, ADRs, code comments, and test fixtures use generic, non-personal language. Reference "the user," "the developer," or "a user" rather than specific individuals. Personal details belong in the vault, not in the codebase. This applies to all three repos.
@@ -488,8 +517,8 @@ A release is not complete at commit. A release is not complete at tag. A release
 - [ ] All tests passing: pytest tests/
 - [ ] Retrieval eval passing: python tools/eval_retrieval.py -- no regression
 - [ ] Conversation eval run: python tools/eval_conversations.py -- document results
-- [ ] CHANGELOG.md updated
-- [ ] version.json bumped
+- [ ] CHANGELOG.md updated (release-please handles this via conventional commits)
+- [ ] version.json bumped (release-please handles this via conventional commits)
 - [ ] All changes committed and pushed to main: git push origin main
 - [ ] Constitution, nature, and Lodestone layers reviewed for coherence
 - [ ] Research review: any watch items ready to graduate to roadmap?

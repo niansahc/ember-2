@@ -1,8 +1,8 @@
 # Ember-2 Technical Design Document (TDD)
 
-Version: 1.0-draft
+Version: 1.1
 Status: Updated working design baseline
-Current release: v0.12.0
+Current release: v0.13.2
 Primary environment: Local-first desktop deployment
 Repository: `ember-2`
 

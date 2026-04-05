@@ -1866,8 +1866,9 @@ The following should be tracked in `design-decisions.md` or ADRs:
 - ~~Local model grounding: three-step compound intervention~~ — resolved (v0.13.0, ADR-018): min_score floor eliminates weak candidates; empty pool detected before prompt assembly; explicit "no relevant memory found" signal added to prompt builder; model instructed to acknowledge uncertainty rather than generate from parametric memory.
 - UI session security phasing — vault masking (v0.11.0), PIN lock (v0.12.0/v0.13.0), full auth (post-v0.15.0). See ADR-012.
 - PIN/passphrase hash storage approach — keyring vs local file, inactivity timeout default, passphrase recovery mechanism
-- How to distinguish genuine deviation choices from model variance artifacts — design needed before implementing deviation memory (ADR-013)
-- Whether deviation records should be user-visible and correctable — yes per ethos, UI design needed (ADR-013)
+- ~~How to distinguish genuine deviation choices from model variance artifacts~~ — resolved (v0.14.0, ADR-013 revised): post-hoc only via logprobs + entropy capture + second Ollama classification pass; no inline self-monitoring; no verbalized confidence scores; pattern classes in config/pattern_classes.yaml
+- ~~Whether deviation records should be user-visible and correctable~~ — resolved (v0.14.0, ADR-013 revised): yes, user-visible; proposed by default; user confirms or marks noise
+- Whether lodestone records should have their own reflection cadence separate from weekly/monthly synthesis (evaluate during v0.14.0 implementation)
 - ~~Whether contextual integrity principles should govern retrieval eligibility, not just ranking~~ — resolved (v0.13.0, ADR-018): intent-aware type gating added to ContextPolicy; eligible_memory_types gates candidates before ranking; consistent min_score floor eliminates weak context injection
 
 ---

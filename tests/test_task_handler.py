@@ -25,71 +25,71 @@ class TestExplicitTaskDetection:
 
     def test_create_a_task_for(self):
         titles = detect_explicit_task_request("Create a task for updating the README")
-        assert titles == ["updating the README"]
+        assert titles == ["Updating the README"]
 
     def test_add_a_task_called(self):
         titles = detect_explicit_task_request("Add a task called fix login bug")
-        assert titles == ["fix login bug"]
+        assert titles == ["Fix login bug"]
 
     def test_make_a_task_to(self):
         titles = detect_explicit_task_request("Make a task to review the PR")
-        assert titles == ["review the PR"]
+        assert titles == ["Review the PR"]
 
     def test_track_as_a_task(self):
         titles = detect_explicit_task_request("Track deploy new version as a task")
-        assert titles == ["deploy new version"]
+        assert titles == ["Deploy new version"]
 
     def test_new_task_for(self):
         titles = detect_explicit_task_request("New task for running the eval harness")
-        assert titles == ["running the eval harness"]
+        assert titles == ["Running the eval harness"]
 
     # --- Polite/natural variations ---
 
     def test_can_you_create(self):
         titles = detect_explicit_task_request("Can you create a task for updating the docs")
-        assert titles == ["updating the docs"]
+        assert titles == ["Updating the docs"]
 
     def test_please_add(self):
         titles = detect_explicit_task_request("Please add a task for running tests")
-        assert titles == ["running tests"]
+        assert titles == ["Running tests"]
 
     def test_can_you_add(self):
         titles = detect_explicit_task_request("Can you add a task for the migration")
-        assert titles == ["the migration"]
+        assert titles == ["The migration"]
 
     def test_i_need_a_task(self):
         titles = detect_explicit_task_request("I need a task for reviewing the architecture")
-        assert titles == ["reviewing the architecture"]
+        assert titles == ["Reviewing the architecture"]
 
     def test_add_to_task_list(self):
         titles = detect_explicit_task_request("Add weeding to my task list")
-        assert titles == ["weeding"]
+        assert titles == ["Weeding"]
 
     def test_put_on_task_list(self):
         titles = detect_explicit_task_request("Put mowing on my task list")
-        assert titles == ["mowing"]
+        assert titles == ["Mowing"]
 
     def test_remind_me_to(self):
         titles = detect_explicit_task_request("Remind me to water the plants")
-        assert titles == ["water the plants"]
+        assert titles == ["Water the plants"]
 
     def test_need_to_remember(self):
         titles = detect_explicit_task_request("I need to remember to call the dentist")
-        assert titles == ["call the dentist"]
+        assert titles == ["Call the dentist"]
 
     # --- Multi-item lists ---
 
     def test_comma_separated_list(self):
         titles = detect_explicit_task_request("Create tasks for weeding, mowing, and picking up sticks")
-        assert titles == ["weeding", "mowing", "picking up sticks"]
+        assert titles == ["Weeding", "Mowing", "Picking up sticks"]
 
     def test_two_items_with_and(self):
         titles = detect_explicit_task_request("Create tasks for weeding and mowing")
-        assert titles == ["weeding", "mowing"]
+        assert titles == ["Weeding", "Mowing"]
 
     def test_comma_no_and(self):
         titles = detect_explicit_task_request("Add tasks for laundry, dishes, vacuuming")
-        assert titles == ["laundry", "dishes", "vacuuming"]
+        assert titles == ["Laundry", "Dishes", "Vacuuming"]
 
     # --- Non-matches ---
 
@@ -107,7 +107,7 @@ class TestExplicitTaskDetection:
 
     def test_strips_trailing_punctuation(self):
         titles = detect_explicit_task_request("Create a task for updating docs.")
-        assert titles == ["updating docs"]
+        assert titles == ["Updating docs"]
 
 
 class TestCreateTask:

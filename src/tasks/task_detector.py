@@ -128,7 +128,7 @@ def _extract_task_title(text: str, pattern: str) -> str:
     lower = text.lower()
     idx = lower.find(pattern)
     if idx == -1:
-        return text[:80]
+        return _clean_detected_title(text[:80])
 
     # Walk backward to find sentence start
     start = idx
@@ -143,6 +143,31 @@ def _extract_task_title(text: str, pattern: str) -> str:
         end += 1  # include the punctuation
 
     sentence = text[start:end].strip()
-    if len(sentence) > 80:
-        sentence = sentence[:77] + '...'
-    return sentence
+    return _clean_detected_title(sentence)
+
+
+def _clean_detected_title(title: str) -> str:
+    """Clean a detected task title into a short imperative phrase."""
+    title = title.strip().rstrip('.!?…')
+
+    # Strip filler prefixes
+    filler_prefixes = (
+        "i'll ", "i will ", "i need to ", "i want to ", "i should ",
+        "i have to ", "you should ", "you need to ", "you'll want to ",
+        "make sure to ", "don't forget to ", "remember to ",
+        "me to ", "please ", "can you ", "could you ",
+    )
+    lower = title.lower()
+    for prefix in filler_prefixes:
+        if lower.startswith(prefix):
+            title = title[len(prefix):]
+            lower = title.lower()
+
+    if title:
+        title = title[0].upper() + title[1:]
+
+    words = title.split()
+    if len(words) > 8:
+        title = " ".join(words[:8])
+
+    return title.rstrip('.…').strip()

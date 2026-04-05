@@ -126,11 +126,60 @@ def _split_task_list(raw: str) -> list[str]:
 
 
 def _clean_title(title: str) -> str:
-    """Clean and truncate a task title."""
-    title = title.strip().rstrip('.!?')
-    if len(title) > 80:
-        title = title[:77] + '...'
-    return title
+    """
+    Clean a raw task title into a short imperative action phrase.
+
+    Strips filler prefixes ("me to", "I need to", etc.), enforces
+    imperative form, caps at 8 words, no trailing ellipsis.
+    """
+    title = title.strip().rstrip('.!?…')
+
+    # Strip common filler prefixes (case-insensitive)
+    filler_prefixes = (
+        "me to ",
+        "i need to remember to ",
+        "i need to ",
+        "i want to ",
+        "i should ",
+        "i have to ",
+        "i'll ",
+        "i will ",
+        "you should ",
+        "you need to ",
+        "you'll want to ",
+        "make sure to ",
+        "don't forget to ",
+        "remember to ",
+        "remind me to ",
+        "please ",
+        "can you ",
+        "could you ",
+    )
+    # Apply repeatedly — some prefixes chain ("please remind me to")
+    changed = True
+    lower = title.lower()
+    while changed:
+        changed = False
+        for prefix in filler_prefixes:
+            if lower.startswith(prefix):
+                title = title[len(prefix):]
+                lower = title.lower()
+                changed = True
+                break
+
+    # Capitalize first letter (imperative form)
+    if title:
+        title = title[0].upper() + title[1:]
+
+    # Cap at 8 words
+    words = title.split()
+    if len(words) > 8:
+        title = " ".join(words[:8])
+
+    # Strip any trailing ellipsis or truncation artifacts
+    title = title.rstrip('.…')
+
+    return title.strip()
 
 
 def create_task(

@@ -694,6 +694,7 @@ class LodestoneCreateRequest(BaseModel):
     value: str
     taxonomy_category: str
     source: str = "conversation"
+    question_context: str | None = None
 
 
 class LodestoneUpdateRequest(BaseModel):
@@ -709,10 +710,49 @@ def get_lodestone():
     return {"records": records, "count": len(records)}
 
 
+def _extract_lodestone_value(raw_answer: str, question_context: str | None = None) -> str:
+    """
+    Use LLM to extract a value statement from a raw answer.
+
+    Returns the inferred value, or the raw answer unchanged on failure.
+    """
+    try:
+        from src.core.config import get_ember_model
+
+        context_line = ""
+        if question_context:
+            context_line = f"Question: {question_context}\n"
+
+        prompt = (
+            "Extract the underlying value from this answer. "
+            "Write one sentence: what does this person care about? "
+            "Do not summarize — identify the value.\n\n"
+            f"{context_line}"
+            f"Answer: {raw_answer}\n\n"
+            "Value:"
+        )
+
+        result = ollama.chat(
+            model=get_ember_model(),
+            messages=[{"role": "user", "content": prompt}],
+            options={"temperature": 0, "num_predict": 50},
+        )
+        inferred = result["message"]["content"].strip()
+        if inferred:
+            logger.info("[LODESTONE] Inferred value: %s", inferred[:80])
+            return inferred
+        logger.warning("[LODESTONE] Inference returned empty — using raw answer")
+        return raw_answer
+    except Exception as exc:
+        logger.warning("[LODESTONE] Value inference failed, using raw answer: %s", exc)
+        return raw_answer
+
+
 @app.post("/v1/lodestone")
 def create_lodestone(body: LodestoneCreateRequest):
     """
     Create an explicit lodestone record (Path 1 acquisition).
+    Infers a value statement from the raw answer via LLM.
     Starts as confirmed: true.
     """
     valid_categories = {"character", "relational", "directional", "ground", "beyond"}
@@ -722,12 +762,15 @@ def create_lodestone(body: LodestoneCreateRequest):
             detail=f"Invalid taxonomy_category. Must be one of: {sorted(valid_categories)}",
         )
 
+    inferred_value = _extract_lodestone_value(body.value, body.question_context)
+
     try:
         record = lodestone_service.write(
-            value=body.value,
+            value=inferred_value,
             taxonomy_category=body.taxonomy_category,
             acquisition_path="explicit",
             source=body.source,
+            supporting_evidence=body.value,
             confirmed=True,
         )
         return {"status": "created", "record": record}

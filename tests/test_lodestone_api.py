@@ -110,3 +110,78 @@ class TestTaxonomyValidation:
         for cat in ("character", "relational", "directional", "ground", "beyond"):
             rec = lodestone_service.write(f"value for {cat}", cat, confirmed=True)
             assert rec["metadata"]["taxonomy_category"] == cat
+
+
+class TestValueInference:
+    @patch("ollama.chat")
+    @patch("src.core.config.get_ember_model", return_value="qwen3:8b")
+    def test_infers_value_from_raw_answer(self, mock_model, mock_chat):
+        from src.api.main import _extract_lodestone_value
+        mock_chat.return_value = {
+            "message": {"content": "building things that matter even under difficult conditions"}
+        }
+        result = _extract_lodestone_value(
+            "Work, building Ember-2, and surviving this hellscape.",
+            question_context="What matters to you right now?",
+        )
+        assert result == "building things that matter even under difficult conditions"
+        mock_chat.assert_called_once()
+        call_args = mock_chat.call_args
+        assert call_args[1]["options"]["temperature"] == 0
+        assert call_args[1]["options"]["num_predict"] == 50
+
+    @patch("ollama.chat")
+    @patch("src.core.config.get_ember_model", return_value="qwen3:8b")
+    def test_includes_question_context_in_prompt(self, mock_model, mock_chat):
+        from src.api.main import _extract_lodestone_value
+        mock_chat.return_value = {"message": {"content": "honesty matters"}}
+        _extract_lodestone_value("I value truth", question_context="What do you care about?")
+        prompt = mock_chat.call_args[1]["messages"][0]["content"]
+        assert "What do you care about?" in prompt
+
+    @patch("ollama.chat")
+    @patch("src.core.config.get_ember_model", return_value="qwen3:8b")
+    def test_works_without_question_context(self, mock_model, mock_chat):
+        from src.api.main import _extract_lodestone_value
+        mock_chat.return_value = {"message": {"content": "creativity matters"}}
+        result = _extract_lodestone_value("I love making things")
+        assert result == "creativity matters"
+
+    @patch("ollama.chat", side_effect=Exception("connection refused"))
+    def test_fallback_on_ollama_failure(self, mock_chat):
+        from src.api.main import _extract_lodestone_value
+        result = _extract_lodestone_value("raw answer text")
+        assert result == "raw answer text"
+
+    @patch("ollama.chat")
+    @patch("src.core.config.get_ember_model", return_value="qwen3:8b")
+    def test_fallback_on_empty_response(self, mock_model, mock_chat):
+        from src.api.main import _extract_lodestone_value
+        mock_chat.return_value = {"message": {"content": ""}}
+        result = _extract_lodestone_value("raw answer text")
+        assert result == "raw answer text"
+
+    @patch("src.api.main._extract_lodestone_value")
+    def test_endpoint_stores_inferred_value(self, mock_extract, vault_dir):
+        mock_extract.return_value = "building meaningful systems"
+        rec = lodestone_service.write(
+            value="building meaningful systems",
+            taxonomy_category="directional",
+            acquisition_path="explicit",
+            source="conversation",
+            supporting_evidence="Work, building Ember-2, surviving hellscape.",
+            confirmed=True,
+        )
+        assert rec["value"] == "building meaningful systems"
+        assert rec["supporting_evidence"] == "Work, building Ember-2, surviving hellscape."
+
+    @patch("src.api.main._extract_lodestone_value")
+    def test_endpoint_stores_raw_in_evidence(self, mock_extract, vault_dir):
+        mock_extract.return_value = "honesty above comfort"
+        rec = lodestone_service.write(
+            value="honesty above comfort",
+            taxonomy_category="character",
+            supporting_evidence="I always tell people the truth even when it sucks",
+            confirmed=True,
+        )
+        assert rec["supporting_evidence"] == "I always tell people the truth even when it sucks"

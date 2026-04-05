@@ -557,6 +557,134 @@ def delete_task_endpoint(task_id: str):
     return {"status": "cancelled", "id": task_id}
 
 
+# ── Deviation endpoints ────────────────────────────────────────────────
+
+
+class DeviationUpdateRequest(BaseModel):
+    confirmed: bool | None = None
+    reason: str | None = None
+    value_aligned: bool | None = None
+    user_note: str | None = None
+    flagged_as_noise: bool | None = None
+
+
+def _read_deviation_records(
+    confirmed: bool | None = None,
+    pattern_class: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Read deviation records from vault with optional filters."""
+    from src.core.config import get_private_vault_path
+    from src.memory.storage import MemoryStorage
+
+    vault = get_private_vault_path()
+    storage = MemoryStorage()
+    dev_dir = storage.get_memory_dir(vault, "deviation")
+
+    records = []
+    for f in sorted(dev_dir.glob("*.json"), reverse=True):
+        try:
+            data = storage.read_json(f)
+            if data.get("type") != "deviation":
+                continue
+
+            meta = data.get("metadata", {})
+            if confirmed is not None:
+                if meta.get("confirmed") != confirmed:
+                    continue
+            if pattern_class is not None:
+                if meta.get("pattern_class") != pattern_class:
+                    continue
+
+            records.append(data)
+            if len(records) >= limit:
+                break
+        except Exception:
+            continue
+
+    return records
+
+
+def _update_deviation_record(record_id: str, updates: dict) -> dict | None:
+    """Update a deviation record in-place."""
+    from src.core.config import get_private_vault_path
+    from src.memory.storage import MemoryStorage
+
+    vault = get_private_vault_path()
+    storage = MemoryStorage()
+    dev_dir = storage.get_memory_dir(vault, "deviation")
+
+    for f in dev_dir.glob("*.json"):
+        try:
+            data = storage.read_json(f)
+            if data.get("id") != record_id:
+                continue
+
+            meta = data.get("metadata", {})
+            if "confirmed" in updates:
+                meta["confirmed"] = bool(updates["confirmed"])
+            if "reason" in updates:
+                meta["reason"] = updates["reason"]
+            if "value_aligned" in updates:
+                meta["value_aligned"] = bool(updates["value_aligned"])
+            if "user_note" in updates:
+                meta["user_note"] = updates["user_note"]
+            if "flagged_as_noise" in updates:
+                meta["flagged_as_noise"] = bool(updates["flagged_as_noise"])
+            if "user_edited" not in meta:
+                meta["user_edited"] = False
+            if any(k in updates for k in ("reason", "user_note", "confirmed", "value_aligned")):
+                meta["user_edited"] = True
+
+            data["metadata"] = meta
+            storage.write_json(f, data)
+            return data
+        except Exception:
+            continue
+
+    return None
+
+
+@app.get("/v1/deviations")
+def get_deviations(
+    confirmed: bool | None = None,
+    pattern_class: str | None = None,
+    limit: int = 20,
+):
+    """Return deviation records with optional filters."""
+    records = _read_deviation_records(
+        confirmed=confirmed,
+        pattern_class=pattern_class,
+        limit=min(limit, 100),
+    )
+    return {"records": records, "count": len(records)}
+
+
+@app.patch("/v1/deviations/{record_id}")
+def update_deviation(record_id: str, body: DeviationUpdateRequest):
+    """Update a deviation record (confirm, add reason, flag as noise)."""
+    updates = {}
+    if body.confirmed is not None:
+        updates["confirmed"] = body.confirmed
+    if body.reason is not None:
+        updates["reason"] = body.reason
+    if body.value_aligned is not None:
+        updates["value_aligned"] = body.value_aligned
+    if body.user_note is not None:
+        updates["user_note"] = body.user_note
+    if body.flagged_as_noise is not None:
+        updates["flagged_as_noise"] = body.flagged_as_noise
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No updates provided")
+
+    result = _update_deviation_record(record_id, updates)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Deviation record '{record_id}' not found")
+
+    return {"status": "updated", "record": result}
+
+
 # ── Lodestone endpoints ────────────────────────────────────────────────
 
 from src.memory import lodestone_service

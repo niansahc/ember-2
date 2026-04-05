@@ -134,35 +134,34 @@ def test_token_count_accumulates_across_turns():
 # ---------------------------------------------------------------------------
 
 def test_needs_compression_false_when_empty():
-    buf = ConversationBuffer(context_window=8192)
+    buf = ConversationBuffer()
     assert buf.needs_compression() is False
 
 
 def test_needs_compression_false_below_threshold():
-    buf = ConversationBuffer(context_window=8192)
+    buf = ConversationBuffer()
     buf.add_turn("hello", "hi")
     assert buf.needs_compression() is False
 
 
 def test_needs_compression_true_when_over_threshold():
-    # Use tiny context window so a small buffer triggers it
-    buf = ConversationBuffer(context_window=10)
-    # Each word ≈ 1.3 tokens; need > 10 * 0.7 = 7 tokens → ~6 words
-    buf.add_turn("one two three four", "five six seven eight")
-    # 8 words → int(8 * 1.3) = 10; threshold = int(10 * 0.7) = 7 → 10 > 7
+    # Fixed threshold is 1500 tokens. Fill buffer past that.
+    buf = ConversationBuffer()
+    # Each turn ~200 words ≈ 260 tokens. 8 turns ≈ 2080 tokens > 1500.
+    for i in range(8):
+        long_msg = " ".join([f"word{j}" for j in range(100)])
+        buf.add_turn(long_msg, long_msg)
     assert buf.needs_compression() is True
 
 
-def test_needs_compression_exactly_at_threshold():
-    # token_count must EXCEED threshold, not just equal it
-    buf = ConversationBuffer(context_window=100)
-    threshold_tokens = int(100 * COMPRESSION_THRESHOLD)  # 70
-    # Build a buffer that lands at exactly threshold_tokens
-    # Force token_count to equal threshold — should NOT compress
-    buf.buffer = [{"user": "", "assistant": ""}]
-    # Override to return exactly threshold value via monkeypatch-free approach:
-    # Just verify the boundary condition directly
-    assert buf.token_count() <= threshold_tokens or buf.needs_compression()
+def test_needs_compression_boundary():
+    # Just under threshold should not compress
+    buf = ConversationBuffer()
+    # COMPRESSION_THRESHOLD is 1500 tokens. ~1150 words = ~1500 tokens.
+    # Add a few short turns that stay under.
+    buf.add_turn("hello there", "hi how are you")
+    assert buf.token_count() < COMPRESSION_THRESHOLD
+    assert buf.needs_compression() is False
 
 
 # ---------------------------------------------------------------------------
@@ -344,11 +343,13 @@ def test_compression_cycle_does_not_lose_recent_turns():
 
 def test_needs_compression_false_after_compression():
     # After compressing, the buffer should be well under threshold
-    buf = ConversationBuffer(context_window=10)
-    buf.add_turn("one two three four", "five six seven eight")
+    buf = ConversationBuffer()
+    for i in range(8):
+        long_msg = " ".join([f"word{j}" for j in range(100)])
+        buf.add_turn(long_msg, long_msg)
     assert buf.needs_compression() is True
 
     buf.pop_oldest_half()
-    buf.inject_summary_turn("ok")
-    # Now buffer has one synthetic turn with short content
+    buf.inject_summary_turn("brief summary")
+    # Now buffer has summary + 4 turns — should be under 1500
     assert buf.needs_compression() is False

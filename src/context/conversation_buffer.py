@@ -10,7 +10,7 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "phi3:mini":   4096,
 }
 
-COMPRESSION_THRESHOLD = 0.70  # trigger compression at 70% of context window
+COMPRESSION_THRESHOLD = 1500  # fixed token count — keeps context packet within budget on any model
 
 
 def _estimate_tokens(text: str) -> int:
@@ -41,8 +41,8 @@ class ConversationBuffer:
         return total
 
     def needs_compression(self) -> bool:
-        """Return True when the buffer exceeds 70% of the model's context window."""
-        return self.token_count() > int(self.context_window * COMPRESSION_THRESHOLD)
+        """Return True when conversation history tokens exceed the fixed threshold."""
+        return self.token_count() > COMPRESSION_THRESHOLD
 
     def pop_oldest_half(self) -> list[dict]:
         """Remove and return the oldest half of turns for summarization."""

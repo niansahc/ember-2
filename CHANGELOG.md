@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.13.3](https://github.com/niansahc/ember-2/compare/v0.13.2...v0.13.3) (2026-04-06)
+
+
+### Features
+
+* add deviation API — GET/PATCH /v1/deviations endpoints (ADR-026) ([274cad7](https://github.com/niansahc/ember-2/commit/274cad7e8e3a01bcfd7ae796de1079519d4c1720))
+* add deviation detection test harness — CLI calibration tool ([ded4487](https://github.com/niansahc/ember-2/commit/ded4487b4fb7e10c7d1e4305f4d689aa168c3967))
+* add deviation engine env vars to .env.example ([f19ce0d](https://github.com/niansahc/ember-2/commit/f19ce0d3d723b28e04d81a258a3b9461e93ab2f9))
+* add DeviationDetector service + record writer (ADR-013, ADR-026) ([46df06e](https://github.com/niansahc/ember-2/commit/46df06e509a9ed5b059d0bbc089f112f79361479))
+* add intent class to audit log for POST /v1/chat/completions ([b1adfc2](https://github.com/niansahc/ember-2/commit/b1adfc2cebaa6197f15d96731a554434a779fa7b))
+* add launcher scripts (launch_ember.bat, launch_ember.sh) ([fa19991](https://github.com/niansahc/ember-2/commit/fa199912c65a5b4a889874c2d9138f98f04a15c0))
+* add lodestone API — GET/POST/PATCH /v1/lodestone endpoints (ADR-017) ([aecf300](https://github.com/niansahc/ember-2/commit/aecf3009d2829b8bebde51d49cdd80549a04b18b))
+* add lodestone seed layer — five default orientation values (ADR-017) ([34649d5](https://github.com/niansahc/ember-2/commit/34649d5a8aeabc7717d9a67c56bdcf5c720c1021))
+* add lodestone taxonomy — five value categories (ADR-017) ([904b753](https://github.com/niansahc/ember-2/commit/904b753778eb2cf9853bc62ac0426e89efec3c67))
+* add lodestone to VALID_MEMORY_TYPES (18 types) ([9297dd4](https://github.com/niansahc/ember-2/commit/9297dd4a369bf65665d5a66925aa5664e8084100))
+* add LodestoneLoader — loads seed layer from config/lodestone.yaml (ADR-017) ([9caa4b4](https://github.com/niansahc/ember-2/commit/9caa4b44e37ca6ee70a64b9037cb8ffa2334eae2))
+* add LodestoneResolver — semantic retrieval of living layer records (ADR-017) ([d167cc5](https://github.com/niansahc/ember-2/commit/d167cc5db326593652b66befe79dfdee6a80380d))
+* add LodestoneService — read/write lodestone vault records (ADR-017) ([706b25e](https://github.com/niansahc/ember-2/commit/706b25e448801fa62050f3900c656f0ced17e00c))
+* add pattern class definitions and update deviation engine docs to 11 classes ([b654272](https://github.com/niansahc/ember-2/commit/b654272a4be94eece89e652cdefb29db6c873e76))
+* add value inference to POST /v1/lodestone — LLM extracts value from raw answer ([ba363a8](https://github.com/niansahc/ember-2/commit/ba363a85bb93011b92538ab52d12bd1192e0d871))
+* inject lodestone into PromptBuilder — seed in system prompt, living in recency position (ADR-017) ([e1d1e8e](https://github.com/niansahc/ember-2/commit/e1d1e8ec289eb8894eca56497a1fa1dc4c9a2070))
+* integrate deviation detection into response pipeline (ADR-026) ([f15593b](https://github.com/niansahc/ember-2/commit/f15593be9b9bcf244bde75f016bbd06e2531f610))
+
+
+### Bug Fixes
+
+* add default to deviation detection gated intents (ADR-026 updated) ([b4fb730](https://github.com/niansahc/ember-2/commit/b4fb7309e26b994bc452fe05526ff6ae49d5600f))
+* add deviation detection to non-streaming response path ([f6698e6](https://github.com/niansahc/ember-2/commit/f6698e6b4d2664e01821c068dfe753468eafde97))
+* correct prompt_builder.py docstring to match production context packet order ([0631195](https://github.com/niansahc/ember-2/commit/0631195d328a871fc40bbb9828346dfe131c9b89))
+* deviation detection — check all pattern classes, fix write filter, increase wait ([ae2b360](https://github.com/niansahc/ember-2/commit/ae2b36061e0f1ec2ed393ea17afc9fdde3b25c0c))
+* empty logprobs proceed to second pass instead of skipping detection ([6e82486](https://github.com/niansahc/ember-2/commit/6e82486138e1afbe9839cd6ac532183148e12a6c))
+* lodestone value inference — think=False for qwen3:8b, 503 on failure ([93db0d1](https://github.com/niansahc/ember-2/commit/93db0d18681c5036902d8f35887069dac3d370e7))
+* raise lodestone cap from 10 to 15 — onboarding alone produces 12 records ([7b992e3](https://github.com/niansahc/ember-2/commit/7b992e341b0ec9b8e220aada19c330eb9d03a4cd))
+
 ## v0.14.0 — 2026-04-06 — Identity Foundation
 
 ### Features

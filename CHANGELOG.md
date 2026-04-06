@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.14.0 — 2026-04-06 — Identity Foundation
+
+### Features
+- Lodestone layer (ADR-017) ��� multi-path user values layer with five taxonomy categories, seed layer in config/lodestone.yaml, living layer accumulated in vault, LLM-inferred value statements from raw answers, three-stage reflection synthesis for value inference
+- Lodestone API — GET/POST/PATCH /v1/lodestone endpoints, value inference via Ollama (think=False), 503 on inference failure, 15-record active cap
+- Deviation engine (ADR-013, ADR-026) ��� post-hoc behavioral pattern detection, 11 pattern classes in config/pattern_classes.yaml, entropy gating, second-pass Ollama classification, vault record writer, opt-in via EMBER_DEVIATION_DETECTION env var
+- Deviation API — GET/PATCH /v1/deviations endpoints with filter by confirmed/pattern_class/limit
+- Context packet reorder — vault memory moved to recency position (lost-in-the-middle fix, Liu et al.), retrieval eval 15/15 before and after
+- Conversation buffer compression threshold — fixed at 1,500 tokens (was 70% of context window)
+- Launcher scripts — launch_ember.bat and launch_ember.sh (Docker, SearXNG, API, browser)
+- Release Please + GitHub Actions automation across all three repos
+- Constitution v0.4 — position_collapse rule added to user_agency_and_respect
+- Intent class added to JSON audit log for POST /v1/chat/completions
+- Lodestone taxonomy display_name fields for UI consumption
+
+### Bug Fixes
+- Context packet order corrected — vault memory was in lowest-attention position, now immediately before user input
+- Lodestone inference empty responses — qwen3:8b consumed all tokens in thinking mode, fixed with think=False
+- Lodestone POST fallback removed — failed inference returns 503 instead of silently writing raw answers
+- Lodestone record cap raised from 10 to 15 — onboarding alone produces 12 records
+- Deviation detection added to non-streaming response path — was skipping stream=false requests
+- Deviation detection empty logprobs — compute_entropy([]) now returns -1.0 sentinel (proceed) instead of 1.0 (skip)
+- Deviation detection priority order — single_response classes checked first, multi_turn last
+- Deviation records bypassed should_skip_memory JSON guard — text starts with [deviation:] which triggered startsWith("[") filter
+- pattern_classes.yaml YAML parse errors — fixed quoting on five marker strings containing double quotes
+- prompt_builder.py docstring corrected to match production context packet order
+- Default model reset to qwen3:8b after model_override.json was set to llama3.1:8b by prior testing
+
+### Documentation
+- TDD version 1.2, §48 Lodestone Layer, §49 Deviation Engine, §14.5 context packet reorder plan
+- ADR-013 revised (post-hoc detection, 11 pattern classes, pulled to v0.14.0)
+- ADR-017 rewritten (Lodestone replaces relational orientation)
+- ADR-026 created (deviation engine implementation)
+- Relational orientation research note (docs/research/relational-orientation.md)
+- Roadmap reprioritized: v0.14.0 Identity, v0.15.0 Connectors, v0.16.0 Health+Agents
+- CLAUDE.md: Testing Discipline, UI Design Gates, conventional commits, dependency review policy
+- Deviation detection calibration baseline (docs/test-reports/deviation-detection-report.md)
+- Eval history: v0.13.2 baseline and v0.14.0 context packet reorder (15/15 both)
+
 ## v0.13.2 — 2026-04-04
 
 ### Bug Fixes

@@ -473,6 +473,15 @@ Public-facing documentation, ADRs, code comments, and test fixtures use generic,
 
 Documentation can have personality and even humor -- it just should not contain personal identifying information about specific people. Exception: About.jsx creator attribution is intentional and at the author's discretion.
 
+**Vault contents must never appear in the codebase.** Referring to "the vault" as a generic concept is fine — every Ember-2 user has one. What is never acceptable: real proper names (people, pets, places) from a user's vault, verbatim or paraphrased conversation text, specific record IDs, session IDs, or any other content that originated inside a user's `private_vault/`. This applies to:
+- Source code, comments, and docstrings
+- Test files, fixtures, and mocks (use generic identifiers like `user`, `assistant`, `sess_test_001`)
+- Commit messages and PR descriptions
+- ADRs and other docs
+- Helper or debug scripts checked into the repo
+
+When debugging real vault data is necessary, do it in an interactive shell session or in scratch files outside the repo — never write a helper file inside the working tree that reads or echoes vault contents. Before committing after any vault inspection, scan the diff for proper names, vault text, and record IDs.
+
 ## Prompt Writing Standards
 
 When writing prompts for Ember's inference-time tasks (reflection, review, synthesis, detection), follow these standards. Derived from research. Not preference.

@@ -30,6 +30,33 @@ from src.tasks.models import VALID_TASK_STATUSES, TaskRecord
 TASK_MEMORY_SUBDIR = "memory/task"
 
 
+# Module-level guard against same-microsecond timestamp collisions in
+# next_timestamp(). Filename convention is `{timestamp}_{slug}.json`, so
+# two timestamps colliding on the same microsecond produce the same path
+# and the second write hits TaskService.write()'s "file already exists"
+# guard, silently dropping the new record. This was the root cause of
+# flaky test_update_status: POST + PATCH within one microsecond on a
+# fast machine. Mirrors the same fix in src/memory/session.py:_now_id().
+_last_timestamp: str = ""
+
+
+def next_timestamp() -> str:
+    """Generate a microsecond-precision timestamp string, guaranteed
+    unique per process.
+
+    Spins on `datetime.now()` until the result differs from the previous
+    return value. The spin can never run for longer than one microsecond
+    of real time. Used by every code path that writes a TaskRecord —
+    make_record() and update_task_status_endpoint() in src/api/main.py.
+    """
+    global _last_timestamp
+    while True:
+        candidate = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
+        if candidate != _last_timestamp:
+            _last_timestamp = candidate
+            return candidate
+
+
 class TaskService:
     """
     Reads and writes TaskRecord objects to private_vault/memory/task/.
@@ -264,8 +291,10 @@ class TaskService:
         metadata : dict | None
             Optional structured context.
         """
-        # Microsecond precision to prevent filename collisions (same as write_memory.py)
-        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
+        # next_timestamp() spins on collision so two back-to-back calls
+        # never share the same microsecond. See module docstring for
+        # _last_timestamp and the BUG-005 / test_update_status flake.
+        timestamp = next_timestamp()
 
         return TaskRecord(
             id=timestamp,

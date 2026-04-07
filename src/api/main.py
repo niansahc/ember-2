@@ -497,9 +497,12 @@ def update_task_status_endpoint(task_id: str, body: TaskUpdateRequest):
     if existing is None:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
 
-    # Write a new record with the same task ID but new timestamp and updated status
-    from datetime import datetime
-    new_timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
+    # Write a new record with the same task ID but new timestamp and updated status.
+    # next_timestamp() spins on same-microsecond collisions so the new record
+    # cannot share a filename with the original (which would silently drop the
+    # update — the root cause of the test_update_status flake).
+    from src.tasks.task_service import next_timestamp
+    new_timestamp = next_timestamp()
 
     from src.tasks.models import TaskRecord
     updated = TaskRecord(

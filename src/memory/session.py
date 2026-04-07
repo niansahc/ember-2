@@ -25,6 +25,16 @@ logger = logging.getLogger("ember.session")
 
 storage = MemoryStorage()
 
+# Module-level guard against same-microsecond collisions in _now_id().
+# Two callers writing back-to-back (e.g. create_session followed immediately
+# by delete_session in tests, or rapid automated batches) can land on the
+# exact same microsecond timestamp on a fast machine. Without this guard,
+# the file-naming convention `{_now_id()}.json` produces a collision and
+# either overwrites the prior record (MemoryStorage.write_json) or silently
+# drops the new one. The spin loop ensures every call returns a value
+# strictly greater than the previous one in the same process.
+_last_id: str = ""
+
 
 def _session_dir() -> Path:
     """Return the session storage directory, creating it if needed."""
@@ -37,8 +47,19 @@ def _conversation_dir() -> Path:
 
 
 def _now_id() -> str:
-    """Generate a timestamp-based ID."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%f")
+    """Generate a timestamp-based ID, guaranteed unique per process.
+
+    Spins on `datetime.now()` until the result differs from the previous
+    return value. This is a defense against same-microsecond collisions
+    when two callers write back-to-back. Bounded by the wall clock — the
+    spin can never run for longer than one microsecond of real time.
+    """
+    global _last_id
+    while True:
+        candidate = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%f")
+        if candidate != _last_id:
+            _last_id = candidate
+            return candidate
 
 
 def _read_all_session_records() -> list[dict]:

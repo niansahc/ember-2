@@ -144,3 +144,33 @@ class TestDateSection:
         date_str = pb._build_date_section()
         assert date_str.startswith("It's ")
         assert "," in date_str
+
+
+# ---------------------------------------------------------------------------
+# Active project section (BUG-002)
+# ---------------------------------------------------------------------------
+
+class TestActiveProjectSection:
+    """When a session has an active project, the project name must be
+    surfaced to the model as an explicit XML-tagged context section so
+    Ember has unambiguous awareness of which project the user is working in."""
+
+    def test_active_project_appears_in_prompt(self):
+        pb = PromptBuilder()
+        packet = ContextPacket(user_message="hello")
+        prompt = pb.build_prompt(packet, project_name="Acme Migration")
+        assert "<active_project>" in prompt
+        assert "Acme Migration" in prompt
+        assert "</active_project>" in prompt
+
+    def test_no_project_section_when_project_name_is_none(self):
+        pb = PromptBuilder()
+        packet = ContextPacket(user_message="hello")
+        prompt = pb.build_prompt(packet, project_name=None)
+        assert "<active_project>" not in prompt
+
+    def test_no_project_section_when_project_name_is_empty(self):
+        pb = PromptBuilder()
+        packet = ContextPacket(user_message="hello")
+        prompt = pb.build_prompt(packet, project_name="")
+        assert "<active_project>" not in prompt

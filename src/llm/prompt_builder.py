@@ -75,7 +75,12 @@ class PromptBuilder:
             logger.warning("[PROMPT] Could not load lodestone seed: %s", exc)
             self._lodestone_loader = None
 
-    def build_prompt(self, context_packet: ContextPacket, style: str = "balanced") -> str:
+    def build_prompt(
+        self,
+        context_packet: ContextPacket,
+        style: str = "balanced",
+        project_name: str | None = None,
+    ) -> str:
         # System prompt with nature (dual injection) + identity rules at front
         system_sections: list[str] = [
             self._build_nature_section(),           # Nature first (dual injection)
@@ -88,12 +93,13 @@ class PromptBuilder:
         ]
 
         # Context packet with XML-tagged sections
-        # Order: state → tasks → nature (dual) → reflection → conversation →
+        # Order: state → project → tasks → nature (dual) → reflection → conversation →
         #        vault_memory (recency position) → lodestone → web → authority → user
         # vault_memory moved from top to recency position per TDD §14.5
         # (lost-in-the-middle fix — Liu et al.)
         context_sections: list[str] = [
             self._build_state_section(context_packet),
+            self._build_project_section(project_name),
             self._build_task_section(context_packet),
             self._build_nature_section(),                  # Dual injection in context
             self._build_reflection_section(context_packet),
@@ -108,6 +114,16 @@ class PromptBuilder:
 
         all_sections = system_sections + context_sections
         return "\n\n".join(section for section in all_sections if section.strip())
+
+    def _build_project_section(self, project_name: str | None) -> str:
+        """Inject the active project name as an XML-tagged context section.
+
+        Returns an empty string when no project is active so the section is
+        omitted from the assembled prompt entirely.
+        """
+        if not project_name:
+            return ""
+        return f"<active_project>\n{project_name}\n</active_project>"
 
     def _build_date_section(self) -> str:
         """Inject current date and time of day for temporal grounding."""

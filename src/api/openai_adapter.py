@@ -328,13 +328,27 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
     # --- RESOLVE PROJECT CONTEXT ---
     # Look up the session's project_id so retrieval can boost project-relevant memories.
+    # Also resolve the project_name so the prompt builder can surface it to the model
+    # as an explicit <active_project> context section (BUG-002).
     project_id = None
+    project_name: str | None = None
     try:
         session_rec = get_session(session_id)
         if session_rec:
             project_id = session_rec.get("metadata", {}).get("project_id")
     except Exception:
         pass  # Non-fatal — proceed without project context
+
+    if project_id:
+        try:
+            from src.memory.project import get_project
+            project_rec = get_project(project_id)
+            if project_rec:
+                # Project name is canonically stored in record["text"]
+                # (see src/memory/project.py:create_project).
+                project_name = project_rec.get("text") or None
+        except Exception:
+            project_name = None  # Non-fatal — proceed without project name
 
     # --- TASK CREATION (pre-generation) ---
     # Path 1: Explicit task request ("create a task for X")
@@ -500,7 +514,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'content': ''}, 'finish_reason': None}]})}\n\n"
 
                 # 2. Generate full response (non-streaming)
-                full_reply = llm_adapter.generate_response(context_packet, style=conversational_style)
+                full_reply = llm_adapter.generate_response(
+                    context_packet, style=conversational_style, project_name=project_name
+                )
 
                 # 3. Grounding check
                 yield _status_event("verifying")
@@ -572,7 +588,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             def _stream_sse():
                 accumulated = []
 
-                for chunk in llm_adapter.generate_response_stream(context_packet, style=conversational_style):
+                for chunk in llm_adapter.generate_response_stream(
+                    context_packet, style=conversational_style, project_name=project_name
+                ):
                     accumulated.append(chunk)
                     sse_data = json.dumps({
                         "id": completion_id,
@@ -609,7 +627,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         )
 
     # --- NON-STREAMING PATH (unchanged) ---
-    reply = llm_adapter.generate_response(context_packet, style=conversational_style)
+    reply = llm_adapter.generate_response(
+        context_packet, style=conversational_style, project_name=project_name
+    )
 
     write_memory(
         text=latest_user_message,

@@ -39,8 +39,15 @@ class LLMAdapter:
         """Switch the active model at runtime without restarting the API."""
         self.model = model
 
-    def generate_response(self, context_packet: ContextPacket, style: str = "balanced") -> str:
-        system_prompt = self.prompt_builder.build_prompt(context_packet, style=style)
+    def generate_response(
+        self,
+        context_packet: ContextPacket,
+        style: str = "balanced",
+        project_name: str | None = None,
+    ) -> str:
+        system_prompt = self.prompt_builder.build_prompt(
+            context_packet, style=style, project_name=project_name
+        )
 
         vision_model = get_ember_vision_model()
         use_vision = bool(context_packet.image_data) and bool(vision_model)
@@ -119,7 +126,12 @@ class LLMAdapter:
 
         return final_response
 
-    def generate_response_stream(self, context_packet: ContextPacket, style: str = "balanced"):
+    def generate_response_stream(
+        self,
+        context_packet: ContextPacket,
+        style: str = "balanced",
+        project_name: str | None = None,
+    ):
         """
         Stream a response token by token. Yields string chunks.
 
@@ -131,7 +143,9 @@ class LLMAdapter:
             for chunk in llm_adapter.generate_response_stream(packet):
                 yield chunk  # send to client
         """
-        system_prompt = self.prompt_builder.build_prompt(context_packet, style=style)
+        system_prompt = self.prompt_builder.build_prompt(
+            context_packet, style=style, project_name=project_name
+        )
 
         vision_model = get_ember_vision_model()
         use_vision = bool(context_packet.image_data) and bool(vision_model)

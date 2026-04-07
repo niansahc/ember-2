@@ -174,3 +174,28 @@ class TestActiveProjectSection:
         packet = ContextPacket(user_message="hello")
         prompt = pb.build_prompt(packet, project_name="")
         assert "<active_project>" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Last session section (BUG-003)
+# ---------------------------------------------------------------------------
+
+class TestLastSessionSection:
+    """When the inter-session gap helper resolves a human label, it must
+    appear in the prompt as an explicit XML-tagged context section so
+    Ember has unambiguous awareness of how recently the user last spoke
+    with her. When no label is available, the section is omitted entirely."""
+
+    def test_last_session_label_appears_in_prompt(self):
+        pb = PromptBuilder()
+        packet = ContextPacket(user_message="hello")
+        prompt = pb.build_prompt(packet, last_session_label="3 hours ago")
+        assert "<last_session>" in prompt
+        assert "3 hours ago" in prompt
+        assert "</last_session>" in prompt
+
+    def test_no_last_session_section_when_label_is_none(self):
+        pb = PromptBuilder()
+        packet = ContextPacket(user_message="hello")
+        prompt = pb.build_prompt(packet, last_session_label=None)
+        assert "<last_session>" not in prompt

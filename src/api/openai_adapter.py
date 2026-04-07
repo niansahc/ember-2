@@ -3,6 +3,7 @@ import logging
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, List, Optional, Literal
 
 from fastapi import APIRouter, Request
@@ -14,7 +15,7 @@ logger = logging.getLogger("ember.openai_adapter")
 from src.api.limiter import limiter
 from src.memory.service import MemoryService
 from src.memory.write_memory import write_memory
-from src.memory.session import create_session, session_exists, get_session
+from src.memory.session import create_session, session_exists, get_session, list_sessions
 from src.context.service import ContextService
 from src.llm.adapter import LLMAdapter
 from src.onboarding.service import OnboardingService
@@ -164,6 +165,66 @@ def _extract_session_id(request: Request) -> str:
         session_id = f"sess_{uuid.uuid4().hex[:16]}"
         logger.info("[SESSION] No X-Session-ID header — generated %s", session_id)
     return session_id
+
+
+def _format_session_gap(gap_seconds: float) -> str | None:
+    """Convert an inter-session time gap into a human-readable label.
+
+    Returns None when the gap is below the surface threshold (5 minutes),
+    so the prompt builder can omit the section entirely. The thresholds
+    and bucketing are intentionally coarse — the model only needs the
+    rough sense of "how long has it been," not minute-level precision.
+    See BUG-003.
+    """
+    if gap_seconds < 300:  # < 5 minutes — too small to surface
+        return None
+    minutes = int(gap_seconds // 60)
+    if gap_seconds < 3600:  # < 1 hour
+        return f"{minutes} minutes ago"
+    hours = int(gap_seconds // 3600)
+    if gap_seconds < 86400:  # < 24 hours
+        return f"{hours} hours ago" if hours > 1 else "1 hour ago"
+    if gap_seconds < 172800:  # < 48 hours
+        return "yesterday"
+    days = int(gap_seconds // 86400)
+    if gap_seconds < 604800:  # < 7 days
+        return f"{days} days ago"
+    weeks = int(gap_seconds // 604800)
+    return f"{weeks} weeks ago" if weeks > 1 else "1 week ago"
+
+
+def _resolve_last_session_label(current_session_id: str) -> str | None:
+    """Find the most recent session that isn't the current one and return
+    a human label for the time gap since its last activity.
+
+    Returns None when no prior session exists, when the gap is below the
+    surface threshold, or when the lookup fails for any reason. Always
+    non-fatal — the caller should fall back to no last-session context.
+    See BUG-003.
+    """
+    try:
+        recent = list_sessions(limit=5)
+    except Exception:
+        return None
+    prior = next((s for s in recent if s.get("id") != current_session_id), None)
+    if prior is None:
+        return None
+    updated_at = prior.get("updated_at")
+    if not updated_at:
+        return None
+    try:
+        # Vault timestamps are ISO; tolerate trailing Z just in case.
+        if updated_at.endswith("Z"):
+            updated_at = updated_at[:-1] + "+00:00"
+        prior_dt = datetime.fromisoformat(updated_at)
+        if prior_dt.tzinfo is None:
+            prior_dt = prior_dt.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+    gap_seconds = (datetime.now(timezone.utc) - prior_dt).total_seconds()
+    if gap_seconds < 0:
+        return None
+    return _format_session_gap(gap_seconds)
 
 
 def _ensure_session(session_id: str, first_user_message: str, *, test: bool = False) -> None:
@@ -350,6 +411,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         except Exception:
             project_name = None  # Non-fatal — proceed without project name
 
+    # --- RESOLVE INTER-SESSION TIME GAP (BUG-003) ---
+    # Compute a human label for "how long since the previous session was active"
+    # so the prompt builder can surface it as an explicit context section. The
+    # helper is fully non-fatal: any error or missing data results in None and
+    # the section is omitted from the prompt entirely.
+    last_session_label = _resolve_last_session_label(session_id)
+
     # --- TASK CREATION (pre-generation) ---
     # Path 1: Explicit task request ("create a task for X")
     # Path 2: Pending offer confirmation ("yes" after Ember offered a task)
@@ -515,7 +583,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
                 # 2. Generate full response (non-streaming)
                 full_reply = llm_adapter.generate_response(
-                    context_packet, style=conversational_style, project_name=project_name
+                    context_packet,
+                    style=conversational_style,
+                    project_name=project_name,
+                    last_session_label=last_session_label,
                 )
 
                 # 3. Grounding check
@@ -589,7 +660,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 accumulated = []
 
                 for chunk in llm_adapter.generate_response_stream(
-                    context_packet, style=conversational_style, project_name=project_name
+                    context_packet,
+                    style=conversational_style,
+                    project_name=project_name,
+                    last_session_label=last_session_label,
                 ):
                     accumulated.append(chunk)
                     sse_data = json.dumps({
@@ -628,7 +702,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
     # --- NON-STREAMING PATH (unchanged) ---
     reply = llm_adapter.generate_response(
-        context_packet, style=conversational_style, project_name=project_name
+        context_packet,
+        style=conversational_style,
+        project_name=project_name,
+        last_session_label=last_session_label,
     )
 
     write_memory(

@@ -80,6 +80,7 @@ class PromptBuilder:
         context_packet: ContextPacket,
         style: str = "balanced",
         project_name: str | None = None,
+        last_session_label: str | None = None,
     ) -> str:
         # System prompt with nature (dual injection) + identity rules at front
         system_sections: list[str] = [
@@ -93,13 +94,14 @@ class PromptBuilder:
         ]
 
         # Context packet with XML-tagged sections
-        # Order: state → project → tasks → nature (dual) → reflection → conversation →
+        # Order: state → project → last_session → tasks → nature (dual) → reflection → conversation →
         #        vault_memory (recency position) → lodestone → web → authority → user
         # vault_memory moved from top to recency position per TDD §14.5
         # (lost-in-the-middle fix — Liu et al.)
         context_sections: list[str] = [
             self._build_state_section(context_packet),
             self._build_project_section(project_name),
+            self._build_last_session_section(last_session_label),
             self._build_task_section(context_packet),
             self._build_nature_section(),                  # Dual injection in context
             self._build_reflection_section(context_packet),
@@ -124,6 +126,18 @@ class PromptBuilder:
         if not project_name:
             return ""
         return f"<active_project>\n{project_name}\n</active_project>"
+
+    def _build_last_session_section(self, last_session_label: str | None) -> str:
+        """Inject the time gap since the previous session as an XML-tagged
+        context section. Gives Ember explicit awareness of how recently the
+        user was last in conversation (BUG-003).
+
+        Returns an empty string when no prior session is known or the gap
+        is too small to surface, so the section is omitted from the prompt.
+        """
+        if not last_session_label:
+            return ""
+        return f"<last_session>\n{last_session_label}\n</last_session>"
 
     def _build_date_section(self) -> str:
         """Inject current date and time of day for temporal grounding."""

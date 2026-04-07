@@ -18,6 +18,31 @@ SQLITE_MEMORY_TYPES = {"conversation", "profile", "reflection", "journal"}
 
 _write_memory_store: SqliteVectorStore | None = None
 
+# Module-level guard against same-microsecond filename collisions in
+# write_memory(). Filename convention is `{timestamp}.json` so two
+# back-to-back writes (e.g. user turn + assistant turn in the same
+# request, or rapid automated batches) that land on the same microsecond
+# produce identical paths and MemoryStorage.write_json overwrites the
+# prior record. Defense-in-depth — same fix as session._now_id() and
+# task_service.next_timestamp(). See BUG-005.
+_last_timestamp: str = ""
+
+
+def _next_timestamp() -> str:
+    """Generate a microsecond-precision timestamp string, guaranteed
+    unique per process.
+
+    Spins on `datetime.now()` until the result differs from the previous
+    return value. The spin can never run for longer than one microsecond
+    of real wall-clock time.
+    """
+    global _last_timestamp
+    while True:
+        candidate = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
+        if candidate != _last_timestamp:
+            _last_timestamp = candidate
+            return candidate
+
 
 def _get_write_memory_store(vault: Path) -> SqliteVectorStore:
     """Singleton for memory.db write path."""
@@ -114,7 +139,7 @@ def write_memory(
     vault = get_private_vault_path()
     memory_dir = storage.get_memory_dir(vault, memory_type)
 
-    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
+    timestamp = _next_timestamp()
     memory_id = timestamp
     normalized = normalize_text(text)
     clean_metadata = flatten_metadata(metadata)

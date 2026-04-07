@@ -42,7 +42,7 @@ class TestProfileSectionLabel:
         pb = PromptBuilder()
         packet = ContextPacket(
             user_message="tell me about yourself",
-            memory_items=[_make_profile_item("My name is Chas. I am a BSA.")],
+            memory_items=[_make_profile_item("My name is Alex. I am a BSA.")],
         )
         prompt = pb._build_context_section(packet)
         assert "person Ember is talking to" in prompt
@@ -52,7 +52,7 @@ class TestProfileSectionLabel:
         pb = PromptBuilder()
         packet = ContextPacket(
             user_message="who are you",
-            memory_items=[_make_profile_item("My name is Chas. I am a BSA.")],
+            memory_items=[_make_profile_item("My name is Alex. I am a BSA.")],
         )
         prompt = pb._build_context_section(packet)
         assert "User self-description" not in prompt
@@ -95,7 +95,7 @@ class TestContextSectionStructure:
         packet = ContextPacket(
             user_message="hello",
             memory_items=[
-                _make_profile_item("My name is Chas. I am a Business Systems Analyst in AI."),
+                _make_profile_item("My name is Alex. I am a Business Systems Analyst in AI."),
                 _make_memory_item("User: I'd like to tell you something about yourself"),
             ],
         )
@@ -109,7 +109,7 @@ class TestContextSectionStructure:
         packet = ContextPacket(
             user_message="who am I",
             memory_items=[
-                _make_profile_item("My name is Chas. I go by Chas."),
+                _make_profile_item("My name is Alex. I go by Alex."),
             ],
         )
         prompt = pb._build_context_section(packet)

@@ -325,7 +325,6 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - GitHub ingestion connector (ADR-022 — CLAUDE.md as first-class document, elevated retrieval priority)
 - Calendar connector
 - Notes ingestion (Obsidian/Notion export)
-- Relational orientation layer (supersedes old ADR-017 concept — see docs/research/relational-orientation.md)
 
 **v0.16.0 — Health + Agent Orchestration:**
 - Fitbit/Apple Health/Garmin export ingestion (ADR-024)
@@ -333,6 +332,7 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - OpenJarvis Learning primitive as reference implementation
 - Controlled tool writes with stricter policy gates
 - Trace-driven learning
+- Relational orientation layer (see docs/research/relational-orientation.md)
 
 **Post-v0.16.0:**
 - Multi-user vault isolation

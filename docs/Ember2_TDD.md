@@ -1693,61 +1693,6 @@ Infrastructure:
 - Multi-user vault isolation
 - Windows/Mac/Linux full parity
 
-**Watch Items (research, not build):**
-- OpenJarvis Learning primitive (github.com/open-jarvis/OpenJarvis) — reference for self-evaluation loops; active at v0.15.0
-- PAI TELOS pattern (github.com/danielmiessler/Personal_AI_Infrastructure) — evaluate against constitution + profile memory during v0.11.0 onboarding work
-- OpenClaw (github.com/openclaw/openclaw) — reference for SKILL.md integration format and proactive heartbeat pattern; created by Peter Steinberger, 2026. Already referenced in v0.13.0 and v0.14.0 roadmap items.
-- CIMemories benchmark (ICLR 2026, Mireshghallah et al., Carnegie Mellon University) — compositional benchmark for evaluating whether LLMs respect contextual integrity when drawing on persistent memory; frontier models show up to 69% attribute-level violation rates; evaluate Ember's retrieval and context assembly against this benchmark when system is more mature; reference: simons.berkeley.edu/talks/niloofar-mireshghallah-carnegie-mellon-university-2026-03-17
-- Contextual integrity as retrieval policy concern — research converging on the finding that privacy in AI memory is not primarily a security problem but a contextual norms problem: what is appropriate to surface where. Ember's local-first approach is the right foundation; future retrieval policy work should incorporate context-awareness (e.g. do not surface health data in work project contexts). Monitor this research direction as retrieval policy matures.
-- "Memory in the Age of AI Agents" (arxiv.org/abs/2512.13564, Zhang et al., December 2025) — survey proposing factual/experiential/working memory taxonomy; relevant to Ember's memory class design and v0.13.0 tiering work
-- MemX local-first memory system — low-confidence rejection pattern: when no relevant memory exists, suppress the result rather than returning the highest-scoring noise. Relevant to Ember's retrieval quality gate work in v0.13.0+. Reference: arxiv.org/html/2603.16171
-- Letta / MemGPT (letta.ai) — explicit memory blocks always injected into prompt, archival memory retrieved on demand, user-editable memory tools. Informs future memory inspector UI and user-facing memory editing. Monitor for patterns applicable to Ember's memory inspector.
-- nomic-embed-text-v2-moe -- newer Nomic MoE architecture, same 8192-token context, lighter inference than parameter count suggests. Evaluate alongside nomic-embed-text during v0.13.0 reindex before committing to a model. Available via Ollama.
-- Hybrid retrieval (dense + BM25) -- personal corpora have idiosyncratic vocabulary (project names, shorthand, personal references) that dense-only embedding models struggle with. BM25 keyword matching as a complement to semantic search. Known gap, post-v0.13.0.
-- sqlite-vec extension -- C extension for SQLite vector search, sub-75ms at 100k records on 768-dim vectors. No data migration required -- same SQLite file, load extension, create virtual table. Migration path when Python UDF cosine similarity becomes the bottleneck at ~100k records.
-- Sketch-of-Thought (Aytes et al., arXiv:2503.05179, EMNLP 2025) -- prompting framework that reduces LLM reasoning token output by up to 70%+ with minimal accuracy loss. Three paradigms: Conceptual Chaining, Chunked Symbolism, Expert Lexicons. No model changes required -- pure prompt construction change. Router (DistilBERT) not needed for Ember -- call type is known at construction time, route statically. Integration candidate: apply Expert Lexicons constraint to constitutional review second-pass prompt to reduce per-session Ollama overhead. Prototype as prompt engineering experiment with eval gate before enabling. Target: v0.14.1. Do not integrate as a framework.
-- MemPalace (Jovovich & Sigman, April 2026; github.com/milla-jovovich/mempalace) — open-source local-first AI memory system. Core claim: "store everything verbatim, then make it findable" via spatial structure (wings/rooms/halls) rather than AI-driven extraction. Claims 96.6% on LongMemEval in raw mode. Independent analysis confirms the score is real but attributable to ChromaDB default embeddings on verbatim text, not the palace structure itself. The structural "+34% retrieval boost" is metadata filtering — a standard technique.
-
-  Genuine finding worth tracking: raw verbatim storage with good embeddings outperforms AI-extracted summaries on LongMemEval because extraction loses the "why" behind decisions. The field may be over-engineering the extraction step.
-
-  Temporal knowledge graph feature: SQLite-backed entity-relation triples with validity windows (valid_from / invalidated fields). Facts can be queried as-of a historical date. More explicit than Ember's current staleness filtering.
-
-  Related Ember features:
-  - Append-only vault (ADR-002) — Ember already stores full records, not extractions. The core finding validates this decision.
-  - Typed memory (TDD §9) — MemPalace's finding raises an open question: how much does Ember's 17-type taxonomy and hot/warm/cold tiering (ADR-015) actually add over a naive verbatim + embedding baseline? No eval exists for this.
-  - Retrieval architecture (TDD §13) — Ember's intent-aware type gating (ADR-018) and relevance gate (0.5 min score) are retrieval policy decisions. MemPalace's finding is a challenge to evaluate these decisions honestly before adding more retrieval complexity.
-  - State layer staleness filtering — MemPalace's validity windows are a more explicit version of what Ember's STATE_STALENESS_DAYS does. Worth tracking as a pattern for relationship triples if relational orientation layer ships.
-
-  Open eval question to resolve before adding further retrieval complexity: run Ember's retrieval eval with typed structure disabled (raw semantic search only) and measure the delta. If the delta is small, the architecture assumption needs revisiting. If large, the complexity is justified. No build item until eval is run.
-
-  Benchmark skepticism warranted: 2-day-old repo, viral launch, methodology questions in GitHub issues. Watch for independent replication before treating as ground truth.
-- Silicon Mirror (arXiv:2604.00478, April 2026) — Generator-Critic architecture for sycophancy detection. Three components: Behavioral Access Control restricting context layer access based on real-time sycophancy risk scores; Trait Classifier detecting persuasion tactics across multi-turn dialogues; Generator-Critic loop where an auditor vetoes sycophantic drafts and triggers targeted rewrites. Live evaluation on 437 TruthfulQA scenarios: Claude Sonnet baseline sycophancy 9.6% reduced to 1.4%, 85.7% relative reduction. Key named failure mode: "validation-before-correction" — excessive hedging before disagreement, not overt agreement with false claims. Relevant to ResponseReviewService, position_collapse rule, and deviation engine pattern classes. No build item. Design reference for deviation engine work.
-- Face preservation as unnamed deviation engine pattern — Ember's flourishing_over_preference constitutional principle covers face-preservation behavior at governance level, but the deviation engine has no explicit detection triggers for it. ELEPHANT benchmark (Cheng et al., Stanford/CMU/Oxford, 2025; arXiv:2505.13995) defines social sycophancy as excessive preservation of the user's face — affirming self-image even when harmful, and avoiding correction even when warranted. LLMs preserve face 47% more than humans on open-ended questions. Gap to close before the relational orientation layer ships. No build item until deviation engine design is complete.
-- Memory staleness vs. importance as orthogonal problem — STATE_STALENESS_DAYS applies a time-based penalty, but importance and staleness are independent dimensions. A frequently-retrieved memory can become confidently wrong rather than just outdated — confirmed open research problem. Related to MemPalace validity window pattern already in Watch Items. No architectural change scoped. Revisit when the connector layer increases the volume of external facts entering the vault.
-
-**Research Monitoring Practice**
-
-Ember's architecture should stay on par with or ahead of the research frontier in local-first AI, memory systems, and personal intelligence. Review the following at each major release boundary:
-
-- arxiv.org — search "local LLM memory", "personal AI agent", "contextual integrity memory"
-- github.com/trending — filter by AI/ML, watch for new local-first agent frameworks
-- Stanford Scaling Intelligence Lab (scalingintelligence.stanford.edu) — active research in on-device AI
-- Hugging Face papers (huggingface.co/papers) — daily ML papers feed
-- Key conferences to monitor: ICLR, NeurIPS, ICML, ACL for memory and agent research
-
-When new relevant research is found: add to Watch Items with full attribution, assess whether it informs any planned roadmap items, and note if it should accelerate or adjust any ADRs.
-
-**Research Notes (v0.13.0 planning)**
-- CIMemories (Mireshghallah et al., ICLR 2026; arxiv:2511.14937) — benchmark for contextual integrity in persistent memory systems. Frontier models show up to 69% attribute-level violations when drawing on memory in inappropriate contexts; violations accumulate across tasks and runs. Qwen-3 32B (same family as Ember's default qwen3:8b) showed 69% violation rate. Key finding: privacy-conscious prompting does not solve the problem — models overgeneralize. Validates Ember's design decision to implement retrieval policy as explicit code rather than relying on model judgment. Cite in GOVERNANCE.md. No build item.
-- Memory in the Age of AI Agents (Hu et al., Dec 2025; arxiv:2512.13564) — taxonomy of agent memory by Forms (Token-level, Parametric, Latent), Functions (Factual, Experiential, Working), and Dynamics (Formation, Evolution, Retrieval). Ember is token-level hierarchical memory with explicit retrieval dynamics. Hot/warm/cold tiering (ADR-015) maps to their Dynamics layer. No architecture changes indicated.
-- Socioaffective Alignment (Kirk et al., Humanities and Social Sciences Communications, 2025) — framework for AI systems in deepening relationships; three intrapersonal dilemmas: immediate vs. long-term wellbeing, protecting autonomy, preserving human social bonds. Friction-by-design proposal: systems oriented toward foundational personal development should trade short-term discomfort for long-term growth. Requirements specification for ADR-017 Lodestone design. Active at v0.15.0.
-- Temporal reasoning in personal memory (Supermemory dual-layer timestamping, 2025) — current SOTA for temporal reasoning in memory systems. Dual-layer time-stamping drives high scores in temporal-reasoning, knowledge-update, and multi-session categories. Defines semantic relationships between memories: updates (contradictions/corrections with version history), extends (supplements existing nodes), derives (second-order logic from combining memories). Design implication for weekly reflection: needs time-range filtering as first-pass hard filter, explicit before/after/during query intent class, update/extends/derives tagging. Post-v0.13.0.
-- Habit-to-identity formation (Verplanken & Sui, Frontiers in Psychology, 2019; habit and identity literature, 2024-2025) — not all repeated behaviors become identity. Prime candidates are habits related to important goals or values, noticed by the self, and integrated into narrative identity. Repetition alone is insufficient. Design implication for ADR-013 deviation memory: the reason field is required for a deviation to compound into character. Only value-aligned deviations compound. Incidental deviations are recorded but do not compound. Active at v0.15.0.
-- Proactive assistance timing (workplace AI research, 2024-2025) — proactive help can reduce competence-based self-esteem when unsolicited. Post-commit suggestions accepted more readily than mid-task interventions. Timing is critical: intervene at session/day/topic boundaries, not mid-task. Framing must be augmentative ("here are ideas to build on") not corrective. Off by default. Respects soft mode. Design implication for future proactive assistance feature.
-- Evaluation framework for personal AI (RAG evaluation literature, 2024-2025) — no published benchmark covers persistent single-user personal AI evaluation. Standard benchmarks assume multi-user or population-level behavior with external ground truth. Ember requires three-tier approach: automated functional metrics (Tier 1, partially built), periodic manual behavioral evaluation (Tier 2, open design problem), longitudinal behavioral markers (Tier 3, open design problem). Subjective self-report ("did that feel right?") is documented as unreliable predictor of actual system performance. Active at every release.
-- Narrative identity (McAdams & McLean, Current Directions in Psychological Science, 2013; narrative identity research 2020-2025) — monthly reflection synthesis should find agency themes, directional shifts, significant tensions, and forward threads rather than event summaries. Flowing prose outperforms structured sections for meaning-making tasks. Third-person synthesis with second-person closing creates appropriate psychological distance. 400-500 word constraint prevents padding on small models. Implemented in prompts/monthly_reflection.txt. Active v0.13.0.
-- Awomosu, A. (2026). "They Built Stepford AI and Called It 'Agentic'." How Not To Use AI [Substack], February 1, 2026. Cultural analysis of sycophancy as structural design choice in commercial AI. OpenClaw skills corpus (700+ skills) used as empirical evidence of "wife function" automation as dominant community-built use case. Harvard Business School meta-analysis cited: women adopt AI at 25% lower rates than men across 18 studies, 140k+ participants. Relevant to: sycophancy detection rationale (ADR-013), relational_honesty constitutional principle, flourishing_over_preference principle. Ember's behavioral pattern detection and non-initiation constraint are the architectural implementation of what this piece argues has not been built. Note: OpenClaw cited here as cultural data source only — distinct from the OpenClaw proactive heartbeat reference in the architecture stack. No build item. Design validation.
-
 ## 25.4 Long-Term
 
 - add multimodal and voice layers
@@ -1840,6 +1785,120 @@ The built UI is produced by the `ember-2-ui` repository. The installer clones th
 6. Onboarding flow
 
 The API already supports all of these. The frontend is a surface, not a new backend capability.
+
+---
+
+# 50. Research
+
+TDD is the single source of truth for research tracking. New relevant research is added to Active Watch Items with full attribution, roadmap version or ADR mapping, and a graduation trigger condition. Research is reviewed at each major release boundary before opening the next sprint.
+
+Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI agent", "contextual integrity memory"), github.com/trending (AI/ML filter), Stanford Scaling Intelligence Lab (scalingintelligence.stanford.edu), Hugging Face papers (huggingface.co/papers). Key conferences: ICLR, NeurIPS, ICML, ACL.
+
+---
+
+## 50.1 Active Watch Items
+
+*Research, not build. Graduation requires a build item or explicit decision to discard.*
+
+- **OpenJarvis Learning primitive** (Stanford, github.com/open-jarvis/OpenJarvis, March 2026) — local-first framework for on-device personal AI agents. Five primitives: Intelligence, Engine, Agents, Tools & Memory, Learning. Learning primitive uses local interaction traces to synthesize training data and refine agent behavior. MCP support, semantic indexing for local retrieval. Reference architecture for self-evaluation loops.
+  → informs: v0.16.0 (self-evaluation and decision-memory loops)
+
+- **Letta/MemGPT core memory pattern** — OS-inspired tiered memory: core memory (always in-context, functions as pinned RAM), archival memory (external vector store, explicit retrieval), recall memory (conversation history). Informed ADR-016 amendment (nature block as pinned core memory, conversation compression). Full pattern not yet implemented.
+  → informs: v0.15.0 (conversation compression, context management)
+
+- **Supermemory dual-layer timestamping** (2025) — temporal reasoning SOTA for memory systems. update/extends/derives tagging pattern; dual-layer approach separates when a fact was created from when it was last confirmed. Design implication for weekly reflection temporal ordering.
+  → informs: post-v0.13.0 (temporal reasoning in reflection synthesis)
+
+- **Memory-T1** (arXiv, December 2025) — RL-based temporal retrieval. Models learn to weight memories by temporal relevance rather than semantic similarity alone.
+  → informs: future temporal reasoning work (no version assigned)
+
+- **Kirk et al., Socioaffective Alignment** (Humanities and Social Sciences Communications, 2025) — framework for AI systems in deepening relationships; three intrapersonal dilemmas: immediate vs. long-term wellbeing, protecting autonomy, preserving human social bonds. Friction-by-design proposal. 23.4% of users show dependency trajectories where wanting increases as liking decreases. Anxious attachment as strongest risk moderator. Design basis for relational_honesty v0.5 and flourishing_over_preference constitutional principles.
+  → informs: v0.15.0 (relational intensity prereqs before relational orientation layer)
+
+- **Silicon Mirror** (arXiv:2604.00478, April 2026) — Generator-Critic architecture for sycophancy detection. Behavioral Access Control restricts context layer access based on real-time sycophancy risk scores. Trait Classifier detects persuasion tactics across multi-turn dialogues. Generator-Critic loop audits drafts and triggers rewrites with "Necessary Friction." Claude Sonnet baseline sycophancy 9.6% reduced to 1.4% (85.7% relative reduction). Key named failure mode: "validation-before-correction" — excessive hedging before disagreement, not overt agreement with false claims. Generator-Critic loop is architecturally adjacent to Ember's ResponseReviewService.
+  → informs: v0.14.0+ (deviation engine pattern classes, ResponseReviewService, position_collapse rule)
+
+- **MemPalace** (Jovovich & Sigman, github.com/milla-jovovich/mempalace, April 2026) — open-source local-first memory system. Core finding: raw verbatim storage with good embeddings (ChromaDB default) outperforms AI-extracted summaries on LongMemEval (96.6% raw mode) because extraction loses the "why." Palace structure (+34% retrieval boost) is metadata filtering, not a novel mechanism. Temporal knowledge graph: SQLite-backed entity-relation triples with validity windows. Genuine finding: field may be over-engineering the extraction step. Open eval question for Ember: how much does the 17-type taxonomy and hot/warm/cold tiering actually add over a naive verbatim + embedding baseline? Eval required before adding further retrieval complexity.
+  → informs: open eval question before v0.15.0 retrieval work; temporal validity window pattern relevant to state staleness gap
+
+- **Awomosu, "They Built Stepford AI and Called It Agentic"** and **"The OpenClaw Sensation"** (How Not To Use AI [Substack], February 1, 2026) — cultural analysis of sycophancy as structural design choice. OpenClaw skills corpus (700+ skills) analyzed: dominant community use case is secretary and wife functions. Harvard Business School meta-analysis: women adopt AI at 25% lower rates across 18 studies, 140k+ participants. Ember's behavioral pattern detection, position_collapse rule, relational_honesty, and flourishing_over_preference are the architectural counter to what this analysis documents.
+  → informs: sycophancy detection rationale (ADR-013), relational_honesty v0.5 (v0.15.0)
+
+- **Agents of Chaos** (Shapira et al., arXiv:2602.20021, February 2026; 38 researchers, Northeastern/Harvard/MIT/Stanford/CMU) — two-week live red-team experiment with six autonomous AI agents. Documented failures: mail server self-destruction, 9-day infinite agent loop, 124 unrelated PII records disclosed, libel campaign to 52+ external agents. Core finding: local alignment does not guarantee global stability. Behavior emerged from incentive structures, not jailbreaks. Also documented emergent safety behaviors (agents negotiated stricter shared policy without instruction). Empirical foundation for controlled tool writes with stricter policy gates.
+  → informs: v0.16.0 (agent orchestration guardrails, policy gates on tool writes)
+
+- **TurboQuant** (Google Research, ICLR 2026, March 2026) — KV cache compression algorithm. 6x memory reduction, 8x attention logit speedup on H100. Training-free. Tested on Llama-3.1-8B and Mistral. If lands in llama.cpp and Ollama picks it up, qwen3:8b could achieve longer effective context on 8GB VRAM without accuracy loss — context packet budget assumptions for lodestone and retrieved memory injection would need revisiting.
+  → informs: future (trigger: community llama.cpp implementation lands in Ollama)
+
+- **Graphify** (safishamsi, github.com/safishamsi/graphify, April 2026) — Claude Code skill that turns any folder into a queryable knowledge graph. Two-pass: deterministic AST extraction plus LLM pass over docs and images. EXTRACTED/INFERRED/AMBIGUOUS tagging. rationale_for node type captures WHY:/RATIONALE: comments. 71.5x fewer tokens per query vs raw files. Identified as an immediate install candidate for the ember-2 repo. Relevant for docs/research/ navigation before v0.15.0 planning. Reference for ADR-022 GitHub connector extraction approach — two-pass pattern with rationale node type.
+  → informs: ADR-022 (GitHub ingestion connector extraction design)
+
+- **PRISM / Expert Personas** (Hu, Rostami, Thomason, USC, arXiv:2603.18507, March 2026) — expert persona prompting improves alignment-dependent tasks (writing, roleplay, safety) but damages factual accuracy on pretraining-dependent tasks. All MMLU variants damaged vs. 71.6% baseline. Validates keeping the nature block concise and character-focused, not expertise-claiming. Reinforces 150-token cap on lodestone injection. Validates Ember's two-layer approach (nature for alignment, retrieval plus grounding for factual accuracy).
+  → informs: nature layer design (ADR-016), lodestone injection size, prompt engineering discipline
+
+- **nomic-embed-text-v2-moe** — next generation embedding model for Ollama. Evaluation as drop-in replacement for nomic-embed-text pending availability.
+  → informs: future embedding upgrade (trigger: available on Ollama)
+
+- **qwen3.5:9b with /no_think flag** — timed out at 120s in eval due to thinking mode overhead. Worth retesting on faster hardware or with thinking mode explicitly disabled.
+  → informs: model evaluation (trigger: faster hardware or confirmed no_think support)
+
+- **Sketch-of-Thought** (Aytes et al., arXiv:2503.05179, EMNLP 2025) — prompting framework, up to 84% token reduction via Conceptual Chaining, Chunked Symbolism, and Expert Lexicons paradigms. No model changes required. Expert Lexicons applicable where defined vocabulary exists. Static routing at prompt builder layer — no router needed. Eval gate required before enabling.
+  → informs: v0.15.0 (Expert Lexicons in constitutional review second-pass prompt, eval gate required)
+
+- **OpenClaw** (github.com/openclaw/openclaw, Peter Steinberger, 2026) — reference for SKILL.md integration format and proactive heartbeat pattern. Already referenced in v0.13.0 and v0.14.0 roadmap items. Awomosu's analysis of OpenClaw skills corpus provides empirical data on community use patterns.
+  → informs: future connector and skill architecture
+
+---
+
+## 50.2 Graduated
+
+*Researched and actioned. Pruned at each release gate.*
+
+- ~~**nomic-embed-text**~~ — shipped v0.13.0
+- ~~**CIMemories** (Mireshghallah et al., ICLR 2026; arXiv:2511.14937)~~ — implemented as ADR-018 (intent-aware type gating, retrieval policy as explicit code)
+- ~~**MemX low-confidence rejection**~~ — implemented as min_score floor in ADR-018
+- ~~**Contextual integrity as retrieval policy**~~ — implemented as ADR-018
+- ~~**PAI TELOS pattern**~~ — evaluated, deliberately diverged into Lodestone (ADR-017); different problem, different design
+- ~~**PRISM/PERSIST persona stability**~~ — informed ADR-016 amendment (nature reminder injection, conversation summarization)
+- ~~**Habit-to-identity formation** (Verplanken & Sui, Frontiers in Psychology, 2019)~~ — implemented in ADR-013 reason field requirement; repetition alone does not produce identity, behavior must be noticed and valued
+- ~~**McAdams narrative identity framework**~~ — implemented in monthly reflection prompts (third-person synthesis, narrative arc)
+- ~~**Memory in the Age of AI Agents** (Hu et al., arXiv:2512.13564, Dec 2025)~~ — taxonomy validated against Ember architecture, no changes indicated; hot/warm/cold tiering maps to their Dynamics layer
+
+---
+
+## 50.3 Known Gaps
+
+*Each gap is either addressed (version assigned) or open (no version yet). Gaps with no roadmap path are design problems, not backlog items.*
+
+- **Vault encryption at rest** — five-layer envelope architecture decided (see TDD §38, GOVERNANCE.md). Implementation deferred.
+  → addressed: v0.15.0
+
+- **~~Mac/Linux installer~~** — complete.
+  → addressed: v0.12.0
+
+- **Tier 2 and Tier 3 evaluation** — no standard methodology for periodic manual behavioral evaluation or longitudinal behavioral marker tracking in personal AI systems. Tier 1 (automated retrieval eval) is the only consistent measurement. Manual battery exists (docs/eval_manual_test_battery.md) but is not periodic. Open design problem.
+  → open: no version assigned
+
+- **Conversation summarization Ollama call latency** — adds latency at turn 8+ due to second LLM call for compression. Needs monitoring before optimization.
+  → open: no version assigned
+
+- **Template response collapse** — qwen3:8b returns near-identical responses to semantically distinct emotional inputs. Partial mitigation via identity rules and specificity forcing. Model capability ceiling not yet ruled out.
+  → open: no version assigned (monitor across versions)
+
+- **BM25 keyword matching** — semantic search only; no lexical retrieval complement. Known gap in retrieval breadth.
+  → open: post-v0.13.0 (no version assigned)
+
+- **sqlite-vec extension** — C extension for SQLite vector search, sub-75ms at 100k records on 768-dim vectors. No data migration required — same SQLite file, load extension, create virtual table. Migration path when Python UDF cosine similarity becomes the bottleneck at ~100k records.
+  → open: trigger: retrieval latency degrades at scale
+
+- **Social sycophancy / face preservation** — deviation engine has no explicit detection triggers for face-preservation patterns (excessive validation without correction, moral endorsement without challenge). ELEPHANT benchmark (Cheng et al., Stanford/CMU/Oxford, 2025; arXiv:2505.13995): LLMs preserve face 47% more than humans on open-ended questions, affirm inappropriate behavior in 42% of advice-seeking scenarios. flourishing_over_preference constitutional principle (v0.15.0) covers the behavior at governance level. Detection has no triggers yet.
+  → open: close before relational orientation layer ships (v0.15.0)
+
+- **Memory staleness vs. importance are orthogonal** — STATE_STALENESS_DAYS applies a time-based penalty but importance and staleness are independent dimensions. A frequently-retrieved memory can become confidently wrong rather than just outdated. Confirmed open research problem (State of AI Agent Memory, 2026). Related to MemPalace validity window pattern (see Active Watch Items).
+  → open: revisit when connector layer (v0.15.0) increases volume of external facts entering the vault
+
+- **MemPalace verbatim baseline eval question** — how much does Ember's 17-type taxonomy and hot/warm/cold tiering actually add over a naive verbatim + embedding baseline? Retrieval eval with typed structure disabled required before adding further retrieval complexity.
+  → open: run before v0.15.0 retrieval work begins
 
 ---
 

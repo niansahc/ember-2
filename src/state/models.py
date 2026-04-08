@@ -37,6 +37,7 @@ VALID_STATE_CATEGORIES: frozenset[str] = frozenset(
         "priority",        # A near-term priority item
         "next_action",     # A concrete next step to take
         "onboarding",      # System-level onboarding flow state
+        "timer",           # An active timer with a start timestamp
     }
 )
 

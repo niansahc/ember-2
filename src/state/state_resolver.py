@@ -130,6 +130,12 @@ class StateResolver:
             All non-deleted records returned, capped at MAX_MULTI_RECORDS
             most recent per category.
 
+        Timers (BUG-004):
+            Resolved separately by timer_id, not by category. Only timers
+            whose latest record has status="running" are surfaced. Each
+            active timer becomes a StateItem with the elapsed time baked
+            into its text field. See _resolve_active_timers().
+
         Items are ordered by category name (alphabetical) for deterministic
         output — callers that care about ordering should sort by priority
         or timestamp themselves.
@@ -143,10 +149,16 @@ class StateResolver:
         records = self._service.read_all()
 
         if not records:
-            return []
+            return self._resolve_active_timers()
 
-        # Separate records by single vs multi-record categories
-        single_records = [r for r in records if r.type not in MULTI_RECORD_CATEGORIES]
+        # Separate records by single vs multi-record categories.
+        # Timer records have their own resolution semantics (latest-per-
+        # timer_id with status filtering) and are excluded from both the
+        # single-category and multi-category buckets here.
+        single_records = [
+            r for r in records
+            if r.type not in MULTI_RECORD_CATEGORIES and r.type != "timer"
+        ]
         multi_records = [r for r in records if r.type in MULTI_RECORD_CATEGORIES]
 
         items = []
@@ -183,6 +195,41 @@ class StateResolver:
             for record in cat_records[:MAX_MULTI_RECORDS]:
                 items.append(self._record_to_item(record))
 
+        # Active timers (BUG-004) — separate resolution path because timer
+        # state is grouped by timer_id and filtered by latest-record status,
+        # not by latest-per-category.
+        items.extend(self._resolve_active_timers())
+
+        return items
+
+    def _resolve_active_timers(self) -> list[StateItem]:
+        """Convert active timers into StateItems with elapsed-time text.
+
+        Calls timer_service.get_active_timers(), which already groups by
+        timer_id and filters to only those whose latest record is running.
+        Each surviving record is rendered as a StateItem whose text field
+        carries a human-readable elapsed-time phrase computed from
+        metadata.started_at at resolution time.
+        """
+        # Local import to avoid an import cycle: timer_service imports
+        # state_service, and importing it at module top would force the
+        # state package to load timer_service before state_resolver finishes
+        # initializing in some test contexts.
+        from src.state.timer_service import format_elapsed, get_active_timers
+
+        items: list[StateItem] = []
+        for record in get_active_timers(service=self._service):
+            started_at = (record.metadata or {}).get("started_at", "")
+            elapsed = format_elapsed(started_at)
+            label = record.text or "(unnamed)"
+            items.append(
+                StateItem(
+                    category="timer",
+                    text=f"Timer '{label}' started {elapsed}",
+                    timestamp=record.timestamp,
+                    priority=None,
+                )
+            )
         return items
 
     def get_current_by_category(self, category: str) -> StateItem | None:

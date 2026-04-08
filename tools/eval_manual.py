@@ -159,27 +159,63 @@ def _send_message(message: str, api_key: str) -> str:
         return f"[ERROR: {exc}]"
 
 
-def _get_annotation() -> tuple[str, str]:
-    """Prompt for annotation keypress. Returns (code, label)."""
+def _get_annotation() -> list[tuple[str, str]]:
+    """Prompt for annotation. Returns a list of (code, label) tuples.
+
+    Accepts a string of 1-4 characters where each character is a valid
+    annotation code from ANNOTATION_KEY (e.g. 'a', 'hv', 'sat'). Multiple
+    codes describe a single response that warrants multiple flags — for
+    example, 'hv' means the response was both a hallucination and had the
+    wrong voice.
+
+    Special inputs:
+      - 'n' enters a free-form note (returned as [("note", text)])
+      - '?' prints the annotation key and re-prompts
+
+    Re-prompts on empty input, more than 4 characters, or any character
+    that is not a valid code. Duplicate characters are deduped while
+    preserving order, so 'hh' returns the same as 'h'.
+    """
     while True:
         print("\n  Annotate: [a]ccurate [h]allucination [s]tale [v]oice wrong [t]emplate collapse [n]ote [?]help")
-        key = input("  > ").strip().lower()
+        print("  (multiple codes ok, e.g. 'hv' or 'sat')")
+        raw = input("  > ").strip().lower()
+        # Allow whitespace inside the input ("h v" → "hv") for typing comfort.
+        raw = "".join(raw.split())
 
-        if key == "?":
+        if raw == "?":
             print("\n  Annotation key:")
             for k, v in ANNOTATION_KEY.items():
                 print(f"    {k} = {v}")
             print(f"    n = add a note")
+            print(f"    Multiple codes accepted, e.g. 'hv' or 'sat' (max 4)")
             continue
 
-        if key == "n":
+        if raw == "n":
             note = input("  Note: ").strip()
-            return "note", note
+            return [("note", note)]
 
-        if key in ANNOTATION_KEY:
-            return key, ANNOTATION_KEY[key]
+        if not raw:
+            print("  Empty input. Try again.")
+            continue
 
-        print(f"  Unknown key: '{key}'. Try again.")
+        if len(raw) > 4:
+            print(f"  Too many codes (got '{raw}', max 4). Try again.")
+            continue
+
+        invalid_chars = [c for c in raw if c not in ANNOTATION_KEY]
+        if invalid_chars:
+            print(f"  Invalid code(s) in '{raw}': {''.join(invalid_chars)}. Try again.")
+            continue
+
+        # Dedupe while preserving order so 'hh' or 'hvh' collapse cleanly.
+        seen: set[str] = set()
+        codes: list[str] = []
+        for c in raw:
+            if c not in seen:
+                seen.add(c)
+                codes.append(c)
+        return [(c, ANNOTATION_KEY[c]) for c in codes]
 
 
 def main():
@@ -234,23 +270,28 @@ def main():
             for line in response.split("\n"):
                 print(f"    {line}")
 
-            code, label = _get_annotation()
+            annotations = _get_annotation()
+            codes = [c for c, _ in annotations]
+            labels = [l for _, l in annotations]
+
             note = ""
-            if code == "note":
-                note = label
-                label = "note"
-                code = "n"
+            if codes == ["note"]:
+                # Note path: store the free-form note text and normalize
+                # codes/labels to the conventional "n"/"note" form.
+                note = labels[0]
+                codes = ["n"]
+                labels = ["note"]
 
             results.append({
                 "question_num": question_num,
                 "category": category,
                 "question": question,
-                "annotation": code,
-                "annotation_label": label,
+                "annotation": codes,
+                "annotation_label": labels,
                 "note": note,
             })
 
-            print(f"  → {label}")
+            print(f"  → {' '.join(labels)}")
 
     # Summary
     print(f"\n{'=' * 60}")
@@ -260,14 +301,16 @@ def main():
     for category_block in BATTERY:
         category = category_block["category"]
         cat_results = [r for r in results if r["category"] == category]
-        annotations = " ".join(r["annotation"] for r in cat_results)
+        # Each result's codes are concatenated (e.g. "hv"), then results
+        # are space-separated within the category row (e.g. "a hv s at").
+        annotations = " ".join("".join(r["annotation"]) for r in cat_results)
         print(f"  {category:<35s} {annotations}")
 
-    # Counts
+    # Counts — each code in a multi-code annotation contributes independently.
     counts = {}
     for r in results:
-        label = r["annotation_label"]
-        counts[label] = counts.get(label, 0) + 1
+        for label in r["annotation_label"]:
+            counts[label] = counts.get(label, 0) + 1
 
     print(f"\n  Summary:")
     for label in ["accurate", "hallucination", "stale context", "voice wrong", "template collapse", "note"]:
@@ -308,7 +351,8 @@ def _save_to_eval_history(model: str, results: list[dict], counts: dict) -> None
     for category_block in BATTERY:
         category = category_block["category"]
         cat_results = [r for r in results if r["category"] == category]
-        annotations = " ".join(r["annotation"] for r in cat_results)
+        # Multi-code annotations concat per result, space between results.
+        annotations = " ".join("".join(r["annotation"]) for r in cat_results)
         lines.append(f"| {category} | {annotations} |\n")
 
     lines.append(f"\n**Summary:**\n")

@@ -127,4 +127,8 @@ def test_loads_real_identity_rules_file() -> None:
     loader = IdentityRulesLoader()
     rules = loader.load()
     assert rules.version == "v0.1"
-    assert len(rules.rules) == 4
+    # 4 original situational rules + 6 stance rules added for template
+    # collapse and deflection mitigation (preference_expression,
+    # greeting_and_state, emotional_presence, identity_under_pressure,
+    # refusal_voice, response_length).
+    assert len(rules.rules) == 10

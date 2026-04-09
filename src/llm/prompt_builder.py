@@ -271,8 +271,8 @@ class PromptBuilder:
         if not turns:
             return "<conversation_history>\nNone\n</conversation_history>"
 
-        # Summarize at turn 8+ to prevent cascade risk and attention dilution
-        if len(turns) > 8:
+        # Summarize at turn 6+ to prevent cascade risk and attention dilution
+        if len(turns) > 6:
             return self._build_summarized_conversation(turns)
 
         lines: list[str] = []

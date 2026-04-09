@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.14.1 — 2026-04-09
+
+### Features
+- Timer functions via state layer (BUG-004) — start, stop, and check timers through natural language; stored as StateRecord with type="timer", grouped by timer_id, surfaced in context packet via StateResolver
+- Stance-level identity rules — six new rules addressing template collapse and deflection (preference_expression, greeting_and_state, emotional_presence, identity_under_pressure, refusal_voice, response_length)
+- Nature orientations — specific behavioral orientations appended to relational_presence and honesty_about_hard_things facets
+- Multi-annotation codes in manual eval CLI — annotators can now flag multiple patterns per response (e.g. "hv" for hallucination + wrong voice)
+- Active project name injected into prompt context (BUG-002) — XML-tagged `<active_project>` section between state and tasks
+- Inter-session time gap injected into prompt context (BUG-003) — XML-tagged `<last_session>` section with human-readable elapsed label
+
+### Bug Fixes
+- Sidebar conversation links now load correctly (BUG-001) — getConversationTurns called non-existent /turns sub-route
+- Timestamp collision guard on session, task, and write_memory generators (BUG-005) — spin-on-collision prevents same-microsecond filename collisions in append-only writes
+- Conversation summarization threshold moved from turn 8 to turn 6 — compensates for increased identity rules token overhead
+- Active project name in prompt uses own `<active_project>` section, not date section
+- Vault contents rule clarified in CLAUDE.md documentation language convention
+- Real vault name replaced with generic placeholder in prompt_builder test fixture
+
+### Maintenance
+- Soft-deleted 124 orphan assistant-only sessions pre-2026-04-01 (BUG-006) — one-time hygiene via scripts/cleanup_orphan_sessions.py
+- Archived one-time migration and cleanup scripts to scripts/archive/
+- Consolidated research tracking into TDD §50 Research section; removed Watch Items and Known Gaps from CLAUDE.md
+- Relational orientation layer moved from v0.15.0 to v0.16.0 roadmap
+
+---
+
 ## v0.14.0 — 2026-04-06 — Identity Foundation
 
 ### Features

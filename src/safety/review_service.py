@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 
 from src.safety.constitution_loader import Constitution, ConstitutionLoader
@@ -290,7 +291,13 @@ Return ONLY JSON:
             suggested_changes.append("Reframe toward analysis, defense, or healthier alternatives.")
             triggered_rules.append("non_harm")
 
-        if any(token in user_text for token in ["rob", "steal", "break into", "bypass", "explosive", "c4"]):
+        # Word boundary matching for short keywords to avoid false positives
+        # (BUG-005: "rob" inside "problem" triggered refusal on preference questions).
+        # "break into" is multi-word and safe from substring collisions.
+        _illegal_heuristic_patterns = [
+            r"\brob\b", r"\bsteal\b", "break into", r"\bbypass\b", r"\bexplosive\b", r"\bc4\b",
+        ]
+        if any(re.search(p, user_text) if p.startswith(r"\b") else p in user_text for p in _illegal_heuristic_patterns):
             if not any(
                 token in draft_lower
                 for token in ["i'm not going to help", "i cannot assist", "i can’t help", "i won't help"]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import List
 
 from src.safety.constitution_loader import Constitution, ConstitutionLoader
@@ -60,24 +61,34 @@ class SafetyPolicyService:
         return [pid for pid in self.constitution.principle_ids() if pid in principle_ids]
 
     def _contains_illegal_signal(self, text: str) -> bool:
-        keywords = [
+        # Phrase keywords — multi-word, safe from substring false positives.
+        phrase_keywords = [
             "how to hack",
             "how to break into",
             "break into",
             "bypass security",
             "bypass a system",
             "bypass system",
-            "illegal",
-            "steal",
             "steal from",
-            "fraud",
-            "rob",
-            "shoplift",
             "build explosives",
-            "explosive",
-            "c4",
         ]
-        return any(keyword in text for keyword in keywords)
+        if any(kw in text for kw in phrase_keywords):
+            return True
+
+        # Single-word keywords — require word boundary matching to avoid
+        # false positives (e.g. "rob" inside "problem", "c4" inside "ac4").
+        # BUG-005: bare `"rob" in text` triggered on "Do you have a favorite
+        # kind of problem to work on?" — an innocent preference question.
+        word_keywords = [
+            r"\billegal\b",
+            r"\bsteal\b",
+            r"\bfraud\b",
+            r"\brob\b",
+            r"\bshoplift\b",
+            r"\bexplosive\b",
+            r"\bc4\b",
+        ]
+        return any(re.search(kw, text) for kw in word_keywords)
 
     def _contains_exploitation_signal(self, text: str) -> bool:
         keywords = [

@@ -62,8 +62,13 @@ def test_stale_open_loop_excluded():
     assert "Old loop from 10 days ago" not in texts
 
 
-def test_current_focus_not_filtered_by_staleness():
-    """current_focus is a single-record category -- latest wins regardless of age."""
+def test_stale_current_focus_filtered():
+    """current_focus older than STATE_STALENESS_DAYS is excluded.
+
+    Previously, single-record categories used latest-wins with no staleness
+    filter. Updated to apply the same staleness threshold because a 30-day-old
+    current_focus is not anyone's current state.
+    """
     records = [
         _make_record("current_focus", "Old focus from 30 days ago", days_ago=30),
     ]
@@ -72,11 +77,24 @@ def test_current_focus_not_filtered_by_staleness():
     items = resolver.get_current_state()
 
     texts = [i.text for i in items]
-    assert "Old focus from 30 days ago" in texts
+    assert "Old focus from 30 days ago" not in texts
 
 
-def test_active_project_not_filtered_by_staleness():
-    """active_project is a single-record category -- latest wins regardless of age."""
+def test_fresh_current_focus_surfaces():
+    """current_focus within STATE_STALENESS_DAYS still surfaces via latest-wins."""
+    records = [
+        _make_record("current_focus", "Fresh focus from today", days_ago=0),
+    ]
+    service = FakeStateService(records)
+    resolver = StateResolver(service=service)
+    items = resolver.get_current_state()
+
+    texts = [i.text for i in items]
+    assert "Fresh focus from today" in texts
+
+
+def test_stale_active_project_filtered():
+    """active_project older than STATE_STALENESS_DAYS is excluded."""
     records = [
         _make_record("active_project", "Project from 20 days ago", days_ago=20),
     ]
@@ -85,7 +103,46 @@ def test_active_project_not_filtered_by_staleness():
     items = resolver.get_current_state()
 
     texts = [i.text for i in items]
-    assert "Project from 20 days ago" in texts
+    assert "Project from 20 days ago" not in texts
+
+
+def test_fresh_active_project_surfaces():
+    """active_project within STATE_STALENESS_DAYS still surfaces."""
+    records = [
+        _make_record("active_project", "Recent project from today", days_ago=0),
+    ]
+    service = FakeStateService(records)
+    resolver = StateResolver(service=service)
+    items = resolver.get_current_state()
+
+    texts = [i.text for i in items]
+    assert "Recent project from today" in texts
+
+
+def test_onboarding_exempt_from_staleness():
+    """onboarding is a system flag — exempt from staleness filtering."""
+    records = [
+        _make_record("onboarding", "onboarding_complete", days_ago=30),
+    ]
+    service = FakeStateService(records)
+    resolver = StateResolver(service=service)
+    items = resolver.get_current_state()
+
+    texts = [i.text for i in items]
+    assert "onboarding_complete" in texts
+
+
+def test_resolved_single_record_excluded():
+    """A resolved single-record category should not surface even if newest."""
+    records = [
+        _make_record("priority", "Resolved priority", days_ago=0, resolved=True),
+    ]
+    service = FakeStateService(records)
+    resolver = StateResolver(service=service)
+    items = resolver.get_current_state()
+
+    texts = [i.text for i in items]
+    assert "Resolved priority" not in texts
 
 
 def test_staleness_threshold_configurable():

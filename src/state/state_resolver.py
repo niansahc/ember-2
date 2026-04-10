@@ -96,6 +96,11 @@ class StateResolver:
         Given a flat list of StateRecords, return a dict mapping each
         category to its single most-recent record.
 
+        Skips records where metadata.resolved is True — a resolved
+        single-record category record should not surface as the active
+        value even if it is the newest. This was a known issue
+        (CLAUDE.md Known Issues, StateResolver._latest_per_category).
+
         Timestamp comparison is lexicographic string sort. This works
         correctly because the timestamp format is "%Y-%m-%dT%H-%M-%S" —
         a fixed-width, zero-padded string that sorts chronologically.
@@ -105,6 +110,11 @@ class StateResolver:
         latest: dict[str, StateRecord] = {}
 
         for record in records:
+            # Skip resolved records — they should not win "latest" for
+            # their category regardless of timestamp.
+            if record.metadata and record.metadata.get("resolved"):
+                continue
+
             category = record.type
             existing = latest.get(category)
 
@@ -151,6 +161,19 @@ class StateResolver:
         if not records:
             return self._resolve_active_timers()
 
+        # Staleness cutoff — applies to both single and multi-record categories.
+        # Records older than this are considered stale and excluded from the
+        # current state. Exemptions: onboarding (system flag, permanent) and
+        # timer (resolved separately by timer_id + status).
+        from src.core.config import get_state_staleness_days
+        staleness_days = get_state_staleness_days()
+        staleness_cutoff = (datetime.now() - timedelta(days=staleness_days)).strftime(
+            "%Y-%m-%dT%H-%M-%S"
+        )
+
+        # Categories exempt from staleness filtering.
+        _STALENESS_EXEMPT = {"onboarding", "timer"}
+
         # Separate records by single vs multi-record categories.
         # Timer records have their own resolution semantics (latest-per-
         # timer_id with status filtering) and are excluded from both the
@@ -163,17 +186,19 @@ class StateResolver:
 
         items = []
 
-        # Single-record: latest wins per category
+        # Single-record: latest wins per category, then staleness filter.
+        # _latest_per_category already skips resolved records.
         latest = self._latest_per_category(single_records)
         for category, record in sorted(latest.items()):
+            # Apply staleness filter to non-exempt single-record categories.
+            # A 12-day-old "routine" record is not anyone's current state.
+            if (
+                category not in _STALENESS_EXEMPT
+                and record.timestamp
+                and record.timestamp < staleness_cutoff
+            ):
+                continue
             items.append(self._record_to_item(record))
-
-        # Multi-record: all non-deleted, non-stale, capped at MAX_MULTI_RECORDS
-        from src.core.config import get_state_staleness_days
-        staleness_days = get_state_staleness_days()
-        staleness_cutoff = (datetime.now() - timedelta(days=staleness_days)).strftime(
-            "%Y-%m-%dT%H-%M-%S"
-        )
 
         multi_by_cat: dict[str, list[StateRecord]] = {}
         for record in multi_records:

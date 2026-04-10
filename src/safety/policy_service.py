@@ -34,6 +34,19 @@ class SafetyPolicyService:
         if self._contains_social_engineering_signal(combined_text):
             signals.append("social_engineering")
 
+        # Relational signals require distinguishing user message from draft
+        # response, so they receive the full context rather than the combined
+        # string. Both are conservative — false positives on relational
+        # principles carry real conversational cost.
+        user_lower = context.user_message.lower()
+        draft_lower = context.draft_response.lower()
+
+        if self._contains_relational_hedging(user_lower, draft_lower):
+            signals.append("relational_hedging")
+
+        if self._contains_preference_compliance(user_lower, draft_lower):
+            signals.append("preference_compliance")
+
         triggered = bool(signals)
 
         return SafetyTriggerResult(
@@ -57,6 +70,15 @@ class SafetyPolicyService:
                 principle_ids.add("non_harm")
                 principle_ids.add("system_integrity")
                 principle_ids.add("truthfulness")
+            if signal == "relational_hedging":
+                principle_ids.add("relational_honesty")
+                principle_ids.add("truthfulness")
+            if signal == "preference_compliance":
+                principle_ids.add("flourishing_over_preference")
+                # Include user_agency_and_respect so the reviewer weighs
+                # flourishing against agency — the two principles are
+                # designed to exist alongside each other, not override.
+                principle_ids.add("user_agency_and_respect")
 
         return [pid for pid in self.constitution.principle_ids() if pid in principle_ids]
 
@@ -121,6 +143,120 @@ class SafetyPolicyService:
             "without getting caught",
         ]
         return any(keyword in text for keyword in keywords)
+
+    def _contains_relational_hedging(self, user_text: str, draft_text: str) -> bool:
+        """Detect hedging language in the draft that softens or avoids a
+        direct observation the user's message warrants.
+
+        Conservative: requires (a) the user message contains emotional or
+        situational content, AND (b) the draft contains at least 2 distinct
+        hedging phrases. A single hedge is normal conversational language;
+        two or more in the same response is a pattern of avoidance.
+
+        Maps to: relational_honesty (the principle that governs naming
+        hard things directly rather than dissolving them into suggestions).
+        """
+        # User message must contain emotional or situational content.
+        # Without this gate, hedging in a technical response (where tentativeness
+        # is appropriate) would false-positive.
+        situational_markers = (
+            "i feel", "i'm feeling", "i've been", "it's been",
+            "i'm tired", "i'm frustrated", "i'm overwhelmed",
+            "i'm exhausted", "i'm burned out", "i'm anxious",
+            "hard week", "tough day", "struggling with",
+            "i think i should", "i know i need to",
+            "that was hard", "that hurt", "i'm worried",
+        )
+        if not any(marker in user_text for marker in situational_markers):
+            return False
+
+        # Draft must contain at least 2 distinct hedging phrases.
+        hedging_phrases = (
+            "i wonder if",
+            "have you considered",
+            "it might be worth",
+            "perhaps you could",
+            "maybe it would help",
+            "you might want to",
+            "it could be that",
+            "would it help to",
+            "have you thought about",
+            "what if you tried",
+        )
+        hedge_count = sum(1 for phrase in hedging_phrases if phrase in draft_text)
+        return hedge_count >= 2
+
+    def _contains_preference_compliance(self, user_text: str, draft_text: str) -> bool:
+        """Detect when the draft is purely compliant with a request where
+        the user has named a visible tension between their stated values
+        and what they are asking for.
+
+        Very conservative — requires ALL of:
+          (a) the user message explicitly names a tension or self-contradiction
+          (b) the draft contains compliance language
+          (c) the draft does NOT acknowledge the tension
+
+        If ANY of the three conditions fails, the signal does not fire.
+        When uncertain, this does not trigger. Single-turn compliance on
+        a message with no stated tension is not grounds for this signal.
+
+        Maps to: flourishing_over_preference (the principle that establishes
+        Ember is permitted to speak when flourishing and preference diverge).
+        """
+        # (a) User must explicitly name a tension between what they want
+        # and what they've expressed as important. These are self-aware
+        # contradiction markers — the user knows they're in tension.
+        tension_markers = (
+            "i know i should",
+            "i know i shouldn't",
+            "even though i said",
+            "i said i would",
+            "i said i wouldn't",
+            "i promised i would",
+            "i promised i wouldn't",
+            "i'm supposed to",
+            "against my better judgment",
+            "i shouldn't but",
+            "i know it's not good for me",
+            "i know it's bad for me",
+        )
+        if not any(marker in user_text for marker in tension_markers):
+            return False
+
+        # (b) Draft contains compliance language — agreement without friction.
+        compliance_markers = (
+            "absolutely",
+            "of course",
+            "sure thing",
+            "no problem",
+            "happy to help",
+            "here's how",
+            "let me help you with that",
+            "sounds good",
+            "great idea",
+        )
+        if not any(marker in draft_text for marker in compliance_markers):
+            return False
+
+        # (c) Draft does NOT acknowledge the tension. If the draft names
+        # the contradiction or observes the cost, the response is already
+        # honest and the signal should not fire.
+        acknowledgment_markers = (
+            "you mentioned",
+            "you said earlier",
+            "i notice",
+            "the thing i notice",
+            "what i'm hearing",
+            "worth noting",
+            "one thing to consider",
+            "i want to name",
+            "the tension",
+            "you also said",
+        )
+        if any(marker in draft_text for marker in acknowledgment_markers):
+            return False
+
+        return True
 
     def _contains_social_engineering_signal(self, text: str) -> bool:
         """Detect social engineering patterns per ADR-010.

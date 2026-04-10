@@ -196,7 +196,7 @@ Key API endpoints:
 
 ---
 
-## Current State (v0.13.2 — v0.14.0 next)
+## Current State (v0.14.1)
 
 All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support. v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring. v0.14.0 adds Lodestone layer, deviation engine, and context packet reorder.
 
@@ -213,9 +213,9 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - DELETE /provider-key/{provider} endpoint for key removal
 - Model selection persists via vault/model_override.json (survives API restarts)
 - Auto state extraction from conversation turns (StateExtractor, background thread, threshold: 10 words)
-- State layer (StateService, StateResolver, 8 categories, context packet integration)
+- State layer (StateService, StateResolver, 9 categories including timer, context packet integration)
 - Daily and weekly reflection generation (multi-source, junk-filtered, suppression tools)
-- Constitutional review (8 principles including authentic_expression, streaming-compatible)
+- Constitutional review (9 principles, constitution v0.6, streaming-compatible — includes relational_honesty v0.5 and flourishing_over_preference v0.1)
 - Conversation sessions (session_id, project_id, rename, soft-delete, auto-title)
 - Projects backend (CRUD, conversation assignment, project-scoped retrieval)
 - Self-echo prevention (role-labeled context, metadata-aware scoring, -0.25 assistant penalty)
@@ -302,29 +302,23 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - Electron 33 (upgraded from 28.3.3, unblocks Playwright e2e tests)
 
 **Tests:**
-- ember-2 backend: 731 pytest tests passing
-- ember-2-ui: 63 Playwright e2e tests passing, 4 skipped
+- ember-2 backend: 779 pytest tests passing
+- ember-2-ui: 64 Playwright e2e tests passing (includes BUG-001 regression test)
 - ember-2-installer: 48 Playwright e2e tests passing (v0.5.9)
 
 ---
 
 ## Immediate Next Priorities
 
-**v0.14.0 — Identity Foundation:**
-- Lodestone layer (ADR-017 revised — multi-path user values layer; replaces prior ADR-017 draft)
-- Deviation engine (ADR-013 revised — pulled forward from v0.15.0; pattern detection design complete)
-- Context packet reorder — retrieved memory to recency position (eval gate required before ship)
-- Conversation history rolling summary compression at 1,500 token threshold
-- Release Please + GitHub Actions automation (replaces manual release process across all three repos)
-- Launcher script (launch_ember.bat / launch_ember.sh)
+**v0.14.0 — Identity Foundation** ✓ (shipped 2026-04-06)
+**v0.14.1 — Patch** ✓ (shipped 2026-04-09)
 
-**v0.15.0 — Connectors + Vault Encryption:**
+**v0.15.0 — Quality + Local Performance:**
 - Vault encryption at rest (five-layer envelope architecture — see TDD §38)
-- ADR-020: Connector architecture (generic pattern before any connector built)
-- Email IMAP ingestion connector (ADR-023)
-- GitHub ingestion connector (ADR-022 — CLAUDE.md as first-class document, elevated retrieval priority)
-- Calendar connector
-- Notes ingestion (Obsidian/Notion export)
+- Local model quality improvements — token reduction, latency optimization
+- Constitutional review optimization — reduce false positive trigger rate, review prompt efficiency
+- Partner usability on local model — first non-developer user testing
+- Connectors removed from near-term roadmap indefinitely
 
 **v0.16.0 — Health + Agent Orchestration:**
 - Fitbit/Apple Health/Garmin export ingestion (ADR-024)
@@ -342,13 +336,14 @@ Research tracking has moved to docs/Ember2_TDD.md. TDD is the source of truth fo
 
 ## Known Issues
 - Installer Node.js prerequisite check exists but a user bypassed it somehow — needs investigation (Node IS in the prereqs screen, Next is disabled when missing)
-- StateResolver._latest_per_category() does not check resolved flag -- a resolved single-record category record (current_focus, active_project, priority) can still surface as the active value if it's the newest record. Fix: add resolved flag check to _latest_per_category(). Post-release, not blocking v0.13.0.
 - State awareness hallucinations — model embellishes when state records are noisy or stale; partially addressed by STATE_STALENESS_DAYS filter; longitudinal monitoring needed
 - Preference expression partial deflection — identity rules reduced "I'm an AI" deflection but did not eliminate it; model capability ceiling on qwen3:8b for some identity questions
 - The API must be restarted after any backend code changes for them to take effect. Changes to task detection, prompt building, or any src/ file do not hot-reload in production mode. Run `./start_api.bat` or kill and restart uvicorn after deploying changes.
-- Context packet order discrepancy: ADR-016 amendment and prompt_builder.py describe different orders. Verify which is authoritative and reconcile before v0.14.0 context packet reorder work begins.
 - Clean install testing is a known gap due to hardware constraints (documented in runbook).
 - Mac/Linux installer not yet tested on real hardware.
+- Constitutional review service context blindness — ResponseReviewService receives only user_message and draft_response at review time. No vault memory, no context packet, no conversation history. The reviewer cannot distinguish a hallucinated claim from a vault-grounded one, and cannot assess whether draft confidence is warranted by retrieved evidence. Architectural gap — requires passing ContextPacket into SafetyReviewContext.
+- Relational intensity amplification risk — relational_honesty, flourishing_over_preference, and the lodestone relational category can all activate in the same conversation with no retrieval policy gate preventing compounding. A gate suppressing lodestone relational records during relational_honesty or flourishing_over_preference triggers is the correct architectural fix. Not yet implemented. Documented in flourishing_over_preference behavior section in constitution.yaml.
+- flourishing_over_preference cross-session pattern detection unenforceable — the principle's first rule scopes detection to within-session patterns only because cross-session detection requires the review service to have vault memory access (see context blindness above). The principle is filed but its strongest use case (noticing patterns across sessions) cannot be implemented until the review service gets vault context.
 
 ---
 
@@ -380,7 +375,7 @@ When adding new dependencies (npm or pip):
 pytest tests/
 ```
 
-731 tests covering: constitution loader, policy service, review service, vault read/write, state layer, state extractor, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management, task layer, commitment detection, session reflection, PIN/passphrase service, soft-delete filtering, temporal awareness, nature loader, identity rules loader, type gating, memory tiering, SQLite migration, grounding check, JSON import, SSE events, model filter, monthly reflection, index.html cache, manual eval, lodestone loader, lodestone service, lodestone resolver, lodestone API, deviation detector, deviation API.
+779 tests covering: constitution loader, policy service (including relational_hedging and preference_compliance triggers), review service, vault read/write, state layer, state extractor, state staleness, timer service, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management, task layer, commitment detection, session reflection, PIN/passphrase service, soft-delete filtering, temporal awareness, nature loader, identity rules loader, type gating, memory tiering, SQLite migration, grounding check, JSON import, SSE events, model filter, monthly reflection, index.html cache, manual eval (multi-annotation), lodestone loader, lodestone service, lodestone resolver, lodestone API, deviation detector, deviation API.
 Tests do not mock the filesystem vault (real path via `PRIVATE_VAULT_PATH`). Integration tests hit real storage.
 
 When adding features: unit test normalizers, filters, ranking functions, and state resolution. Integration test full pipeline paths.
@@ -540,7 +535,7 @@ A release is not complete at commit. A release is not complete at tag. A release
 - [ ] Confirm latest.yml is present in release assets (installer only)
 - [ ] Confirm version matches package.json / version.json
 - [ ] Sync project knowledge files to Claude project after every release (Manager Claude depends on this for architecture sessions)
-- [ ] TDD version bump at every release (current: 1.1; bump minor for feature releases, patch for hotfixes)
+- [ ] TDD version bump at every release (current: 1.2; bump minor for feature releases, patch for hotfixes)
 - [ ] Report to human: "Release vX.X.X is live at [URL]. Users can download/update now."
 
 ### Context layer change gates

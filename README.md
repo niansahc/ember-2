@@ -347,7 +347,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 
 # Current State
 
-## Working (v0.12.0)
+## Working (v0.14.1)
 
 **Core systems:**
 - Append-only JSON vault with typed memory enforcement (17 types validated at write time)
@@ -362,7 +362,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - Multi-record state categories for open_loop and next_action (capped at 5)
 - Commitment detection — post-generation detector writes open_loop state records
 - Daily, weekly, and session reflection generation
-- Constitutional review (8 principles, streaming-compatible)
+- Constitutional review (9 principles, constitution v0.6, streaming-compatible)
 - Conversation sessions with projects, rename, soft-delete, auto-title
 - Task layer — create and track tasks through conversation or direct request
 - Task sidebar tray in the UI with checkbox completion
@@ -393,7 +393,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - Conversation quality eval with Claude as external evaluator
 - Model selection guide with real eval data (docs/model_guide.md)
 - Vault health audit (7 checks, GREEN/YELLOW/RED health score)
-- 610 pytest tests passing
+- 779 pytest tests passing
 
 > Note: Eval harness results reflect personal vault contents and are not generic benchmarks.
 
@@ -402,9 +402,10 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 **v0.11.0** — Cloud provider UI, OpenAI support, backup/export, recovery playbook, semantic safety triggers ✓
 **v0.12.0** — Task layer, session reflection, PIN lock, Mac/Linux installer, temporal awareness ✓
 **v0.13.0** — Embedding upgrade (nomic-embed-text 768-dim), SQLite index migration, memory tiering (ADR-015), nature layer (ADR-016), grounding verification (ADR-019), intent-aware type gating (ADR-018), XML context sections, monthly reflection, JSON import, identity rules layer ✓
-**v0.14.0** — Identity foundation: Lodestone layer, deviation engine, context packet reorder, release automation
-**v0.15.0** — Connectors + vault encryption: connector architecture, email/GitHub/calendar ingestion, vault encryption at rest
-**v0.16.0** — Health + agent orchestration: health data ingestion, self-evaluation loops, trace-driven learning
+**v0.14.0** — Identity foundation: Lodestone layer, deviation engine, context packet reorder, release automation ✓
+**v0.14.1** — Patch: timer functions, identity stance rules, constitutional review fixes, vault hygiene ✓
+**v0.15.0** — Quality + local performance: vault encryption, token reduction, constitutional review optimization, partner usability
+**v0.16.0** — Health + agent orchestration: health data ingestion, self-evaluation loops, trace-driven learning, relational orientation layer
 **Post-v0.16.0** — Multi-user vault isolation, full platform parity
 
 ---
@@ -511,7 +512,7 @@ src/
 │   ├ audit_assistant_chunks.py   Audit assistant-generated chunks
 │   └ suppress_assistant_noise.py Flag low-quality ingested records
 │
-├ tests/                  Pytest suite (485 tests)
+├ tests/                  Pytest suite (779 tests)
 ├ prompts/                LLM prompt templates
 ├ logs/                   Audit logs, safety review logs (gitignored)
 ├ ui/                     Built Ember UI frontend (gitignored, built from ember-2-ui)

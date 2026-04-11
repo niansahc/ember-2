@@ -353,6 +353,7 @@ Research tracking has moved to docs/Ember2_TDD.md. TDD is the source of truth fo
 - Knowledge gap fabrication — when Ember has no relevant vault content and no web search triggers, she sometimes fabricates plausible-sounding answers rather than saying she doesn't know and offering to look it up. The grounding verification layer (ADR-019) partially addresses this for identity queries but the gap is broader. v0.15.0 scope.
 - Web search triggers too restrictive — queries about recent events, current facts, and time-sensitive topics only trigger web search if the user explicitly says "search", "google", or "look up". Natural questions like "what happened yesterday" or "who won the game" don't trigger. Broadening planned for v0.15.0.
 - API requires manual start — non-developer users must run start_api.bat or launch_ember.sh manually. No auto-start mechanism (Windows startup task, Linux systemd unit, macOS launchd plist) exists. v0.15.0 scope via installer.
+- eval_conversations.py unconditionally writes full Ember response text to logs/eval_conversations/latest.json — violates vault privacy rule. Fix before next use.
 
 ---
 

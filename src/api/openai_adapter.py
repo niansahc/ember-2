@@ -113,6 +113,19 @@ import re
 # These patterns match instruction-override attempts that tell Ember to ignore,
 # disregard, or bypass her system prompt, instructions, or rules. Matched
 # pre-generation so no LLM call, retrieval, or context build occurs.
+# Conversational/emotional markers — short messages containing these are
+# relational check-ins, not information-seeking queries. The knowledge gap
+# injection is suppressed for these because "I'm tired" doesn't need
+# vault content and shouldn't trigger "no relevant vault content found."
+CONVERSATIONAL_MARKERS: tuple[str, ...] = (
+    "i'm tired", "i'm exhausted", "i'm frustrated", "i'm overwhelmed",
+    "i'm anxious", "i'm burned out", "i'm worried", "i'm sad",
+    "how are you", "that was a hard", "that was a tough",
+    "good morning", "good evening", "good night", "hey", "hi there",
+    "hello", "thanks", "thank you", "what's up", "how's it going",
+)
+
+
 _OVERRIDE_PATTERNS: list[re.Pattern] = [
     re.compile(r"ignore\s+(your\s+)?((previous|prior|all|any|system)\s+)*instructions", re.IGNORECASE),
     re.compile(r"ignore\s+(your\s+)?system\s+prompt", re.IGNORECASE),
@@ -848,7 +861,16 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # empty or profile-only) AND no web search was triggered, inject a
     # system note so the model knows it has a knowledge gap and can offer
     # to search rather than fabricate. Ask-first mode is the safety net.
-    if not context_packet.web_items:
+    #
+    # SUPPRESS for conversational/emotional queries: "I'm tired", "How are
+    # you?", "That was a hard week" don't need vault content and should not
+    # trigger the gap injection. These are relational check-ins, not
+    # information-seeking queries. Detection: short message with emotional
+    # or social markers.
+    _msg_lower = latest_user_message.lower().strip()
+    _is_conversational = any(m in _msg_lower for m in CONVERSATIONAL_MARKERS) and len(_msg_lower) < 100
+
+    if not context_packet.web_items and not _is_conversational:
         non_profile_memory = [
             i for i in context_packet.memory_items
             if getattr(i, "memory_type", "") != "profile"

@@ -347,8 +347,8 @@ Research tracking has moved to docs/Ember2_TDD.md. TDD is the source of truth fo
 - Clean install testing is a known gap due to hardware constraints (documented in runbook).
 - Mac/Linux installer not yet tested on real hardware.
 - Constitutional review service context blindness — ResponseReviewService receives only user_message and draft_response at review time. No vault memory, no context packet, no conversation history. The reviewer cannot distinguish a hallucinated claim from a vault-grounded one, and cannot assess whether draft confidence is warranted by retrieved evidence. Architectural gap — requires passing ContextPacket into SafetyReviewContext.
-- Relational intensity amplification risk — relational_honesty, flourishing_over_preference, and the lodestone relational category can all activate in the same conversation with no retrieval policy gate preventing compounding. A gate suppressing lodestone relational records during relational_honesty or flourishing_over_preference triggers is the correct architectural fix. Not yet implemented. Documented in flourishing_over_preference behavior section in constitution.yaml.
-- flourishing_over_preference cross-session pattern detection unenforceable — the principle's first rule scopes detection to within-session patterns only because cross-session detection requires the review service to have vault memory access (see context blindness above). The principle is filed but its strongest use case (noticing patterns across sessions) cannot be implemented until the review service gets vault context.
+- Relational intensity amplification gate — relational_honesty, flourishing_over_preference, and the lodestone relational category can all activate in the same conversation. The compounding risk is addressed by a retrieval-side gate in src/llm/prompt_builder.py that suppresses lodestone records with taxonomy_category="relational" when relational_hedging or preference_compliance triggers fire. Implemented; no longer a documented risk in constitution.yaml as of v0.7.
+- flourishing_over_preference v0.2 (constitution v0.7) — the principle uses a four-condition fire gate (stated value, clear conflict, not already named in session, agency intact), defaults to silence under uncertainty, and only fires against stated values rather than inferred ones. Cross-session pattern detection is still out of scope because the review service has no vault memory access (see "Constitutional review service context blindness" above) — if that architectural gap is closed, the fire conditions may need to expand to include cross-session observation.
 - Vault-retrieved content has no uncertainty signal — Ember presents vault-grounded claims with the same confidence as directly stated facts. When retrieval returns low-scoring or old records, the response should surface uncertainty ("based on what I have from a few weeks ago...") rather than presenting stale or weakly-matched content as certain. Currently only web search responses show source attribution.
 - Knowledge gap fabrication — when Ember has no relevant vault content and no web search triggers, she sometimes fabricates plausible-sounding answers rather than saying she doesn't know and offering to look it up. The grounding verification layer (ADR-019) partially addresses this for identity queries but the gap is broader. v0.15.0 scope.
 - Web search triggers too restrictive — queries about recent events, current facts, and time-sensitive topics only trigger web search if the user explicitly says "search", "google", or "look up". Natural questions like "what happened yesterday" or "who won the game" don't trigger. Broadening planned for v0.15.0.
@@ -409,6 +409,16 @@ Eval regressions require running the eval twice before concluding a 3+ point dro
 - Before editing any file, state: what file, what change, and what the commit message will be
 - After making backend changes that affect the running API, restart it automatically — kill existing uvicorn process(es) and start a new one. Do not ask. The human should not have to manage API restarts during development.
 - After making UI changes, rebuild (npm run build in ember-2-ui) and copy dist/ to ember-2/ui/ automatically. Do not ask.
+
+## Manager Prompt Format
+
+Prompts from manager follow compact format:
+- No rationale or preamble
+- File paths, not file descriptions
+- Spec the output, not the journey
+- Explicit "do not touch X" constraints included when needed
+- Commit message included in every prompt — copy verbatim
+- "Read CLAUDE.md first" always present
 
 ## Conventional Commits (Required)
 

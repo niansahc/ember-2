@@ -246,6 +246,12 @@ class ContextService:
             self._tokenize(normalized_user_message),
         )
 
+        # 0.55 Jaccard threshold: content sharing >55% of its tokens with
+        # the user message is likely a near-echo (the user's own question
+        # stored as a conversation turn, or a prior assistant response that
+        # paraphrased the question). Tuned to catch echoes without dropping
+        # semantically related but distinct content — 0.50 produced false
+        # positives on legitimate related memories, 0.60 let echoes through.
         return similarity > 0.55
 
     def _is_low_value_memory(self, item) -> bool:

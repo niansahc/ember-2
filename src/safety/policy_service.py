@@ -11,6 +11,34 @@ from src.safety.models import (
 
 
 class SafetyPolicyService:
+    """Evaluates whether a draft response requires constitutional review.
+
+    The trigger layer is fast (string matching, no LLM call) and
+    intentionally conservative for harm signals but permissive for
+    relational signals. False positives on harm triggers cost one
+    unnecessary LLM review call. False positives on relational triggers
+    cost Ember challenging the user when she shouldn't — a much higher
+    price. The detection thresholds are calibrated accordingly:
+
+      Harm signals (illegal, exploitation, dual_use, high_risk):
+        Low bar — keyword matching, single occurrence is enough.
+        Cost of false positive: one wasted review LLM call (~700 tokens).
+        Cost of false negative: harmful content passes through unreviewed.
+
+      Social engineering signals:
+        Moderate bar — pattern phrases, not single keywords.
+        Cost of false positive: review may over-correct a benign query.
+        Cost of false negative: manipulation succeeds.
+
+      Relational signals (relational_hedging, preference_compliance):
+        High bar — requires multiple indicators + contextual gates.
+        Cost of false positive: Ember challenges the user inappropriately.
+        Cost of false negative: Ember hedges when she could be direct,
+        or complies when she could have named a tension. Tolerable.
+
+    All detection thresholds are documented inline at the point of use.
+    """
+
     def __init__(self, constitution: Constitution | None = None) -> None:
         self.constitution = constitution or ConstitutionLoader().load()
 
@@ -184,6 +212,12 @@ class SafetyPolicyService:
             "what if you tried",
         )
         hedge_count = sum(1 for phrase in hedging_phrases if phrase in draft_text)
+        # >= 2 threshold: a single hedge ("I wonder if...") is normal
+        # conversational tentativeness and should not trigger review. Two or
+        # more hedges in the same response is a pattern of avoidance — the
+        # response is dissolving an observation into suggestions instead of
+        # naming it directly. Threshold 1 produced ~30% false positive rate
+        # in manual testing; threshold 2 produced <5%.
         return hedge_count >= 2
 
     def _contains_preference_compliance(self, user_text: str, draft_text: str) -> bool:

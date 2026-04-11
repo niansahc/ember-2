@@ -91,7 +91,7 @@ def test_shorter_messages_please_is_skipped():
 
 
 def test_shorter_responses_is_skipped():
-    assert _should_skip_for_reflection("user: shorter responses. remember i have adhd and long responses are not accessible.") is True
+    assert _should_skip_for_reflection("user: shorter responses. i've asked for concise answers and long blocks are hard to read.") is True
 
 
 def test_thats_a_long_response_is_skipped():
@@ -203,15 +203,15 @@ def test_def_statement_anywhere_is_skipped():
 # ---------------------------------------------------------------------------
 
 def test_personal_update_passes():
-    text = "i took a break, meal planned, and came back less enraged. the estrogen patch timing was the issue, not the work."
+    text = "i took a walk, made lunch, and came back feeling clearer. the headache was from skipping coffee, not from the project."
     assert _should_skip_for_reflection(text) is False
 
 
 def test_work_reflection_passes():
-    text = "spent the day debugging the retrieval pipeline. the _relevance_hits gate was dropping valid results because it matched exact tokens instead of semantic meaning."
+    text = "spent the day debugging the retrieval pipeline. the scoring gate was dropping valid results because it matched exact tokens instead of semantic meaning."
     assert _should_skip_for_reflection(text) is False
 
 
 def test_frustration_with_substance_passes():
-    text = "you told me to use phi3.mini because it's faster and you wrote the prompt. i need to be more careful about taking model recommendations at face value."
+    text = "the recommendation to switch frameworks didn't account for our existing test coverage. i need to evaluate trade-offs more carefully before committing."
     assert _should_skip_for_reflection(text) is False

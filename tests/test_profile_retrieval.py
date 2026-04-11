@@ -17,14 +17,14 @@ from src.context.retriever import ContextRetriever
 # ---------------------------------------------------------------------------
 
 MOCK_PROFILE_RECORDS = [
-    {"id": "p1", "content": "My name is [Name]. I use they/them and she/her pronouns. I am nonbinary and queer.", "score": 0.50, "memory_type": "profile", "metadata": {}},
-    {"id": "p2", "content": "I am a Business Systems Analyst working in Generative AI and enterprise systems. My domains include prompt engineering and RAG.", "score": 0.33, "memory_type": "profile", "metadata": {}},
-    {"id": "p3", "content": "I am autistic and have ADHD. I prefer structured, concise information. I process best with bullets, steps, and frameworks.", "score": 0.26, "memory_type": "profile", "metadata": {}},
-    {"id": "p4", "content": "My current major personal project is Ember-2 — a local-first AI intelligence system I am building for long-term memory and reasoning.", "score": 0.29, "memory_type": "profile", "metadata": {}},
-    {"id": "p5", "content": "I maintain a personal spiritual practice rooted in seasonal cycles, ritual, symbolism, witchcraft-adjacent frameworks.", "score": 0.17, "memory_type": "profile", "metadata": {}},
-    {"id": "p6", "content": "I prefer communication that is clear, structured, concise, and dense with meaning. I dislike empty reassurance.", "score": 0.27, "memory_type": "profile", "metadata": {}},
-    {"id": "p7", "content": "What I value most from an AI: pattern recognition across time, long-term synthesis, context awareness, not cheerfulness.", "score": 0.17, "memory_type": "profile", "metadata": {}},
-    {"id": "p8", "content": "I live with someone who works in a technical field. They are supportive of my projects but not a direct collaborator.", "score": 0.15, "memory_type": "profile", "metadata": {}},
+    {"id": "p1", "content": "My name is Jordan. I go by Jordan or J. I use he/him pronouns.", "score": 0.50, "memory_type": "profile", "metadata": {}},
+    {"id": "p2", "content": "I work as a data engineer at a mid-size logistics company. Most of my day is SQL, Python, and pipeline orchestration.", "score": 0.33, "memory_type": "profile", "metadata": {}},
+    {"id": "p3", "content": "I have a chronic back condition that flares up when I sit too long. I take breaks every 45 minutes and prefer standing desk setups.", "score": 0.26, "memory_type": "profile", "metadata": {}},
+    {"id": "p4", "content": "My current side project is a home automation system built on a Raspberry Pi cluster. I am learning Rust for the firmware layer.", "score": 0.29, "memory_type": "profile", "metadata": {}},
+    {"id": "p5", "content": "I keep a weekly journaling practice and spend Sunday mornings reviewing the previous week. It helps me notice patterns I miss in real time.", "score": 0.17, "memory_type": "profile", "metadata": {}},
+    {"id": "p6", "content": "I prefer communication that gets to the point. I dislike small talk in work contexts and value directness over politeness.", "score": 0.27, "memory_type": "profile", "metadata": {}},
+    {"id": "p7", "content": "What I want from an AI assistant: help me think through trade-offs, remember context across sessions, and challenge my assumptions when they are weak.", "score": 0.17, "memory_type": "profile", "metadata": {}},
+    {"id": "p8", "content": "I live with a partner who works in education. We share a home office and coordinate schedules around meeting blocks.", "score": 0.15, "memory_type": "profile", "metadata": {}},
 ]
 
 
@@ -103,8 +103,8 @@ class TestProfileRetrievalRoute:
             ids = {item.id for item in items}
             assert "p1" in ids  # name/pronouns
             assert "p2" in ids  # job
-            assert "p3" in ids  # ADHD/autism
-            assert "p5" in ids  # spirituality
+            assert "p3" in ids  # health
+            assert "p5" in ids  # personal practice
 
     def test_ember_directed_query_triggers_full_profile(self):
         """'tell me about yourself' should trigger identity detection and get limit=8."""

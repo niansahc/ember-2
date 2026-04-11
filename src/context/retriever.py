@@ -1,3 +1,13 @@
+"""
+src/context/retriever.py
+
+ContextRetriever gathers raw candidate items from the vault's vector
+indexes and state layer. It does not rank or filter — that is the
+ranker's and service's job. It handles identity query detection,
+profile retrieval routing, and the semantic search calls across
+multiple index stores (memory.db, ingested.db, conversation, reflection).
+"""
+
 import re
 import warnings
 

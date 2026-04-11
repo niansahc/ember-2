@@ -1,3 +1,13 @@
+"""
+src/memory/service.py
+
+MemoryService is a thin facade over the read, write, and search
+helpers in the memory package. It provides a single import point for
+callers that need vault I/O without knowing which sub-module handles
+each operation. Used by OnboardingService, StateExtractor, and
+reflection generators.
+"""
+
 from src.memory.read_memory import read_memories
 from src.memory.search_memory import search_memories
 from src.memory.write_memory import write_memory

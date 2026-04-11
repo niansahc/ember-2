@@ -1,3 +1,16 @@
+"""
+src/safety/review_service.py
+
+ResponseReviewService is the LLM-assisted constitutional review layer.
+When a trigger fires (via SafetyPolicyService), this service critiques
+the draft response against the relevant constitutional principles and
+decides whether to allow, revise, or refuse+redirect.
+
+The reviewer sees only the user message and draft response — it has no
+access to the context packet, vault memory, or conversation history.
+This is a known architectural gap documented in CLAUDE.md Known Issues.
+"""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,15 @@
+"""
+src/context/service.py
+
+ContextService orchestrates context assembly for each request. It is
+the central coordinator between retrieval, ranking, type gating, and
+prompt formatting — the cognitive layer's main entry point.
+
+Pipeline: classify query intent → retrieve candidates → relevance gate →
+type gate (ADR-018) → policy weighting → project boost → rank → echo/meta
+filter → dedup → diversity selection → format into ContextPacket.
+"""
+
 import re
 
 from src.context.formatter import ContextFormatter

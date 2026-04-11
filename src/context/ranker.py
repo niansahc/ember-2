@@ -1,3 +1,16 @@
+"""
+src/context/ranker.py
+
+ContextRanker applies policy-based scoring adjustments to retrieved
+items and produces the final ranked ordering. Scoring encodes a clear
+priority hierarchy: user-authored experiences > conversation turns >
+reflections > ingested content > assistant responses. All scoring
+constants are empirical and documented inline with rationale.
+
+See the class-level docstring on ContextRanker for the full scoring
+philosophy and tuning guidance.
+"""
+
 from __future__ import annotations
 
 import re

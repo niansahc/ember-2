@@ -1,3 +1,18 @@
+"""
+src/safety/policy_service.py
+
+SafetyPolicyService is the fast, heuristic trigger layer for
+constitutional review. It evaluates whether a draft response requires
+full LLM-assisted review by checking for keyword and pattern signals
+in the combined user message + draft response text.
+
+The trigger layer is intentionally cheap (string matching, no LLM call)
+so it can run on every request without adding latency. Only triggered
+requests pay the cost of a full constitutional review. See the class-level
+docstring on SafetyPolicyService for the three-tier cost model governing
+detection thresholds.
+"""
+
 from __future__ import annotations
 
 import re

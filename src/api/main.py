@@ -1,3 +1,16 @@
+"""
+src/api/main.py
+
+FastAPI application entry point for Ember-2. Registers all API routes,
+middleware (auth, rate limiting, CORS, audit logging), and the nightly
+tiering scheduler. Serves the built Ember UI from ui/ as a static
+fallback after all API routes.
+
+This is the largest file in the backend. Route handlers are defined
+inline rather than split into route modules — acceptable for now but
+a refactor candidate if the file exceeds ~1500 lines.
+"""
+
 import json
 import logging
 import secrets

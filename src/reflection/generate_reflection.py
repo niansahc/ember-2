@@ -1,3 +1,16 @@
+"""
+src/reflection/generate_reflection.py
+
+Generates daily, weekly, and monthly reflections by reading recent vault
+records, filtering junk, and synthesizing via an LLM call. Reflections
+are derived artifacts — they summarize source memory over a time window
+and are written back to the vault as reflection-type records.
+
+The synthesis prompt follows the standards in CLAUDE.md: third person,
+no therapeutic register, explicit prohibition of summary behavior,
+temporal weighting by significance not recency.
+"""
+
 from __future__ import annotations
 
 import re

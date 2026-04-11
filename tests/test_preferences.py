@@ -14,14 +14,17 @@ from src.core import preferences
 class TestPreferencesStore:
     """Unit tests for src.core.preferences."""
 
-    def test_read_empty_vault(self, tmp_path):
+    def test_read_empty_vault_returns_defaults(self, tmp_path):
         result = preferences.read(vault_path=tmp_path)
-        assert result == {}
+        # Empty vault returns PREFERENCE_DEFAULTS — all known fields with defaults.
+        assert result == preferences.PREFERENCE_DEFAULTS
 
     def test_write_and_read(self, tmp_path):
         preferences.write("conversational_style", "casual", vault_path=tmp_path)
         result = preferences.read(vault_path=tmp_path)
-        assert result == {"conversational_style": "casual"}
+        assert result["conversational_style"] == "casual"
+        # Defaults still present for fields not explicitly written
+        assert result["web_search_autonomous"] is False
 
     def test_write_multiple_keys(self, tmp_path):
         preferences.write("conversational_style", "thoughtful", vault_path=tmp_path)
@@ -42,13 +45,15 @@ class TestPreferencesStore:
     def test_update_multiple(self, tmp_path):
         preferences.update({"a": 1, "b": 2}, vault_path=tmp_path)
         result = preferences.read(vault_path=tmp_path)
-        assert result == {"a": 1, "b": 2}
+        assert result["a"] == 1
+        assert result["b"] == 2
 
     def test_handles_corrupted_file(self, tmp_path):
         prefs_path = tmp_path / "preferences.json"
         prefs_path.write_text("not json!", encoding="utf-8")
         result = preferences.read(vault_path=tmp_path)
-        assert result == {}
+        # Corrupted file falls back to defaults
+        assert result == preferences.PREFERENCE_DEFAULTS
 
     def test_overwrites_existing_key(self, tmp_path):
         preferences.write("style", "casual", vault_path=tmp_path)
@@ -118,10 +123,14 @@ class TestPreferencesAPI:
             from fastapi.testclient import TestClient
             yield TestClient(app)
 
-    def test_get_empty_preferences(self, client):
+    def test_get_empty_preferences_returns_defaults(self, client):
         resp = client.get("/v1/preferences")
         assert resp.status_code == 200
-        assert resp.json() == {}
+        data = resp.json()
+        # Empty vault returns defaults for all known fields
+        assert data["web_search_autonomous"] is False
+        assert data["conversational_style"] == "balanced"
+        assert data["first_run_tour_complete"] is False
 
     def test_patch_and_get_preferences(self, client):
         resp = client.patch("/v1/preferences", json={"conversational_style": "casual"})

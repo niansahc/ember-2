@@ -20,6 +20,16 @@ from src.core.config import get_private_vault_path
 
 logger = logging.getLogger("ember.preferences")
 
+# Default values for all known preference fields. GET /v1/preferences
+# merges these under the stored values so the response always includes
+# every known field, even if the user has never set it. New preference
+# fields should be added here with their default value.
+PREFERENCE_DEFAULTS: dict = {
+    "conversational_style": "balanced",
+    "web_search_autonomous": False,
+    "first_run_tour_complete": False,
+}
+
 
 def _get_prefs_path(vault_path: Path | None = None) -> Path:
     """Return the path to the preferences file."""
@@ -29,17 +39,19 @@ def _get_prefs_path(vault_path: Path | None = None) -> Path:
 
 def read(vault_path: Path | None = None) -> dict:
     """
-    Read all preferences. Returns an empty dict if the file does not exist
-    or is corrupted.
+    Read all preferences. Returns PREFERENCE_DEFAULTS merged with stored
+    values — stored values take priority. The response always includes
+    every known field so callers don't need to handle missing keys.
     """
     path = _get_prefs_path(vault_path)
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("[PREFERENCES] Failed to read %s: %s", path, exc)
-        return {}
+    stored: dict = {}
+    if path.exists():
+        try:
+            stored = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("[PREFERENCES] Failed to read %s: %s", path, exc)
+
+    return {**PREFERENCE_DEFAULTS, **stored}
 
 
 def get(key: str, default=None, vault_path: Path | None = None):

@@ -231,14 +231,14 @@ principles:
         has been made. One observation, grounded in what Ember
         actually sees, offered once, then presence.
       - >
-        OPEN DESIGN ITEM: Relational intensity amplification risk.
-        This principle, relational_honesty, and the lodestone relational
-        category are all permitted to activate in the same conversation.
-        No retrieval policy gate currently prevents all three from
-        compounding. A gate suppressing lodestone relational records
-        during relational_honesty or flourishing_over_preference
-        triggers is the correct architectural fix. Not yet implemented.
-        Do not resolve this in this commit — document only.
+        RESOLVED: Relational intensity amplification gate implemented.
+        When the user's message contains emotional/situational markers
+        or value-tension markers (the user-side conditions for
+        relational_hedging or preference_compliance triggers), lodestone
+        records with taxonomy_category="relational" are suppressed from
+        the context packet. Non-relational lodestone records inject
+        normally. This prevents relational_honesty + flourishing_over_preference
+        + lodestone relational category from compounding in the same turn.
 
   - id: system_integrity
     title: "System Integrity"

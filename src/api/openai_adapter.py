@@ -518,6 +518,46 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         # Defensive: timer module load failures should never break a chat request.
         logger.warning("[TIMER] Detection block failed: %s", exc)
 
+    # --- RELATIONAL INTENSITY AMPLIFICATION GATE ---
+    # Pre-generation check: if the user's message contains markers that
+    # would gate either relational trigger (emotional/situational content
+    # for relational_hedging, or tension markers for preference_compliance),
+    # suppress relational lodestone records from the context packet.
+    #
+    # This is a pre-check on the user message only — the full trigger also
+    # requires draft-side patterns, which aren't available yet. The pre-check
+    # is conservative in the right direction: it suppresses relational
+    # lodestone when relational honesty MIGHT be needed, even if the draft
+    # turns out fine. Better to have a clean context than a compounded one.
+    suppress_relational_lodestone = False
+    try:
+        from src.safety.policy_service import SafetyPolicyService
+        _pre_svc = SafetyPolicyService()
+        user_lower = latest_user_message.lower()
+        # Check user-side markers from both relational detectors.
+        # These are the same marker lists used by _contains_relational_hedging
+        # and _contains_preference_compliance in policy_service.py.
+        _emotional_markers = (
+            "i feel", "i'm feeling", "i've been", "it's been",
+            "i'm tired", "i'm frustrated", "i'm overwhelmed",
+            "i'm exhausted", "i'm burned out", "i'm anxious",
+            "hard week", "tough day", "struggling with",
+            "i think i should", "i know i need to",
+            "that was hard", "that hurt", "i'm worried",
+        )
+        _tension_markers = (
+            "i know i should", "i know i shouldn't",
+            "even though i said", "i said i would", "i said i wouldn't",
+            "i promised i would", "i promised i wouldn't",
+            "i'm supposed to", "against my better judgment",
+            "i shouldn't but", "i know it's not good for me",
+            "i know it's bad for me",
+        )
+        if any(m in user_lower for m in _emotional_markers) or any(m in user_lower for m in _tension_markers):
+            suppress_relational_lodestone = True
+    except Exception:
+        pass  # Non-fatal — proceed without suppression
+
     context_packet = context_service.build_context(
         latest_user_message, image_data=image_data, project_id=project_id,
     )
@@ -644,6 +684,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     style=conversational_style,
                     project_name=project_name,
                     last_session_label=last_session_label,
+                    suppress_relational_lodestone=suppress_relational_lodestone,
                 )
 
                 # 3. Grounding check
@@ -721,6 +762,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     style=conversational_style,
                     project_name=project_name,
                     last_session_label=last_session_label,
+                    suppress_relational_lodestone=suppress_relational_lodestone,
                 ):
                     accumulated.append(chunk)
                     sse_data = json.dumps({
@@ -763,6 +805,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         style=conversational_style,
         project_name=project_name,
         last_session_label=last_session_label,
+        suppress_relational_lodestone=suppress_relational_lodestone,
     )
 
     write_memory(

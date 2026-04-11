@@ -81,6 +81,7 @@ class PromptBuilder:
         style: str = "balanced",
         project_name: str | None = None,
         last_session_label: str | None = None,
+        suppress_relational_lodestone: bool = False,
     ) -> str:
         # System prompt with nature (dual injection) + identity rules at front
         system_sections: list[str] = [
@@ -107,7 +108,9 @@ class PromptBuilder:
             self._build_reflection_section(context_packet),
             self._build_conversation_section(),
             self._build_context_section(context_packet),   # vault_memory in recency position
-            self._build_lodestone_living_section(context_packet),
+            self._build_lodestone_living_section(
+                context_packet, suppress_relational=suppress_relational_lodestone
+            ),
             self._build_web_search_section(context_packet),
             AUTHORITY_RULES,
             self._build_instruction_section(),
@@ -206,17 +209,35 @@ class PromptBuilder:
         except Exception:
             return ""
 
-    def _build_lodestone_living_section(self, context_packet: ContextPacket) -> str:
+    def _build_lodestone_living_section(
+        self,
+        context_packet: ContextPacket,
+        suppress_relational: bool = False,
+    ) -> str:
         """
         Render lodestone living layer for context packet injection (ADR-017).
 
         Retrieves 1-2 most relevant confirmed lodestone records via semantic
         similarity. Injected in recency position — after conversation history,
         before web search. Only confirmed records auto-inject.
+
+        When suppress_relational is True, lodestone records with
+        taxonomy_category == "relational" are filtered out before injection.
+        This is the relational intensity amplification gate: when
+        relational_honesty or flourishing_over_preference triggers fire,
+        relational lodestone values are suppressed to prevent all three
+        relational layers (constitution + lodestone + nature) from
+        compounding in the same context packet. Non-relational lodestone
+        records inject normally.
         """
         try:
             from src.context.lodestone_resolver import resolve, to_prompt_text
             records = resolve(context_packet.user_message)
+            if suppress_relational:
+                records = [
+                    r for r in records
+                    if r.get("taxonomy_category") != "relational"
+                ]
             return to_prompt_text(records)
         except Exception as exc:
             logger.warning("[PROMPT] Lodestone living layer failed: %s", exc)

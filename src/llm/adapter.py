@@ -45,12 +45,14 @@ class LLMAdapter:
         style: str = "balanced",
         project_name: str | None = None,
         last_session_label: str | None = None,
+        suppress_relational_lodestone: bool = False,
     ) -> str:
         system_prompt = self.prompt_builder.build_prompt(
             context_packet,
             style=style,
             project_name=project_name,
             last_session_label=last_session_label,
+            suppress_relational_lodestone=suppress_relational_lodestone,
         )
 
         vision_model = get_ember_vision_model()
@@ -136,6 +138,7 @@ class LLMAdapter:
         style: str = "balanced",
         project_name: str | None = None,
         last_session_label: str | None = None,
+        suppress_relational_lodestone: bool = False,
     ):
         """
         Stream a response token by token. Yields string chunks.
@@ -153,6 +156,7 @@ class LLMAdapter:
             style=style,
             project_name=project_name,
             last_session_label=last_session_label,
+            suppress_relational_lodestone=suppress_relational_lodestone,
         )
 
         vision_model = get_ember_vision_model()

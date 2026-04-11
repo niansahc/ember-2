@@ -232,7 +232,8 @@ def _run_auto_battery(target_model: str, api_key: str) -> None:
     date_str = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     log_dir = REPO_ROOT / "logs" / "eval_manual"
     log_dir.mkdir(parents=True, exist_ok=True)
-    out_file = log_dir / f"auto_{target_model}_{date_str}.md"
+    safe_model = target_model.replace(":", "-")
+    out_file = log_dir / f"auto_{safe_model}_{date_str}.md"
 
     lines = [
         f"# Auto Battery — {target_model} — {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n",

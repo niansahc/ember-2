@@ -444,6 +444,8 @@ Vault contents — including names, conversation text, and record IDs — must n
 
 Ember's generated responses that draw on vault content are also vault content. Response text must never be saved to files in the repo or logs directory. The --auto battery mode shows responses on stdout for live review but writes only metadata (latency, word count) to disk.
 
+Do not run eval_manual.py (interactive or --auto) through Claude Code without warning the user first. Responses appear in the tool output and enter the session log. If the user wants to run the manual eval, suggest they run it in a separate terminal outside of Claude Code so vault-grounded responses never enter the session context.
+
 ---
 
 ## Documentation Language Convention

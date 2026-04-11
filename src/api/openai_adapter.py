@@ -227,6 +227,60 @@ def _resolve_last_session_label(current_session_id: str) -> str | None:
     return _format_session_gap(gap_seconds)
 
 
+def _build_vault_sources(context_packet) -> list[dict]:
+    """Build vault source entries for the vault_sources SSE event.
+
+    Returns a list of {type, timestamp, summary} dicts — one per
+    non-profile retrieved record. Profile items are excluded because
+    they are always injected and don't represent a specific retrieval
+    event worth citing.
+
+    The summary is a short natural-language label M can render, e.g.
+    "conversation from March 15" or "journal entry from February 3".
+    """
+    sources = []
+    all_items = list(context_packet.memory_items) + list(context_packet.reflection_items)
+
+    for item in all_items:
+        mem_type = getattr(item, "memory_type", "") or getattr(item, "item_type", "")
+        if mem_type == "profile":
+            continue
+
+        timestamp = getattr(item, "timestamp", "")
+        date_label = _format_source_date(timestamp)
+        # Build a human-readable label: "conversation from March 15"
+        type_label = mem_type.replace("_", " ") if mem_type else "record"
+        summary = f"{type_label} from {date_label}" if date_label else type_label
+
+        sources.append({
+            "type": mem_type,
+            "timestamp": timestamp,
+            "summary": summary,
+        })
+
+    return sources
+
+
+def _format_source_date(timestamp: str) -> str:
+    """Convert a vault timestamp to a short human date like 'March 15'."""
+    if not timestamp:
+        return ""
+    try:
+        date_part = timestamp.split("T")[0]
+        parts = date_part.split("-")
+        if len(parts) >= 3:
+            from datetime import datetime as dt
+            d = dt(int(parts[0]), int(parts[1]), int(parts[2]))
+            # %#d is Windows-safe non-padded day; fall back to strip
+            try:
+                return d.strftime("%B %#d")
+            except ValueError:
+                return d.strftime("%B %d").lstrip("0")
+    except (ValueError, IndexError):
+        pass
+    return ""
+
+
 class ThinkBlockFilter:
     """Streaming filter that suppresses <think>...</think> blocks.
 
@@ -691,6 +745,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # OpenAI-compatible response schema.
     used_web_search = bool(context_packet.web_items)
 
+    # Vault citation: track whether non-profile vault records were retrieved.
+    # Communicated to M via X-Ember-Vault-Used header + vault_sources SSE event.
+    vault_sources = _build_vault_sources(context_packet)
+    used_vault = bool(vault_sources)
+
     # Read conversational style preference (casual/balanced/thoughtful)
     from src.core.preferences import get as get_pref
     conversational_style = get_pref("conversational_style", "balanced")
@@ -853,6 +912,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     if sources:
                         yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
 
+                # 6. Vault sources event (if applicable)
+                if vault_sources:
+                    yield f"data: {json.dumps({'type': 'vault_sources', 'sources': vault_sources})}\n\n"
+
                 # Final chunk
                 yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
                 yield "data: [DONE]\n\n"
@@ -891,6 +954,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                         })
                         yield f"data: {sse_data}\n\n"
 
+                # Vault sources event (if applicable)
+                if vault_sources:
+                    yield f"data: {json.dumps({'type': 'vault_sources', 'sources': vault_sources})}\n\n"
+
                 # Final chunk
                 yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
                 yield "data: [DONE]\n\n"
@@ -905,6 +972,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         }
         if used_web_search:
             response_headers["X-Ember-Web-Search"] = "true"
+        if used_vault:
+            response_headers["X-Ember-Vault-Used"] = "true"
 
         return StreamingResponse(
             _stream_sse(),
@@ -995,4 +1064,6 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     non_stream_headers = {}
     if used_web_search:
         non_stream_headers["X-Ember-Web-Search"] = "true"
+    if used_vault:
+        non_stream_headers["X-Ember-Vault-Used"] = "true"
     return JSONResponse(content=response_body.model_dump(), headers=non_stream_headers)

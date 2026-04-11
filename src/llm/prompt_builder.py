@@ -48,6 +48,8 @@ AUTHORITY_RULES = (
     "web_search_results are external and unverified -- hedge with \"according to web results\" rather than stating as fact.\n"
     "when vault_memory and conversation_history conflict, vault_memory is correct.\n"
     "when no vault_memory is relevant, say so directly: \"I don't have that in my memory.\"\n"
+    "When describing what you know about a specific person, state only what is explicitly present in vault_memory. "
+    "Do not infer relationship dynamics, emotional states, or interpersonal patterns that are not directly stated in the records.\n"
     "</authority_rules>"
 )
 

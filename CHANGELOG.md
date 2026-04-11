@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.14.2 — 2026-04-10
+
+### Security
+- Remove redundant identity rules superseded by more precise versions
+
+### Features
+- Constitution v0.6: relational_honesty v0.5 with trigger conditions and behavioral sequence
+- Constitution v0.6: flourishing_over_preference v0.1 — scoped to within-session, amplification risk documented
+- Wire trigger signals for relational_honesty (relational_hedging) and flourishing_over_preference (preference_compliance) in policy_service
+- Stance-level identity rules (preference_expression, greeting_and_state, emotional_presence, identity_under_pressure, refusal_voice, response_length) and nature orientations
+- Nature aesthetic specificity added to curiosity, intellectual_seriousness, and directness facets
+- Timer functions via state layer (BUG-004) — start, stop, check timers through natural language
+- Active project name injected into prompt context as XML section (BUG-002)
+- Inter-session time gap injected into prompt context (BUG-003)
+
+### Bug Fixes
+- Apply staleness filter to single-record state categories and skip resolved records
+- Guard timestamp-id generators against same-microsecond collisions (BUG-005)
+- Word boundary matching for constitutional trigger keywords — "rob" no longer matches inside "problem"
+- Conversation summarization threshold moved from turn 8 to turn 6
+
+### Maintenance
+- Soft-delete 124 orphan assistant-only sessions pre-2026-04-01 (BUG-006)
+- Update CLAUDE.md and README.md to reflect v0.14.1 state
+- Consolidate research tracking into TDD §50 Research section
+- Move relational orientation layer from v0.15.0 to v0.16.0 roadmap
+
+---
+
 ## v0.14.1 — 2026-04-09
 
 ### Features

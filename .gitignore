@@ -23,6 +23,9 @@ ui/
 # One-time cleanup scripts (not part of the codebase)
 scripts/cleanup_today_test_sessions.py
 
+# Local dev tools
+watch-cc.ps1
+
 # OS junk
 .DS_Store
 Thumbs.db

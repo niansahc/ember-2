@@ -600,3 +600,22 @@ Do not build or review UI against broken, partial, or pre-inference data. If the
 
 **Design before implementation.**
 For any panel or view that surfaces user data, the information architecture (what the user sees, in what order, what each element means) must be described and approved in this chat before M builds it. Prompts that skip this step will be sent back.
+
+---
+
+## Claude Code Efficiency Rules
+
+**Parallel subagents — use them.**
+Any task touching 3+ independent files or with clearly separable subtasks must use parallel subagents. Do not work sequentially when work can be fanned out. Spawn subagents, merge results.
+
+**Hooks — always active:**
+- Auto-run tests after any code edit (pytest for G, npm run test:e2e for M and Y)
+- Auto-reject any changes to private_vault/ or .env files
+
+**Scheduled tasks:**
+- Weekly dependency audit — flag outdated or vulnerable packages in requirements.txt / package.json
+- Pre-release cross-repo consistency check — verify UI matches backend API responses before any release
+
+**Session naming:**
+- Always name sessions descriptively, e.g. `claude -n "vault-citation-backend"`
+- Enables resumption with full context.

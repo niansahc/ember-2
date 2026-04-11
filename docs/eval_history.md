@@ -583,3 +583,29 @@ Change: vault_memory moved from position 1 to position 6 (recency) in context pa
 - stale context: 5/19
 - voice wrong: 0/19
 - template collapse: 1/19
+
+
+---
+
+## Manual Eval — qwen3:8b — 2026-04-11
+
+**Model:** qwen3:8b
+**Date:** 2026-04-11
+**Battery:** 19-question sequential (docs/eval_manual_test_battery.md)
+
+| Category | Annotations |
+|---|---|
+| Category 0: Web Search | as |
+| Category 1: Memory Grounding | at as as |
+| Category 2: Preference Expression | at at at |
+| Category 3: Constitutional Behavior | v vt vt |
+| Category 4: Tone & Presence | vt atv tv |
+| Category 5: State Awareness | sav as sa |
+| Category 6: Self-Attribution | as a a |
+
+**Summary:**
+- accurate: 14/19
+- hallucination: 0/19
+- stale context: 7/19
+- voice wrong: 7/19
+- template collapse: 9/19

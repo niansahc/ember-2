@@ -500,6 +500,7 @@ A release is not complete at commit. A release is not complete at tag. A release
 - [ ] version.json bumped (release-please handles this via conventional commits)
 - [ ] All changes committed and pushed to main: git push origin main
 - [ ] Constitution, nature, and Lodestone layers reviewed for coherence
+- [ ] Deviation drift check — review deviation record distribution against nature document; verify accumulated character is consistent with intended character
 - [ ] Research review: any watch items ready to graduate to roadmap?
 
 **ember-2-ui (frontend):**

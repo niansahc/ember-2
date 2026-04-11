@@ -576,6 +576,22 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         if hasattr(item, "content") and item.content
     )
 
+    # --- KNOWLEDGE-GAP INJECTION ---
+    # When the relevance gate has stripped vault content (memory_items is
+    # empty or profile-only) AND no web search was triggered, inject a
+    # system note so the model knows it has a knowledge gap and can offer
+    # to search rather than fabricate. Ask-first mode is the safety net.
+    if not context_packet.web_items:
+        non_profile_memory = [
+            i for i in context_packet.memory_items
+            if getattr(i, "memory_type", "") != "profile"
+        ]
+        if not non_profile_memory and not context_packet.reflection_items:
+            latest_user_message = (
+                "[System: no relevant vault content found for this query. "
+                "Offer to search if appropriate.] " + latest_user_message
+            )
+
     # Web search transparency: track whether web search results were used
     # in context assembly. Communicated to the UI via X-Ember-Web-Search response
     # header so the client can show a transparency indicator on the message.

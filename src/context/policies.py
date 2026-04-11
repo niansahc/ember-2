@@ -133,6 +133,35 @@ def classify_query(user_message: str) -> ContextPolicy:
         "web search",
     )
 
+    # Factual uncertainty — the user is asking whether something external
+    # is true. These never resolve from the vault.
+    factual_uncertainty_markers = (
+        "is it true that",
+        "has there been",
+        "did they announce",
+        "have they released",
+        "is there a new",
+        "what's happening with",
+        "what is happening with",
+        "has anyone",
+        "have they",
+    )
+
+    # Temporal currency — temporal word + external-event context word.
+    # "What happened yesterday" → web search.
+    # "What did I do yesterday" → vault (recent_markers handles this).
+    # The compound requirement prevents false positives on personal
+    # temporal queries. Ask-first mode is the safety net.
+    temporal_currency_words = (
+        "yesterday", "last night", "this morning",
+        "last week", "this month", "over the weekend",
+    )
+    event_context_words = (
+        "happened", "news", "announced", "released", "launched",
+        "update on", "latest on", "going on with", "situation with",
+        "election", "game", "match", "score", "weather",
+    )
+
     # Status/state queries resolve against current state first — checked before
     # reflective so "what am I working on" routes to state, not reflection.
     if any(marker in q for marker in state_markers):
@@ -158,8 +187,22 @@ def classify_query(user_message: str) -> ContextPolicy:
             prefer_experiences=True,
         )
 
-    if any(marker in q for marker in web_search_markers):
-        logger.warning("[CLASSIFY] intent=web_search")
+    # Web search: three trigger paths, all route to the same policy.
+    # 1. Explicit markers ("search the web", "google", etc.)
+    _explicit_web = any(marker in q for marker in web_search_markers)
+    # 2. Factual uncertainty ("is it true that", "has there been", etc.)
+    _factual_uncertainty = any(marker in q for marker in factual_uncertainty_markers)
+    # 3. Temporal currency compound: temporal word + event context word.
+    #    Requires both — "yesterday" alone is personal (vault), but
+    #    "what happened yesterday" is external (web).
+    _temporal_currency = (
+        any(t in q for t in temporal_currency_words)
+        and any(e in q for e in event_context_words)
+    )
+
+    if _explicit_web or _factual_uncertainty or _temporal_currency:
+        _trigger = "explicit" if _explicit_web else ("factual_uncertainty" if _factual_uncertainty else "temporal_currency")
+        logger.warning("[CLASSIFY] intent=web_search trigger=%s", _trigger)
         return ContextPolicy(
             name="web_search",
             memory_weight=0.5,

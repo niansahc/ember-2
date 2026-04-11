@@ -313,11 +313,16 @@ All items from the original TDD §25 build order are complete through step 7. Th
 **v0.14.0 — Identity Foundation** ✓ (shipped 2026-04-06)
 **v0.14.1 — Patch** ✓ (shipped 2026-04-09)
 
-**v0.15.0 — Quality + Local Performance:**
+**v0.15.0 — Quality of Life Improvements:**
 - Vault encryption at rest (five-layer envelope architecture — see TDD §38)
 - Local model quality improvements — token reduction, latency optimization
 - Constitutional review optimization — reduce false positive trigger rate, review prompt efficiency
-- Partner usability on local model — first non-developer user testing
+- Web search interaction mode — ask-first (default: "I don't have enough on this — want me to search?") with opt-in autonomous toggle in Settings (autonomous behavior itself is v0.16.0; toggle and ask-first pattern are v0.15.0)
+- Web search trigger broadening — current triggers require explicit "search"/"google"/"look up"; broaden to temporal currency markers and factual uncertainty
+- API as a service — auto-start on boot for non-developer users (Windows startup task, Linux systemd unit, macOS launchd plist via installer)
+- Hallucination reduction — surface uncertainty on vault-retrieved claims, not just web search; identify knowledge gaps and offer to look up rather than fabricate
+- Source citation on vault-retrieved content — currently only web search responses show sources
+- Quality of life testing — first non-developer user testing on local model
 - Connectors removed from near-term roadmap indefinitely
 
 **v0.16.0 — Health + Agent Orchestration:**
@@ -344,6 +349,10 @@ Research tracking has moved to docs/Ember2_TDD.md. TDD is the source of truth fo
 - Constitutional review service context blindness — ResponseReviewService receives only user_message and draft_response at review time. No vault memory, no context packet, no conversation history. The reviewer cannot distinguish a hallucinated claim from a vault-grounded one, and cannot assess whether draft confidence is warranted by retrieved evidence. Architectural gap — requires passing ContextPacket into SafetyReviewContext.
 - Relational intensity amplification risk — relational_honesty, flourishing_over_preference, and the lodestone relational category can all activate in the same conversation with no retrieval policy gate preventing compounding. A gate suppressing lodestone relational records during relational_honesty or flourishing_over_preference triggers is the correct architectural fix. Not yet implemented. Documented in flourishing_over_preference behavior section in constitution.yaml.
 - flourishing_over_preference cross-session pattern detection unenforceable — the principle's first rule scopes detection to within-session patterns only because cross-session detection requires the review service to have vault memory access (see context blindness above). The principle is filed but its strongest use case (noticing patterns across sessions) cannot be implemented until the review service gets vault context.
+- Vault-retrieved content has no uncertainty signal — Ember presents vault-grounded claims with the same confidence as directly stated facts. When retrieval returns low-scoring or old records, the response should surface uncertainty ("based on what I have from a few weeks ago...") rather than presenting stale or weakly-matched content as certain. Currently only web search responses show source attribution.
+- Knowledge gap fabrication — when Ember has no relevant vault content and no web search triggers, she sometimes fabricates plausible-sounding answers rather than saying she doesn't know and offering to look it up. The grounding verification layer (ADR-019) partially addresses this for identity queries but the gap is broader. v0.15.0 scope.
+- Web search triggers too restrictive — queries about recent events, current facts, and time-sensitive topics only trigger web search if the user explicitly says "search", "google", or "look up". Natural questions like "what happened yesterday" or "who won the game" don't trigger. Broadening planned for v0.15.0.
+- API requires manual start — non-developer users must run start_api.bat or launch_ember.sh manually. No auto-start mechanism (Windows startup task, Linux systemd unit, macOS launchd plist) exists. v0.15.0 scope via installer.
 
 ---
 

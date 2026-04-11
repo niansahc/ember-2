@@ -404,7 +404,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 **v0.13.0** — Embedding upgrade (nomic-embed-text 768-dim), SQLite index migration, memory tiering (ADR-015), nature layer (ADR-016), grounding verification (ADR-019), intent-aware type gating (ADR-018), XML context sections, monthly reflection, JSON import, identity rules layer ✓
 **v0.14.0** — Identity foundation: Lodestone layer, deviation engine, context packet reorder, release automation ✓
 **v0.14.1** — Patch: timer functions, identity stance rules, constitutional review fixes, vault hygiene ✓
-**v0.15.0** — Quality + local performance: vault encryption, token reduction, constitutional review optimization, partner usability
+**v0.15.0** — Quality of life improvements: vault encryption, token reduction, constitutional review optimization, web search interaction mode, hallucination reduction, API auto-start, quality of life testing
 **v0.16.0** — Health + agent orchestration: health data ingestion, self-evaluation loops, trace-driven learning, relational orientation layer
 **Post-v0.16.0** — Multi-user vault isolation, full platform parity
 

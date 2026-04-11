@@ -1673,13 +1673,17 @@ Infrastructure:
 - Release Please + GitHub Actions automation (replaces manual release process across all three repos)
 - Launcher script (launch_ember.bat / launch_ember.sh)
 
-**v0.15.0 — Connectors + Vault Encryption**
+**v0.15.0 — Quality of Life Improvements**
 - Vault encryption at rest (five-layer envelope architecture — see TDD §38)
-- ADR-020: Connector architecture (generic pattern before any connector built)
-- Email IMAP ingestion connector (ADR-023)
-- GitHub ingestion connector (ADR-022 — CLAUDE.md as first-class document, elevated retrieval priority)
-- Calendar connector
-- Notes ingestion (Obsidian/Notion export)
+- Web search interaction mode — ask-first (default) with opt-in autonomous toggle; ask-first pattern: Ember says "I don't have enough on this — want me to search?" when she identifies a gap she can't answer confidently. Autonomous mode (Ember searches without asking) is v0.16.0; the toggle and ask-first pattern are v0.15.0.
+- Web search trigger broadening — current 14 explicit markers require the user to say "search"/"google"/"look up"; broaden to temporal currency markers ("yesterday", "this week") and factual uncertainty markers ("is it true", "has there been")
+- API as a service — auto-start on boot via installer (Windows startup task, Linux systemd unit, macOS launchd plist)
+- Hallucination reduction — surface uncertainty on vault-retrieved claims; identify knowledge gaps and offer to look up rather than fabricate
+- Source citation on vault-retrieved content — extend the existing web search citation pattern to vault memories
+- Local model quality improvements — token reduction, latency optimization
+- Constitutional review optimization — reduce false positive trigger rate
+- Quality of life testing — first non-developer user on local model
+- Connectors removed from near-term roadmap indefinitely
 
 **v0.16.0 — Health + Agent Orchestration**
 - Fitbit/Apple Health/Garmin export ingestion (ADR-024)

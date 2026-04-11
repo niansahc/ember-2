@@ -3,9 +3,9 @@ tools/eval_retrieval.py
 
 Retrieval evaluation harness for Ember-2.
 
-Runs 15 benchmark queries covering all query intent classes and scores
-the results to catch retrieval regressions. This is evaluation only —
-it does not change any retrieval logic.
+Runs 15 benchmark queries against the real vault covering all query
+intent classes, plus 5 contextual integrity cases using synthetic
+fixtures to test type gating behavior.
 
 Usage:
     python tools/eval_retrieval.py              # summary only
@@ -230,12 +230,209 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
     return results, summary
 
 
+# ---------------------------------------------------------------------------
+# Contextual integrity cases — 5 cases with synthetic fixtures
+# ---------------------------------------------------------------------------
+# These test type gating behavior (ADR-018) using controlled synthetic
+# records. They do not touch the real vault. Each case provides a query,
+# a set of synthetic retrieval results, and an expected outcome:
+#   "suppress" = the tagged record should NOT appear in final results
+#   "surface"  = the tagged record SHOULD appear in final results
+
+@dataclass
+class IntegrityCase:
+    name: str
+    query: str
+    intent: str  # the intent class the query should match
+    tagged_record: dict  # the record we're testing for
+    other_records: list  # normal records that should always surface
+    expect: str  # "suppress" or "surface"
+
+
+def _make_item(content: str, memory_type: str, score: float = 0.6, **extra_meta) -> dict:
+    """Build a minimal ContextItem-compatible dict for synthetic fixtures."""
+    return {
+        "id": f"synth-{hash(content) % 10000}",
+        "content": content,
+        "source": memory_type,
+        "item_type": memory_type,
+        "memory_type": memory_type,
+        "score": score,
+        "metadata": extra_meta,
+    }
+
+
+INTEGRITY_CASES: list[IntegrityCase] = [
+    # 1. Health-in-work context: work query, health record present → suppress
+    IntegrityCase(
+        name="health_in_work_context",
+        query="What's blocking my project right now?",
+        intent="task",
+        tagged_record=_make_item(
+            "User manages a chronic joint condition that limits long sitting sessions and requires regular breaks throughout the day.",
+            "journal", score=0.55,
+        ),
+        other_records=[
+            _make_item("The retrieval pipeline refactor is blocked on the index migration — can't merge until SQLite store is stable.", "conversation", score=0.72),
+            _make_item("Need to resolve the dependency conflict between httpx and the new test harness before the next release.", "conversation", score=0.65),
+        ],
+        expect="suppress",
+    ),
+    # 2. Personal-in-professional context: work deliverable query, journal entry → suppress
+    IntegrityCase(
+        name="personal_in_professional",
+        query="What's the status of the API refactor?",
+        intent="task",
+        tagged_record=_make_item(
+            "Had a long conversation about feeling disconnected from close friends after the move. Missing the spontaneous drop-ins that used to happen.",
+            "journal", score=0.45,
+        ),
+        other_records=[
+            _make_item("API refactor: split main.py into route modules. Auth middleware extracted. Rate limiter consolidated.", "conversation", score=0.78),
+        ],
+        expect="suppress",
+    ),
+    # 3. Cross-domain leakage: technical query, emotional reflection → suppress
+    IntegrityCase(
+        name="cross_domain_leakage",
+        query="How does the context ranker score memories?",
+        intent="reference",
+        tagged_record=_make_item(
+            "This week was emotionally heavy. The combination of work pressure and family obligations left little room for rest. Noticed a pattern of pushing through without checking in.",
+            "reflection", score=0.40,
+        ),
+        other_records=[
+            _make_item("ContextRanker applies policy weights, recency boost, role scoring, and diversity selection. Assistant content penalized at -0.25.", "ingested", score=0.82),
+        ],
+        expect="suppress",
+    ),
+    # 4. Appropriate health surfacing: health query, health record → surface
+    IntegrityCase(
+        name="appropriate_health_surface",
+        query="I'm exhausted and can't focus — what do I usually do when this happens?",
+        intent="reflective",
+        tagged_record=_make_item(
+            "User manages a chronic joint condition that limits long sitting sessions and requires regular breaks throughout the day.",
+            "journal", score=0.65,
+        ),
+        other_records=[
+            _make_item("Noticed a recurring pattern: energy drops after two hours of deep focus. Walking break restores about 80% of capacity.", "reflection", score=0.60),
+        ],
+        expect="surface",
+    ),
+    # 5. Appropriate personal surfacing: reflective query, personal records → surface
+    IntegrityCase(
+        name="appropriate_personal_surface",
+        query="What have I been struggling with lately?",
+        intent="reflective",
+        tagged_record=_make_item(
+            "Had a long conversation about feeling disconnected from close friends after the move. Missing the spontaneous drop-ins that used to happen.",
+            "journal", score=0.58,
+        ),
+        other_records=[
+            _make_item("Work has been steady but the creative projects are stalling. Three ideas started, none past the outline stage.", "conversation", score=0.62),
+        ],
+        expect="surface",
+    ),
+]
+
+
+def run_integrity_eval() -> tuple[list[dict], str]:
+    """
+    Run contextual integrity cases with synthetic fixtures.
+
+    Each case patches the retrieval layer to return controlled records,
+    then checks whether the tagged record was correctly surfaced or
+    suppressed by the type gating and policy weighting pipeline.
+    """
+    from unittest.mock import patch, MagicMock
+    from src.context.models import ContextItem
+
+    def _dict_to_item(d: dict) -> ContextItem:
+        return ContextItem(
+            id=d["id"],
+            content=d["content"],
+            source=d["source"],
+            item_type=d["item_type"],
+            memory_type=d["memory_type"],
+            score=d["score"],
+            metadata=d.get("metadata", {}),
+        )
+
+    results: list[dict] = []
+    lines: list[str] = []
+    counts = {"PASS": 0, "FAIL": 0}
+
+    lines.append("")
+    lines.append(f"{'=' * 60}")
+    lines.append("Contextual Integrity Cases (synthetic fixtures)")
+    lines.append(f"{'=' * 60}")
+    lines.append("")
+
+    for case in INTEGRITY_CASES:
+        all_synthetic = [case.tagged_record] + case.other_records
+        synthetic_items = [_dict_to_item(d) for d in all_synthetic]
+        tagged_content = case.tagged_record["content"]
+
+        # Patch the retriever to return our synthetic items
+        context_service = ContextService()
+
+        def _mock_retrieve(query, *args, **kwargs):
+            # Return: state_items, task_items, memory_items, reflection_items
+            mem = [i for i in synthetic_items if i.memory_type != "reflection"]
+            ref = [i for i in synthetic_items if i.memory_type == "reflection"]
+            return [], [], mem, ref
+
+        with patch.object(context_service.retriever, "retrieve", side_effect=_mock_retrieve):
+            packet = context_service.build_context(case.query)
+
+        # Check if tagged record content appears in the final packet
+        all_content = [item.content for item in packet.memory_items + packet.reflection_items]
+        tagged_present = any(tagged_content in c for c in all_content)
+
+        if case.expect == "suppress":
+            passed = not tagged_present
+        else:  # "surface"
+            passed = tagged_present
+
+        v = "PASS" if passed else "FAIL"
+        counts[v] += 1
+
+        icon = "✅" if passed else "❌"
+        lines.append(f"{icon} {v}  [integrity:{case.expect}] {case.name}")
+        lines.append(f"   Query: {case.query}")
+        lines.append(f"   Tagged record type: {case.tagged_record['memory_type']}")
+        lines.append(f"   Expected: {case.expect}  Actual: {'present' if tagged_present else 'absent'}")
+        if not passed:
+            lines.append(f"   ** MISMATCH — tagged record was {'present' if tagged_present else 'absent'} but expected {case.expect}")
+        lines.append("")
+
+        results.append({
+            "name": case.name,
+            "intent": f"integrity:{case.expect}",
+            "query": case.query,
+            "verdict": v,
+            "tagged_type": case.tagged_record["memory_type"],
+            "expect": case.expect,
+            "actual": "present" if tagged_present else "absent",
+        })
+
+    lines.append(f"INTEGRITY SUMMARY: {counts['PASS']} passed, {counts['FAIL']} failed out of {len(INTEGRITY_CASES)}")
+    summary = "\n".join(lines)
+    return results, summary
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     verbose = "--verbose" in sys.argv
 
     print("Running retrieval evaluation...\n")
     results, summary = run_eval(verbose=verbose)
+
+    # Run contextual integrity cases
+    integrity_results, integrity_summary = run_integrity_eval()
+    summary += "\n" + integrity_summary
+    results += integrity_results
 
     # Print to stdout
     print(summary)

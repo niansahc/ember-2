@@ -619,3 +619,20 @@ Any task touching 3+ independent files or with clearly separable subtasks must u
 **Session naming:**
 - Always name sessions descriptively, e.g. `claude -n "vault-citation-backend"`
 - Enables resumption with full context.
+- Use TodoWrite and TodoRead tools to maintain a visible task list for every multi-step task. Update it as work completes.
+
+---
+
+## Pre-Implementation Validation
+
+Before modifying any of the following, read all relevant existing files and report conflicts before writing any code:
+
+- Prompt templates or instruction rules
+- Constitutional rules (constitution.yaml)
+- Retrieval or ranking logic
+- Context packet structure or order
+- Safety trigger patterns
+
+Report format: list each relevant file read, note any conflicts or dependencies found, confirm clear before proceeding. If conflicts exist, stop and report — do not resolve them unilaterally.
+
+This step is mandatory. Do not skip it for small changes.

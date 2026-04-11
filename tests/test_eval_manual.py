@@ -145,3 +145,51 @@ def test_get_annotation_note_path(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(inputs))
     result = eval_manual._get_annotation()
     assert result == [("note", "this is a note")]
+
+
+# ---------------------------------------------------------------------------
+# Auto battery mode (--auto)
+# ---------------------------------------------------------------------------
+
+def test_auto_battery_flag_accepted():
+    """Verify --auto flag is accepted by the argument parser."""
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "tools" / "eval_manual.py"), "--auto", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    # --help exits 0 and shows --auto in the output
+    assert result.returncode == 0
+    assert "--auto" in result.stdout
+
+
+def test_run_auto_battery_produces_output(tmp_path, monkeypatch):
+    """Verify _run_auto_battery writes a markdown file with Q/A pairs."""
+    sys.path.insert(0, str(REPO_ROOT))
+    from tools import eval_manual
+
+    # Mock _send_message to avoid needing a running API
+    call_count = {"n": 0}
+    def mock_send(msg, key):
+        call_count["n"] += 1
+        return f"Mock response to: {msg}"
+
+    monkeypatch.setattr(eval_manual, "_send_message", mock_send)
+    monkeypatch.setattr(eval_manual, "REPO_ROOT", tmp_path)
+
+    eval_manual._run_auto_battery("test-model", "fake-key")
+
+    # Should have sent 19 messages
+    assert call_count["n"] == 19
+
+    # Should have written a file
+    log_dir = tmp_path / "logs" / "eval_manual"
+    files = list(log_dir.glob("auto_*.md"))
+    assert len(files) == 1
+
+    content = files[0].read_text(encoding="utf-8")
+    assert "test-model" in content
+    assert "Q1:" in content
+    assert "Q19:" in content
+    assert "Mock response to:" in content

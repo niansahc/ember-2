@@ -227,6 +227,98 @@ def _resolve_last_session_label(current_session_id: str) -> str | None:
     return _format_session_gap(gap_seconds)
 
 
+class ThinkBlockFilter:
+    """Streaming filter that suppresses <think>...</think> blocks.
+
+    qwen3 emits internal reasoning in <think> tags during streaming.
+    This filter tracks state across chunks and suppresses content
+    between the opening and closing tags. Content outside think blocks
+    is yielded unchanged.
+
+    Usage:
+        f = ThinkBlockFilter()
+        for chunk in stream:
+            filtered = f.filter(chunk)
+            if filtered:
+                yield filtered
+    """
+
+    _OPEN_TAG = "<think>"
+    _CLOSE_TAG = "</think>"
+
+    def __init__(self):
+        self._inside_think = False
+        self._buffer = ""
+
+    def filter(self, chunk: str) -> str:
+        """Filter a single chunk. Returns the chunk with think blocks removed,
+        or empty string if the entire chunk is inside a think block.
+
+        Handles partial tags split across chunks: if the buffer ends with
+        a prefix of '<think>' or '</think>', the ambiguous tail is held
+        back until the next chunk resolves it.
+        """
+        result = []
+        self._buffer += chunk
+
+        while self._buffer:
+            if self._inside_think:
+                end_idx = self._buffer.find(self._CLOSE_TAG)
+                if end_idx == -1:
+                    # Check if buffer ends with a partial </think> prefix
+                    held = self._hold_partial(self._CLOSE_TAG)
+                    if held:
+                        break  # wait for more data
+                    # No partial match — consume entire buffer
+                    self._buffer = ""
+                    break
+                # Skip past the closing tag
+                self._buffer = self._buffer[end_idx + len(self._CLOSE_TAG):]
+                self._inside_think = False
+            else:
+                start_idx = self._buffer.find(self._OPEN_TAG)
+                if start_idx == -1:
+                    # Check if buffer ends with a partial <think> prefix.
+                    # If so, emit everything before the partial and hold the tail.
+                    emit, held = self._emit_safe(self._OPEN_TAG)
+                    if emit:
+                        result.append(emit)
+                    break
+                # Emit content before the tag, enter think mode
+                result.append(self._buffer[:start_idx])
+                self._buffer = self._buffer[start_idx + len(self._OPEN_TAG):]
+                self._inside_think = True
+
+        return "".join(result)
+
+    def _emit_safe(self, tag: str) -> tuple[str, bool]:
+        """Emit buffer content that cannot be part of a partial tag.
+
+        If the buffer ends with a prefix of `tag` (e.g. '<thi' which
+        could become '<think>'), hold back the ambiguous tail and return
+        only the safe prefix. Returns (safe_content, held_back).
+        """
+        for i in range(min(len(tag) - 1, len(self._buffer)), 0, -1):
+            tail = self._buffer[-i:]
+            if tag.startswith(tail):
+                safe = self._buffer[:-i]
+                self._buffer = tail
+                return safe, True
+        # No partial match — emit everything
+        safe = self._buffer
+        self._buffer = ""
+        return safe, False
+
+    def _hold_partial(self, tag: str) -> bool:
+        """Check if buffer ends with a partial prefix of tag. If so,
+        keep the buffer as-is (hold back) and return True."""
+        for i in range(min(len(tag) - 1, len(self._buffer)), 0, -1):
+            tail = self._buffer[-i:]
+            if tag.startswith(tail):
+                return True
+        return False
+
+
 def _ensure_session(session_id: str, first_user_message: str, *, test: bool = False) -> None:
     """
     Create a session record if one doesn't exist for this session_id.
@@ -770,8 +862,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         else:
             # --- FAST STREAMING PATH (non-grounding intents) ---
             # Casual/social/activity queries: stream tokens as they arrive.
+            # ThinkBlockFilter suppresses <think>...</think> blocks from
+            # qwen3's reasoning output before the chunks reach the client.
             def _stream_sse():
                 accumulated = []
+                think_filter = ThinkBlockFilter()
 
                 for chunk in llm_adapter.generate_response_stream(
                     context_packet,
@@ -780,19 +875,21 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     last_session_label=last_session_label,
                     suppress_relational_lodestone=suppress_relational_lodestone,
                 ):
-                    accumulated.append(chunk)
-                    sse_data = json.dumps({
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": "ember-2",
-                        "choices": [{
-                            "index": 0,
-                            "delta": {"content": chunk},
-                            "finish_reason": None,
-                        }],
-                    })
-                    yield f"data: {sse_data}\n\n"
+                    filtered = think_filter.filter(chunk)
+                    if filtered:
+                        accumulated.append(filtered)
+                        sse_data = json.dumps({
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": int(time.time()),
+                            "model": "ember-2",
+                            "choices": [{
+                                "index": 0,
+                                "delta": {"content": filtered},
+                                "finish_reason": None,
+                            }],
+                        })
+                        yield f"data: {sse_data}\n\n"
 
                 # Final chunk
                 yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"

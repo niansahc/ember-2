@@ -218,10 +218,44 @@ def _get_annotation() -> list[tuple[str, str]]:
         return [(c, ANNOTATION_KEY[c]) for c in codes]
 
 
+def _run_auto_battery(target_model: str, api_key: str) -> None:
+    """Run all 19 questions without pausing for annotation.
+
+    Saves raw question/response pairs to a dated file in logs/eval_manual/.
+    No annotation, no scoring — just a fast capture for before/after comparison.
+    """
+    date_str = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    log_dir = REPO_ROOT / "logs" / "eval_manual"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    out_file = log_dir / f"auto_{target_model}_{date_str}.md"
+
+    lines = [
+        f"# Auto Battery — {target_model} — {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n",
+    ]
+
+    question_num = 0
+    for category_block in BATTERY:
+        category = category_block["category"]
+        lines.append(f"## {category}\n\n")
+
+        for question in category_block["questions"]:
+            question_num += 1
+            print(f"  [{question_num}/19] {question}")
+
+            response = _send_message(question, api_key)
+
+            lines.append(f"**Q{question_num}:** {question}\n\n")
+            lines.append(f"**A:** {response}\n\n---\n\n")
+
+    out_file.write_text("".join(lines), encoding="utf-8")
+    print(f"\nSaved to: {out_file}")
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Ember-2 interactive manual eval")
     parser.add_argument("--model", type=str, default=None, help="Model to test")
+    parser.add_argument("--auto", action="store_true", help="Run all 19 questions without annotation — saves raw responses to file")
     args = parser.parse_args()
 
     api_key = _get_api_key()
@@ -244,6 +278,17 @@ def main():
         original_model = _switch_model(args.model, api_key)
         if original_model:
             print(f"Switched to: {args.model}")
+
+    # --- AUTO MODE: run all questions, save raw responses, skip annotation ---
+    if args.auto:
+        print(f"\nAuto Battery — {target_model} — {datetime.now().strftime('%Y-%m-%d')}")
+        print("=" * 60)
+        print("Running all 19 questions without annotation...\n")
+        _run_auto_battery(target_model, api_key)
+        if original_model and args.model:
+            _switch_model(original_model, api_key)
+        print("\nDone.")
+        return
 
     print(f"\nManual Eval Battery — {target_model} — {datetime.now().strftime('%Y-%m-%d')}")
     print("=" * 60)

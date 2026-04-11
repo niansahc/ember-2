@@ -20,6 +20,24 @@ from src.safety.review_logger import SafetyReviewLogger
 from src.safety.review_service import ResponseReviewService
 
 
+def strip_think_blocks(text: str) -> str:
+    """Remove <think>...</think> blocks from model output.
+
+    qwen3 (and other thinking-capable models) emit internal reasoning
+    wrapped in <think> tags. The reasoning improves response quality
+    but should not be visible to the user. This strips the blocks
+    while preserving all content outside them.
+
+    Handles multi-line blocks, multiple blocks, and nested whitespace.
+    If no <think> tags are present, returns the input unchanged.
+    """
+    import re
+    # re.DOTALL makes . match newlines so multi-line think blocks are caught.
+    stripped = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    # Clean up any leading/trailing whitespace left by removal.
+    return stripped.strip()
+
+
 class LLMAdapter:
     def __init__(
         self,
@@ -67,6 +85,7 @@ class LLMAdapter:
             image_data=context_packet.image_data if use_vision else [],
             model_override=vision_model if use_vision else None,
         )
+        draft_response = strip_think_blocks(draft_response)
 
         initial_review_context = SafetyReviewContext(
             user_message=context_packet.user_message,

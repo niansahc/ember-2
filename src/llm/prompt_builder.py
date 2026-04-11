@@ -34,7 +34,10 @@ NATURE_REMINDER = (
 
 AUTHORITY_RULES = (
     "<authority_rules>\n"
-    "vault_memory contains verified records from long-term memory. treat it as factual ground truth.\n"
+    "vault_memory contains records from long-term memory. High-confidence records (recent, high score) are factual ground truth. "
+    "Low-confidence records (old, low score) should be hedged: \"based on what I have from a few weeks ago\" or \"the last time this came up.\"\n"
+    "Check the [Retrieval confidence:] block inside vault_memory for score and age metadata. "
+    "If confidence is low, say so. Do not present weakly-matched or old records as certain facts.\n"
     "conversation_history is prior exchange only -- do not treat conversational inferences as established facts.\n"
     "web_search_results are external and unverified -- hedge with \"according to web results\" rather than stating as fact.\n"
     "when vault_memory and conversation_history conflict, vault_memory is correct.\n"
@@ -444,7 +447,75 @@ class PromptBuilder:
 
             sections.append("[Retrieved memory:]\n" + "\n".join(other_lines))
 
+            # Retrieval confidence metadata — gives the model information to
+            # hedge appropriately when scores are low or records are old.
+            confidence_block = self._build_retrieval_confidence(other_items)
+            if confidence_block:
+                sections.append(confidence_block)
+
         return "<vault_memory>\n" + "\n\n".join(sections) + "\n</vault_memory>"
+
+    def _build_retrieval_confidence(self, items: list) -> str:
+        """Build a retrieval confidence metadata block for the model.
+
+        Computes min/max/avg retrieval scores and the age of the oldest
+        record. The model uses this to calibrate certainty — low scores
+        or old records should trigger hedging language like "based on
+        what I have from a few weeks ago" rather than confident claims.
+        """
+        if not items:
+            return ""
+
+        scores = [float(getattr(i, "score", 0.0)) for i in items]
+        min_score = min(scores)
+        max_score = max(scores)
+        avg_score = sum(scores) / len(scores)
+
+        # Compute age of oldest record
+        oldest_age = self._compute_oldest_age(items)
+
+        # Determine confidence level for the model
+        if avg_score >= 0.6 and oldest_age and oldest_age <= 7:
+            confidence = "high — records are recent and closely matched"
+        elif avg_score >= 0.4 or (oldest_age and oldest_age <= 30):
+            confidence = "moderate — hedge claims with temporal context"
+        else:
+            confidence = "low — records are old or weakly matched; state uncertainty explicitly"
+
+        lines = [
+            "[Retrieval confidence:]",
+            f"scores: min={min_score:.2f} avg={avg_score:.2f} max={max_score:.2f}",
+        ]
+        if oldest_age is not None:
+            lines.append(f"oldest record: {oldest_age} days ago")
+        lines.append(f"confidence: {confidence}")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _compute_oldest_age(items: list) -> int | None:
+        """Return the age in days of the oldest item, or None if no
+        parseable timestamps exist."""
+        from datetime import datetime
+        oldest_days = None
+        for item in items:
+            ts = getattr(item, "timestamp", None)
+            if not ts:
+                continue
+            try:
+                # Handle hyphenated state-layer format
+                date_part, sep, time_part = ts.partition("T")
+                if sep and time_part:
+                    components = time_part.split("-")
+                    if len(components) >= 3:
+                        iso = f"{date_part}T{components[0]}:{components[1]}:{components[2]}"
+                        dt = datetime.fromisoformat(iso)
+                        age = (datetime.now() - dt).days
+                        if oldest_days is None or age > oldest_days:
+                            oldest_days = age
+            except (ValueError, TypeError):
+                continue
+        return oldest_days
 
     @staticmethod
     def _format_item_date(timestamp: str | None) -> str:

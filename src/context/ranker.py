@@ -165,6 +165,16 @@ class ContextRanker:
         ranked_memory = [self._score_memory_item(item) for item in memory_items]
         ranked_reflections = [self._score_reflection_item(item) for item in reflection_items]
 
+        # Apply multiplicative temporal decay AFTER additive scoring, BEFORE
+        # final sort. This is distinct from _recency_boost (which is additive
+        # and rewards freshness). Temporal decay progressively reduces old
+        # records' contribution so stale content cannot win context slots on
+        # semantic similarity alone. Both mechanisms coexist intentionally.
+        for item in ranked_memory:
+            item.score = float(item.score) * self._temporal_decay_weight(item)
+        for item in ranked_reflections:
+            item.score = float(item.score) * self._temporal_decay_weight(item)
+
         ranked_memory.sort(key=lambda item: item.score, reverse=True)
         ranked_reflections.sort(key=lambda item: item.score, reverse=True)
 
@@ -288,6 +298,132 @@ class ContextRanker:
 
         item.score = score
         return item
+
+    # -----------------------------------------------------------------
+    # Decay tier definitions. Each tier maps memory types to a list of
+    # (max_age_days, weight) tuples. The list MUST be sorted ascending
+    # by max_age_days so the first match wins. A final entry with
+    # max_age_days=None serves as the fallback for anything older.
+    # -----------------------------------------------------------------
+    _NO_DECAY_TYPES = frozenset({"profile", "reference", "ingested"})
+
+    _REFLECTION_DECAY = [
+        (7, 1.0),
+        (30, 0.80),
+        (90, 0.60),
+        (None, 0.40),
+    ]
+
+    _EPHEMERAL_DECAY = [
+        (3, 1.0),
+        (7, 0.70),
+        (14, 0.45),
+        (30, 0.25),
+        (None, 0.10),
+    ]
+    _EPHEMERAL_TYPES = frozenset({"conversation", "journal", "session", "decision"})
+
+    _DEFAULT_DECAY = [
+        (3, 1.0),
+        (7, 0.85),
+        (14, 0.70),
+        (30, 0.50),
+        (90, 0.30),
+        (None, 0.15),
+    ]
+
+    def _temporal_decay_weight(self, item: ContextItem) -> float:
+        """Compute a multiplicative temporal decay weight for a context item.
+
+        This is intentionally separate from _recency_boost():
+        - _recency_boost is ADDITIVE and rewards freshness (a bonus).
+        - _temporal_decay_weight is MULTIPLICATIVE and penalizes staleness
+          (a scaling factor that shrinks old scores toward zero).
+
+        Both coexist. The additive boost ensures recent items get a lift;
+        the multiplicative decay ensures old items cannot win context slots
+        on high semantic similarity alone.
+
+        Returns 1.0 (no decay) for reference-class types (profile, reference,
+        ingested) and for items whose timestamp cannot be parsed.
+        """
+        mem_type = getattr(item, "memory_type", "") or ""
+
+        if mem_type in self._NO_DECAY_TYPES:
+            return 1.0
+
+        age_days = self._parse_age_days(item.timestamp)
+        if age_days is None:
+            return 1.0
+
+        if mem_type == "reflection":
+            tiers = self._REFLECTION_DECAY
+        elif mem_type in self._EPHEMERAL_TYPES:
+            tiers = self._EPHEMERAL_DECAY
+        else:
+            tiers = self._DEFAULT_DECAY
+
+        for max_age, weight in tiers:
+            if max_age is None or age_days <= max_age:
+                return weight
+
+        # Should never reach here, but safety fallback.
+        return 1.0
+
+    def _parse_age_days(self, timestamp: str | None) -> int | None:
+        """Parse a timestamp string and return age in days, or None on failure.
+
+        Handles three formats:
+        1. Unix epoch float (e.g. "1711929600.0")
+        2. ISO 8601 (e.g. "2026-03-17T20:15:00+00:00")
+        3. Hyphenated vault format (e.g. "2026-03-17T20-15-00")
+        """
+        if not timestamp:
+            return None
+
+        item_dt = None
+
+        # Try epoch float first.
+        try:
+            ts = float(timestamp)
+            item_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        except (TypeError, ValueError):
+            pass
+
+        # Try ISO format.
+        if item_dt is None:
+            try:
+                normalized = timestamp.replace("Z", "+00:00")
+                item_dt = datetime.fromisoformat(normalized)
+                if item_dt.tzinfo is None:
+                    item_dt = item_dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+
+        # Try hyphenated vault format: "YYYY-MM-DDTHH-MM-SS" or
+        # "YYYY-MM-DDTHH-MM-SS-ffffff".
+        if item_dt is None:
+            try:
+                # Replace hyphens after the T with colons for time part.
+                if "T" in timestamp:
+                    date_part, time_part = timestamp.split("T", 1)
+                    segments = time_part.split("-")
+                    if len(segments) >= 3:
+                        colon_time = f"{segments[0]}:{segments[1]}:{segments[2]}"
+                        if len(segments) == 4:
+                            colon_time += f".{segments[3]}"
+                        iso_str = f"{date_part}T{colon_time}"
+                        item_dt = datetime.fromisoformat(iso_str)
+                        if item_dt.tzinfo is None:
+                            item_dt = item_dt.replace(tzinfo=timezone.utc)
+            except (ValueError, IndexError):
+                pass
+
+        if item_dt is None:
+            return None
+
+        now = datetime.now(timezone.utc)
+        return max((now - item_dt).days, 0)
 
     def _recency_boost(self, timestamp: str | None) -> float:
         """Time-based scoring adjustment. Recent content is more likely to

@@ -638,3 +638,14 @@ Before modifying any of the following, read all relevant existing files and repo
 Report format: list each relevant file read, note any conflicts or dependencies found, confirm clear before proceeding. If conflicts exist, stop and report — do not resolve them unilaterally.
 
 This step is mandatory. Do not skip it for small changes.
+
+---
+
+## Hooks
+
+Configured in `.claude/settings.local.json` (gitignored — local to this machine).
+
+**PreToolUse: Vault Protection (Edit|Write)**
+Blocks any attempted edit to files containing `private_vault/` in the path or ending in `.env`. Returns a deny decision with a clear error message referencing the Vault Privacy Rule. Runs before the edit is applied — the file is never modified.
+
+Review or disable hooks via `/hooks` in Claude Code.

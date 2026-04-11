@@ -72,6 +72,15 @@ def classify_query(user_message: str) -> ContextPolicy:
         "reflection",
         "summarize me",
         "summarise me",
+        # Personal retrospective queries — asking about recurring
+        # experiences, typical behavior, or self-awareness over time.
+        # Without these markers, health/energy queries like "I'm exhausted,
+        # what do I usually do" fall to default policy, which triggers the
+        # relevance gate and suppresses non-profile vault content.
+        "struggling",
+        "what do i usually",
+        "what have i been",
+        "how have i been",
     )
 
     recent_markers = (

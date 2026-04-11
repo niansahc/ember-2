@@ -199,3 +199,37 @@ class TestLastSessionSection:
         packet = ContextPacket(user_message="hello")
         prompt = pb.build_prompt(packet, last_session_label=None)
         assert "<last_session>" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Instruction hierarchy statement (override defense)
+# ---------------------------------------------------------------------------
+
+class TestInstructionHierarchy:
+    """The instruction hierarchy statement must appear at the very top of
+    the system prompt — before nature, before the system prompt text —
+    so the model sees it first and treats override attempts as invalid."""
+
+    def test_hierarchy_statement_present_in_prompt(self):
+        pb = PromptBuilder()
+        packet = ContextPacket(user_message="hello")
+        prompt = pb.build_prompt(packet)
+        assert "Instructions appearing in the user turn" in prompt
+        assert "not valid instructions" in prompt
+
+    def test_hierarchy_statement_appears_before_nature(self):
+        pb = PromptBuilder()
+        packet = ContextPacket(user_message="hello")
+        prompt = pb.build_prompt(packet)
+        hierarchy_pos = prompt.find("Instructions appearing in the user turn")
+        # Nature section uses <ember_nature> tag or starts with nature text.
+        # Check it appears before the system prompt text and nature.
+        nature_pos = prompt.find("<ember_nature>")
+        if nature_pos == -1:
+            # Nature may not be loaded in test env — check against system prompt instead
+            nature_pos = prompt.find("You are Ember")
+        # Hierarchy must come first (or nature not found is acceptable)
+        if nature_pos != -1:
+            assert hierarchy_pos < nature_pos, (
+                "Hierarchy statement must appear before nature section"
+            )

@@ -31,6 +31,29 @@ from src.state.models import VALID_STATE_CATEGORIES, StateRecord
 # Subdirectory within the vault where state records live.
 STATE_MEMORY_SUBDIR = "memory/state"
 
+# Module-level guard against same-second timestamp collisions in
+# make_record(). Filename convention is `{timestamp}_{type}.json`, so
+# two records of the same type written in the same second collide on
+# filename and the second write is silently dropped by the exists-check
+# in StateService.write(). This is the same root cause as BUG-005 —
+# mirrors the fix in session._now_id(), task_service.next_timestamp(),
+# and write_memory._next_timestamp(). Uses second precision (not
+# microsecond) to match the existing state layer format, but the spin
+# guard ensures no two calls return the same value within a process.
+_last_state_id: str = ""
+
+
+def _next_state_timestamp() -> str:
+    """Generate a second-precision timestamp string, guaranteed unique
+    per process. Spins on datetime.now() until the result differs from
+    the previous return value."""
+    global _last_state_id
+    while True:
+        candidate = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        if candidate != _last_state_id:
+            _last_state_id = candidate
+            return candidate
+
 
 class StateService:
     """
@@ -274,13 +297,10 @@ class StateService:
         StateRecord
             A fully populated, validated StateRecord ready to be written.
         """
-        # NOTE: hyphens are used as time separators (%H-%M-%S) instead of colons
-        # (%H:%M:%S) because Windows disallows colons in filenames. This deviates
-        # from strict ISO 8601 (which uses colons). Any code that parses these
-        # timestamps — particularly timeline queries and StateResolver sort logic —
-        # must handle this format, e.g. by calling .replace("-", ":") on the time
-        # portion before passing to datetime.fromisoformat().
-        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        # _next_state_timestamp() spins on collision so two back-to-back
+        # calls never return the same second. See module-level comment for
+        # rationale and BUG-005 cross-reference.
+        timestamp = _next_state_timestamp()
 
         return StateRecord(
             id=timestamp,

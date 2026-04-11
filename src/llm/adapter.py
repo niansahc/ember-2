@@ -20,6 +20,29 @@ from src.safety.review_logger import SafetyReviewLogger
 from src.safety.review_service import ResponseReviewService
 
 
+def _normalize_unicode_tags(text: str) -> str:
+    """Normalize unicode mathematical italic (U+1D44E-U+1D467) to ASCII lowercase.
+
+    qwen3:8b sometimes wraps think tag content in unicode math italic
+    characters. This converts those back to plain ASCII so the tag
+    regex can match them. Non-tag text is also normalized, which is
+    acceptable because the math italic range has no semantic use in
+    Ember responses — it is always model formatting noise.
+    """
+    result = []
+    for ch in text:
+        cp = ord(ch)
+        # Mathematical Italic Small: U+1D44E (a) .. U+1D467 (z)
+        if 0x1D44E <= cp <= 0x1D467:
+            result.append(chr(ord('a') + (cp - 0x1D44E)))
+        # Mathematical Italic Capital: U+1D434 (A) .. U+1D44D (Z)
+        elif 0x1D434 <= cp <= 0x1D44D:
+            result.append(chr(ord('A') + (cp - 0x1D434)))
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
 def strip_think_blocks(text: str) -> str:
     """Remove <think>...</think> blocks from model output.
 
@@ -28,12 +51,23 @@ def strip_think_blocks(text: str) -> str:
     but should not be visible to the user. This strips the blocks
     while preserving all content outside them.
 
-    Handles multi-line blocks, multiple blocks, and nested whitespace.
+    Handles multi-line blocks, multiple blocks, nested whitespace,
+    case variants (<Think>, <THINK>), whitespace/BOM between < and
+    think>, and unicode mathematical italic variants of the tag text.
     If no <think> tags are present, returns the input unchanged.
     """
     import re
-    # re.DOTALL makes . match newlines so multi-line think blocks are caught.
-    stripped = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    # Normalize unicode math italic to ASCII so tags are matchable.
+    normalized = _normalize_unicode_tags(text)
+    # Pattern: <, optional whitespace/BOM, think, optional whitespace, >
+    # ... content ... <, optional whitespace/BOM, /think, optional whitespace, >
+    # Case-insensitive + DOTALL for multi-line blocks.
+    stripped = re.sub(
+        r"<[\s\ufeff]*think[\s\ufeff]*>.*?<[\s\ufeff]*/[\s\ufeff]*think[\s\ufeff]*>",
+        "",
+        normalized,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
     # Clean up any leading/trailing whitespace left by removal.
     return stripped.strip()
 

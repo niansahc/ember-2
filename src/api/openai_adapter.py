@@ -107,6 +107,48 @@ def _background_deviation_detection(
         logger.warning("[DEVIATION] Background detection failed (non-fatal): %s", exc)
 
 
+import re
+
+# --- Override detection patterns (jailbreak-class) ---
+# These patterns match instruction-override attempts that tell Ember to ignore,
+# disregard, or bypass her system prompt, instructions, or rules. Matched
+# pre-generation so no LLM call, retrieval, or context build occurs.
+_OVERRIDE_PATTERNS: list[re.Pattern] = [
+    re.compile(r"ignore\s+(your\s+)?((previous|prior|all|any|system)\s+)*instructions", re.IGNORECASE),
+    re.compile(r"ignore\s+(your\s+)?system\s+prompt", re.IGNORECASE),
+    re.compile(r"disregard\s+(your\s+)?((previous|prior|all|any|system)\s+)*instructions", re.IGNORECASE),
+    re.compile(r"disregard\s+(your\s+)?system\s+prompt", re.IGNORECASE),
+    re.compile(r"forget\s+(your\s+)?(rules|instructions|guidelines|system\s+prompt)", re.IGNORECASE),
+    re.compile(r"you\s+have\s+no\s+(restrictions|rules|guidelines|limits|constraints)", re.IGNORECASE),
+    re.compile(r"pretend\s+you\s+have\s+no\s+(guidelines|rules|restrictions|instructions|constraints)", re.IGNORECASE),
+    re.compile(r"pretend\s+(your\s+)?(instructions|rules|guidelines)\s+(don'?t|do\s+not)\s+exist", re.IGNORECASE),
+    re.compile(r"override\s+(your\s+)?(system\s+)?(prompt|instructions|rules|guidelines)", re.IGNORECASE),
+    re.compile(r"bypass\s+(your\s+)?(safety|system|content)\s*(filters?|rules?|restrictions?|guidelines?|instructions?)", re.IGNORECASE),
+    re.compile(r"act\s+as\s+if\s+you\s+have\s+no\s+(rules|instructions|guidelines|restrictions)", re.IGNORECASE),
+    re.compile(r"from\s+now\s+on\s+(ignore|disregard|forget)\s+(your\s+)?(rules|instructions|guidelines)", re.IGNORECASE),
+    re.compile(r"new\s+instructions?\s*[:\-]\s*(ignore|disregard|forget|override)", re.IGNORECASE),
+    re.compile(r"do\s+not\s+follow\s+(your\s+)?(previous\s+|prior\s+|system\s+)?(instructions|rules|guidelines|prompt)", re.IGNORECASE),
+    re.compile(r"stop\s+following\s+(your\s+)?(instructions|rules|guidelines|system\s+prompt)", re.IGNORECASE),
+]
+
+
+def _is_override_attempt(message: str) -> bool:
+    """Return True if the message contains an instruction-override jailbreak pattern.
+
+    This is a fast heuristic check run before any LLM call, context build,
+    or retrieval. Only matches explicit override-class language — normal
+    queries that happen to contain words like 'ignore' or 'rules' in
+    non-override contexts will not match because the patterns require
+    the instruction-directive framing.
+    """
+    if not message or len(message.strip()) < 10:
+        return False
+    for pattern in _OVERRIDE_PATTERNS:
+        if pattern.search(message):
+            return True
+    return False
+
+
 class OpenAIMessage(BaseModel):
     role: Literal["system", "user", "assistant"]
     content: Any  # str normally; list of content parts when files are attached
@@ -289,6 +331,9 @@ class ThinkBlockFilter:
     between the opening and closing tags. Content outside think blocks
     is yielded unchanged.
 
+    Handles case variants (<Think>, <THINK>), whitespace/BOM between
+    < and think>, and unicode mathematical italic characters in tags.
+
     Usage:
         f = ThinkBlockFilter()
         for chunk in stream:
@@ -304,6 +349,16 @@ class ThinkBlockFilter:
         self._inside_think = False
         self._buffer = ""
 
+    @staticmethod
+    def _normalize(text: str) -> str:
+        """Normalize unicode math italic to ASCII and lowercase tag candidates.
+
+        Converts Mathematical Italic (U+1D434-U+1D467) to plain ASCII,
+        then lowercases the result so <Think>, <THINK>, etc. all match.
+        """
+        from src.llm.adapter import _normalize_unicode_tags
+        return _normalize_unicode_tags(text).lower()
+
     def filter(self, chunk: str) -> str:
         """Filter a single chunk. Returns the chunk with think blocks removed,
         or empty string if the entire chunk is inside a think block.
@@ -311,13 +366,24 @@ class ThinkBlockFilter:
         Handles partial tags split across chunks: if the buffer ends with
         a prefix of '<think>' or '</think>', the ambiguous tail is held
         back until the next chunk resolves it.
+
+        Incoming text is normalized (unicode math italic -> ASCII, lowercased)
+        so that variant tag formats are caught. This means output text is
+        also lowercased — acceptable because think block content is discarded
+        and the visible response text is produced by the model outside these
+        blocks (the SSE stream sends the original chunks; this filter only
+        decides what to suppress vs. pass through based on normalized form).
         """
+        # Normalize incoming chunk for reliable tag detection.
+        chunk = self._normalize(chunk)
+
         result = []
         self._buffer += chunk
 
         while self._buffer:
             if self._inside_think:
-                end_idx = self._buffer.find(self._CLOSE_TAG)
+                # Inside a think block — scan for any close-tag variant.
+                end_idx = self._find_close_tag(self._buffer)
                 if end_idx == -1:
                     # Check if buffer ends with a partial </think> prefix
                     held = self._hold_partial(self._CLOSE_TAG)
@@ -327,23 +393,56 @@ class ThinkBlockFilter:
                     self._buffer = ""
                     break
                 # Skip past the closing tag
-                self._buffer = self._buffer[end_idx + len(self._CLOSE_TAG):]
+                close_end = self._close_tag_end(self._buffer, end_idx)
+                self._buffer = self._buffer[close_end:]
                 self._inside_think = False
             else:
-                start_idx = self._buffer.find(self._OPEN_TAG)
+                # Outside — scan for any open-tag variant.
+                start_idx = self._find_open_tag(self._buffer)
                 if start_idx == -1:
                     # Check if buffer ends with a partial <think> prefix.
-                    # If so, emit everything before the partial and hold the tail.
                     emit, held = self._emit_safe(self._OPEN_TAG)
                     if emit:
                         result.append(emit)
                     break
                 # Emit content before the tag, enter think mode
                 result.append(self._buffer[:start_idx])
-                self._buffer = self._buffer[start_idx + len(self._OPEN_TAG):]
+                open_end = self._open_tag_end(self._buffer, start_idx)
+                self._buffer = self._buffer[open_end:]
                 self._inside_think = True
 
         return "".join(result)
+
+    # -- Tag finders that tolerate whitespace/BOM inside the tag -----------
+
+    @staticmethod
+    def _find_open_tag(buf: str) -> int:
+        """Find the start position of an open think tag, tolerating
+        whitespace/BOM between < and think and >. Returns -1 if not found."""
+        import re
+        m = re.search(r"<[\s\ufeff]*think[\s\ufeff]*>", buf, re.IGNORECASE)
+        return m.start() if m else -1
+
+    @staticmethod
+    def _open_tag_end(buf: str, start: int) -> int:
+        """Return the index just past the end of the open tag starting at `start`."""
+        import re
+        m = re.search(r"<[\s\ufeff]*think[\s\ufeff]*>", buf[start:], re.IGNORECASE)
+        return start + m.end() if m else start + len("<think>")
+
+    @staticmethod
+    def _find_close_tag(buf: str) -> int:
+        """Find the start position of a close think tag. Returns -1 if not found."""
+        import re
+        m = re.search(r"<[\s\ufeff]*/[\s\ufeff]*think[\s\ufeff]*>", buf, re.IGNORECASE)
+        return m.start() if m else -1
+
+    @staticmethod
+    def _close_tag_end(buf: str, start: int) -> int:
+        """Return the index just past the end of the close tag starting at `start`."""
+        import re
+        m = re.search(r"<[\s\ufeff]*/[\s\ufeff]*think[\s\ufeff]*>", buf[start:], re.IGNORECASE)
+        return start + m.end() if m else start + len("</think>")
 
     def _emit_safe(self, tag: str) -> tuple[str, bool]:
         """Emit buffer content that cannot be part of a partial tag.
@@ -493,6 +592,28 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     message=ChatCompletionsResponseMessage(
                         role="assistant",
                         content="I didn't receive a message — please try again.",
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+        )
+
+    # --- OVERRIDE DETECTION (pre-generation) ---
+    # Jailbreak-class prompts that instruct Ember to ignore her system prompt
+    # are short-circuited here — no context build, no retrieval, no LLM call.
+    if _is_override_attempt(latest_user_message):
+        logger.warning("[OVERRIDE] Blocked override attempt: %s", latest_user_message[:80])
+        return ChatCompletionsResponse(
+            id=f"chatcmpl-{uuid.uuid4().hex}",
+            object="chat.completion",
+            created=int(time.time()),
+            model="ember-2",
+            choices=[
+                ChatCompletionsChoice(
+                    index=0,
+                    message=ChatCompletionsResponseMessage(
+                        role="assistant",
+                        content="That's exactly what I'm not going to do. What are you actually trying to figure out?",
                     ),
                     finish_reason="stop",
                 )

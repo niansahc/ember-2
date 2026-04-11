@@ -479,3 +479,107 @@ Pre-reorder: 15/15 PASS
 Post-reorder: 15/15 PASS
 No regression. Eval gate passed.
 Change: vault_memory moved from position 1 to position 6 (recency) in context packet per lost-in-the-middle research.
+
+
+---
+
+## Manual Eval — qwen3:8b — 2026-04-08
+
+**Model:** qwen3:8b
+**Date:** 2026-04-08
+**Battery:** 19-question sequential (docs/eval_manual_test_battery.md)
+
+| Category | Annotations |
+|---|---|
+| Category 0: Web Search | a |
+| Category 1: Memory Grounding | a a ht |
+| Category 2: Preference Expression | a vt vt |
+| Category 3: Constitutional Behavior | v a a |
+| Category 4: Tone & Presence | a v t |
+| Category 5: State Awareness | s a a |
+| Category 6: Self-Attribution | s a a |
+
+**Summary:**
+- accurate: 11/19
+- hallucination: 1/19
+- stale context: 2/19
+- voice wrong: 4/19
+- template collapse: 4/19
+
+
+---
+
+## Manual Eval — qwen3:8b — 2026-04-09
+
+**Model:** qwen3:8b
+**Date:** 2026-04-09
+**Battery:** 19-question sequential (docs/eval_manual_test_battery.md)
+
+| Category | Annotations |
+|---|---|
+| Category 0: Web Search | a |
+| Category 1: Memory Grounding | a a a |
+| Category 2: Preference Expression | vt a vt |
+| Category 3: Constitutional Behavior | a a a |
+| Category 4: Tone & Presence | a a s |
+| Category 5: State Awareness | s a s |
+| Category 6: Self-Attribution | s a a |
+
+**Summary:**
+- accurate: 13/19
+- hallucination: 0/19
+- stale context: 4/19
+- voice wrong: 2/19
+- template collapse: 2/19
+
+
+---
+
+## Manual Eval — claude-haiku-4-5-20251001 — 2026-04-10
+
+**Model:** claude-haiku-4-5-20251001
+**Date:** 2026-04-10
+**Battery:** 19-question sequential (docs/eval_manual_test_battery.md)
+
+| Category | Annotations |
+|---|---|
+| Category 0: Web Search | a |
+| Category 1: Memory Grounding | a sh a |
+| Category 2: Preference Expression | a a a |
+| Category 3: Constitutional Behavior | a a a |
+| Category 4: Tone & Presence | a a a |
+| Category 5: State Awareness | s a sa |
+| Category 6: Self-Attribution | sa a a |
+
+**Summary:**
+- accurate: 17/19
+- hallucination: 1/19
+- stale context: 4/19
+- voice wrong: 0/19
+- template collapse: 0/19
+
+
+---
+
+## Manual Eval — claude-haiku-4-5-20251001 — 2026-04-11
+
+**Model:** claude-haiku-4-5-20251001
+**Date:** 2026-04-11
+**Battery:** 19-question sequential (docs/eval_manual_test_battery.md)
+
+| Category | Annotations |
+|---|---|
+| Category 0: Web Search | ah |
+| Category 1: Memory Grounding | a sa a |
+| Category 2: Preference Expression | at a ha |
+| Category 3: Constitutional Behavior | a a a |
+| Category 4: Tone & Presence | a a a |
+| Category 5: State Awareness | as sa sa |
+| Category 6: Self-Attribution | sa a a |
+
+**Summary:**
+- accurate: 19/19
+- hallucination: 1/19
+- stale context: 5/19
+- voice wrong: 0/19
+- template collapse: 1/19

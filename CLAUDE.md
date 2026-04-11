@@ -442,6 +442,8 @@ release-please reads these commit messages to auto-generate changelogs and deter
 
 Vault contents — including names, conversation text, and record IDs — must never appear in code, tests, commits, scripts, or docs. This rule has no exceptions. If a test requires memory data, use synthetic fixture data only.
 
+Ember's generated responses that draw on vault content are also vault content. Response text must never be saved to files in the repo or logs directory. The --auto battery mode shows responses on stdout for live review but writes only metadata (latency, word count) to disk.
+
 ---
 
 ## Documentation Language Convention

@@ -164,12 +164,12 @@ def test_auto_battery_flag_accepted():
     assert "--auto" in result.stdout
 
 
-def test_run_auto_battery_produces_output(tmp_path, monkeypatch):
-    """Verify _run_auto_battery writes a markdown file with Q/A pairs."""
+def test_run_auto_battery_produces_metadata_only(tmp_path, monkeypatch):
+    """Verify _run_auto_battery writes metadata (latency, word count)
+    but NOT response text to the output file. Per Vault Privacy Rule."""
     sys.path.insert(0, str(REPO_ROOT))
     from tools import eval_manual
 
-    # Mock _send_message to avoid needing a running API
     call_count = {"n": 0}
     def mock_send(msg, key):
         call_count["n"] += 1
@@ -180,10 +180,8 @@ def test_run_auto_battery_produces_output(tmp_path, monkeypatch):
 
     eval_manual._run_auto_battery("test-model", "fake-key")
 
-    # Should have sent 19 messages
     assert call_count["n"] == 19
 
-    # Should have written a file
     log_dir = tmp_path / "logs" / "eval_manual"
     files = list(log_dir.glob("auto_*.md"))
     assert len(files) == 1
@@ -192,4 +190,8 @@ def test_run_auto_battery_produces_output(tmp_path, monkeypatch):
     assert "test-model" in content
     assert "Q1:" in content
     assert "Q19:" in content
-    assert "Mock response to:" in content
+    # Metadata IS saved
+    assert "latency:" in content
+    assert "words:" in content
+    # Response text is NOT saved (vault privacy)
+    assert "Mock response to:" not in content

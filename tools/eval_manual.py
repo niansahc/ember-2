@@ -221,8 +221,13 @@ def _get_annotation() -> list[tuple[str, str]]:
 def _run_auto_battery(target_model: str, api_key: str) -> None:
     """Run all 19 questions without pausing for annotation.
 
-    Saves raw question/response pairs to a dated file in logs/eval_manual/.
-    No annotation, no scoring — just a fast capture for before/after comparison.
+    Prints responses to stdout for live review but does NOT save them
+    to disk — responses contain vault-grounded content (names, personal
+    details) that must not be persisted in the repo or logs directory.
+    Per Vault Privacy Rule in CLAUDE.md.
+
+    Saves only metadata (model, question, latency, word count) to a
+    dated log file for before/after timing comparison.
     """
     date_str = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     log_dir = REPO_ROOT / "logs" / "eval_manual"
@@ -231,24 +236,39 @@ def _run_auto_battery(target_model: str, api_key: str) -> None:
 
     lines = [
         f"# Auto Battery — {target_model} — {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n",
+        "Responses shown on stdout only — not saved to disk (vault privacy).\n\n",
     ]
 
     question_num = 0
     for category_block in BATTERY:
         category = category_block["category"]
         lines.append(f"## {category}\n\n")
+        print(f"\n{'─' * 60}")
+        print(f"  {category}")
+        print(f"{'─' * 60}")
 
         for question in category_block["questions"]:
             question_num += 1
-            print(f"  [{question_num}/19] {question}")
+            print(f"\n  [{question_num}/19] {question}")
+            print("  Sending...")
 
+            start = time.time()
             response = _send_message(question, api_key)
+            latency = time.time() - start
+            word_count = len(response.split())
 
-            lines.append(f"**Q{question_num}:** {question}\n\n")
-            lines.append(f"**A:** {response}\n\n---\n\n")
+            # Print response to stdout for live review
+            print(f"\n  Ember ({latency:.1f}s, {word_count} words):")
+            for line in response.split("\n"):
+                print(f"    {line}")
+
+            # Save only metadata — no response text
+            lines.append(f"**Q{question_num}:** {question}\n")
+            lines.append(f"- latency: {latency:.1f}s, words: {word_count}\n\n")
 
     out_file.write_text("".join(lines), encoding="utf-8")
-    print(f"\nSaved to: {out_file}")
+    print(f"\nMetadata saved to: {out_file}")
+    print("(Responses shown above — not written to disk)")
 
 
 def main():

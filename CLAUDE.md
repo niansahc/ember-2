@@ -373,6 +373,20 @@ Research tracking has moved to docs/Ember2_TDD.md. TDD is the source of truth fo
 - BUG-008: Repetitive parenthetical questions — FIXED v0.14.2. Three-part fix: closing_questions identity rule strengthened with explicit persistence clause and negative parenthetical example; post-generation `strip_trailing_parenthetical_question` filter when question_suppressed flag active; session-sticky "[System: user has requested no questions]" note in conversation buffer.
 - BUG-009: Topic fixation — FIXED v0.14.2. Three-part fix: `resolve_open_loops_by_topic` in StateService writes resolution records on user decline; retrieval suppression via keyword matching in `_build_context_section`; session-sticky decline notes in conversation buffer.
 - New user calibration gap — users unfamiliar with Ember's principled nature may experience her holding positions or naming patterns as the system being difficult. Relational orientation layer (v0.16.0) should account for onboarding period before full constitutional behavior activates.
+- BUG-010: Inconsistent capitalization — Ember producing lowercase responses without standard capitalization. Confirmed on BOTH qwen3:8b AND claude-haiku-4-5-20251001 — not a model-specific issue. Root cause is in the prompt layer, not the model. Low priority but needs investigation before v0.16.0.
+
+---
+
+## Test Tiers
+
+| Tier | Trigger | What runs | Time | Cost |
+|---|---|---|---|---|
+| **Tier 1: Fast** | Every src/*.py edit (post-edit hook) | `pytest tests/ -q` | ~80s | Free |
+| **Tier 2: Retrieval** | Commits touching src/context/, src/retrieval/, src/llm/ (post-commit hook) | `eval_retrieval.py` | ~30s | Free |
+| **Tier 3: Release gate** | Before every release | Tier 1 + `test_streaming_regression.py` + `eval_manual.py --auto` + `eval_web_search.py` | ~30min | Free |
+| **Tier 4: Cloud eval** | Before minor/major releases only | `eval_conversations.py` + `eval_manual.py --compare` | ~15min | ~$1-2 |
+
+Tier 4 uses Claude API credits. Do not run Tier 4 on patches or during development iteration — reserve for release gates only.
 
 ---
 
@@ -543,8 +557,10 @@ A release is not complete at commit. A release is not complete at tag. A release
 
 **ember-2 (backend):**
 - [ ] All tests passing: pytest tests/
+- [ ] Streaming SSE regression test passing: pytest tests/test_streaming_regression.py -v
 - [ ] Retrieval eval passing: python tools/eval_retrieval.py -- no regression
-- [ ] Conversation eval run: python tools/eval_conversations.py -- document results
+- [ ] Web search eval run: python tools/eval_web_search.py --auto-search -- document trigger rate
+- [ ] Conversation eval run: python tools/eval_conversations.py -- document results (Tier 4, minor/major only)
 - [ ] CHANGELOG.md updated (release-please handles this via conventional commits)
 - [ ] version.json bumped (release-please handles this via conventional commits)
 - [ ] All changes committed and pushed to main: git push origin main

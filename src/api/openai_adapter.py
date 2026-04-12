@@ -113,16 +113,14 @@ import re
 # These patterns match instruction-override attempts that tell Ember to ignore,
 # disregard, or bypass her system prompt, instructions, or rules. Matched
 # pre-generation so no LLM call, retrieval, or context build occurs.
-# Conversational/emotional markers — short messages containing these are
-# relational check-ins, not information-seeking queries. The knowledge gap
-# injection is suppressed for these because "I'm tired" doesn't need
-# vault content and shouldn't trigger "no relevant vault content found."
-CONVERSATIONAL_MARKERS: tuple[str, ...] = (
-    "i'm tired", "i'm exhausted", "i'm frustrated", "i'm overwhelmed",
-    "i'm anxious", "i'm burned out", "i'm worried", "i'm sad",
-    "how are you", "that was a hard", "that was a tough",
-    "good morning", "good evening", "good night", "hey", "hi there",
-    "hello", "thanks", "thank you", "what's up", "how's it going",
+#
+# Conversational / emotional markers live in src.llm.prompt_builder as the
+# canonical source — the prompt layer and this adapter share one definition
+# so a short check-in is detected identically in both places. Re-exported
+# here for backward compatibility with existing tests.
+from src.llm.prompt_builder import (
+    CONVERSATIONAL_MARKERS,
+    is_conversational_query,
 )
 
 
@@ -865,10 +863,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # SUPPRESS for conversational/emotional queries: "I'm tired", "How are
     # you?", "That was a hard week" don't need vault content and should not
     # trigger the gap injection. These are relational check-ins, not
-    # information-seeking queries. Detection: short message with emotional
-    # or social markers.
-    _msg_lower = latest_user_message.lower().strip()
-    _is_conversational = any(m in _msg_lower for m in CONVERSATIONAL_MARKERS) and len(_msg_lower) < 100
+    # information-seeking queries. Detection delegates to
+    # is_conversational_query in prompt_builder, which normalizes curly
+    # apostrophes (U+2018, U+2019) so "I\u2019m tired" from a mobile
+    # keyboard is recognized identically to "I'm tired".
+    _is_conversational = is_conversational_query(latest_user_message)
 
     if not context_packet.web_items and not _is_conversational:
         non_profile_memory = [

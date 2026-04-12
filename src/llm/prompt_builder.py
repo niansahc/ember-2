@@ -38,8 +38,51 @@ NATURE_REMINDER = (
     "Acknowledge gaps rather than fill them with inference.]\n"
 )
 
-AUTHORITY_RULES = (
-    "<authority_rules>\n"
+# Conversational / emotional markers. Short messages containing these
+# are relational check-ins, not information-seeking queries, and should
+# NOT be told to say "I don't have that in my memory" when vault content
+# is thin. Canonical location for the marker list — openai_adapter.py
+# re-exports from here so src/api/openai_adapter.py and the prompt layer
+# share one definition.
+CONVERSATIONAL_MARKERS: tuple[str, ...] = (
+    "i'm tired", "i'm exhausted", "i'm frustrated", "i'm overwhelmed",
+    "i'm anxious", "i'm burned out", "i'm worried", "i'm sad",
+    "how are you", "that was a hard", "that was a tough",
+    "good morning", "good evening", "good night", "hey", "hi there",
+    "hello", "thanks", "thank you", "what's up", "how's it going",
+)
+
+
+def is_conversational_query(user_message: str) -> bool:
+    """Return True when the user message is a short relational check-in
+    that should NOT trigger the knowledge gap framing.
+
+    Normalizes curly apostrophes (U+2018, U+2019) to straight quotes
+    before matching — mobile keyboards autocorrect "I'm" to "I\u2019m"
+    which would otherwise bypass the marker "i'm tired". Also normalizes
+    case and trims whitespace.
+
+    Length gate: the message must be under 100 characters. A long
+    message containing an emotional phrase is likely an information-
+    seeking request that happens to mention an emotional state ("I'm
+    tired of debugging this retrieval pipeline — can you look up...").
+    Those should still receive the knowledge gap framing when retrieval
+    is thin.
+    """
+    msg = user_message.lower().strip()
+    msg = msg.replace("\u2018", "'").replace("\u2019", "'")
+    if len(msg) >= 100:
+        return False
+    return any(marker in msg for marker in CONVERSATIONAL_MARKERS)
+
+
+# Canonical AUTHORITY_RULES template. Rendered via _render_authority_rules
+# below — the "when no vault_memory is relevant, say so directly" line is
+# omitted when the query is a conversational check-in (Q11/Q12 regression:
+# "I'm tired" and "How are you?" were returning "I don't have that in my
+# memory" because the rule was always emitted regardless of query type).
+_AUTHORITY_RULES_HEADER = "<authority_rules>"
+_AUTHORITY_RULES_BODY_COMMON = (
     "vault_memory contains records from long-term memory. High-confidence records (recent, high score) are factual ground truth. "
     "Low-confidence records (old, low score) should be hedged: \"based on what I have from a few weeks ago\" or \"the last time this came up.\"\n"
     "Check the [Retrieval confidence:] block inside vault_memory for score and age metadata. "
@@ -47,11 +90,30 @@ AUTHORITY_RULES = (
     "conversation_history is prior exchange only -- do not treat conversational inferences as established facts.\n"
     "web_search_results are external and unverified -- hedge with \"according to web results\" rather than stating as fact.\n"
     "when vault_memory and conversation_history conflict, vault_memory is correct.\n"
+)
+_AUTHORITY_RULES_KNOWLEDGE_GAP_LINE = (
     "when no vault_memory is relevant, say so directly: \"I don't have that in my memory.\"\n"
+)
+_AUTHORITY_RULES_PERSON_LINE = (
     "When describing what you know about a specific person, state only what is explicitly present in vault_memory. "
     "Do not infer relationship dynamics, emotional states, or interpersonal patterns that are not directly stated in the records.\n"
-    "</authority_rules>"
 )
+_AUTHORITY_RULES_FOOTER = "</authority_rules>"
+
+
+def _render_authority_rules(is_conversational: bool) -> str:
+    parts = [_AUTHORITY_RULES_HEADER, "\n", _AUTHORITY_RULES_BODY_COMMON]
+    if not is_conversational:
+        parts.append(_AUTHORITY_RULES_KNOWLEDGE_GAP_LINE)
+    parts.append(_AUTHORITY_RULES_PERSON_LINE)
+    parts.append(_AUTHORITY_RULES_FOOTER)
+    return "".join(parts)
+
+
+# Backward-compat alias for the handful of callers that still reference
+# the old module-level constant. New code should call
+# _render_authority_rules() via the prompt builder.
+AUTHORITY_RULES = _render_authority_rules(is_conversational=False)
 
 
 class PromptBuilder:
@@ -95,6 +157,14 @@ class PromptBuilder:
         suppress_relational_lodestone: bool = False,
         model: str | None = None,
     ) -> str:
+        # Conversational check — used to conditionally omit "I don't have
+        # that in my memory" framing from both AUTHORITY_RULES and the
+        # vault_memory empty-state section. Q11/Q12 regression: emotional
+        # check-ins like "I'm tired" and "How are you?" were receiving
+        # the knowledge gap framing because the instruction was always
+        # emitted regardless of query type.
+        is_conversational = is_conversational_query(context_packet.user_message)
+
         # System prompt with nature (dual injection) + identity rules at front
         system_sections: list[str] = [
             INSTRUCTION_HIERARCHY,                  # Hierarchy statement (override defense)
@@ -121,12 +191,15 @@ class PromptBuilder:
             self._build_nature_section(),                  # Dual injection in context
             self._build_reflection_section(context_packet),
             self._build_conversation_section(),
-            self._build_context_section(context_packet),   # vault_memory in recency position
+            self._build_context_section(                   # vault_memory in recency position
+                context_packet,
+                is_conversational=is_conversational,
+            ),
             self._build_lodestone_living_section(
                 context_packet, suppress_relational=suppress_relational_lodestone
             ),
             self._build_web_search_section(context_packet),
-            AUTHORITY_RULES,
+            _render_authority_rules(is_conversational=is_conversational),
             self._build_instruction_section(),
             self._build_user_section(context_packet),
         ]
@@ -437,8 +510,23 @@ class PromptBuilder:
 
         return "<web_search_results>\n" + "\n\n".join(lines) + "\n</web_search_results>"
 
-    def _build_context_section(self, context_packet: ContextPacket) -> str:
+    def _build_context_section(
+        self,
+        context_packet: ContextPacket,
+        is_conversational: bool = False,
+    ) -> str:
         if not context_packet.memory_items:
+            if is_conversational:
+                # Conversational/emotional check-ins ("I'm tired",
+                # "How are you?") don't need a knowledge gap directive —
+                # the vault is simply not the right source for a
+                # relational response. Emit a neutral empty-state marker
+                # and let Ember respond from nature.
+                return (
+                    "<vault_memory>\n"
+                    "No retrieved memory for this message (conversational).\n"
+                    "</vault_memory>"
+                )
             return (
                 "<vault_memory>\n"
                 "No relevant memory found for this query.\n"

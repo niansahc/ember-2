@@ -687,3 +687,41 @@ Business & Economics and Culture still miss 2/6 each. Current Events at 4/6. Lat
 - Current Events 5/6 — one miss likely a query that doesn't match any trigger pattern. Investigate specific question.
 - Implicit recency patterns (Tier 2) and what-happened patterns (Tier 3b) are the primary new contributors. Episodic event domains (Tier 3) activated on layoff/premiere/standings queries.
 - Target was 85%+ — achieved 83% raw, 93% excluding errors. Target met on clean runs.
+
+---
+
+## Web Search Eval — claude-haiku-4-5-20251001 — 2026-04-12
+
+**Model:** claude-haiku-4-5-20251001 (via Ember cloud provider dispatch)
+**Eval:** tools/eval_web_search.py --auto-search
+**Overall:** 87% trigger rate (26/30)
+
+| Category | Triggered | Total | Rate |
+|---|---|---|---|
+| Current Events | 5 | 6 | 83% |
+| Science & Tech | 4 | 6 | 67% |
+| Sports | 6 | 6 | 100% |
+| Business & Economics | 6 | 6 | 100% |
+| Culture | 5 | 6 | 83% |
+
+**Average latency:** 14.8s
+
+---
+
+## Web Search Eval — qwen3:8b — Post-Fixes Final — 2026-04-12
+
+**Model:** qwen3:8b
+**Eval:** tools/eval_web_search.py --auto-search
+**Overall:** 83% trigger rate (25/30, 3 API errors). Excluding errors: 93% (25/27).
+
+| Category | Triggered | Total | Rate |
+|---|---|---|---|
+| Current Events | 5 | 6 | 83% |
+| Science & Tech | 2 | 6 | 33% (3 errors) |
+| Sports | 6 | 6 | 100% |
+| Business & Economics | 6 | 6 | 100% |
+| Culture | 6 | 6 | 100% |
+
+**Average latency:** 25.0s
+
+**Pre-v0.15.0 summary:** Both models meet the 85%+ target on clean runs. Haiku at 87% raw, qwen3:8b at 93% excluding API errors. Trigger patterns are model-agnostic (determined before LLM call). Latency gap (14.8s vs 25.0s) is entirely LLM generation speed — context assembly and trigger detection are identical.

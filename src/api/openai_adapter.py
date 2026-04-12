@@ -384,14 +384,17 @@ class ThinkBlockFilter:
 
     def __init__(self):
         self._inside_think = False
-        self._buffer = ""
+        self._buffer = ""           # Normalized (lowercased) buffer for tag detection
+        self._original_buffer = ""  # Original-cased buffer for output (BUG-010)
 
     @staticmethod
     def _normalize(text: str) -> str:
-        """Normalize unicode math italic to ASCII and lowercase tag candidates.
+        """Normalize unicode math italic to ASCII and lowercase for tag detection.
 
         Converts Mathematical Italic (U+1D434-U+1D467) to plain ASCII,
         then lowercases the result so <Think>, <THINK>, etc. all match.
+        Used only for tag position detection — the original-cased text
+        is preserved for visible output.
         """
         from src.llm.adapter import _normalize_unicode_tags
         return _normalize_unicode_tags(text).lower()
@@ -404,51 +407,68 @@ class ThinkBlockFilter:
         a prefix of '<think>' or '</think>', the ambiguous tail is held
         back until the next chunk resolves it.
 
-        Incoming text is normalized (unicode math italic -> ASCII, lowercased)
-        so that variant tag formats are caught. This means output text is
-        also lowercased — acceptable because think block content is discarded
-        and the visible response text is produced by the model outside these
-        blocks (the SSE stream sends the original chunks; this filter only
-        decides what to suppress vs. pass through based on normalized form).
+        BUG-010 fix: tag detection uses a normalized (lowercased) shadow
+        buffer for case-insensitive matching, while the original-cased
+        text is preserved in a parallel buffer for visible output. Both
+        buffers are always the same length — normalization only changes
+        character values, never string length. Every slice operation on
+        _buffer is mirrored on _original_buffer at the same positions.
         """
-        # Normalize incoming chunk for reliable tag detection.
-        chunk = self._normalize(chunk)
+        from src.llm.adapter import _normalize_unicode_tags
+        original_chunk = _normalize_unicode_tags(chunk)
+        normalized_chunk = original_chunk.lower()
+
+        self._buffer += normalized_chunk
+        self._original_buffer += original_chunk
 
         result = []
-        self._buffer += chunk
 
         while self._buffer:
             if self._inside_think:
-                # Inside a think block — scan for any close-tag variant.
                 end_idx = self._find_close_tag(self._buffer)
                 if end_idx == -1:
-                    # Check if buffer ends with a partial </think> prefix
                     held = self._hold_partial(self._CLOSE_TAG)
                     if held:
-                        break  # wait for more data
-                    # No partial match — consume entire buffer
+                        break
+                    # Discard both buffers (all inside think)
                     self._buffer = ""
+                    self._original_buffer = ""
                     break
-                # Skip past the closing tag
                 close_end = self._close_tag_end(self._buffer, end_idx)
                 self._buffer = self._buffer[close_end:]
+                self._original_buffer = self._original_buffer[close_end:]
                 self._inside_think = False
             else:
-                # Outside — scan for any open-tag variant.
                 start_idx = self._find_open_tag(self._buffer)
                 if start_idx == -1:
-                    # Check if buffer ends with a partial <think> prefix.
-                    emit, held = self._emit_safe(self._OPEN_TAG)
-                    if emit:
-                        result.append(emit)
+                    # No open tag — emit safe content, hold back partial.
+                    safe_len = self._safe_emit_length(self._OPEN_TAG)
+                    if safe_len > 0:
+                        result.append(self._original_buffer[:safe_len])
+                        self._buffer = self._buffer[safe_len:]
+                        self._original_buffer = self._original_buffer[safe_len:]
                     break
-                # Emit content before the tag, enter think mode
-                result.append(self._buffer[:start_idx])
+                # Emit original-cased content before the tag
+                result.append(self._original_buffer[:start_idx])
                 open_end = self._open_tag_end(self._buffer, start_idx)
                 self._buffer = self._buffer[open_end:]
+                self._original_buffer = self._original_buffer[open_end:]
                 self._inside_think = True
 
         return "".join(result)
+
+    def _safe_emit_length(self, tag: str) -> int:
+        """Return how many leading chars of _buffer are safe to emit.
+
+        If the buffer ends with a prefix of `tag`, those trailing chars
+        are held back (might be the start of a tag). Returns the number
+        of safe characters to emit from the front.
+        """
+        for i in range(min(len(tag) - 1, len(self._buffer)), 0, -1):
+            tail = self._buffer[-i:]
+            if tag.startswith(tail):
+                return len(self._buffer) - i
+        return len(self._buffer)
 
     # -- Tag finders that tolerate whitespace/BOM inside the tag -----------
 
@@ -480,24 +500,6 @@ class ThinkBlockFilter:
         import re
         m = re.search(r"<[\s\ufeff]*/[\s\ufeff]*think[\s\ufeff]*>", buf[start:], re.IGNORECASE)
         return start + m.end() if m else start + len("</think>")
-
-    def _emit_safe(self, tag: str) -> tuple[str, bool]:
-        """Emit buffer content that cannot be part of a partial tag.
-
-        If the buffer ends with a prefix of `tag` (e.g. '<thi' which
-        could become '<think>'), hold back the ambiguous tail and return
-        only the safe prefix. Returns (safe_content, held_back).
-        """
-        for i in range(min(len(tag) - 1, len(self._buffer)), 0, -1):
-            tail = self._buffer[-i:]
-            if tag.startswith(tail):
-                safe = self._buffer[:-i]
-                self._buffer = tail
-                return safe, True
-        # No partial match — emit everything
-        safe = self._buffer
-        self._buffer = ""
-        return safe, False
 
     def _hold_partial(self, tag: str) -> bool:
         """Check if buffer ends with a partial prefix of tag. If so,

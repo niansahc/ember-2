@@ -202,29 +202,29 @@ class TestStripThinkBlocks:
 class TestThinkBlockFilterStreaming:
     """Streaming filter that processes chunks incrementally.
 
-    Note: ThinkBlockFilter normalizes all text to lowercase for tag
-    detection, so assertions use lowercase expected values.
+    BUG-010 fix: ThinkBlockFilter now preserves original casing in
+    output. Lowercasing is used only for internal tag detection.
+    Assertions use original-cased expected values.
     """
 
     def test_think_block_split_across_chunks(self):
         f = ThinkBlockFilter()
-        # Think block starts in chunk 1, ends in chunk 3
-        assert f.filter("Hello <thi") == "hello "
+        assert f.filter("Hello <thi") == "Hello "
         assert f.filter("nk>secret reasoning") == ""
         assert f.filter("</think> world") == " world"
 
     def test_clean_chunks_pass_through(self):
         f = ThinkBlockFilter()
-        assert f.filter("Hello ") == "hello "
+        assert f.filter("Hello ") == "Hello "
         assert f.filter("world.") == "world."
 
     def test_complete_think_block_in_one_chunk(self):
         f = ThinkBlockFilter()
-        assert f.filter("<think>reasoning</think>answer") == "answer"
+        assert f.filter("<think>reasoning</think>Answer") == "Answer"
 
     def test_content_before_and_after(self):
         f = ThinkBlockFilter()
-        assert f.filter("before <think>hidden</think> after") == "before  after"
+        assert f.filter("Before <think>hidden</think> After") == "Before  After"
 
     def test_multiple_blocks_across_chunks(self):
         f = ThinkBlockFilter()
@@ -235,17 +235,17 @@ class TestThinkBlockFilterStreaming:
 
     def test_capitalized_tag_in_stream(self):
         f = ThinkBlockFilter()
-        assert f.filter("<Think>reasoning</Think>answer") == "answer"
+        assert f.filter("<Think>reasoning</Think>Answer") == "Answer"
 
     def test_uppercase_tag_in_stream(self):
         f = ThinkBlockFilter()
-        assert f.filter("<THINK>reasoning</THINK>answer") == "answer"
+        assert f.filter("<THINK>reasoning</THINK>Answer") == "Answer"
 
     def test_mixed_case_across_chunks(self):
         f = ThinkBlockFilter()
-        assert f.filter("start <Thi") == "start "
+        assert f.filter("Start <Thi") == "Start "
         assert f.filter("nk>hidden</") == ""
-        assert f.filter("Think>visible") == "visible"
+        assert f.filter("Think>Visible") == "Visible"
 
     # -- Whitespace/BOM tolerance in streaming --
 
@@ -275,3 +275,31 @@ class TestThinkBlockFilterStreaming:
         assert f.filter("start <" + italic_think[:2]) == "start "
         assert f.filter(italic_think[2:] + ">hidden") == ""
         assert f.filter("</think>end") == "end"
+
+    # -- BUG-010 regression: casing preserved in output --
+
+    def test_preserves_capitalization_in_output(self):
+        """BUG-010: ThinkBlockFilter was lowercasing all output via
+        _normalize(). Fixed: normalized copy used only for tag detection,
+        original-cased text preserved in output."""
+        f = ThinkBlockFilter()
+        result = f.filter("<think>reasoning</think>Hello World, This Is Ember.")
+        assert result == "Hello World, This Is Ember."
+
+    def test_preserves_mixed_case_across_chunks(self):
+        """Multi-chunk: casing must survive across chunk boundaries."""
+        f = ThinkBlockFilter()
+        assert f.filter("The Quick ") == "The Quick "
+        assert f.filter("Brown Fox.") == "Brown Fox."
+
+    def test_preserves_case_after_think_block(self):
+        f = ThinkBlockFilter()
+        assert f.filter("<think>internal</think>") == ""
+        assert f.filter("Proper Case Response.") == "Proper Case Response."
+
+    def test_preserves_urls_and_special_chars(self):
+        """URLs and mixed-case identifiers must not be lowercased."""
+        f = ThinkBlockFilter()
+        result = f.filter("Check https://GitHub.com/Ember for details.")
+        assert "GitHub.com" in result
+        assert "Ember" in result

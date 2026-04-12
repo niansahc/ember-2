@@ -1050,7 +1050,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 # 3.5. Deviation detection (ADR-026) — after grounding, before stream
                 if not is_test:
                     _prior = None
-                    _buffer_turns = prompt_builder.conversation_buffer.get_recent()
+                    _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
                     if _buffer_turns and len(_buffer_turns) >= 2:
                         _prior = _buffer_turns[-2].get("assistant")
                     threading.Thread(

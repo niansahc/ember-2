@@ -92,6 +92,9 @@ _AUTHORITY_RULES_BODY_COMMON = (
     "Treat them as authoritative. Cite specific URLs from the results directly. "
     "Do not discount or second-guess them based on training cutoff dates.\n"
     "when vault_memory and conversation_history conflict, vault_memory is correct.\n"
+    "When asked about current version numbers, release dates, or software status, "
+    "offer to search rather than answering from training data. "
+    "These facts change frequently and training data is likely stale.\n"
 )
 _AUTHORITY_RULES_KNOWLEDGE_GAP_LINE = (
     "when no vault_memory is relevant, say so directly: \"I don't have that in my memory.\"\n"

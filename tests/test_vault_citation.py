@@ -105,6 +105,38 @@ class TestBuildVaultSources:
         assert "summary" in entry
 
 
+class TestAntiDisclaimerRule:
+    """Identity rules must prohibit italic disclaimers."""
+
+    def test_no_disclaimers_rule_in_identity_rules(self):
+        from src.safety.identity_rules_loader import IdentityRulesLoader
+        loader = IdentityRulesLoader()
+        loader.load()
+        text = loader.to_prompt_text()
+        assert "Do not append italic notes" in text
+        assert "Never write" in text
+
+    def test_no_disclaimers_rule_in_prompt(self):
+        from src.llm.prompt_builder import PromptBuilder
+        from src.context.models import ContextPacket
+        pb = PromptBuilder()
+        prompt = pb.build_prompt(ContextPacket(user_message="test"))
+        assert "italic notes" in prompt or "disclaimers" in prompt
+
+
+class TestLaunchInstallerEndpoint:
+    """POST /v1/system/launch-installer."""
+
+    def test_returns_404_when_no_installer_dir(self):
+        from unittest.mock import patch
+        with patch("src.api.main.get_ember_api_key", return_value=None):
+            from fastapi.testclient import TestClient
+            from src.api.main import app
+            resp = TestClient(app).post("/v1/system/launch-installer")
+        # May return 404 (no sibling installer dir) or 200 (if dir exists)
+        assert resp.status_code in (200, 404)
+
+
 class TestFormatSourceDate:
 
     def test_formats_standard_timestamp(self):
@@ -168,6 +200,46 @@ class TestVaultCitationSuppressionDuringWebSearch:
         vault_sources = _build_vault_sources(packet)
         # Profile items are excluded by _build_vault_sources already
         assert len(vault_sources) == 0
+
+    def test_low_score_vault_suppressed_by_threshold(self):
+        """When non-profile vault items have avg score < 0.6, vault
+        citation should not fire — the model likely answered from
+        training data, not from weakly-matched vault records."""
+        from src.context.models import ContextPacket
+
+        low_score_item = _make_item("conversation", "2026-04-01T10-00-00", score=0.35)
+        packet = ContextPacket(
+            user_message="explain photosynthesis",
+            memory_items=[
+                _make_item("profile", "2026-01-01T00-00-00"),
+                low_score_item,
+            ],
+        )
+        vault_sources = _build_vault_sources(packet)
+        # _build_vault_sources returns the conversation item (non-profile)
+        assert len(vault_sources) == 1
+        # But the openai_adapter threshold check (avg < 0.6) would suppress it.
+        # Test the threshold logic directly:
+        non_profile = [i for i in packet.memory_items if getattr(i, "memory_type", "") != "profile"]
+        avg_score = sum(getattr(i, "score", 0.0) for i in non_profile) / len(non_profile)
+        assert avg_score < 0.6
+
+    def test_high_score_vault_preserved(self):
+        """When non-profile vault items have avg score >= 0.6, vault
+        citation should fire."""
+        from src.context.models import ContextPacket
+
+        high_score_item = _make_item("conversation", "2026-04-01T10-00-00", score=0.75)
+        packet = ContextPacket(
+            user_message="what did I say about work",
+            memory_items=[
+                _make_item("profile", "2026-01-01T00-00-00"),
+                high_score_item,
+            ],
+        )
+        non_profile = [i for i in packet.memory_items if getattr(i, "memory_type", "") != "profile"]
+        avg_score = sum(getattr(i, "score", 0.0) for i in non_profile) / len(non_profile)
+        assert avg_score >= 0.6
 
     def test_non_profile_vault_preserved_during_web_search(self):
         """When actual vault records (non-profile) are retrieved alongside

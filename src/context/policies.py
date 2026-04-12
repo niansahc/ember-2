@@ -39,11 +39,16 @@ VOLATILE_ENTITY_SIGNALS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNOREC
     r"\b(?:nba|nfl|mlb|nhl|premier league|formula 1|f1|wimbledon)\b",
     # Current state markers
     r"\b(?:currently|still|now|latest|newest|most recent)\b",
+    # Version / release queries — facts that change frequently
+    r"\bwhat version\b",
+    r"\blatest (?:version|release|update)\b",
+    r"\bcurrent (?:version|release|update)\b",
+    r"\bwhen did .* (?:release|launch|ship|come out)\b",
 ))
 
 STATE_QUERY_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
     # What/who/where/how + auxiliary or common past-tense event verb
-    r"^(?:what|who|where|how|how much|how many)\b.*\b(?:is|are|does|do|has|have|was|were|did|won|released|announced|scored|traded|happened)\b",
+    r"^(?:what|who|where|when|how|how much|how many)\b.*\b(?:is|are|does|do|has|have|was|were|did|won|released|announced|scored|traded|happened)\b",
     # Auxiliary-first questions (yes/no form)
     r"^(?:is|are|does|do|has|have|can|will|did)\b",
     # Contractions

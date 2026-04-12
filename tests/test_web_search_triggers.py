@@ -271,6 +271,26 @@ class TestWhatHappenedTriggers:
         assert p.name == "web_search"
 
 
+class TestVersionReleaseTriggers:
+    """Version/release queries should trigger web search via entity signals."""
+
+    def test_what_version_of_python(self):
+        p = classify_query("What version of Python is current?")
+        assert p.name == "web_search"
+
+    def test_latest_version_of_node(self):
+        p = classify_query("What is the latest version of Node.js?")
+        assert p.name == "web_search"
+
+    def test_when_did_release(self):
+        p = classify_query("When did Python 3.13 come out?")
+        assert p.name == "web_search"
+
+    def test_current_release_of(self):
+        p = classify_query("What is the current release of Rust?")
+        assert p.name == "web_search"
+
+
 class TestLayerOneHelpers:
     """Direct tests on the pattern matching helpers."""
 

@@ -1011,6 +1011,48 @@ def service_restart_endpoint(name: str):
     raise HTTPException(status_code=400, detail=f"Unknown service: {name}. Valid: api, docker.")
 
 
+@app.post("/v1/system/launch-installer")
+def launch_installer_endpoint():
+    """Open the Ember installer executable on the user's machine.
+
+    Uses the platform-appropriate open command (start on Windows,
+    open on macOS, xdg-open on Linux). Looks for the installer in
+    a sibling directory: ../ember-2-installer/dist/
+    """
+    import glob
+    import platform
+    import subprocess
+
+    repo_root = Path(__file__).resolve().parents[2]
+    installer_dir = repo_root.parent / "ember-2-installer" / "dist"
+
+    if not installer_dir.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Installer directory not found: {installer_dir}",
+        )
+
+    system = platform.system()
+    if system == "Windows":
+        exes = sorted(installer_dir.glob("*.exe"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not exes:
+            raise HTTPException(status_code=404, detail="No .exe found in installer dist/")
+        target = str(exes[0])
+        subprocess.Popen(["cmd", "/c", "start", "", target], cwd=str(installer_dir))
+    elif system == "Darwin":
+        dmgs = sorted(installer_dir.glob("*.dmg"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not dmgs:
+            raise HTTPException(status_code=404, detail="No .dmg found in installer dist/")
+        subprocess.Popen(["open", str(dmgs[0])])
+    else:
+        appimages = sorted(installer_dir.glob("*.AppImage"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not appimages:
+            raise HTTPException(status_code=404, detail="No .AppImage found in installer dist/")
+        subprocess.Popen(["xdg-open", str(appimages[0])])
+
+    return {"status": "launching", "platform": system}
+
+
 @app.post("/v1/service/{name}/stop")
 def service_stop_endpoint(name: str):
     """Stop a named service.

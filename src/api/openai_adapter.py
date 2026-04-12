@@ -927,6 +927,19 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         non_profile_vault = [s for s in vault_sources if s.get("type") != "profile"]
         if not non_profile_vault:
             vault_sources = []
+    # Only signal vault-used when retrieval confidence is meaningful.
+    # Low-scoring tangential matches (avg < 0.6) should not trigger the
+    # vault citation — the model likely answered from training data, not
+    # from the weakly-matched vault records in the context packet.
+    if vault_sources:
+        non_profile_items = [
+            i for i in context_packet.memory_items
+            if getattr(i, "memory_type", "") != "profile"
+        ]
+        if non_profile_items:
+            avg_score = sum(getattr(i, "score", 0.0) for i in non_profile_items) / len(non_profile_items)
+            if avg_score < 0.6:
+                vault_sources = []
     used_vault = bool(vault_sources)
 
     # Read conversational style preference (casual/balanced/thoughtful)

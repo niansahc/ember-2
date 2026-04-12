@@ -7,17 +7,66 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+# Runtime vault path override. Set by the developer vault-swap endpoint
+# (POST /v1/developer/vault/swap). Takes precedence over PRIVATE_VAULT_PATH
+# from .env. Reverts on API restart — never persisted to disk.
+_vault_path_override: str | None = None
+_vault_label: str | None = None
+
+
 def get_private_vault_path():
     """
     Reads the PRIVATE_VAULT_PATH from the .env file
     and returns the absolute path to the vault.
+
+    If a runtime override has been set via set_vault_path_override(),
+    that takes precedence. The override is memory-only and reverts
+    on API restart.
     """
+    if _vault_path_override is not None:
+        return Path(_vault_path_override).resolve()
+
     vault_path = os.getenv("PRIVATE_VAULT_PATH")
 
     if not vault_path:
         raise ValueError("PRIVATE_VAULT_PATH not set in environment")
 
     return Path(vault_path).resolve()
+
+
+def set_vault_path_override(path: str, label: str) -> None:
+    """Set a runtime vault path override. Memory-only — does not touch .env."""
+    global _vault_path_override, _vault_label
+    _vault_path_override = path
+    _vault_label = label
+
+
+def clear_vault_path_override() -> None:
+    """Clear the runtime vault path override, reverting to .env."""
+    global _vault_path_override, _vault_label
+    _vault_path_override = None
+    _vault_label = None
+
+
+def get_vault_label() -> str:
+    """Return the current vault label ('live', 'demo', 'test', or 'default')."""
+    return _vault_label or "default"
+
+
+def get_known_vault_paths() -> dict[str, str]:
+    """Read known vault paths from .env (VAULT_PATH_LIVE, etc.)."""
+    paths: dict[str, str] = {}
+    for label in ("live", "demo", "test"):
+        env_key = f"VAULT_PATH_{label.upper()}"
+        val = os.getenv(env_key)
+        if val:
+            paths[label] = val
+    return paths
+
+
+def is_dev_mode() -> bool:
+    """Return True if EMBER_DEV_MODE=true in environment."""
+    return os.getenv("EMBER_DEV_MODE", "").lower() in ("true", "1", "yes")
 
 
 def get_ember_api_key() -> str | None:

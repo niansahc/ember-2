@@ -975,6 +975,79 @@ def disk_encryption_status_endpoint():
     return detect()
 
 
+# ── Developer endpoints ───────────────────────────────────────────────
+
+
+class VaultSwapRequest(BaseModel):
+    vault_label: str
+
+
+@app.post("/v1/developer/vault/swap")
+def vault_swap_endpoint(body: VaultSwapRequest):
+    """Swap the active vault at runtime (developer mode only).
+
+    Runtime-only — updates an in-memory override, never touches .env.
+    Reverts to the .env vault path on API restart. Clears all in-memory
+    vector indexes so they lazy-load from the new vault on next query.
+
+    Requires EMBER_DEV_MODE=true in the environment.
+    Known vault labels are read from .env at startup:
+      VAULT_PATH_LIVE, VAULT_PATH_DEMO, VAULT_PATH_TEST
+    """
+    from src.core.config import (
+        is_dev_mode,
+        get_known_vault_paths,
+        set_vault_path_override,
+        get_vault_label,
+    )
+
+    if not is_dev_mode():
+        raise HTTPException(
+            status_code=403,
+            detail="Vault swap requires EMBER_DEV_MODE=true in environment.",
+        )
+
+    known = get_known_vault_paths()
+    label = body.vault_label.lower()
+
+    if label not in known:
+        available = ", ".join(sorted(known.keys())) if known else "none configured"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown vault label '{label}'. Available: {available}.",
+        )
+
+    vault_path = known[label]
+    resolved = Path(vault_path).resolve()
+    if not resolved.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Vault path does not exist or is not a directory: {resolved}",
+        )
+
+    set_vault_path_override(str(resolved), label)
+
+    # Clear all in-memory vector indexes — they belong to the previous vault.
+    from src.retrieval.vector_index import clear_index_cache
+    clear_index_cache()
+
+    return {
+        "active_vault": str(resolved),
+        "label": label,
+        "note": "indexes cleared, will rebuild on first query",
+    }
+
+
+@app.get("/v1/developer/vault/status")
+def vault_status_endpoint():
+    """Return the currently active vault path and label."""
+    from src.core.config import get_private_vault_path, get_vault_label
+    return {
+        "active_vault": str(get_private_vault_path()),
+        "label": get_vault_label(),
+    }
+
+
 # ── Preferences endpoints ──────────────────────────────────────────────
 
 

@@ -267,6 +267,52 @@ class StateService:
 
         return [r for r in self.read_all() if r.type == category]
 
+    def resolve_open_loops_by_topic(self, declined_topic: str) -> int:
+        """Resolve open_loop records whose text matches a declined topic.
+
+        BUG-009: when the user explicitly declines a topic, all active
+        open_loop records that contain the declined topic text are
+        resolved by writing a new record with metadata.resolved=True.
+        This is the same append-only resolution pattern used by the
+        existing open_loop workflow — no records are modified or deleted.
+
+        Matching is case-insensitive substring. The declined topic is
+        typically short (extracted from "I don't want to talk about X"),
+        so substring match is appropriate — semantic matching would be
+        overkill and add an LLM call.
+
+        Returns the number of open_loop records resolved.
+        """
+        if not declined_topic or len(declined_topic) < 3:
+            return 0
+
+        topic_lower = declined_topic.lower()
+        open_loops = self.read_by_category("open_loop")
+        resolved_count = 0
+
+        for record in open_loops:
+            # Skip already-resolved/deleted records
+            if record.metadata and (
+                record.metadata.get("resolved") or record.metadata.get("deleted")
+            ):
+                continue
+            if topic_lower in record.text.lower():
+                resolution = self.make_record(
+                    state_type="open_loop",
+                    text=f"[Declined] {record.text}",
+                    source="topic_decline",
+                    tags=["declined", "auto_resolved"],
+                    metadata={
+                        "resolved": True,
+                        "resolution": "user_declined",
+                        "original_id": record.id,
+                    },
+                )
+                self.write(resolution)
+                resolved_count += 1
+
+        return resolved_count
+
     @staticmethod
     def make_record(
         state_type: str,

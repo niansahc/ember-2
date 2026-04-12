@@ -116,6 +116,28 @@ def _render_authority_rules(is_conversational: bool) -> str:
 AUTHORITY_RULES = _render_authority_rules(is_conversational=False)
 
 
+_DECLINE_STOPWORDS = frozenset(
+    {"my", "the", "this", "that", "a", "an", "his", "her", "their",
+     "our", "its", "about", "with", "from", "and", "or", "of", "in", "on"}
+)
+
+
+def _extract_decline_keywords(declined_topics: list[str]) -> list[list[str]]:
+    """Extract significant keywords from declined topic phrases.
+
+    Strips common determiners and pronouns so "my diet" becomes ["diet"]
+    and matches content containing "their diet" or just "diet".
+    Returns a list of keyword sets (one per declined topic). Each set
+    contains the significant words (length > 2, not in stopwords).
+    """
+    result: list[list[str]] = []
+    for topic in declined_topics:
+        words = topic.lower().split()
+        keywords = [w for w in words if len(w) > 2 and w not in _DECLINE_STOPWORDS]
+        result.append(keywords)
+    return result
+
+
 class PromptBuilder:
     def __init__(self):
         base_dir = Path(__file__).resolve().parents[2]
@@ -517,6 +539,36 @@ class PromptBuilder:
         context_packet: ContextPacket,
         is_conversational: bool = False,
     ) -> str:
+        # BUG-009: filter retrieved memory items that match declined topics.
+        # The declined_topics list is populated by the conversation buffer
+        # when the user explicitly rejects a topic ("I don't want to talk
+        # about X"). Matching uses keyword overlap: the topic is split into
+        # significant words (>2 chars, common determiners stripped) and the
+        # item is suppressed if ALL significant words appear in its content.
+        # This handles pronoun differences ("my diet" vs "their diet").
+        declined = self.conversation_buffer.declined_topics
+        if declined and context_packet.memory_items:
+            declined_keywords = _extract_decline_keywords(declined)
+            filtered = []
+            for item in context_packet.memory_items:
+                content_lower = (getattr(item, "content", "") or "").lower()
+                if any(
+                    all(kw in content_lower for kw in kw_set)
+                    for kw_set in declined_keywords
+                    if kw_set
+                ):
+                    continue
+                filtered.append(item)
+            context_packet = ContextPacket(
+                user_message=context_packet.user_message,
+                memory_items=filtered,
+                reflection_items=context_packet.reflection_items,
+                state_items=context_packet.state_items,
+                web_items=context_packet.web_items,
+                image_data=context_packet.image_data,
+                task_items=context_packet.task_items,
+            )
+
         if not context_packet.memory_items:
             if is_conversational:
                 # Conversational/emotional check-ins ("I'm tired",

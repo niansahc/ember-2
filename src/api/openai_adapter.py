@@ -87,6 +87,32 @@ def _background_state_extraction(user_message: str, reply: str) -> None:
         logger.warning("[STATE_EXTRACT] Background extraction failed (non-fatal): %s", exc)
 
 
+def _background_topic_decline_resolution(user_message: str) -> None:
+    """Resolve open_loop state records when the user declines a topic.
+
+    BUG-009: when the user says "I don't want to talk about X", resolve
+    any matching open_loop records so the state layer stops surfacing
+    the topic in current_state. Runs post-turn in a background thread.
+    """
+    try:
+        from src.context.conversation_buffer import TOPIC_DECLINE_MARKERS
+        user_lower = user_message.lower()
+        for marker in TOPIC_DECLINE_MARKERS:
+            if marker in user_lower:
+                idx = user_lower.index(marker) + len(marker)
+                topic = user_lower[idx:].strip().rstrip(".!?,")
+                if topic and len(topic) > 2:
+                    count = state_service.resolve_open_loops_by_topic(topic)
+                    if count:
+                        logger.info(
+                            "[TOPIC_DECLINE] Resolved %d open_loop(s) matching '%s'",
+                            count, topic[:40],
+                        )
+                break
+    except Exception as exc:
+        logger.warning("[TOPIC_DECLINE] Resolution failed (non-fatal): %s", exc)
+
+
 def _background_deviation_detection(
     response_text: str, intent_class: str,
     user_message: str, prior_response: str | None = None,
@@ -943,6 +969,12 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     args=(latest_user_message, full_reply),
                     daemon=True,
                 ).start()
+                # BUG-009: resolve open_loops for declined topics
+                threading.Thread(
+                    target=_background_topic_decline_resolution,
+                    args=(latest_user_message,),
+                    daemon=True,
+                ).start()
 
             if not is_test:
                 threading.Thread(
@@ -1153,6 +1185,12 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         threading.Thread(
             target=_background_state_extraction,
             args=(latest_user_message, reply),
+            daemon=True,
+        ).start()
+        # BUG-009: resolve open_loops for declined topics
+        threading.Thread(
+            target=_background_topic_decline_resolution,
+            args=(latest_user_message,),
             daemon=True,
         ).start()
 

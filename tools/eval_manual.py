@@ -218,6 +218,135 @@ def _get_annotation() -> list[tuple[str, str]]:
         return [(c, ANNOTATION_KEY[c]) for c in codes]
 
 
+COMPARE_CLOUD_MODEL = "claude-haiku-4-5-20251001"
+
+
+def _run_auto_battery_collect(target_model: str, api_key: str) -> list[dict]:
+    """Run all 19 questions, print to stdout, return per-question metadata.
+
+    Returns a list of dicts with keys: question_num, category, question,
+    latency, word_count. Used by both --auto and --compare modes.
+    """
+    results: list[dict] = []
+    question_num = 0
+
+    for category_block in BATTERY:
+        category = category_block["category"]
+        print(f"\n{'─' * 60}")
+        print(f"  {category}")
+        print(f"{'─' * 60}")
+
+        for question in category_block["questions"]:
+            question_num += 1
+            print(f"\n  [{question_num}/19] {question}")
+            print("  Sending...")
+
+            start = time.time()
+            response = _send_message(question, api_key)
+            latency = time.time() - start
+            word_count = len(response.split())
+
+            print(f"\n  {target_model} ({latency:.1f}s, {word_count} words):")
+            for line in response.split("\n"):
+                print(f"    {line}")
+
+            results.append({
+                "question_num": question_num,
+                "category": category,
+                "question": question,
+                "latency": latency,
+                "word_count": word_count,
+            })
+
+    return results
+
+
+def _run_compare(api_key: str, local_model: str) -> None:
+    """Run the battery against both the local model and Haiku, then
+    print a side-by-side comparison.
+
+    Routes cloud model calls through Ember's existing provider dispatch
+    (POST /model → claude-haiku-4-5-20251001 → Anthropic adapter). No
+    direct Anthropic API calls from this script.
+    """
+    date_str = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    log_dir = REPO_ROOT / "logs" / "eval_manual"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Run 1: local model ---
+    print(f"\n{'=' * 60}")
+    print(f"  COMPARE — Pass 1: {local_model}")
+    print(f"{'=' * 60}")
+    _switch_model(local_model, api_key)
+    local_results = _run_auto_battery_collect(local_model, api_key)
+
+    # --- Run 2: cloud model ---
+    print(f"\n{'=' * 60}")
+    print(f"  COMPARE — Pass 2: {COMPARE_CLOUD_MODEL}")
+    print(f"{'=' * 60}")
+    _switch_model(COMPARE_CLOUD_MODEL, api_key)
+    cloud_results = _run_auto_battery_collect(COMPARE_CLOUD_MODEL, api_key)
+
+    # Restore local model
+    _switch_model(local_model, api_key)
+
+    # --- Side-by-side summary ---
+    local_label = local_model.replace(":", "-")[:15]
+    cloud_label = "haiku-4.5"
+
+    lines: list[str] = []
+    lines.append(f"\n{'=' * 60}")
+    lines.append("SIDE-BY-SIDE COMPARISON")
+    lines.append(f"{'=' * 60}\n")
+    lines.append(f"{'Question':45s}  {local_label:>15s}  {cloud_label:>15s}")
+    lines.append(f"{'-' * 45}  {'-' * 15}  {'-' * 15}")
+
+    for i in range(len(local_results)):
+        lr = local_results[i]
+        cr = cloud_results[i] if i < len(cloud_results) else {"latency": 0, "word_count": 0}
+        q = lr["question"][:42]
+        l_stat = f"{lr['latency']:.1f}s/{lr['word_count']}w"
+        c_stat = f"{cr['latency']:.1f}s/{cr['word_count']}w"
+        lines.append(f"{q:45s}  {l_stat:>15s}  {c_stat:>15s}")
+
+    # Category averages
+    lines.append(f"\n{'-' * 45}  {'-' * 15}  {'-' * 15}")
+    lines.append(f"{'CATEGORY AVERAGES':45s}  {local_label:>15s}  {cloud_label:>15s}")
+    lines.append(f"{'-' * 45}  {'-' * 15}  {'-' * 15}")
+
+    for cat_block in BATTERY:
+        cat = cat_block["category"]
+        l_cat = [r for r in local_results if r["category"] == cat]
+        c_cat = [r for r in cloud_results if r["category"] == cat]
+        l_avg = sum(r["latency"] for r in l_cat) / len(l_cat) if l_cat else 0
+        c_avg = sum(r["latency"] for r in c_cat) / len(c_cat) if c_cat else 0
+        l_words = sum(r["word_count"] for r in l_cat) / len(l_cat) if l_cat else 0
+        c_words = sum(r["word_count"] for r in c_cat) / len(c_cat) if c_cat else 0
+        lines.append(f"{cat:45s}  {l_avg:.1f}s/{l_words:.0f}w  {c_avg:.1f}s/{c_words:.0f}w")
+
+    # Overall
+    l_total_lat = sum(r["latency"] for r in local_results)
+    c_total_lat = sum(r["latency"] for r in cloud_results)
+    l_avg_lat = l_total_lat / len(local_results) if local_results else 0
+    c_avg_lat = c_total_lat / len(cloud_results) if cloud_results else 0
+    lines.append(f"\n{'OVERALL AVG LATENCY':45s}  {l_avg_lat:.1f}s  {c_avg_lat:.1f}s")
+    lines.append(f"{'TOTAL TIME':45s}  {l_total_lat:.0f}s  {c_total_lat:.0f}s")
+
+    comparison = "\n".join(lines)
+    print(comparison)
+
+    # Save metadata log
+    out_file = log_dir / f"compare_{local_label}_vs_haiku_{date_str}.md"
+    log_content = (
+        f"# Compare — {local_model} vs {COMPARE_CLOUD_MODEL} — "
+        f"{datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+        "Responses shown on stdout only — not saved to disk (vault privacy).\n\n"
+        f"{comparison}\n"
+    )
+    out_file.write_text(log_content, encoding="utf-8")
+    print(f"\nComparison metadata saved to: {out_file}")
+
+
 def _run_auto_battery(target_model: str, api_key: str) -> None:
     """Run all 19 questions without pausing for annotation.
 
@@ -277,6 +406,7 @@ def main():
     parser = argparse.ArgumentParser(description="Ember-2 interactive manual eval")
     parser.add_argument("--model", type=str, default=None, help="Model to test")
     parser.add_argument("--auto", action="store_true", help="Run all 19 questions without annotation — saves raw responses to file")
+    parser.add_argument("--compare", action="store_true", help="Run battery twice: active local model then claude-haiku-4-5, side-by-side comparison")
     args = parser.parse_args()
 
     api_key = _get_api_key()
@@ -299,6 +429,16 @@ def main():
         original_model = _switch_model(args.model, api_key)
         if original_model:
             print(f"Switched to: {args.model}")
+
+    # --- COMPARE MODE: run battery against local model then Haiku ---
+    if args.compare:
+        print(f"\nCompare Battery — {target_model} vs {COMPARE_CLOUD_MODEL}")
+        print("=" * 60)
+        _run_compare(api_key, target_model)
+        if original_model and args.model:
+            _switch_model(original_model, api_key)
+        print("\nDone.")
+        return
 
     # --- AUTO MODE: run all questions, save raw responses, skip annotation ---
     if args.auto:

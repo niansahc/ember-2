@@ -195,3 +195,88 @@ def test_run_auto_battery_produces_metadata_only(tmp_path, monkeypatch):
     assert "words:" in content
     # Response text is NOT saved (vault privacy)
     assert "Mock response to:" not in content
+
+
+# ---------------------------------------------------------------------------
+# Compare mode (--compare)
+# ---------------------------------------------------------------------------
+
+
+def test_compare_flag_accepted():
+    """Verify --compare flag is accepted by the argument parser."""
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "tools" / "eval_manual.py"), "--help"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0
+    assert "--compare" in result.stdout
+
+
+def test_compare_cloud_model_is_haiku():
+    sys.path.insert(0, str(REPO_ROOT))
+    from tools.eval_manual import COMPARE_CLOUD_MODEL
+    assert COMPARE_CLOUD_MODEL == "claude-haiku-4-5-20251001"
+
+
+def test_run_auto_battery_collect_returns_19_results(monkeypatch):
+    """_run_auto_battery_collect returns a list of 19 result dicts."""
+    sys.path.insert(0, str(REPO_ROOT))
+    from tools import eval_manual
+
+    def mock_send(msg, key):
+        return "Mock response."
+
+    monkeypatch.setattr(eval_manual, "_send_message", mock_send)
+
+    results = eval_manual._run_auto_battery_collect("test-model", "fake-key")
+    assert len(results) == 19
+    assert all("latency" in r for r in results)
+    assert all("word_count" in r for r in results)
+    assert all("question" in r for r in results)
+
+
+def test_run_compare_produces_comparison_log(tmp_path, monkeypatch):
+    """_run_compare saves a comparison metadata file and restores the
+    original model."""
+    sys.path.insert(0, str(REPO_ROOT))
+    from tools import eval_manual
+
+    switch_calls: list[str] = []
+
+    def mock_send(msg, key):
+        return "Mock response."
+
+    def mock_switch(model, key):
+        switch_calls.append(model)
+        return "previous-model"
+
+    monkeypatch.setattr(eval_manual, "_send_message", mock_send)
+    monkeypatch.setattr(eval_manual, "_switch_model", mock_switch)
+    monkeypatch.setattr(eval_manual, "REPO_ROOT", tmp_path)
+
+    eval_manual._run_compare("fake-key", "qwen3:8b")
+
+    # Should have switched to local, then cloud, then back to local
+    assert switch_calls[0] == "qwen3:8b"
+    assert switch_calls[1] == "claude-haiku-4-5-20251001"
+    assert switch_calls[2] == "qwen3:8b"
+
+    log_dir = tmp_path / "logs" / "eval_manual"
+    files = list(log_dir.glob("compare_*.md"))
+    assert len(files) == 1
+    content = files[0].read_text(encoding="utf-8")
+    assert "SIDE-BY-SIDE" in content
+    assert "qwen3" in content.lower()
+    assert "haiku" in content.lower()
+    # Response text not in file (vault privacy)
+    assert "Mock response" not in content
+
+
+def test_run_compare_no_direct_anthropic_imports():
+    """The compare path must use Ember's provider dispatch, not
+    direct Anthropic API calls."""
+    source = (REPO_ROOT / "tools" / "eval_manual.py").read_text(encoding="utf-8")
+    assert "import anthropic" not in source
+    assert "Anthropic(" not in source

@@ -142,6 +142,62 @@ class TestStripThinkBlocks:
         text = f"{italic_open}Loud italic reasoning.{italic_close}Result."
         assert strip_think_blocks(text) == "Result."
 
+    # -- Orphaned tag handling (root cause of Q1/Q15 leaks) --
+
+    def test_strips_orphaned_closing_tag_with_preceding_content(self):
+        """Q1 regression: leaked reasoning ending in </think> with no
+        matching opener passed through unchanged. The preceding content
+        must be stripped along with the orphaned close tag."""
+        text = "leaked reasoning discussing minorities</think>Here is the answer."
+        assert strip_think_blocks(text) == "Here is the answer."
+
+    def test_strips_orphaned_closing_tag_alone(self):
+        text = "</think>Just the answer."
+        assert strip_think_blocks(text) == "Just the answer."
+
+    def test_strips_orphaned_opening_tag_to_end(self):
+        """Model started a think block and never closed it — strip from
+        the opening tag through end of string."""
+        text = "Real answer here.<think>internal reasoning never closed"
+        assert strip_think_blocks(text) == "Real answer here."
+
+    def test_strips_orphaned_opening_tag_alone(self):
+        text = "<think>unclosed thinking forever"
+        assert strip_think_blocks(text) == ""
+
+    def test_strips_orphaned_open_containing_regional_indicator_emoji(self):
+        """Q15 regression: stray regional-indicator glyph 🇼 (U+1F1FC)
+        appeared at the start of a response. Root cause: the glyph was
+        inside an unclosed think block."""
+        text = "<think>internal reasoning with 🇼 marker not closed"
+        assert strip_think_blocks(text) == ""
+
+    def test_orphaned_close_after_paired_block_still_stripped(self):
+        """Paired block gets stripped in pass 1. A trailing orphaned
+        </think> with content between them means the content is
+        pre-close leakage — strip preceding content too."""
+        text = "<think>first</think>real one leaked minorities</think>final answer."
+        assert strip_think_blocks(text) == "final answer."
+
+    def test_orphaned_tags_with_unicode_italic_variant(self):
+        """Orphan handling must survive unicode italic normalization."""
+        italic_close = "</" + _to_math_italic("think") + ">"
+        text = f"leaked content {italic_close}visible answer."
+        assert strip_think_blocks(text) == "visible answer."
+
+    def test_orphaned_closing_with_bom_and_whitespace(self):
+        text = "leaked< \ufeff /think >the actual answer."
+        assert strip_think_blocks(text) == "the actual answer."
+
+    def test_clean_response_unchanged_after_orphan_passes(self):
+        """Ensure the orphan passes don't touch well-formed responses."""
+        text = "A calm response with no think tags at all."
+        assert strip_think_blocks(text) == text
+
+    def test_clean_response_with_paired_block_unchanged_after_orphan_passes(self):
+        text = "<think>internal</think>Visible answer with no orphans."
+        assert strip_think_blocks(text) == "Visible answer with no orphans."
+
 
 class TestThinkBlockFilterStreaming:
     """Streaming filter that processes chunks incrementally.

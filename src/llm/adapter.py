@@ -43,6 +43,10 @@ def _normalize_unicode_tags(text: str) -> str:
     return "".join(result)
 
 
+_THINK_OPEN_PATTERN = r"<[\s\ufeff]*think[\s\ufeff]*>"
+_THINK_CLOSE_PATTERN = r"<[\s\ufeff]*/[\s\ufeff]*think[\s\ufeff]*>"
+
+
 def strip_think_blocks(text: str) -> str:
     """Remove <think>...</think> blocks from model output.
 
@@ -51,24 +55,57 @@ def strip_think_blocks(text: str) -> str:
     but should not be visible to the user. This strips the blocks
     while preserving all content outside them.
 
-    Handles multi-line blocks, multiple blocks, nested whitespace,
-    case variants (<Think>, <THINK>), whitespace/BOM between < and
-    think>, and unicode mathematical italic variants of the tag text.
-    If no <think> tags are present, returns the input unchanged.
+    Three passes:
+
+    1. Paired tags — strip every well-formed `<think>...</think>` block.
+       Handles multi-line blocks, multiple blocks, case variants, inner
+       whitespace/BOM, and unicode mathematical italic variants of the
+       tag text.
+
+    2. Orphaned closing tags — if any `</think>` remains after pass 1,
+       strip everything from the start of the (post-pass-1) text through
+       and including the first remaining `</think>`. This recovers from
+       malformed output where the opening tag was missing, emitted in an
+       unrecognized variant, or lost during streaming, while a closing
+       tag still survived. Prior failure: Q1 leaked the word "minorities"
+       because a `</think>` without a matching opener let everything
+       before it pass through unchanged.
+
+    3. Orphaned opening tags — if any `<think>` remains after pass 2,
+       strip from that tag to end of string. This recovers from the
+       "model started thinking and never closed the block" failure mode.
+       Prior failure: Q15 leaked a stray regional-indicator glyph 🇼
+       that was inside an unclosed think block.
+
+    Edge case: a well-formed answer that happens to contain a literal
+    `</think>` string in user-visible content (e.g. discussing this
+    function) would be truncated by pass 2. That tradeoff is accepted —
+    leaked reasoning is a real, observed failure; meta-discussion of the
+    tag is a hypothetical one.
     """
     import re
-    # Normalize unicode math italic to ASCII so tags are matchable.
+
+    # Pass 1: paired tags.
     normalized = _normalize_unicode_tags(text)
-    # Pattern: <, optional whitespace/BOM, think, optional whitespace, >
-    # ... content ... <, optional whitespace/BOM, /think, optional whitespace, >
-    # Case-insensitive + DOTALL for multi-line blocks.
     stripped = re.sub(
-        r"<[\s\ufeff]*think[\s\ufeff]*>.*?<[\s\ufeff]*/[\s\ufeff]*think[\s\ufeff]*>",
+        _THINK_OPEN_PATTERN + r".*?" + _THINK_CLOSE_PATTERN,
         "",
         normalized,
         flags=re.DOTALL | re.IGNORECASE,
     )
-    # Clean up any leading/trailing whitespace left by removal.
+
+    # Pass 2: orphaned closing tag. Any `</think>` remaining after pass 1
+    # had no matching opener — strip everything up to and including it.
+    orphan_close = re.search(_THINK_CLOSE_PATTERN, stripped, flags=re.IGNORECASE)
+    if orphan_close is not None:
+        stripped = stripped[orphan_close.end():]
+
+    # Pass 3: orphaned opening tag. Any `<think>` remaining after pass 2
+    # had no matching closer — strip from that tag to end of string.
+    orphan_open = re.search(_THINK_OPEN_PATTERN, stripped, flags=re.IGNORECASE)
+    if orphan_open is not None:
+        stripped = stripped[:orphan_open.start()]
+
     return stripped.strip()
 
 

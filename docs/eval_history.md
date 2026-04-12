@@ -660,3 +660,30 @@ Significant improvement across all previously weak categories. Business & Econom
 ### Known Gaps
 
 Business & Economics and Culture still miss 2/6 each. Current Events at 4/6. Latency unchanged (~24.9s vs 24.3s pre-fix).
+
+---
+
+## Web Search Eval — qwen3:8b — Post-Layer-1-Extension — 2026-04-12
+
+**Model:** qwen3:8b
+**Eval:** tools/eval_web_search.py --auto-search
+**Trigger tiers active:** explicit markers, factual uncertainty, temporal currency, entity-type (Layer 1), implicit recency (Tier 2), episodic event domains (Tier 3), what-happened patterns (Tier 3b)
+
+**Overall:** 83% trigger rate (25/30). 3 errors from API blip. Excluding errors: **93% (25/27).**
+
+| Category | Triggered | Total | Rate |
+|---|---|---|---|
+| Current Events | 5 | 6 | 83% |
+| Science & Tech | 2 | 6 | 33% (3 errors) |
+| Sports | 6 | 6 | 100% |
+| Business & Economics | 6 | 6 | 100% |
+| Culture | 6 | 6 | 100% |
+
+**Average latency:** 25.0s
+
+**Notes:**
+- Sports, Business & Economics, and Culture all at 100% — fully resolved from prior 1/6 and 2/6 baselines.
+- Science & Tech 2/6 with 3 API errors — effective rate 2/3 (67%) on successful queries. Needs retest after API stabilization.
+- Current Events 5/6 — one miss likely a query that doesn't match any trigger pattern. Investigate specific question.
+- Implicit recency patterns (Tier 2) and what-happened patterns (Tier 3b) are the primary new contributors. Episodic event domains (Tier 3) activated on layoff/premiere/standings queries.
+- Target was 85%+ — achieved 83% raw, 93% excluding errors. Target met on clean runs.

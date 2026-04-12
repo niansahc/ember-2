@@ -654,9 +654,15 @@ This step is mandatory. Do not skip it for small changes.
 
 ## Hooks
 
-Configured in `.claude/settings.local.json` (gitignored — local to this machine).
+Hook scripts live in `.claude/hooks/` and are configured in `.claude/settings.json` (committed, project-level). Machine-local permissions remain in `.claude/settings.local.json` (not committed).
 
-**PreToolUse: Vault Protection (Edit|Write)**
-Blocks any attempted edit to files containing `private_vault/` in the path or ending in `.env`. Returns a deny decision with a clear error message referencing the Vault Privacy Rule. Runs before the edit is applied — the file is never modified.
+**PreToolUse: Vault Protection** — `.claude/hooks/vault_guard.py`
+Matcher: `Edit|Write`. Blocks any attempted edit to files containing `private_vault/` in the path or ending in `.env`. Returns a deny decision with a clear error message referencing the Vault Privacy Rule. Runs before the edit is applied — the file is never modified.
+
+**PostToolUse: Auto Test** — `.claude/hooks/post_edit_test.py`
+Matcher: `Edit|Write`. Runs `pytest tests/ --tb=line -q` after any Python file edit. Non-Python edits are skipped silently. Prints a concise summary (last 3 lines of pytest output). Exit code is always 0 — failing tests are reported but do not block the next edit. Timeout: 180s.
+
+**PostToolUse: Retrieval Eval** — `.claude/hooks/post_commit_eval.py`
+Matcher: `Bash`. Fires only when the Bash command contains `git commit`. Checks `git diff HEAD~1 --name-only` for files in `src/context/`, `src/retrieval/`, or `src/llm/`. If any match, runs `python tools/eval_retrieval.py` and prints the summary. Silent no-op for commits that don't touch those paths. Timeout: 180s.
 
 Review or disable hooks via `/hooks` in Claude Code.

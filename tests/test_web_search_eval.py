@@ -3,12 +3,11 @@ tests/test_web_search_eval.py
 
 Tests for the web search accuracy evaluation harness. Covers question
 battery structure, grade validation, and utility functions. Does NOT
-test actual API calls (those require a running Ember API + Anthropic key).
+test actual API calls (those require a running Ember API + Ollama).
 """
 
 import pytest
 
-# Import the eval module from tools/
 import sys
 from pathlib import Path
 
@@ -98,3 +97,15 @@ class TestQuestionTimeRelevance:
         assert any(m in q for m in temporal_markers), (
             f"Question may not require web search: {question['question']}"
         )
+
+
+class TestNoAnthropicDependency:
+    """The eval must not import or reference the Anthropic SDK."""
+
+    def test_no_anthropic_import(self):
+        import importlib
+        source_path = TOOLS_DIR / "eval_web_search.py"
+        source = source_path.read_text(encoding="utf-8")
+        assert "import anthropic" not in source
+        assert "ANTHROPIC_API_KEY" not in source
+        assert "claude" not in source.lower().split("# ")[0]  # ignore comments

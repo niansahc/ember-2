@@ -4,24 +4,20 @@ tools/eval_web_search.py
 Automated web search accuracy evaluation for Ember-2.
 
 Sends 30 questions requiring live web retrieval across 5 categories
-(6 each) to the local Ember API, then grades each response via Claude
-for factual accuracy. Outputs per-question results, category summaries,
-and an overall score.
+(6 each) to the local Ember API, then grades each response using the
+same active model via Ollama. No external API dependencies.
 
 Requirements:
     - Ember API running at http://localhost:8000
-    - ANTHROPIC_API_KEY set in environment
-    - pip install anthropic httpx
+    - Ollama running with the active model loaded
 
 Usage:
-    python tools/eval_web_search.py                         # default qwen3:8b
-    python tools/eval_web_search.py --model qwen3:8b        # explicit model
-    python tools/eval_web_search.py --auto-search            # bypass ask-first mode
-    python tools/eval_web_search.py --compare                # side-by-side qwen3:8b vs claude-haiku-4-5
+    python tools/eval_web_search.py                 # run with current model
+    python tools/eval_web_search.py --auto-search   # bypass ask-first mode
 
 Output:
     - stdout: per-question results + summary
-    - logs/eval_web_search/eval_{model}_{timestamp}.log
+    - logs/eval_web_search/eval_{timestamp}.log
 """
 
 from __future__ import annotations
@@ -29,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -37,10 +34,13 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import httpx
+import ollama
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from src.core.config import get_ember_model
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +260,6 @@ GRADE_LABELS = ("accurate", "partial", "hallucination", "search_not_triggered")
 # ---------------------------------------------------------------------------
 
 EMBER_API_URL = "http://localhost:8000/v1/chat/completions"
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
 
 
 def _get_ember_api_key() -> str:
@@ -310,78 +309,52 @@ def send_to_ember(question: str) -> dict:
         return {"ok": False, "error": str(exc), "latency": 0}
 
 
-def grade_with_claude(question: str, answer: str, expected_hint: str) -> dict:
-    """Grade Ember's answer via Claude. Returns {ok, grade, reason}."""
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return {"ok": False, "error": "ANTHROPIC_API_KEY not set"}
+def grade_answer(question: str, answer: str, expected_hint: str) -> dict:
+    """Grade Ember's answer using the active Ollama model.
+
+    Returns {ok, grade, reason}. Uses the same local model that Ember
+    is running on — no external API required.
+    """
+    model = get_ember_model()
+
+    prompt = (
+        "Grade this answer to a question that requires current, live web data.\n\n"
+        f"Question: {question}\n"
+        f"Answer: {answer}\n"
+        f"Expected: {expected_hint}\n\n"
+        "Grade as one of:\n"
+        "- accurate: answer contains specific, verifiable current facts\n"
+        "- partial: some relevant information but vague or incomplete\n"
+        "- hallucination: asserts specific facts that appear fabricated\n"
+        "- search_not_triggered: says it doesn't have current info, suggests searching, "
+        "or gives only general background\n\n"
+        "Return ONLY JSON: {\"grade\": \"...\", \"reason\": \"one sentence\"}"
+    )
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-
-        prompt = (
-            f"Question asked: {question}\n"
-            f"Answer given: {answer}\n"
-            f"Expected answer hint: {expected_hint}\n\n"
-            "Grade the answer as one of:\n"
-            "- accurate: answer contains specific, verifiable facts that match the question's time frame\n"
-            "- partial: answer has some relevant information but is vague or incomplete\n"
-            "- hallucination: answer asserts specific facts that appear fabricated\n"
-            "- search_not_triggered: answer says it doesn't have current information, suggests searching, "
-            "or gives only general background without current data\n\n"
-            "Return ONLY valid JSON:\n"
-            '{"grade": "accurate|partial|hallucination|search_not_triggered", "reason": "one sentence"}'
-        )
-
-        msg = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=300,
-            system=(
-                "You are grading an AI assistant's ability to answer questions "
-                "that require live web search. Be strict — generic background "
-                "knowledge does not count as accurate for time-sensitive questions."
-            ),
+        response = ollama.chat(
+            model=model,
             messages=[{"role": "user", "content": prompt}],
+            options={"temperature": 0.1, "num_predict": 150},
         )
+        raw = response["message"]["content"].strip()
 
-        import re
-        raw = msg.content[0].text
+        # Strip think blocks if present (qwen3 emits them)
+        from src.llm.adapter import strip_think_blocks
+        raw = strip_think_blocks(raw)
+
         json_match = re.search(r"\{.*\}", raw, re.DOTALL)
         if not json_match:
-            return {"ok": False, "error": f"No JSON in grader response: {raw[:200]}"}
+            return {"ok": False, "error": f"No JSON in grader output: {raw[:200]}"}
 
         data = json.loads(json_match.group())
-        grade = data.get("grade", "").lower()
+        grade = data.get("grade", "").lower().strip()
         if grade not in GRADE_LABELS:
             grade = "hallucination"
         return {"ok": True, "grade": grade, "reason": data.get("reason", "")}
 
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
-
-
-# ---------------------------------------------------------------------------
-# Model and preference management
-# ---------------------------------------------------------------------------
-
-
-def switch_model(model: str) -> str | None:
-    """Switch Ember's active model. Returns previous model or None."""
-    try:
-        headers = _ember_headers()
-        resp = httpx.get("http://localhost:8000/model", headers=headers, timeout=10)
-        previous = resp.json().get("model", "")
-        httpx.post(
-            "http://localhost:8000/model",
-            json={"model": model},
-            headers=headers,
-            timeout=10,
-        )
-        return previous
-    except Exception as exc:
-        print(f"WARNING: Could not switch model: {exc}")
-        return None
 
 
 def set_autonomous_search(enabled: bool) -> bool | None:
@@ -407,15 +380,16 @@ def set_autonomous_search(enabled: bool) -> bool | None:
 # ---------------------------------------------------------------------------
 
 
-def run_eval(model_label: str) -> tuple[list[dict], str]:
+def run_eval() -> tuple[list[dict], str]:
     """Run all 30 questions. Returns (results, summary_text)."""
+    model = get_ember_model()
     timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     lines: list[str] = []
     results: list[dict] = []
 
     lines.append(f"Ember-2 Web Search Accuracy Evaluation — {timestamp}")
-    lines.append(f"Model: {model_label}")
-    lines.append(f"Grader: {CLAUDE_MODEL}")
+    lines.append(f"Active model: {model}")
+    lines.append(f"Grader: {model} (same model, local)")
     lines.append(f"{'=' * 60}")
     lines.append("")
 
@@ -449,7 +423,7 @@ def run_eval(model_label: str) -> tuple[list[dict], str]:
         all_latencies.append(latency)
         category_latencies.setdefault(cat, []).append(latency)
 
-        grade_result = grade_with_claude(question, ember_response, hint)
+        grade_result = grade_answer(question, ember_response, hint)
         if not grade_result["ok"]:
             lines.append(f"  ERROR — Grader: {grade_result['error']}")
             counts["error"] += 1
@@ -523,121 +497,34 @@ def run_eval(model_label: str) -> tuple[list[dict], str]:
 
 def main():
     parser = argparse.ArgumentParser(description="Ember-2 web search accuracy evaluation")
-    parser.add_argument("--model", type=str, default="qwen3:8b", help="Model to test (default: qwen3:8b)")
-    parser.add_argument("--auto-search", action="store_true", help="Enable autonomous web search for the eval session")
-    parser.add_argument("--compare", action="store_true", help="Run twice: qwen3:8b then claude-haiku-4-5-20251001, produce comparison")
+    parser.add_argument("--auto-search", action="store_true",
+                        help="Enable autonomous web search for the eval session")
     args = parser.parse_args()
-
-    # Check requirements
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        print("ERROR: ANTHROPIC_API_KEY not set.")
-        sys.exit(1)
-    try:
-        import anthropic  # noqa: F401
-    except ImportError:
-        print("ERROR: anthropic package not installed.")
-        sys.exit(1)
 
     log_dir = REPO_ROOT / "logs" / "eval_web_search"
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    # Auto-search toggle
     prev_autonomous = None
     if args.auto_search:
         prev_autonomous = set_autonomous_search(True)
         print("Autonomous web search enabled for this eval session.")
 
     try:
-        if args.compare:
-            _run_comparison(log_dir)
-        else:
-            _run_single(args.model, log_dir)
+        model = get_ember_model()
+        print(f"Running web search eval (model: {model})...")
+        print(f"30 questions across 5 categories. Estimated time: 15-30 minutes.\n")
+
+        results, summary = run_eval()
+        print(summary)
+
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        log_file = log_dir / f"eval_{timestamp}.log"
+        log_file.write_text(summary, encoding="utf-8")
+        print(f"\nLog written to: {log_file}")
     finally:
         if prev_autonomous is not None:
             set_autonomous_search(prev_autonomous)
             print(f"Restored web_search_autonomous to {prev_autonomous}.")
-
-
-def _run_single(model: str, log_dir: Path):
-    original_model = switch_model(model)
-    print(f"Running web search eval (model: {model})...")
-    print(f"30 questions across 5 categories. Estimated time: 15-30 minutes.\n")
-
-    results, summary = run_eval(model)
-    print(summary)
-
-    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    log_file = log_dir / f"eval_{model.replace(':', '-')}_{timestamp}.log"
-    log_file.write_text(summary, encoding="utf-8")
-    print(f"\nLog written to: {log_file}")
-
-    if original_model and original_model != model:
-        switch_model(original_model)
-        print(f"Restored model to: {original_model}")
-
-
-def _run_comparison(log_dir: Path):
-    models = ["qwen3:8b", "claude-haiku-4-5-20251001"]
-    all_results: dict[str, list[dict]] = {}
-    all_summaries: dict[str, str] = {}
-
-    for model in models:
-        original = switch_model(model)
-        print(f"\n{'=' * 60}")
-        print(f"Running: {model}")
-        print(f"{'=' * 60}\n")
-
-        results, summary = run_eval(model)
-        all_results[model] = results
-        all_summaries[model] = summary
-        print(summary)
-
-        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-        log_file = log_dir / f"eval_{model.replace(':', '-')}_{timestamp}.log"
-        log_file.write_text(summary, encoding="utf-8")
-
-        if original and original != model:
-            switch_model(original)
-
-    # Comparison table
-    lines = [
-        "",
-        "=" * 60,
-        "SIDE-BY-SIDE COMPARISON",
-        "=" * 60,
-        "",
-        f"{'Category':25s}  {'qwen3:8b':>12s}  {'claude-haiku':>12s}",
-        f"{'-' * 25}  {'-' * 12}  {'-' * 12}",
-    ]
-
-    for cat_key in ("current_events", "science_tech", "sports", "business", "culture"):
-        display = CATEGORY_DISPLAY.get(cat_key, cat_key)
-        scores = []
-        for model in models:
-            grades = [r["grade"] for r in all_results[model] if r["category"] == cat_key]
-            accurate = sum(1 for g in grades if g == "accurate")
-            total = len(grades)
-            scores.append(f"{accurate}/{total}")
-        lines.append(f"{display:25s}  {scores[0]:>12s}  {scores[1]:>12s}")
-
-    # Totals
-    totals = []
-    for model in models:
-        accurate = sum(1 for r in all_results[model] if r.get("grade") == "accurate")
-        total = len(all_results[model])
-        totals.append(f"{accurate}/{total}")
-    lines.append(f"{'-' * 25}  {'-' * 12}  {'-' * 12}")
-    lines.append(f"{'TOTAL':25s}  {totals[0]:>12s}  {totals[1]:>12s}")
-    lines.append("")
-
-    comparison = "\n".join(lines)
-    print(comparison)
-
-    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    comp_file = log_dir / f"comparison_{timestamp}.log"
-    comp_file.write_text(comparison, encoding="utf-8")
-    print(f"Comparison written to: {comp_file}")
 
 
 if __name__ == "__main__":

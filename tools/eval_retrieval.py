@@ -378,10 +378,10 @@ def run_integrity_eval() -> tuple[list[dict], str]:
         context_service = ContextService()
 
         def _mock_retrieve(query, *args, **kwargs):
-            # Return: state_items, task_items, memory_items, reflection_items
+            # Return: state_items, task_items, memory_items, reflection_items, query_embedding
             mem = [i for i in synthetic_items if i.memory_type != "reflection"]
             ref = [i for i in synthetic_items if i.memory_type == "reflection"]
-            return [], [], mem, ref
+            return [], [], mem, ref, None
 
         with patch.object(context_service.retriever, "retrieve", side_effect=_mock_retrieve):
             packet = context_service.build_context(case.query)

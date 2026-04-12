@@ -109,3 +109,132 @@ class TestNonWebQueries:
     def test_general_question_not_web(self):
         p = classify_query("Explain how photosynthesis works")
         assert p.name == "default"
+
+
+# ---------------------------------------------------------------------------
+# Layer 1: Entity-type triggers (volatile entity + state query pattern)
+# ---------------------------------------------------------------------------
+
+class TestEntityTypeTriggers:
+    """Dual-condition: volatile entity signal AND state query pattern."""
+
+    # --- Finance ---
+    def test_bitcoin_price(self):
+        p = classify_query("What is the current price of Bitcoin?")
+        assert p.name == "web_search"
+
+    def test_sp500_performance(self):
+        p = classify_query("How did the S&P 500 perform this week?")
+        assert p.name == "web_search"
+
+    def test_interest_rate(self):
+        p = classify_query("What is the current US federal interest rate?")
+        assert p.name == "web_search"
+
+    def test_stock_trading(self):
+        p = classify_query("Is Tesla stock trading above 200?")
+        assert p.name == "web_search"
+
+    # --- Current roles ---
+    def test_who_is_ceo(self):
+        p = classify_query("Who is the CEO of OpenAI?")
+        assert p.name == "web_search"
+
+    def test_who_runs(self):
+        p = classify_query("Who runs Google now?")
+        assert p.name == "web_search"
+
+    # --- Culture / entertainment ---
+    def test_box_office(self):
+        p = classify_query("What movies are currently number one at the box office?")
+        assert p.name == "web_search"
+
+    def test_billboard(self):
+        p = classify_query("What are the most popular songs on the Billboard Hot 100?")
+        assert p.name == "web_search"
+
+    def test_streaming_show(self):
+        p = classify_query("What's the most popular show on Netflix right now?")
+        assert p.name == "web_search"
+
+    def test_game_release(self):
+        p = classify_query("What major video games were released recently?")
+        assert p.name == "web_search"
+
+    # --- Sports ---
+    def test_nba_standings(self):
+        p = classify_query("What are the current NBA playoff standings?")
+        assert p.name == "web_search"
+
+    def test_f1_winner(self):
+        p = classify_query("Who won the most recent Formula 1 race?")
+        assert p.name == "web_search"
+
+    def test_tennis_ranking(self):
+        p = classify_query("Who is currently ranked number one in men's tennis?")
+        assert p.name == "web_search"
+
+    def test_premier_league_results(self):
+        p = classify_query("What are the latest Premier League results?")
+        assert p.name == "web_search"
+
+    # --- Weather / events ---
+    def test_weather_forecast(self):
+        p = classify_query("What is the current weather forecast for New York City?")
+        assert p.name == "web_search"
+
+    # --- Negative cases: entity without state query pattern ---
+    def test_vault_question_about_stock(self):
+        """'Tell me about my stock portfolio' has entity signal but no
+        state query pattern — should NOT trigger web search."""
+        p = classify_query("Tell me about my stock portfolio")
+        assert p.name != "web_search"
+
+    def test_personal_question_with_entity_word(self):
+        """'I'm worried about the election' has entity signal but
+        doesn't match state query pattern (not a question)."""
+        p = classify_query("I'm worried about the election")
+        assert p.name != "web_search"
+
+    def test_explain_concept_not_web(self):
+        """'Explain how the stock market works' has entity signal
+        but 'explain how' is not a state query pattern."""
+        p = classify_query("Explain how the stock market works")
+        assert p.name != "web_search"
+
+
+class TestLayerOneHelpers:
+    """Direct tests on the pattern matching helpers."""
+
+    def test_volatile_entity_detects_finance(self):
+        from src.context.policies import _matches_volatile_entity
+        assert _matches_volatile_entity("bitcoin price today") is True
+        assert _matches_volatile_entity("s&p 500 performance") is True
+
+    def test_volatile_entity_detects_sports(self):
+        from src.context.policies import _matches_volatile_entity
+        assert _matches_volatile_entity("nba playoff standings") is True
+
+    def test_volatile_entity_misses_personal(self):
+        from src.context.policies import _matches_volatile_entity
+        assert _matches_volatile_entity("my favorite recipe") is False
+
+    def test_state_query_matches_what_is(self):
+        from src.context.policies import _matches_state_query
+        assert _matches_state_query("what is the current price") is True
+
+    def test_state_query_matches_who_is(self):
+        from src.context.policies import _matches_state_query
+        assert _matches_state_query("who is the ceo of apple") is True
+
+    def test_state_query_matches_is_opening(self):
+        from src.context.policies import _matches_state_query
+        assert _matches_state_query("is tesla stock above 200") is True
+
+    def test_state_query_misses_imperative(self):
+        from src.context.policies import _matches_state_query
+        assert _matches_state_query("tell me about stocks") is False
+
+    def test_state_query_misses_statement(self):
+        from src.context.policies import _matches_state_query
+        assert _matches_state_query("i'm worried about bitcoin") is False

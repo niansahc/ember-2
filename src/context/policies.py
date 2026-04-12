@@ -1,9 +1,64 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 logger = logging.getLogger("ember.policies")
+
+
+# ---------------------------------------------------------------------------
+# Layer 1: Entity-type web search triggers (volatile entity + state query)
+# ---------------------------------------------------------------------------
+# Dual-condition: query must match BOTH a volatile entity signal AND a
+# state query pattern to trigger web search. This prevents false positives
+# on vault-answerable questions while catching current-state questions
+# about external, time-sensitive entities.
+#
+# Layer 2 (future, TDD watch item): prompt-based pre-classifier using
+# a 50-token Ollama call when Layer 1 is uncertain. Not implemented.
+# ---------------------------------------------------------------------------
+
+VOLATILE_ENTITY_SIGNALS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+    # Finance
+    r"\b(?:price|cost|trading|stock|crypto|bitcoin|btc|ethereum|eth)\b",
+    r"\b(?:interest rate|inflation|fed(?:eral)?|gdp|s&p|nasdaq|dow)\b",
+    r"\b(?:market|earnings|ipo|dividend|yield|forex)\b",
+    # Current roles
+    r"\b(?:ceo|president|prime minister|chancellor)\b",
+    r"\bwho (?:is|runs|leads|heads|founded)\b",
+    # Culture / entertainment
+    r"\b(?:trending|popular|top rated|number one|box office)\b",
+    r"\b(?:billboard|grammy|oscar|emmy|golden globe)\b",
+    r"\b(?:movies?|shows?|albums?|games?|songs?|episodes?|series)\b",
+    r"\b(?:streaming|netflix|spotify|disney|hbo|amazon prime)\b",
+    # Current events
+    r"\b(?:war|election|vote|policy|legislation|law|sanction)\b",
+    r"\b(?:weather|forecast|temperature|hurricane|earthquake|wildfire)\b",
+    r"\b(?:score|match|standings|playoff|championship|tournament)\b",
+    r"\b(?:nba|nfl|mlb|nhl|premier league|formula 1|f1|wimbledon)\b",
+    # Current state markers
+    r"\b(?:currently|still|now|latest|newest|most recent)\b",
+))
+
+STATE_QUERY_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+    # What/who/where/how + auxiliary or common past-tense event verb
+    r"^(?:what|who|where|how|how much|how many)\b.*\b(?:is|are|does|do|has|have|was|were|did|won|released|announced|scored|traded|happened)\b",
+    # Auxiliary-first questions (yes/no form)
+    r"^(?:is|are|does|do|has|have|can|will|did)\b",
+    # Contractions
+    r"^(?:what's|who's|where's|how's)\b",
+))
+
+
+def _matches_volatile_entity(q: str) -> bool:
+    """Return True if the query references a volatile external entity."""
+    return any(p.search(q) for p in VOLATILE_ENTITY_SIGNALS)
+
+
+def _matches_state_query(q: str) -> bool:
+    """Return True if the query is a present-tense state question."""
+    return any(p.search(q) for p in STATE_QUERY_PATTERNS)
 
 
 @dataclass
@@ -199,9 +254,19 @@ def classify_query(user_message: str) -> ContextPolicy:
         any(t in q for t in temporal_currency_words)
         and any(e in q for e in event_context_words)
     )
+    # 4. Layer 1 entity-type: volatile entity signal + state query pattern.
+    #    Dual-condition prevents false positives on vault-answerable
+    #    questions while catching "What is the current price of Bitcoin?"
+    #    or "Who is the CEO of OpenAI?"
+    _entity_trigger = _matches_volatile_entity(q) and _matches_state_query(q)
 
-    if _explicit_web or _factual_uncertainty or _temporal_currency:
-        _trigger = "explicit" if _explicit_web else ("factual_uncertainty" if _factual_uncertainty else "temporal_currency")
+    if _explicit_web or _factual_uncertainty or _temporal_currency or _entity_trigger:
+        _trigger = (
+            "explicit" if _explicit_web
+            else "factual_uncertainty" if _factual_uncertainty
+            else "temporal_currency" if _temporal_currency
+            else "entity_type"
+        )
         logger.warning("[CLASSIFY] intent=web_search trigger=%s", _trigger)
         return ContextPolicy(
             name="web_search",

@@ -27,15 +27,18 @@ import pytest
 
 
 def _mock_ollama_chat(**kwargs):
-    """Fake ollama.chat that returns a simple response."""
+    """Fake ollama.chat that handles both stream=True and stream=False.
+
+    When stream=True, returns an iterator of chunk dicts (matching
+    the real ollama.chat streaming behavior). When stream=False,
+    returns a single response dict.
+    """
+    if kwargs.get("stream"):
+        def _chunks():
+            for word in ["This ", "is ", "a ", "test ", "response."]:
+                yield {"message": {"content": word}}
+        return _chunks()
     return {"message": {"content": "This is a test response from the mock model."}}
-
-
-def _mock_ollama_chat_stream(**kwargs):
-    """Fake ollama.chat that yields streaming chunks."""
-    chunks = ["This ", "is ", "a ", "test ", "response."]
-    for chunk in chunks:
-        yield {"message": {"content": chunk}}
 
 
 class TestStreamingSSERegression:

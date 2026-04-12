@@ -26,6 +26,12 @@ def main():
     if not file_path or not file_path.endswith(".py"):
         return
 
+    # Only run tests when src/ files change — not tests, docs, scripts, or tools.
+    # Normalise path separators for cross-platform matching.
+    normalized = file_path.replace("\\", "/")
+    if "/src/" not in normalized:
+        return
+
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "tests/", "--tb=line", "-q"],

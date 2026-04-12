@@ -203,6 +203,74 @@ class TestEntityTypeTriggers:
         assert p.name != "web_search"
 
 
+class TestImplicitRecencyTriggers:
+    """Tier 2: implicit recency words always trigger web search."""
+
+    def test_this_week(self):
+        p = classify_query("What major events happened this week?")
+        assert p.name == "web_search"
+
+    def test_this_month(self):
+        p = classify_query("What new TV shows premiered this month?")
+        assert p.name == "web_search"
+
+    def test_this_weekend(self):
+        p = classify_query("What major sporting events are happening this weekend?")
+        assert p.name == "web_search"
+
+    def test_last_month(self):
+        p = classify_query("What mergers were announced last month?")
+        assert p.name == "web_search"
+
+    def test_just_released(self):
+        p = classify_query("Was a new iPhone just released?")
+        assert p.name == "web_search"
+
+    def test_upcoming(self):
+        p = classify_query("What upcoming movies look interesting?")
+        assert p.name == "web_search"
+
+
+class TestEpisodicEventTriggers:
+    """Tier 3: episodic event domain + state query pattern."""
+
+    def test_layoffs_question(self):
+        p = classify_query("What major tech company layoffs happened recently?")
+        assert p.name == "web_search"
+
+    def test_premiere_question(self):
+        p = classify_query("What new shows have premiered this season?")
+        assert p.name == "web_search"
+
+    def test_election_question(self):
+        p = classify_query("Who was appointed as the new secretary of state?")
+        assert p.name == "web_search"
+
+    def test_standings_question(self):
+        p = classify_query("What are the current NBA standings?")
+        assert p.name == "web_search"
+
+
+class TestWhatHappenedTriggers:
+    """Tier 3b: syntactic 'what happened' patterns always trigger."""
+
+    def test_what_happened(self):
+        p = classify_query("What happened in the stock market today?")
+        assert p.name == "web_search"
+
+    def test_what_is_going_on(self):
+        p = classify_query("What is going on with the Ukraine situation?")
+        assert p.name == "web_search"
+
+    def test_what_to_watch(self):
+        p = classify_query("What is there to watch this weekend?")
+        assert p.name == "web_search"
+
+    def test_next_week(self):
+        p = classify_query("What is happening next week in sports?")
+        assert p.name == "web_search"
+
+
 class TestLayerOneHelpers:
     """Direct tests on the pattern matching helpers."""
 
@@ -234,6 +302,64 @@ class TestLayerOneHelpers:
     def test_state_query_misses_imperative(self):
         from src.context.policies import _matches_state_query
         assert _matches_state_query("tell me about stocks") is False
+
+    def test_state_query_misses_statement(self):
+        from src.context.policies import _matches_state_query
+
+    # --- Implicit recency helpers ---
+    def test_implicit_recency_this_week(self):
+        from src.context.policies import _matches_implicit_recency
+        assert _matches_implicit_recency("what happened this week") is True
+
+    def test_implicit_recency_last_month(self):
+        from src.context.policies import _matches_implicit_recency
+        assert _matches_implicit_recency("events last month") is True
+
+    def test_implicit_recency_just_announced(self):
+        from src.context.policies import _matches_implicit_recency
+        assert _matches_implicit_recency("was it just announced") is True
+
+    def test_implicit_recency_misses_general(self):
+        from src.context.policies import _matches_implicit_recency
+        assert _matches_implicit_recency("how does photosynthesis work") is False
+
+    # --- Episodic event helpers ---
+    def test_episodic_detects_layoff(self):
+        from src.context.policies import _matches_episodic_event
+        assert _matches_episodic_event("tech layoffs announced") is True
+
+    def test_episodic_detects_premiere(self):
+        from src.context.policies import _matches_episodic_event
+        assert _matches_episodic_event("new show premiered this month") is True
+
+    def test_episodic_detects_election(self):
+        from src.context.policies import _matches_episodic_event
+        assert _matches_episodic_event("who won the election") is True
+
+    def test_episodic_misses_personal(self):
+        from src.context.policies import _matches_episodic_event
+        assert _matches_episodic_event("my favorite recipe") is False
+
+    # --- What happened helpers ---
+    def test_what_happened_basic(self):
+        from src.context.policies import _matches_what_happened
+        assert _matches_what_happened("what happened yesterday") is True
+
+    def test_what_happened_going_on(self):
+        from src.context.policies import _matches_what_happened
+        assert _matches_what_happened("what is going on with twitter") is True
+
+    def test_what_to_watch(self):
+        from src.context.policies import _matches_what_happened
+        assert _matches_what_happened("what is there to watch this weekend") is True
+
+    def test_this_weekend(self):
+        from src.context.policies import _matches_what_happened
+        assert _matches_what_happened("anything good this weekend") is True
+
+    def test_what_happened_misses_vault(self):
+        from src.context.policies import _matches_what_happened
+        assert _matches_what_happened("what is my current focus") is False
 
     def test_state_query_misses_statement(self):
         from src.context.policies import _matches_state_query

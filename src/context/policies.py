@@ -61,6 +61,56 @@ def _matches_state_query(q: str) -> bool:
     return any(p.search(q) for p in STATE_QUERY_PATTERNS)
 
 
+# ---------------------------------------------------------------------------
+# Tier 2: Implicit recency — always triggers web search alone
+# ---------------------------------------------------------------------------
+
+IMPLICIT_RECENCY_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"\b(?:this (?:month|week|weekend|season|year|quarter))\b",
+    r"\b(?:last (?:month|week|weekend|few weeks|few days))\b",
+    r"\b(?:upcoming|scheduled)\b",
+    r"\bjust (?:announced|released|launched)\b",
+    r"\bnewly (?:released|launched|opened)\b",
+))
+
+# ---------------------------------------------------------------------------
+# Tier 3: Episodic event domains — require event-class structure to trigger
+# ---------------------------------------------------------------------------
+
+EPISODIC_EVENT_DOMAINS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+    # Business
+    r"\b(?:layoffs?|merger|acquisition|bankruptcy|funding round|scandal|recall|lawsuit)\b",
+    # Entertainment
+    r"\b(?:premiere|premiered|new (?:season|episode|film)|box office|award show|cancelled|renewed)\b",
+    # Sports
+    r"\b(?:standings|draft|trade|transfer)\b",
+    # Political
+    r"\b(?:election|voted?|passed|signed into law|appointed|resigned)\b",
+))
+
+# ---------------------------------------------------------------------------
+# Tier 3b: "What happened" syntactic patterns — always trigger
+# ---------------------------------------------------------------------------
+
+WHAT_HAPPENED_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"\bwhat\b.*\b(?:happened|is happening|are happening|going on)\b",
+    r"\bwhat\b.*\bto (?:watch|see|know|read)\b",
+    r"\b(?:this|next) (?:weekend|week|month|season)\b",
+))
+
+
+def _matches_implicit_recency(q: str) -> bool:
+    return any(p.search(q) for p in IMPLICIT_RECENCY_PATTERNS)
+
+
+def _matches_episodic_event(q: str) -> bool:
+    return any(p.search(q) for p in EPISODIC_EVENT_DOMAINS)
+
+
+def _matches_what_happened(q: str) -> bool:
+    return any(p.search(q) for p in WHAT_HAPPENED_PATTERNS)
+
+
 @dataclass
 class ContextPolicy:
     name: str
@@ -259,13 +309,26 @@ def classify_query(user_message: str) -> ContextPolicy:
     #    questions while catching "What is the current price of Bitcoin?"
     #    or "Who is the CEO of OpenAI?"
     _entity_trigger = _matches_volatile_entity(q) and _matches_state_query(q)
+    # 5. Implicit recency: "this week", "last month", "just announced", etc.
+    #    Always triggers — any implicit recency marker = web search.
+    _implicit_recency = _matches_implicit_recency(q)
+    # 6. Episodic event domain + state query: "layoffs", "premiere", etc.
+    #    Requires event-class structure (episodic domain word present) to
+    #    reduce false positives on vault-answerable election/trade discussions.
+    _episodic_event = _matches_episodic_event(q) and _matches_state_query(q)
+    # 7. "What happened" syntactic patterns: always triggers.
+    _what_happened = _matches_what_happened(q)
 
-    if _explicit_web or _factual_uncertainty or _temporal_currency or _entity_trigger:
+    if (_explicit_web or _factual_uncertainty or _temporal_currency
+            or _entity_trigger or _implicit_recency or _episodic_event or _what_happened):
         _trigger = (
             "explicit" if _explicit_web
             else "factual_uncertainty" if _factual_uncertainty
             else "temporal_currency" if _temporal_currency
-            else "entity_type"
+            else "entity_type" if _entity_trigger
+            else "implicit_recency" if _implicit_recency
+            else "episodic_event" if _episodic_event
+            else "what_happened"
         )
         logger.warning("[CLASSIFY] intent=web_search trigger=%s", _trigger)
         return ContextPolicy(

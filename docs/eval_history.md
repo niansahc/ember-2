@@ -609,3 +609,38 @@ Change: vault_memory moved from position 1 to position 6 (recency) in context pa
 - stale context: 7/19
 - voice wrong: 7/19
 - template collapse: 9/19
+
+
+---
+
+## Web Search Eval — 2026-04-12
+
+### claude-haiku-4-5-20251001 (Haiku)
+
+**Trigger rate:** 47% (14/30)
+**Avg latency:** 16.7s
+
+| Category | Score |
+|---|---|
+| Current Events | 2/6 |
+| Science & Tech | 6/6 |
+| Sports | 5/6 |
+| Business & Economics | 1/6 |
+| Culture | 0/6 |
+
+### qwen3:8b
+
+**Trigger rate:** 40% (12/30)
+**Avg latency:** 24.3s
+
+| Category | Score |
+|---|---|
+| Current Events | 2/6 |
+| Science & Tech | 6/6 |
+| Sports | 2/6 |
+| Business & Economics | 1/6 |
+| Culture | 1/6 |
+
+### Known Gaps
+
+Trigger rate insufficient for Business/Economics and Culture categories. Layer 1 trigger fix in progress (G).

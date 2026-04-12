@@ -11,6 +11,10 @@ cache/
 .env
 .env.local
 
+# Watchdog signal files (runtime only, never committed)
+ember_restart.signal
+ember_stop.signal
+
 # Python
 .venv/
 .env

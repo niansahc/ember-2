@@ -86,10 +86,11 @@ if [ -f .env ]; then
     fi
 fi
 
-uvicorn src.api.main:app --host "$EMBER_HOST" --port 8000 &
-API_PID=$!
+# Start API via watchdog (manages restart/stop signals)
+python scripts/watchdog.py --host "$EMBER_HOST" --port 8000 &
+WATCHDOG_PID=$!
 
-echo "      API starting in background (PID: $API_PID)..."
+echo "      API starting via watchdog (PID: $WATCHDOG_PID)..."
 
 # -----------------------------------------------------------
 # 4. Health check polling
@@ -136,5 +137,5 @@ else
     xdg-open http://localhost:8000 2>/dev/null || echo "      Open http://localhost:8000 in your browser."
 fi
 
-# Keep script alive so API stays running
-wait $API_PID
+# Keep script alive so watchdog (and API) stay running
+wait $WATCHDOG_PID

@@ -59,10 +59,19 @@ class TestServiceRestart:
             from src.api.main import app
             return TestClient(app)
 
-    def test_restart_api_returns_501(self):
+    def test_restart_api_writes_signal_and_returns_200(self):
+        """API restart now writes a signal file for the watchdog instead
+        of returning 501. The watchdog picks up the signal and restarts."""
         with patch("src.api.main.get_ember_api_key", return_value=None):
             resp = self._client().post("/v1/service/api/restart")
-        assert resp.status_code == 501
+        assert resp.status_code == 200
+        assert resp.json()["service"] == "api"
+        assert "watchdog" in resp.json()["note"]
+        # Clean up signal file written during test
+        from pathlib import Path
+        sig = Path(__file__).resolve().parents[1] / "ember_restart.signal"
+        if sig.exists():
+            sig.unlink()
 
     def test_restart_docker_succeeds(self):
         with patch("src.api.main.get_ember_api_key", return_value=None), \

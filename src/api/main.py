@@ -978,8 +978,9 @@ def pin_change_endpoint(request: Request, body: PinChangeRequest):
 def service_restart_endpoint(name: str):
     """Restart a named service (api or docker).
 
-    - api: not implemented as a self-restart (returns 501). The caller
-      should kill and re-launch uvicorn externally.
+    - api: writes ember_restart.signal in the repo root. The watchdog
+      process (scripts/watchdog.py) picks it up, kills the API, and
+      relaunches it. Returns immediately — the restart is async.
     - docker: runs `docker compose restart` in the repo root.
 
     Returns {"status": "restarting"} on success.
@@ -987,10 +988,10 @@ def service_restart_endpoint(name: str):
     import subprocess
 
     if name == "api":
-        raise HTTPException(
-            status_code=501,
-            detail="API self-restart is not supported. Kill and re-launch uvicorn externally.",
-        )
+        repo_root = Path(__file__).resolve().parents[2]
+        signal_path = repo_root / "ember_restart.signal"
+        signal_path.write_text("restart", encoding="utf-8")
+        return {"status": "restarting", "service": "api", "note": "signal written, watchdog will restart"}
 
     if name == "docker":
         repo_root = Path(__file__).resolve().parents[2]
@@ -1006,6 +1007,42 @@ def service_restart_endpoint(name: str):
             raise HTTPException(status_code=500, detail="docker command not found")
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to restart docker: {exc}")
+
+    raise HTTPException(status_code=400, detail=f"Unknown service: {name}. Valid: api, docker.")
+
+
+@app.post("/v1/service/{name}/stop")
+def service_stop_endpoint(name: str):
+    """Stop a named service.
+
+    - api: writes ember_stop.signal. The watchdog kills the API and
+      exits. Returns immediately.
+    - docker: runs `docker compose stop`.
+
+    Returns {"status": "stopping"} on success.
+    """
+    import subprocess
+
+    if name == "api":
+        repo_root = Path(__file__).resolve().parents[2]
+        signal_path = repo_root / "ember_stop.signal"
+        signal_path.write_text("stop", encoding="utf-8")
+        return {"status": "stopping", "service": "api", "note": "signal written, watchdog will stop"}
+
+    if name == "docker":
+        repo_root = Path(__file__).resolve().parents[2]
+        try:
+            subprocess.Popen(
+                ["docker", "compose", "stop"],
+                cwd=str(repo_root),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return {"status": "stopping", "service": "docker"}
+        except FileNotFoundError:
+            raise HTTPException(status_code=500, detail="docker command not found")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to stop docker: {exc}")
 
     raise HTTPException(status_code=400, detail=f"Unknown service: {name}. Valid: api, docker.")
 

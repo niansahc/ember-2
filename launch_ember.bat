@@ -84,9 +84,10 @@ call .venv\Scripts\activate
 set EMBER_HOST=0.0.0.0
 for /f "tokens=1,* delims==" %%a in ('findstr /b "EMBER_HOST" .env 2^>nul') do set EMBER_HOST=%%b
 
-start "Ember-2 API" /min cmd /c "cd /d %~dp0 && call .venv\Scripts\activate && python -m uvicorn src.api.main:app --host %EMBER_HOST% --port 8000"
+:: Start API via watchdog (manages restart/stop signals)
+start "Ember-2 Watchdog" /min cmd /c "cd /d %~dp0 && call .venv\Scripts\activate && python scripts\watchdog.py --host %EMBER_HOST% --port 8000"
 
-echo       API starting in background...
+echo       API starting via watchdog...
 
 :: -----------------------------------------------------------
 :: 4. Health check polling

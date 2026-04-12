@@ -16,6 +16,7 @@ from src.security.pin_service import (
     set_recovery_passphrase,
     verify_recovery_passphrase,
     clear_pin,
+    change_pin,
     check_rate_limit,
     record_failed_attempt,
     get_remaining_attempts,
@@ -154,3 +155,161 @@ class TestClearPin:
             clear_pin()
         assert "ember-2-pin" in deleted
         assert "ember-2-recovery" in deleted
+
+
+class TestChangePin:
+    """change_pin verifies the current PIN before rotating to the new one.
+    No recovery-phrase coupling — this is the routine-rotation path."""
+
+    def test_change_pin_returns_false_when_no_pin_set(self):
+        with patch("src.security.pin_service._get_keyring", return_value=None):
+            assert change_pin("1234", "5678") is False
+
+    def test_change_pin_returns_false_on_wrong_current(self):
+        hashed = _hash("1234")
+        with patch("src.security.pin_service._get_keyring", return_value=hashed):
+            with patch("src.security.pin_service._set_keyring") as mock_set:
+                assert change_pin("wrong", "5678") is False
+                mock_set.assert_not_called()
+
+    def test_change_pin_stores_new_hash_on_correct_current(self):
+        hashed = _hash("1234")
+        stored: dict = {}
+
+        def fake_get(service):
+            return hashed
+
+        def fake_set(service, value):
+            stored[service] = value
+
+        with patch("src.security.pin_service._get_keyring", side_effect=fake_get):
+            with patch("src.security.pin_service._set_keyring", side_effect=fake_set):
+                assert change_pin("1234", "5678") is True
+
+        # New stored value must be a bcrypt hash of the new PIN.
+        assert "ember-2-pin" in stored
+        assert stored["ember-2-pin"].startswith("$2b$")
+        assert _verify("5678", stored["ember-2-pin"])
+        # And must not be plaintext or match the old PIN's hash.
+        assert stored["ember-2-pin"] != "5678"
+        assert stored["ember-2-pin"] != hashed
+
+    def test_change_pin_does_not_touch_recovery_passphrase(self):
+        """Routine rotation must not modify or require the recovery
+        passphrase — that path is for forgotten PINs only."""
+        hashed = _hash("1234")
+        touched_services: list[str] = []
+
+        def fake_get(service):
+            return hashed if service == "ember-2-pin" else None
+
+        def fake_set(service, value):
+            touched_services.append(service)
+
+        with patch("src.security.pin_service._get_keyring", side_effect=fake_get):
+            with patch("src.security.pin_service._set_keyring", side_effect=fake_set):
+                change_pin("1234", "5678")
+
+        assert "ember-2-recovery" not in touched_services
+        assert touched_services == ["ember-2-pin"]
+
+    def test_change_pin_preserves_old_hash_on_failure(self):
+        """A failed verification must leave the stored hash untouched."""
+        hashed = _hash("1234")
+
+        def fake_get(service):
+            return hashed
+
+        with patch("src.security.pin_service._get_keyring", side_effect=fake_get):
+            with patch("src.security.pin_service._set_keyring") as mock_set:
+                change_pin("wrong", "5678")
+                mock_set.assert_not_called()
+
+
+class TestPinChangeEndpoint:
+    """Integration tests for POST /v1/security/pin/change. Verify that
+    the endpoint enforces the current-PIN check, rate limits failures,
+    and returns the documented response shape."""
+
+    def setup_method(self):
+        _failed_attempts.clear()
+
+    def test_change_endpoint_success(self):
+        hashed = _hash("1234")
+        stored: dict = {"ember-2-pin": hashed}
+
+        def fake_get(service):
+            return stored.get(service)
+
+        def fake_set(service, value):
+            stored[service] = value
+
+        with patch("src.security.pin_service._get_keyring", side_effect=fake_get), \
+             patch("src.security.pin_service._set_keyring", side_effect=fake_set), \
+             patch("src.api.main.get_ember_api_key", return_value=None):
+            from fastapi.testclient import TestClient
+            from src.api.main import app
+            resp = TestClient(app).post(
+                "/v1/security/pin/change",
+                json={"current_pin": "1234", "new_pin": "5678"},
+            )
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "changed"}
+        assert _verify("5678", stored["ember-2-pin"])
+
+    def test_change_endpoint_rejects_wrong_current_pin(self):
+        hashed = _hash("1234")
+        with patch("src.security.pin_service._get_keyring", return_value=hashed), \
+             patch("src.security.pin_service._set_keyring") as mock_set, \
+             patch("src.api.main.get_ember_api_key", return_value=None):
+            from fastapi.testclient import TestClient
+            from src.api.main import app
+            resp = TestClient(app).post(
+                "/v1/security/pin/change",
+                json={"current_pin": "wrong", "new_pin": "5678"},
+            )
+        assert resp.status_code == 403
+        mock_set.assert_not_called()
+
+    def test_change_endpoint_rejects_short_new_pin(self):
+        hashed = _hash("1234")
+        with patch("src.security.pin_service._get_keyring", return_value=hashed), \
+             patch("src.security.pin_service._set_keyring") as mock_set, \
+             patch("src.api.main.get_ember_api_key", return_value=None):
+            from fastapi.testclient import TestClient
+            from src.api.main import app
+            resp = TestClient(app).post(
+                "/v1/security/pin/change",
+                json={"current_pin": "1234", "new_pin": "12"},
+            )
+        assert resp.status_code == 400
+        mock_set.assert_not_called()
+
+    def test_change_endpoint_does_not_require_recovery_passphrase(self):
+        """Body schema must not include recovery_passphrase — routine
+        rotation is decoupled from recovery."""
+        from src.api.main import PinChangeRequest
+        fields = PinChangeRequest.model_fields
+        assert set(fields.keys()) == {"current_pin", "new_pin"}
+
+    def test_failed_change_records_attempt_for_rate_limit(self):
+        """A failed current-PIN check must record a failed attempt so
+        the application-level rate limiter locks out after 5 failures.
+        Tests the service-level interaction directly — slowapi provides
+        an additional request-count limiter at the decorator level."""
+        hashed = _hash("1234")
+        with patch("src.security.pin_service._get_keyring", return_value=hashed), \
+             patch("src.security.pin_service._set_keyring"), \
+             patch("src.api.main.get_ember_api_key", return_value=None):
+            from fastapi.testclient import TestClient
+            from src.api.main import app
+            client = TestClient(app)
+            resp = client.post(
+                "/v1/security/pin/change",
+                json={"current_pin": "wrong", "new_pin": "5678"},
+            )
+            assert resp.status_code == 403
+            # After the failed attempt, remaining_attempts should have
+            # decreased by 1 (from 5 to 4 for the test client IP).
+            remaining = get_remaining_attempts("testclient")
+            assert remaining == 4

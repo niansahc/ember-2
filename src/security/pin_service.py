@@ -153,3 +153,27 @@ def clear_pin() -> None:
     _delete_keyring(_PIN_SERVICE)
     _delete_keyring(_RECOVERY_SERVICE)
     logger.info("[PIN_SERVICE] PIN and recovery passphrase cleared")
+
+
+def change_pin(current_pin: str, new_pin: str) -> bool:
+    """Change the stored PIN after verifying the current one.
+
+    Returns True if the PIN was changed. Returns False if the current
+    PIN is incorrect or no PIN is configured — the stored hash is left
+    untouched in both cases, so a failed verification cannot corrupt
+    state. Intentionally decoupled from the recovery passphrase: the
+    recovery path is for when the user has forgotten the current PIN,
+    whereas this path is for routine rotation by a user who already
+    knows their PIN.
+
+    Neither the current nor new PIN is logged. The caller is responsible
+    for rate limiting — the service function is stateless.
+    """
+    stored = _get_keyring(_PIN_SERVICE)
+    if not stored:
+        return False
+    if not _verify(current_pin, stored):
+        return False
+    _set_keyring(_PIN_SERVICE, _hash(new_pin))
+    logger.info("[PIN_SERVICE] PIN changed successfully")
+    return True

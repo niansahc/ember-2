@@ -844,6 +844,11 @@ class PinRecoverRequest(BaseModel):
     new_pin: str
 
 
+class PinChangeRequest(BaseModel):
+    current_pin: str
+    new_pin: str
+
+
 @app.get("/v1/security/pin/status")
 def pin_status_endpoint():
     """Check if a PIN has been configured. No auth required.
@@ -906,6 +911,53 @@ def pin_recover_endpoint(request: Request, body: PinRecoverRequest):
         raise HTTPException(status_code=400, detail="PIN must be at least 4 characters")
     set_pin(body.new_pin)
     return {"status": "recovered"}
+
+
+@app.post("/v1/security/pin/change")
+@limiter.limit("5/minute")
+def pin_change_endpoint(request: Request, body: PinChangeRequest):
+    """Change the PIN. Requires the current PIN for verification.
+
+    Rate-limited and API-key authenticated (routine rotation by a user
+    who is already signed in). Intentionally decoupled from the recovery
+    passphrase — this endpoint is for users who know their current PIN.
+    Users who have forgotten their PIN must use /v1/security/pin/recover
+    instead.
+    """
+    try:
+        from src.security.pin_service import (
+            change_pin,
+            check_rate_limit,
+            record_failed_attempt,
+            get_remaining_attempts,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"PIN service unavailable: {exc}")
+
+    client_ip = request.client.host
+    if not check_rate_limit(client_ip):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many attempts. Try again in 5 minutes.",
+        )
+
+    if len(body.new_pin) < 4:
+        raise HTTPException(
+            status_code=400,
+            detail="PIN must be at least 4 characters",
+        )
+
+    if not change_pin(body.current_pin, body.new_pin):
+        remaining = record_failed_attempt(client_ip)
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Invalid current PIN",
+                "remaining_attempts": remaining,
+            },
+        )
+
+    return {"status": "changed"}
 
 
 # ── Preferences endpoints ──────────────────────────────────────────────

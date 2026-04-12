@@ -917,7 +917,16 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
     # Vault citation: track whether non-profile vault records were retrieved.
     # Communicated to M via X-Ember-Vault-Used header + vault_sources SSE event.
+    #
+    # Suppress when web search is the primary source AND the only vault
+    # items are profile records. Profile records are always injected and
+    # don't represent meaningful vault-grounded content — showing
+    # "Source: Vault" on a web search response confuses the user.
     vault_sources = _build_vault_sources(context_packet)
+    if used_web_search and vault_sources:
+        non_profile_vault = [s for s in vault_sources if s.get("type") != "profile"]
+        if not non_profile_vault:
+            vault_sources = []
     used_vault = bool(vault_sources)
 
     # Read conversational style preference (casual/balanced/thoughtful)

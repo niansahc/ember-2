@@ -118,3 +118,72 @@ class TestFormatSourceDate:
 
     def test_handles_malformed_timestamp(self):
         assert _format_source_date("not-a-date") == ""
+
+
+# ---------------------------------------------------------------------------
+# Web search authority instruction
+# ---------------------------------------------------------------------------
+
+class TestWebSearchAuthorityInstruction:
+    """The authority rules must tell the model that web search results
+    are current, authoritative, and should be cited with URLs."""
+
+    def test_authority_rules_contain_web_search_authority(self):
+        from src.llm.prompt_builder import _render_authority_rules
+        rules = _render_authority_rules(is_conversational=False)
+        assert "live data" in rules
+        assert "current as of today" in rules
+        assert "Cite specific URLs" in rules
+        assert "Do not discount" in rules
+
+    def test_authority_rules_no_longer_hedge_web_results(self):
+        from src.llm.prompt_builder import _render_authority_rules
+        rules = _render_authority_rules(is_conversational=False)
+        assert "unverified" not in rules
+        # The old instruction said "hedge with 'according to web results'"
+        assert "according to web results" not in rules
+
+
+# ---------------------------------------------------------------------------
+# Vault citation suppression during web search
+# ---------------------------------------------------------------------------
+
+class TestVaultCitationSuppressionDuringWebSearch:
+    """When web search is the primary source and the only vault items
+    are profile records, the vault_sources signal should be suppressed
+    to avoid showing 'Source: Vault' on web search responses."""
+
+    def test_profile_only_vault_suppressed_during_web_search(self):
+        """Profile-only vault sources are suppressed when web search
+        is active — the UI should show 'Source: Web Search' not 'Vault'."""
+        from src.context.models import ContextPacket
+
+        packet = ContextPacket(
+            user_message="What is the current price of Bitcoin?",
+            memory_items=[
+                _make_item("profile", "2026-01-01T00-00-00"),
+            ],
+            web_items=[{"title": "BTC Price", "url": "https://example.com", "snippet": "$60k"}],
+        )
+        vault_sources = _build_vault_sources(packet)
+        # Profile items are excluded by _build_vault_sources already
+        assert len(vault_sources) == 0
+
+    def test_non_profile_vault_preserved_during_web_search(self):
+        """When actual vault records (non-profile) are retrieved alongside
+        web search, vault_sources should still fire — the response
+        genuinely draws on both sources."""
+        from src.context.models import ContextPacket
+
+        packet = ContextPacket(
+            user_message="What did I say about Bitcoin last week?",
+            memory_items=[
+                _make_item("profile", "2026-01-01T00-00-00"),
+                _make_item("conversation", "2026-04-05T10-00-00"),
+            ],
+            web_items=[{"title": "BTC Price", "url": "https://example.com", "snippet": "$60k"}],
+        )
+        vault_sources = _build_vault_sources(packet)
+        # conversation record should produce a vault source
+        assert len(vault_sources) == 1
+        assert vault_sources[0]["type"] == "conversation"

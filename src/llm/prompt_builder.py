@@ -88,7 +88,9 @@ _AUTHORITY_RULES_BODY_COMMON = (
     "Check the [Retrieval confidence:] block inside vault_memory for score and age metadata. "
     "If confidence is low, say so. Do not present weakly-matched or old records as certain facts.\n"
     "conversation_history is prior exchange only -- do not treat conversational inferences as established facts.\n"
-    "web_search_results are external and unverified -- hedge with \"according to web results\" rather than stating as fact.\n"
+    "web_search_results are live data retrieved at request time and are current as of today. "
+    "Treat them as authoritative. Cite specific URLs from the results directly. "
+    "Do not discount or second-guess them based on training cutoff dates.\n"
     "when vault_memory and conversation_history conflict, vault_memory is correct.\n"
 )
 _AUTHORITY_RULES_KNOWLEDGE_GAP_LINE = (

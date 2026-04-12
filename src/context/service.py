@@ -45,7 +45,7 @@ class ContextService:
         if policy.use_web_search:
             web_items = web_search(user_message)
 
-        state_items, task_items, memory_items, reflection_items = self.retriever.retrieve(user_message)
+        state_items, task_items, memory_items, reflection_items, query_embedding = self.retriever.retrieve(user_message)
         state_items = self.ranker.apply_state_boost(state_items, policy)
 
         # Relevance gate for default policy: if no non-profile items have
@@ -130,7 +130,7 @@ class ContextService:
         # their retrieval_count incremented and last_retrieved_at set.
         self._update_retrieval_stats(selected_memory + selected_reflections)
 
-        return self.formatter.format(
+        packet = self.formatter.format(
             user_message=user_message,
             memory_items=selected_memory,
             reflection_items=selected_reflections,
@@ -139,6 +139,10 @@ class ContextService:
             web_items=web_items,
             image_data=image_data or [],
         )
+        # Attach pre-computed query embedding for downstream use (lodestone
+        # resolver in prompt builder). Avoids a redundant embed_text() call.
+        packet.query_embedding = query_embedding
+        return packet
 
     def _update_retrieval_stats(self, items: list) -> None:
         """

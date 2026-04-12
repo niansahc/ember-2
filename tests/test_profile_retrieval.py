@@ -90,6 +90,7 @@ class TestProfileRetrievalRoute:
                 memory_type="profile",
                 limit=8,
                 min_score=0.0,
+                query_embedding=None,
             )
 
     def test_identity_query_surfaces_all_available_profiles(self):
@@ -117,6 +118,7 @@ class TestProfileRetrievalRoute:
                 memory_type="profile",
                 limit=8,
                 min_score=0.0,
+                query_embedding=None,
             )
 
     def test_non_identity_query_uses_restricted_params(self):
@@ -129,6 +131,7 @@ class TestProfileRetrievalRoute:
                 memory_type="profile",
                 limit=3,
                 min_score=0.3,
+                query_embedding=None,
             )
 
 

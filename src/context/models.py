@@ -39,6 +39,11 @@ class ContextPacket:
     # Populated by openai_adapter when the user uploads an image.
     image_data: list[str] = field(default_factory=list)
     summary: str | None = None
+    # Pre-computed query embedding for the user message. Populated once
+    # during context assembly and reused by the lodestone resolver in the
+    # prompt builder. Avoids a redundant embed_text() call (perf: 3→1
+    # embedding calls per request).
+    query_embedding: list[float] | None = None
 
     def all_items(self) -> list[ContextItem]:
         # Order matches TDD context packet order:

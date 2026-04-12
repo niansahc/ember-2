@@ -30,7 +30,7 @@ class TestTaskContextInjection:
              patch.object(ContextRetriever, "get_state_items", return_value=[]):
 
             retriever = ContextRetriever(task_resolver=resolver)
-            state_items, task_items, memory_items, reflection_items = retriever.retrieve("test")
+            state_items, task_items, memory_items, reflection_items, _ = retriever.retrieve("test")
 
         assert len(task_items) == 1
         assert task_items[0].title == "Fix retrieval bug"
@@ -49,7 +49,7 @@ class TestTaskContextInjection:
              patch.object(ContextRetriever, "get_state_items", return_value=[]):
 
             retriever = ContextRetriever(task_resolver=resolver)
-            _, task_items, _, _ = retriever.retrieve("test")
+            _, task_items, _, _, _ = retriever.retrieve("test")
 
         assert len(task_items) == 1
         assert task_items[0].title == "Active task"
@@ -66,7 +66,7 @@ class TestTaskContextInjection:
 
             retriever = ContextRetriever(task_resolver=broken_resolver)
             with pytest.warns(match="Task retrieval failed"):
-                _, task_items, _, _ = retriever.retrieve("test")
+                _, task_items, _, _, _ = retriever.retrieve("test")
 
         assert task_items == []
 

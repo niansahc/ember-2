@@ -339,7 +339,10 @@ class PromptBuilder:
         """
         try:
             from src.context.lodestone_resolver import resolve, to_prompt_text
-            records = resolve(context_packet.user_message)
+            records = resolve(
+                context_packet.user_message,
+                query_embedding=getattr(context_packet, "query_embedding", None),
+            )
             if suppress_relational:
                 records = [
                     r for r in records

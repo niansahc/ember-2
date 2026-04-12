@@ -46,6 +46,7 @@ def semantic_search(
     limit: int = 5,
     memory_type: str | None = None,
     min_score: float | None = 0.20,
+    query_embedding: list[float] | None = None,
 ):
     vault = get_private_vault_path()
     embeddings_dir = vault / "embeddings"
@@ -53,7 +54,8 @@ def semantic_search(
     if not embeddings_dir.exists():
         return []
 
-    query_embedding = embed_text(query)
+    if query_embedding is None:
+        query_embedding = embed_text(query)
     normalized_query = normalize_text(query)
     query_terms = extract_query_terms(normalized_query)
 

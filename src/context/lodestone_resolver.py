@@ -36,23 +36,30 @@ def _token_estimate(text: str) -> int:
     return int(len(text.split()) * 1.3)
 
 
-def resolve(user_message: str, max_records: int = 2) -> list[dict]:
+def resolve(
+    user_message: str,
+    max_records: int = 2,
+    query_embedding: list[float] | None = None,
+) -> list[dict]:
     """
     Return the most relevant confirmed lodestone records for the query.
 
     Uses semantic similarity between the user message and lodestone values.
     Returns up to max_records records, capped at TOKEN_BUDGET tokens total.
     Returns empty list if no confirmed records exist or embedding fails.
+
+    If query_embedding is provided, reuses it instead of computing a new one.
     """
     active = read_active()
     if not active:
         return []
 
-    try:
-        query_embedding = embed_text(user_message)
-    except Exception as exc:
-        logger.warning("[LODESTONE_RESOLVER] Embedding failed: %s", exc)
-        return []
+    if query_embedding is None:
+        try:
+            query_embedding = embed_text(user_message)
+        except Exception as exc:
+            logger.warning("[LODESTONE_RESOLVER] Embedding failed: %s", exc)
+            return []
 
     scored = []
     for record in active:

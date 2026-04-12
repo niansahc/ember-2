@@ -119,7 +119,7 @@ def test_service_passes_image_data_to_packet():
     from src.context.formatter import ContextFormatter
 
     mock_retriever = MagicMock(spec=ContextRetriever)
-    mock_retriever.retrieve.return_value = ([], [], [], [])
+    mock_retriever.retrieve.return_value = ([], [], [], [], None)
 
     service = ContextService(
         retriever=mock_retriever,
@@ -137,7 +137,7 @@ def test_service_image_data_defaults_empty():
     from src.context.formatter import ContextFormatter
 
     mock_retriever = MagicMock(spec=ContextRetriever)
-    mock_retriever.retrieve.return_value = ([], [], [], [])
+    mock_retriever.retrieve.return_value = ([], [], [], [], None)
 
     service = ContextService(
         retriever=mock_retriever,

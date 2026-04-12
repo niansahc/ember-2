@@ -83,10 +83,14 @@ class ContextRetriever:
             )
             return []
 
-    def get_memory_items(self, user_message: str) -> list[ContextItem]:
+    def get_memory_items(
+        self,
+        user_message: str,
+        query_embedding: list[float] | None = None,
+    ) -> list[ContextItem]:
         from src.retrieval.semantic_search import semantic_search
 
-        results = semantic_search(user_message, limit=8)
+        results = semantic_search(user_message, limit=8, query_embedding=query_embedding)
         items: list[ContextItem] = []
 
         for result in results:
@@ -180,7 +184,11 @@ class ContextRetriever:
         q = query.lower().strip()
         return any(marker in q for marker in self.IDENTITY_MARKERS)
 
-    def get_profile_items(self, user_message: str) -> list[ContextItem]:
+    def get_profile_items(
+        self,
+        user_message: str,
+        query_embedding: list[float] | None = None,
+    ) -> list[ContextItem]:
         is_identity = self._is_identity_query(user_message)
         limit = 8 if is_identity else 3
         min_score = 0.0 if is_identity else 0.3
@@ -190,6 +198,7 @@ class ContextRetriever:
             memory_type="profile",
             limit=limit,
             min_score=min_score,
+            query_embedding=query_embedding,
         )
 
         items: list[ContextItem] = []
@@ -246,12 +255,12 @@ class ContextRetriever:
 
     def retrieve(
         self, user_message: str
-    ) -> tuple[list[StateItem], list[TaskItem], list[ContextItem], list[ContextItem]]:
+    ) -> tuple[list[StateItem], list[TaskItem], list[ContextItem], list[ContextItem], list[float] | None]:
         """
         Retrieve all context for a user message.
 
-        Returns a 4-tuple in TDD context packet order:
-          (state_items, task_items, memory_items, reflection_items)
+        Returns a 5-tuple:
+          (state_items, task_items, memory_items, reflection_items, query_embedding)
 
         State and task items come first -- they represent current operational
         truth and should be injected into the prompt before reflections and
@@ -264,25 +273,36 @@ class ContextRetriever:
 
         Returns
         -------
-        tuple[list[StateItem], list[TaskItem], list[ContextItem], list[ContextItem]]
-            (state_items, task_items, memory_items, reflection_items)
+        tuple[list[StateItem], list[TaskItem], list[ContextItem], list[ContextItem], list[float] | None]
+            (state_items, task_items, memory_items, reflection_items, query_embedding)
         """
         state_items = self.get_state_items()
         task_items = self.get_task_items()
 
-        profile_items = self.get_profile_items(user_message)
+        # Compute the query embedding once and reuse across all semantic
+        # search paths. Before this optimization, each of get_profile_items,
+        # get_memory_items, and the lodestone resolver independently called
+        # embed_text(user_message) — 3 identical Ollama calls at ~50-150ms
+        # each. Computing once saves 100-300ms per request.
+        try:
+            from src.retrieval.embed_memory import embed_text
+            query_embedding = embed_text(user_message)
+        except Exception:
+            query_embedding = None
+
+        profile_items = self.get_profile_items(user_message, query_embedding=query_embedding)
         # get_memory_items() does a full semantic_search() which already searches
         # the conversation index. get_conversation_items() would load and search
         # the same conversation index again via search_conversation_memories().
         # Skipping get_conversation_items() to avoid the double index load --
         # conversation results are already included in get_memory_items().
-        memory_items = self.get_memory_items(user_message)
+        memory_items = self.get_memory_items(user_message, query_embedding=query_embedding)
         reflection_items = self.get_reflection_items(user_message)
 
         memory_items = profile_items + memory_items
         memory_items = self._deduplicate_items(memory_items)
 
-        return state_items, task_items, memory_items, reflection_items
+        return state_items, task_items, memory_items, reflection_items, query_embedding
 
     def _deduplicate_items(self, items: list[ContextItem]) -> list[ContextItem]:
         seen = set()

@@ -273,7 +273,18 @@ def health_check():
         "message": "Ember-2 API is running",
         "model": llm_adapter.model,
         "version": f"v{version}" if not version.startswith("v") else version,
+        "docker": _check_docker_status(),
     }
+
+
+def _check_docker_status() -> str:
+    """Ping SearXNG on localhost:8888 to determine if Docker services are up."""
+    try:
+        import httpx as _httpx
+        resp = _httpx.get("http://localhost:8888/", timeout=3.0)
+        return "ok" if resp.status_code < 500 else "down"
+    except Exception:
+        return "down"
 
 
 # ── Conversation session endpoints ─────────────────────────────────────
@@ -960,6 +971,45 @@ def pin_change_endpoint(request: Request, body: PinChangeRequest):
     return {"status": "changed"}
 
 
+# ── Service management endpoints ─────────────────────────────────────
+
+
+@app.post("/v1/service/{name}/restart")
+def service_restart_endpoint(name: str):
+    """Restart a named service (api or docker).
+
+    - api: not implemented as a self-restart (returns 501). The caller
+      should kill and re-launch uvicorn externally.
+    - docker: runs `docker compose restart` in the repo root.
+
+    Returns {"status": "restarting"} on success.
+    """
+    import subprocess
+
+    if name == "api":
+        raise HTTPException(
+            status_code=501,
+            detail="API self-restart is not supported. Kill and re-launch uvicorn externally.",
+        )
+
+    if name == "docker":
+        repo_root = Path(__file__).resolve().parents[2]
+        try:
+            subprocess.Popen(
+                ["docker", "compose", "restart"],
+                cwd=str(repo_root),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return {"status": "restarting", "service": "docker"}
+        except FileNotFoundError:
+            raise HTTPException(status_code=500, detail="docker command not found")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to restart docker: {exc}")
+
+    raise HTTPException(status_code=400, detail=f"Unknown service: {name}. Valid: api, docker.")
+
+
 # ── System endpoints ──────────────────────────────────────────────────
 
 
@@ -1046,6 +1096,44 @@ def vault_status_endpoint():
         "active_vault": str(get_private_vault_path()),
         "label": get_vault_label(),
     }
+
+
+@app.get("/v1/developer/status")
+def developer_status_endpoint():
+    """Return developer mode state, active vault, and available vaults.
+
+    Always accessible (does not require dev mode) so the UI can show
+    the developer panel toggle state without a chicken-and-egg problem.
+    """
+    from src.core.config import (
+        is_dev_mode,
+        get_private_vault_path,
+        get_vault_label,
+        get_known_vault_paths,
+    )
+    known = get_known_vault_paths()
+    return {
+        "dev_mode": is_dev_mode(),
+        "active_vault": {
+            "label": get_vault_label(),
+            "path": str(get_private_vault_path()),
+        },
+        "available_vaults": [
+            {"label": label, "path": path}
+            for label, path in sorted(known.items())
+        ],
+    }
+
+
+@app.get("/v1/developer/vaults")
+def developer_vaults_endpoint():
+    """Return list of configured vault paths from .env."""
+    from src.core.config import get_known_vault_paths
+    known = get_known_vault_paths()
+    return [
+        {"label": label, "path": path}
+        for label, path in sorted(known.items())
+    ]
 
 
 # ── Preferences endpoints ──────────────────────────────────────────────

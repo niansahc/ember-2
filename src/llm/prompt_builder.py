@@ -93,6 +93,7 @@ class PromptBuilder:
         project_name: str | None = None,
         last_session_label: str | None = None,
         suppress_relational_lodestone: bool = False,
+        model: str | None = None,
     ) -> str:
         # System prompt with nature (dual injection) + identity rules at front
         system_sections: list[str] = [
@@ -101,6 +102,7 @@ class PromptBuilder:
             self.system_prompt,                     # System prompt
             self._build_identity_rules_section(),   # Identity rules
             self._build_lodestone_seed_section(),   # Lodestone seed layer
+            self._build_runtime_section(model),     # Runtime model identity
             self._build_date_section(),
             self._build_style_section(style),
             self._build_capabilities_section(),
@@ -153,6 +155,29 @@ class PromptBuilder:
         if not last_session_label:
             return ""
         return f"<last_session>\n{last_session_label}\n</last_session>"
+
+    def _build_runtime_section(self, model: str | None) -> str:
+        """Inject the active model name so Ember can answer "what model are
+        you running on?" directly rather than deflecting with "I don't have
+        direct experience with that model."
+
+        Q7 regression: asked about qwen3:8b, Ember said "I don't have direct
+        experience with Qwen3:8b." Root cause: the model name known to
+        LLMAdapter.__init__ was never propagated to the prompt, so Ember had
+        no way to know which model she was. Injected as a short runtime
+        block near the identity rules so the model treats it as first-person
+        identity, not external trivia.
+        """
+        if not model:
+            return ""
+        return (
+            "<runtime>\n"
+            f"You are currently running on the {model} model. "
+            "When asked which model you are or what you think of your own "
+            "model, answer directly from this fact — do not deflect with "
+            "\"I don't have direct experience with that model.\"\n"
+            "</runtime>"
+        )
 
     def _build_date_section(self) -> str:
         """Inject current date and time of day for temporal grounding."""

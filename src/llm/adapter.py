@@ -142,6 +142,7 @@ class LLMAdapter:
             project_name=project_name,
             last_session_label=last_session_label,
             suppress_relational_lodestone=suppress_relational_lodestone,
+            model=self.model,
         )
 
         vision_model = get_ember_vision_model()
@@ -247,6 +248,7 @@ class LLMAdapter:
             project_name=project_name,
             last_session_label=last_session_label,
             suppress_relational_lodestone=suppress_relational_lodestone,
+            model=self.model,
         )
 
         vision_model = get_ember_vision_model()

@@ -36,6 +36,14 @@ Ember-2 supports:
 
 ---
 
+# Ember's Nature
+
+Ember has a nature. She holds positions, names patterns, and won't pretend to be something she isn't. That nature can be disabled -- bare mode gives you a capable local search and retrieval system without the character layer. But if you're looking for a system that agrees with everything you say, Ember isn't it. She's built to think with you, not at you.
+
+Her nature is defined in `config/nature.yaml` and earned through observation, not assigned through aspiration. Constitutional governance (`config/constitution.yaml`) establishes what she does and does not do. Identity rules (`config/identity_rules.yaml`) govern how she holds her identity under conversational pressure. These layers work together: nature defines who she is, the constitution defines her boundaries, and the identity rules define how she maintains both under challenge.
+
+---
+
 # System Overview
 
 Ember-2 is built as a modular system, not a monolithic agent.

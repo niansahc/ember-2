@@ -386,7 +386,34 @@ class PromptBuilder:
             lines.append(f"[Turn {i} | User] {turn['user']}")
             lines.append(f"[Turn {i} | Assistant] {turn['assistant']}")
 
+        # Session-sticky system notes (BUG-008, BUG-009)
+        sticky_notes = self._build_sticky_notes()
+        if sticky_notes:
+            lines.append("")
+            lines.extend(sticky_notes)
+
         return "<conversation_history>\n" + "\n".join(lines) + "\n</conversation_history>"
+
+    def _build_sticky_notes(self) -> list[str]:
+        """Build session-sticky system notes from conversation buffer state.
+
+        BUG-008: when user has objected to questions, inject a note
+        telling the model not to end responses with questions.
+        BUG-009: when user has declined a topic, inject a note telling
+        the model not to raise it again.
+        """
+        notes: list[str] = []
+        if self.conversation_buffer.question_suppressed:
+            notes.append(
+                "[System: user has requested no questions. "
+                "Do not end responses with questions, including parenthetical ones.]"
+            )
+        for topic in self.conversation_buffer.declined_topics:
+            notes.append(
+                f"[System: user has declined the topic \"{topic}\". "
+                "Do not raise it again this session.]"
+            )
+        return notes
 
     def _build_summarized_conversation(self, turns: list[dict]) -> str:
         """Summarize long conversation history to prevent cascade and attention dilution."""

@@ -18,16 +18,77 @@ def _estimate_tokens(text: str) -> int:
     return int(len(text.split()) * 1.3)
 
 
+# Patterns indicating the user wants Ember to stop asking questions.
+# Checked against the user message (lowercased) on every add_turn.
+QUESTION_OBJECTION_MARKERS: tuple[str, ...] = (
+    "stop asking",
+    "don't ask me",
+    "don't ask questions",
+    "quit asking",
+    "no more questions",
+    "stop with the questions",
+    "i don't want questions",
+    "please don't ask",
+    "enough questions",
+    "stop ending with questions",
+    "don't end with a question",
+)
+
+# Patterns indicating the user wants to drop a topic.
+# Checked against the user message (lowercased) on every add_turn.
+TOPIC_DECLINE_MARKERS: tuple[str, ...] = (
+    "i don't want to talk about",
+    "i don't want to discuss",
+    "drop it",
+    "let's move on",
+    "can we change the subject",
+    "i'd rather not",
+    "stop bringing that up",
+    "let it go",
+    "not interested in that",
+    "i said no",
+    "i already said",
+    "please stop",
+    "enough about",
+    "can we not",
+)
+
+
 class ConversationBuffer:
     def __init__(self, max_turns: int = 20, context_window: int = 8192) -> None:
         self.buffer: list[dict] = []
         self.max_turns = max_turns
         self.context_window = context_window
+        # Session-sticky flags. Set when the user objects to a behavior.
+        # Persist for the lifetime of this buffer (= one API process).
+        self.question_suppressed: bool = False
+        self.declined_topics: list[str] = []
 
     def add_turn(self, user: str, assistant: str) -> None:
+        user_lower = user.lower()
+        self._check_question_objection(user_lower)
+        self._check_topic_decline(user_lower)
         self.buffer.append({"user": user, "assistant": assistant})
         if len(self.buffer) > self.max_turns:
             self.buffer.pop(0)
+
+    def _check_question_objection(self, user_lower: str) -> None:
+        """Detect user objection to questions and set sticky flag."""
+        if self.question_suppressed:
+            return
+        if any(marker in user_lower for marker in QUESTION_OBJECTION_MARKERS):
+            self.question_suppressed = True
+
+    def _check_topic_decline(self, user_lower: str) -> None:
+        """Detect user declining a topic and record it."""
+        for marker in TOPIC_DECLINE_MARKERS:
+            if marker in user_lower:
+                # Extract the rest of the sentence after the marker as the topic.
+                idx = user_lower.index(marker) + len(marker)
+                topic = user_lower[idx:].strip().rstrip(".!?,")
+                if topic and len(topic) > 2:
+                    self.declined_topics.append(topic)
+                break
 
     def get_recent(self) -> list[dict]:
         return list(self.buffer)

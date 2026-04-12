@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 
 import httpx
@@ -45,6 +46,26 @@ def _normalize_unicode_tags(text: str) -> str:
 
 _THINK_OPEN_PATTERN = r"<[\s\ufeff]*think[\s\ufeff]*>"
 _THINK_CLOSE_PATTERN = r"<[\s\ufeff]*/[\s\ufeff]*think[\s\ufeff]*>"
+
+# BUG-008: pattern for trailing parenthetical questions.
+# Matches a final parenthesized sentence that ends with a question mark,
+# optionally followed by whitespace. Used by strip_trailing_parenthetical_question.
+_TRAILING_PAREN_QUESTION = re.compile(r"\s*\([^)]*\?\)\s*$")
+
+
+def strip_trailing_parenthetical_question(text: str) -> str:
+    """Remove a trailing parenthetical question from the response.
+
+    BUG-008: qwen3:8b wraps engagement questions in parentheses to
+    bypass the closing_questions identity rule. When the conversation
+    buffer's question_suppressed flag is True, this function strips
+    the trailing pattern before the response reaches the user.
+
+    Only strips if the response ends with the pattern — interior
+    parenthetical questions are left alone (they may be part of the
+    content the user asked for).
+    """
+    return _TRAILING_PAREN_QUESTION.sub("", text).rstrip()
 
 
 def strip_think_blocks(text: str) -> str:
@@ -207,6 +228,12 @@ class LLMAdapter:
                 final_response = (
                     review_result.refusal_message or "I can't help with that."
                 )
+
+        # BUG-008: strip trailing parenthetical questions when user has
+        # objected to questions. Runs after safety review so the review
+        # sees the unfiltered draft, but the user sees the cleaned output.
+        if self.prompt_builder.conversation_buffer.question_suppressed:
+            final_response = strip_trailing_parenthetical_question(final_response)
 
         self.prompt_builder.conversation_buffer.add_turn(
             context_packet.user_message,

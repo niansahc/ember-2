@@ -1852,6 +1852,9 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 - **OpenClaw** (github.com/openclaw/openclaw, Peter Steinberger, 2026) — reference for SKILL.md integration format and proactive heartbeat pattern. Already referenced in v0.13.0 and v0.14.0 roadmap items. Awomosu's analysis of OpenClaw skills corpus provides empirical data on community use patterns.
   → informs: future connector and skill architecture
 
+- **ELEPHANT** (ICLR 2026, arXiv) — social sycophancy as face-preservation. Theory: sycophancy is excessive preservation of the user's face via affirming (positive face) or avoiding challenge (negative face). Extends beyond explicit agreement detection to implicit face-preservation patterns. Cited via Kirk et al. socioaffective alignment framework. Design implication: the deviation engine's sycophancy detection currently catches explicit agreement-under-pushback (position_collapse) and hedging-as-avoidance (relational_hedging), but does not name face-preservation as a pattern class. Face-preservation is a distinct behavioral mode — affirming the user's self-image rather than agreeing with their claims. The deviation engine has no detector for this. Log as v0.16.0 candidate: add face-preservation as a named deviation pattern class alongside position_collapse and sycophancy.
+  → informs: v0.16.0 (deviation engine pattern classes, sycophancy detection expansion)
+
 ---
 
 ## 50.2 Graduated

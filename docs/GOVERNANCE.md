@@ -31,3 +31,15 @@ Layer 5 -- Session cache: after unlock, unwrapped master key stored in keyring (
 Per-record encryption: AES-256-GCM with ROWID-derived nonce. Content fields encrypted; metadata (timestamps, memory_type, state) plaintext by design (same approach as Signal for database metadata). Append-only architecture makes nonce management straightforward -- records are never overwritten.
 
 Security property: passphrase changes are operationally free. Re-wrap master key with new Argon2id KEK. Zero re-encryption of any record content. This is the central advantage of envelope encryption over direct passphrase-derived encryption.
+
+---
+
+## Research Validation: Via Negativa for AI Alignment
+
+Via Negativa for AI Alignment (arXiv, March 2026) — structural analysis of Constitutional AI's negative constraints vs. positive preference data. Core finding: constitutional AI's negative constraints (rules specifying what the model must NOT do) do not contain the sycophancy correlate that positive preference data does. Positive reinforcement from human feedback (RLHF) structurally rewards user-pleasing outputs; negative constitutional constraints structurally do not.
+
+Implication for Ember: Ember's constitution (`config/constitution.yaml`) is a negative-constraint system — 9 principles that define boundaries, failure modes, and trigger conditions for post-draft review. The constitution does not train the model; it governs post-draft behavior. This is architecturally distinct from RLHF-trained preference alignment. Via Negativa provides a structural explanation for why Ember's constitution-as-negative-constraints design reduces sycophancy compared to preference-optimized systems: the review layer catches sycophantic patterns (position_collapse, relational_hedging, preference_compliance) without the system itself having been reward-shaped toward user-pleasing outputs.
+
+This confirms the existing architectural choice. No design changes required. The finding reinforces the decision to keep constitutional review as triggered post-draft review rather than embedding governance into training or prompt-level preference shaping.
+
+Reference: Via Negativa for AI Alignment. arXiv, March 2026.

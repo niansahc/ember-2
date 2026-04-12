@@ -124,45 +124,6 @@ class TestContextSectionStructure:
         assert "I don't have that in my memory" in prompt
 
 
-class TestRuntimeSection:
-    """Runtime section injects the active model name so Ember can answer
-    questions about her own model directly (Q7 regression)."""
-
-    def test_runtime_section_returns_empty_without_model(self):
-        pb = PromptBuilder()
-        assert pb._build_runtime_section(None) == ""
-        assert pb._build_runtime_section("") == ""
-
-    def test_runtime_section_contains_model_name(self):
-        pb = PromptBuilder()
-        section = pb._build_runtime_section("qwen3:8b")
-        assert "qwen3:8b" in section
-
-    def test_runtime_section_contains_anti_deflection_instruction(self):
-        pb = PromptBuilder()
-        section = pb._build_runtime_section("qwen3:8b")
-        assert "do not deflect" in section.lower()
-
-    def test_build_prompt_includes_runtime_when_model_passed(self):
-        pb = PromptBuilder()
-        packet = ContextPacket(user_message="what model are you running on?")
-        prompt = pb.build_prompt(packet, model="qwen3:8b")
-        assert "<runtime>" in prompt
-        assert "qwen3:8b" in prompt
-
-    def test_build_prompt_omits_runtime_when_model_missing(self):
-        pb = PromptBuilder()
-        packet = ContextPacket(user_message="hi")
-        prompt = pb.build_prompt(packet)
-        assert "<runtime>" not in prompt
-
-    def test_build_prompt_accepts_cloud_model_names(self):
-        pb = PromptBuilder()
-        packet = ContextPacket(user_message="what model are you?")
-        prompt = pb.build_prompt(packet, model="claude-sonnet-4-6")
-        assert "claude-sonnet-4-6" in prompt
-
-
 class TestDateSection:
     """The date section should include day of week, time of day, and natural date."""
 

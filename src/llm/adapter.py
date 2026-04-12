@@ -142,7 +142,6 @@ class LLMAdapter:
             project_name=project_name,
             last_session_label=last_session_label,
             suppress_relational_lodestone=suppress_relational_lodestone,
-            model=self.model,
         )
 
         vision_model = get_ember_vision_model()
@@ -248,7 +247,6 @@ class LLMAdapter:
             project_name=project_name,
             last_session_label=last_session_label,
             suppress_relational_lodestone=suppress_relational_lodestone,
-            model=self.model,
         )
 
         vision_model = get_ember_vision_model()
@@ -620,7 +618,6 @@ class LLMAdapter:
         """Plain summarization call — neutral system message, no JSON instruction.
         Used for buffer compression to avoid leaking JSON into conversation context."""
         response = ollama.chat(
-            model=self.model,
             messages=[
                 {
                     "role": "system",
@@ -636,7 +633,6 @@ class LLMAdapter:
 
     def _call_model_with_prompt(self, prompt: str) -> str:
         response = ollama.chat(
-            model=self.model,
             messages=[
                 {
                     "role": "system",

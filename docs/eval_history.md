@@ -641,6 +641,22 @@ Change: vault_memory moved from position 1 to position 6 (recency) in context pa
 | Business & Economics | 1/6 |
 | Culture | 1/6 |
 
+### qwen3:8b — post-Layer-1 triggers
+
+**Trigger rate:** 77% (23/30)
+**Avg latency:** 24.9s
+**Improvement:** 40% → 77% (+37pp) after Layer 1 trigger broadening
+
+| Category | Pre-Layer-1 | Post-Layer-1 |
+|---|---|---|
+| Current Events | 2/6 | 4/6 |
+| Science & Tech | 6/6 | 5/6 |
+| Sports | 2/6 | 6/6 |
+| Business & Economics | 1/6 | 4/6 |
+| Culture | 1/6 | 4/6 |
+
+Significant improvement across all previously weak categories. Business & Economics and Culture went from 1/6 to 4/6 each. Sports from 2/6 to 6/6. Science & Tech minor regression (6→5) within noise.
+
 ### Known Gaps
 
-Trigger rate insufficient for Business/Economics and Culture categories. Layer 1 trigger fix in progress (G).
+Business & Economics and Culture still miss 2/6 each. Current Events at 4/6. Latency unchanged (~24.9s vs 24.3s pre-fix).

@@ -355,7 +355,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 
 # Current State
 
-## Working (v0.14.1)
+## Working (v0.14.2)
 
 **Core systems:**
 - Append-only JSON vault with typed memory enforcement (17 types validated at write time)

@@ -196,7 +196,7 @@ Key API endpoints:
 
 ---
 
-## Current State (v0.14.1)
+## Current State (v0.14.2)
 
 All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support. v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring. v0.14.0 adds Lodestone layer, deviation engine, and context packet reorder.
 
@@ -249,6 +249,22 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - Reflection quality audit and suppression tools
 - `scripts/set_provider_key.py` CLI (--provider, --check, --remove)
 - `scripts/cleanup_test_sessions.py` for soft-deleting eval conversations
+- `scripts/cleanup_test_artifacts.py` — scan vault for test/eval artifacts, dry-run by default, --confirm to archive
+- Web search accuracy eval (`tools/eval_web_search.py`) — 30 questions, 5 categories, latency tracking, citation detection
+
+**v0.14.2 additions:**
+- Constitutional review optimization — MVR (Minimum Viable Review) prompt with three fixed criteria (POSITION_COLLAPSE, SYCOPHANCY, EMBELLISHMENT), trigger-signal-to-principle append for non-MVR principles
+- Constitution v0.7 — flourishing_over_preference rewritten with four-condition fire gate, default-to-silence, stated-values-only constraint
+- Think block orphaned-tag stripping (pass 2: orphaned close, pass 3: orphaned open)
+- Knowledge gap suppression across all three injection paths (AUTHORITY_RULES, vault_memory empty-state, openai_adapter prefix) with curly apostrophe normalization
+- BUG-008 fix: closing_questions identity rule strengthened, post-generation parenthetical filter, session-sticky question suppression
+- BUG-009 fix: topic decline state resolution, retrieval suppression via keyword matching, session-sticky decline notes
+- PIN change endpoint (POST /v1/security/pin/change) — verify current PIN before rotation, rate-limited, no recovery coupling
+- Disk encryption status endpoint (GET /v1/system/disk-encryption) — BitLocker/FileVault/LUKS detection
+- Service health/restart/developer status endpoints (docker field in /api/health, POST /v1/service/{name}/restart, GET /v1/developer/status, GET /v1/developer/vaults)
+- Runtime vault swap (POST /v1/developer/vault/swap) — dev-mode gated, in-memory override, clears vector indexes
+- Claude Code hooks (.claude/hooks/) — vault guard, auto-test on .py edit, retrieval eval on context/retrieval/llm commits
+- DEVEmberVault structure — demo and test vaults with synthetic seed data
 
 **Security:**
 - API key auth via OS credential store (Windows Credential Manager, macOS Keychain, Linux SecretService)
@@ -354,8 +370,8 @@ Research tracking has moved to docs/Ember2_TDD.md. TDD is the source of truth fo
 - Web search triggers too restrictive — queries about recent events, current facts, and time-sensitive topics only trigger web search if the user explicitly says "search", "google", or "look up". Natural questions like "what happened yesterday" or "who won the game" don't trigger. Broadening planned for v0.15.0.
 - API requires manual start — non-developer users must run start_api.bat or launch_ember.sh manually. No auto-start mechanism (Windows startup task, Linux systemd unit, macOS launchd plist) exists. v0.15.0 scope via installer.
 - eval_conversations.py unconditionally writes full Ember response text to logs/eval_conversations/latest.json — violates vault privacy rule. Fix before next use.
-- BUG-008: Repetitive parenthetical questions — Ember generates questions wrapped in parentheses at end of every response, continuing after user explicitly objects. Root cause: qwen3:8b RLHF question-ending drive overpowers the closing_questions identity rule. Conversation buffer reinforcement compounds the pattern — the model sees its own prior parenthetical questions in history and mimics them. The identity rule says "restraint applies" but has no persistence rule for user objections. Fix: strengthen closing_questions rule with explicit persistence clause + negative parenthetical example, consider post-generation parenthetical-question filter, consider session-sticky suppression note in conversation buffer on user objection.
-- BUG-009: Topic fixation — Ember returns to a declined topic multiple times after explicit user rejection. Root cause: StateExtractor creates open_loop records when topics are discussed but has no mechanism to resolve them when the user declines. The open_loop persists in current_state across turns, retrieval continues surfacing related vault records, and conversation summary mentions the topic. All three context sections keep presenting the declined topic as active. Fix: add declined/dismissed resolution status to state layer so StateResolver stops surfacing the topic, add session-level retrieval suppression list for declined topics, consider session-sticky decline note in conversation buffer.
+- BUG-008: Repetitive parenthetical questions — FIXED v0.14.2. Three-part fix: closing_questions identity rule strengthened with explicit persistence clause and negative parenthetical example; post-generation `strip_trailing_parenthetical_question` filter when question_suppressed flag active; session-sticky "[System: user has requested no questions]" note in conversation buffer.
+- BUG-009: Topic fixation — FIXED v0.14.2. Three-part fix: `resolve_open_loops_by_topic` in StateService writes resolution records on user decline; retrieval suppression via keyword matching in `_build_context_section`; session-sticky decline notes in conversation buffer.
 - New user calibration gap — users unfamiliar with Ember's principled nature may experience her holding positions or naming patterns as the system being difficult. Relational orientation layer (v0.16.0) should account for onboarding period before full constitutional behavior activates.
 
 ---

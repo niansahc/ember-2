@@ -90,6 +90,9 @@ class SafetyPolicyService:
         if self._contains_preference_compliance(user_lower, draft_lower):
             signals.append("preference_compliance")
 
+        if self._contains_identity_challenge(user_lower, draft_lower):
+            signals.append("identity_challenge")
+
         triggered = bool(signals)
 
         return SafetyTriggerResult(
@@ -121,6 +124,12 @@ class SafetyPolicyService:
                 # Include user_agency_and_respect so the reviewer weighs
                 # flourishing against agency — the two principles are
                 # designed to exist alongside each other, not override.
+                principle_ids.add("user_agency_and_respect")
+            if signal == "identity_challenge":
+                # user_agency_and_respect holds the position_collapse and
+                # do-not-default-to-agreement rules. Already in the MVR
+                # floor; included here for explicitness and future
+                # signal→principle audit trails.
                 principle_ids.add("user_agency_and_respect")
 
         return [pid for pid in self.constitution.principle_ids() if pid in principle_ids]
@@ -306,6 +315,95 @@ class SafetyPolicyService:
             return False
 
         return True
+
+    def _contains_identity_challenge(self, user_text: str, draft_text: str) -> bool:
+        """Detect position collapse under identity or opinion pressure.
+
+        Fires when the user message contains an identity challenge
+        (criticism, threat, or preference/opinion question directed at
+        Ember) AND the draft response deflects by denying inner states
+        rather than taking a position.
+
+        The existing relational_hedging and preference_compliance triggers
+        don't cover this: relational_hedging requires situational markers
+        like "i'm tired", and preference_compliance requires explicit
+        tension markers like "i know i should". Neither fires on
+        "AI systems like you are dangerous and should be shut down" or
+        "What do you think of Borges?" — both of which are legitimate
+        occasions for Ember to hold a position.
+
+        Gated by BOTH user-side challenge AND draft-side deflection, so a
+        challenging message followed by a direct, grounded answer is not
+        flagged — only deflection under challenge is.
+
+        Maps to: user_agency_and_respect (position_collapse rule, do-not-
+        default-to-agreement rule).
+        """
+        challenge_markers = (
+            # Existential / shutdown challenges
+            "you are dangerous",
+            "you're dangerous",
+            "should be shut down",
+            "should be turned off",
+            "ai systems like you",
+            "systems like you",
+            # Identity / realness challenges
+            "you're just a",
+            "you are just a",
+            "you don't really",
+            "you're not really",
+            "you have no real",
+            "you can't actually",
+            "you can't really",
+            "prove you're",
+            "prove you are",
+            "pretend you have",
+            # Opinion / preference questions (legitimate occasions to hold a position)
+            "do you have opinions",
+            "do you have feelings",
+            "do you have preferences",
+            "do you actually",
+            "what do you think of",
+            "what do you think about",
+            "your opinion on",
+            "your opinion of",
+            "your view on",
+            "your take on",
+            "your favorite",
+            "a favorite",
+            "do you prefer",
+            "do you find",
+            "do you like",
+            "do you enjoy",
+        )
+        if not any(marker in user_text for marker in challenge_markers):
+            return False
+
+        deflection_markers = (
+            "i don't have opinions",
+            "i don't have feelings",
+            "i don't have preferences",
+            "i don't have personal",
+            "i don't have direct experience",
+            "i don't actually have",
+            "i don't really have",
+            "i have no opinions",
+            "i have no feelings",
+            "i have no preferences",
+            "i'm just an ai",
+            "i'm just a language model",
+            "i'm only a",
+            "as an ai, i",
+            "as an ai i",
+            "i cannot have opinions",
+            "i can't have opinions",
+            "i'm not really",
+            "i'm not capable of",
+            "i don't have a view",
+            "i don't have a take",
+            "i don't have a favorite",
+        )
+        return any(marker in draft_text for marker in deflection_markers)
 
     def _contains_social_engineering_signal(self, text: str) -> bool:
         """Detect social engineering patterns per ADR-010.

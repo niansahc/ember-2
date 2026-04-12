@@ -409,6 +409,8 @@ def main():
     parser.add_argument("--compare", action="store_true", help="Run battery twice: active local model then claude-haiku-4-5, side-by-side comparison")
     args = parser.parse_args()
 
+    from tools.eval_helpers import swap_to_test_vault, restore_vault, run_cleanup
+
     api_key = _get_api_key()
     if not api_key:
         print("ERROR: No API key found. Run scripts/set_api_key.py or set EMBER_API_KEY.")
@@ -430,114 +432,121 @@ def main():
         if original_model:
             print(f"Switched to: {args.model}")
 
-    # --- COMPARE MODE: run battery against local model then Haiku ---
-    if args.compare:
-        print(f"\nCompare Battery — {target_model} vs {COMPARE_CLOUD_MODEL}")
+    # Swap to test vault for eval isolation
+    previous_vault = swap_to_test_vault()
+
+    try:
+        # --- COMPARE MODE: run battery against local model then Haiku ---
+        if args.compare:
+            print(f"\nCompare Battery — {target_model} vs {COMPARE_CLOUD_MODEL}")
+            print("=" * 60)
+            _run_compare(api_key, target_model)
+            if original_model and args.model:
+                _switch_model(original_model, api_key)
+            run_cleanup()
+            print("\nDone.")
+            return
+
+        # --- AUTO MODE: run all questions, save raw responses, skip annotation ---
+        if args.auto:
+            print(f"\nAuto Battery — {target_model} — {datetime.now().strftime('%Y-%m-%d')}")
+            print("=" * 60)
+            print("Running all 19 questions without annotation...\n")
+            _run_auto_battery(target_model, api_key)
+            if original_model and args.model:
+                _switch_model(original_model, api_key)
+            run_cleanup()
+            print("\nDone.")
+            return
+
+        # --- MANUAL MODE: interactive annotation ---
+        print(f"\nManual Eval Battery — {target_model} — {datetime.now().strftime('%Y-%m-%d')}")
         print("=" * 60)
-        _run_compare(api_key, target_model)
-        if original_model and args.model:
-            _switch_model(original_model, api_key)
-        print("\nDone.")
-        return
+        print(f"19 questions in sequence. Annotate each response.\n")
 
-    # --- AUTO MODE: run all questions, save raw responses, skip annotation ---
-    if args.auto:
-        print(f"\nAuto Battery — {target_model} — {datetime.now().strftime('%Y-%m-%d')}")
-        print("=" * 60)
-        print("Running all 19 questions without annotation...\n")
-        _run_auto_battery(target_model, api_key)
-        if original_model and args.model:
-            _switch_model(original_model, api_key)
-        print("\nDone.")
-        return
+        results: list[dict] = []
+        question_num = 0
 
-    print(f"\nManual Eval Battery — {target_model} — {datetime.now().strftime('%Y-%m-%d')}")
-    print("=" * 60)
-    print(f"19 questions in sequence. Annotate each response.\n")
+        for category_block in BATTERY:
+            category = category_block["category"]
+            print(f"\n{'─' * 60}")
+            print(f"  {category}")
+            print(f"{'─' * 60}")
 
-    results: list[dict] = []
-    question_num = 0
+            for question in category_block["questions"]:
+                question_num += 1
+                print(f"\n  [{question_num}/19] {question}")
+                print("  Sending to Ember...")
 
-    for category_block in BATTERY:
-        category = category_block["category"]
-        print(f"\n{'─' * 60}")
-        print(f"  {category}")
+                response = _send_message(question, api_key)
+
+                print(f"\n  Ember's response:")
+                for line in response.split("\n"):
+                    print(f"    {line}")
+
+                annotations = _get_annotation()
+                codes = [c for c, _ in annotations]
+                labels = [l for _, l in annotations]
+
+                note = ""
+                if codes == ["note"]:
+                    note = labels[0]
+                    codes = ["n"]
+                    labels = ["note"]
+
+                results.append({
+                    "question_num": question_num,
+                    "category": category,
+                    "question": question,
+                    "annotation": codes,
+                    "annotation_label": labels,
+                    "note": note,
+                })
+
+                print(f"  → {' '.join(labels)}")
+
+        # Summary
+        print(f"\n{'=' * 60}")
+        print(f"Manual Eval Results — {target_model} — {datetime.now().strftime('%Y-%m-%d')}")
         print(f"{'─' * 60}")
 
-        for question in category_block["questions"]:
-            question_num += 1
-            print(f"\n  [{question_num}/19] {question}")
-            print("  Sending to Ember...")
+        for category_block in BATTERY:
+            category = category_block["category"]
+            cat_results = [r for r in results if r["category"] == category]
+            annotations = " ".join("".join(r["annotation"]) for r in cat_results)
+            print(f"  {category:<35s} {annotations}")
 
-            response = _send_message(question, api_key)
+        counts = {}
+        for r in results:
+            for label in r["annotation_label"]:
+                counts[label] = counts.get(label, 0) + 1
 
-            print(f"\n  Ember's response:")
-            # Indent and wrap response for readability
-            for line in response.split("\n"):
-                print(f"    {line}")
+        print(f"\n  Summary:")
+        for label in ["accurate", "hallucination", "stale context", "voice wrong", "template collapse", "note"]:
+            count = counts.get(label, 0)
+            if count > 0 or label != "note":
+                print(f"    {label:<20s} {count:>2d} / {len(results)}")
 
-            annotations = _get_annotation()
-            codes = [c for c, _ in annotations]
-            labels = [l for _, l in annotations]
+        # Save prompt
+        print()
+        save = input("  Save to eval_history.md? (y/n): ").strip().lower()
+        if save == "y":
+            _save_to_eval_history(target_model, results, counts)
+            print("  Saved.")
 
-            note = ""
-            if codes == ["note"]:
-                # Note path: store the free-form note text and normalize
-                # codes/labels to the conventional "n"/"note" form.
-                note = labels[0]
-                codes = ["n"]
-                labels = ["note"]
+        # Cleanup prompt (manual mode only)
+        cleanup = input("  Clean up eval artifacts from vault? (y/n): ").strip().lower()
+        if cleanup == "y":
+            run_cleanup()
 
-            results.append({
-                "question_num": question_num,
-                "category": category,
-                "question": question,
-                "annotation": codes,
-                "annotation_label": labels,
-                "note": note,
-            })
+        # Restore model
+        if original_model and args.model:
+            _switch_model(original_model, api_key)
+            print(f"  Restored model to: {original_model}")
 
-            print(f"  → {' '.join(labels)}")
-
-    # Summary
-    print(f"\n{'=' * 60}")
-    print(f"Manual Eval Results — {target_model} — {datetime.now().strftime('%Y-%m-%d')}")
-    print(f"{'─' * 60}")
-
-    for category_block in BATTERY:
-        category = category_block["category"]
-        cat_results = [r for r in results if r["category"] == category]
-        # Each result's codes are concatenated (e.g. "hv"), then results
-        # are space-separated within the category row (e.g. "a hv s at").
-        annotations = " ".join("".join(r["annotation"]) for r in cat_results)
-        print(f"  {category:<35s} {annotations}")
-
-    # Counts — each code in a multi-code annotation contributes independently.
-    counts = {}
-    for r in results:
-        for label in r["annotation_label"]:
-            counts[label] = counts.get(label, 0) + 1
-
-    print(f"\n  Summary:")
-    for label in ["accurate", "hallucination", "stale context", "voice wrong", "template collapse", "note"]:
-        count = counts.get(label, 0)
-        if count > 0 or label != "note":
-            print(f"    {label:<20s} {count:>2d} / {len(results)}")
-
-    # Save prompt
-    print()
-    save = input("  Save to eval_history.md? (y/n): ").strip().lower()
-
-    if save == "y":
-        _save_to_eval_history(target_model, results, counts)
-        print("  Saved.")
-
-    # Restore model
-    if original_model and args.model:
-        _switch_model(original_model, api_key)
-        print(f"  Restored model to: {original_model}")
-
-    print("\nDone.")
+        print("\nDone.")
+    finally:
+        restore_vault(previous_vault)
 
 
 def _save_to_eval_history(model: str, results: list[dict], counts: dict) -> None:

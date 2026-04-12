@@ -210,6 +210,8 @@ def main():
                         help="Enable autonomous web search for the eval session")
     args = parser.parse_args()
 
+    from tools.eval_helpers import swap_to_test_vault, restore_vault, run_cleanup
+
     api_key = _get_api_key()
     if not api_key:
         print("ERROR: No API key. Run scripts/set_api_key.py or set EMBER_API_KEY.")
@@ -222,6 +224,9 @@ def main():
     except Exception:
         print(f"ERROR: API unreachable at {API_BASE}")
         sys.exit(1)
+
+    # Swap to test vault for eval isolation
+    previous_vault = swap_to_test_vault()
 
     # Auto-search toggle
     prev_autonomous = None
@@ -337,6 +342,10 @@ def main():
     log_path.write_text("".join(log_lines), encoding="utf-8")
     print(f"\nMetadata saved to: {log_path}")
     print("(Response previews shown above — full text not written to disk)")
+
+    # Post-run cleanup and vault restore
+    run_cleanup()
+    restore_vault(previous_vault)
 
 
 if __name__ == "__main__":

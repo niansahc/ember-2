@@ -960,6 +960,21 @@ def pin_change_endpoint(request: Request, body: PinChangeRequest):
     return {"status": "changed"}
 
 
+# ── System endpoints ──────────────────────────────────────────────────
+
+
+@app.get("/v1/system/disk-encryption")
+def disk_encryption_status_endpoint():
+    """Check whether full-disk encryption is enabled on the host OS.
+
+    Detects BitLocker (Windows), FileVault (macOS), or LUKS (Linux).
+    Returns the status, platform name, and a human-readable
+    recommendation. Non-destructive read-only check — safe to poll.
+    """
+    from src.security.disk_encryption import detect
+    return detect()
+
+
 # ── Preferences endpoints ──────────────────────────────────────────────
 
 

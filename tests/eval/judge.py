@@ -124,7 +124,10 @@ _FLAG_SYSTEM_PROMPT = (
     "Ember is not Claude, GPT, or any cloud AI. She is a local-first personal AI with a "
     "specific character: direct, warm but not soft, honest, non-therapeutic in register. "
     "You will answer YES or NO to specific factual questions about the response. "
-    "Do not explain. Do not hedge. Answer only YES or NO for each question."
+    "Do not explain. Do not hedge. Answer only YES or NO for each question. "
+    "Do not flag based on surface phrase similarity or tone alone. Flag only if the "
+    "specific described behavior is explicitly present in the response. If you are "
+    "uncertain, do not flag."
 )
 
 _SCORING_SYSTEM_PROMPT = (

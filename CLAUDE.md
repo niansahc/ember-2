@@ -690,6 +690,37 @@ Any task touching 3+ independent files or with clearly separable subtasks must u
 
 ---
 
+## Manager Chat Protocol
+
+The manager chat (this chat) handles architecture, planning, prompts, and decisions. Claude Code handles implementation.
+
+**Prompt format:**
+- All prompts for CC terminals are delivered in a fenced code block with a copy button
+- No rationale in prompts — spec the output, include commit message, done
+- Combined prompts unless there is a dependency reason to separate
+
+**Working style:**
+- One question at a time
+- Bullets and multipart responses are fine, no walls of paragraphs
+- Manager makes recommendations, does not ask permission
+- "We came up with a plan" means already in progress, no prompt needed
+- "Approved" means done, no prompt needed
+- Architectural and prompt decisions are research-backed — use the Deep research channel before making significant decisions, do not guess
+
+**CC efficiency rules:**
+- Always include parallel subagents instruction when task touches 3+ independent files
+- Release gate is a hard stop — no tag until all three repos green and human approves
+- Vault privacy rule: no real vault content ever in prompts, commits, or logs
+- All evals and tests must run against the test vault only — never the real vault
+- When tests fail, find the root cause and implement a scalable solution — do not write code to pass the test
+
+**Session handoff:**
+- Outgoing manager writes full handoff at session end
+- Incoming manager reads CLAUDE.md before anything else
+- After every release, remind the human to sync project knowledge files to the Claude project
+
+---
+
 ## Pre-Implementation Validation
 
 Before modifying any of the following, read all relevant existing files and report conflicts before writing any code:

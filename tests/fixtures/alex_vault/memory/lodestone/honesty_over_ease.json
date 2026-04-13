@@ -1,0 +1,17 @@
+{
+  "id": "2026-03-20T14-05-22",
+  "timestamp": "2026-03-20T14-05-22",
+  "type": "lodestone",
+  "value": "Honesty over ease — would rather hear a hard truth than a comfortable evasion. Applies this to himself and expects it from others.",
+  "acquisition_path": "explicit",
+  "source": "conversation",
+  "supporting_evidence": "Stated directly: 'I'd rather you just tell me than try to soften it. I can handle it. What I can't handle is finding out later you were managing me.'",
+  "recurrence_count": 3,
+  "confirmed": true,
+  "conflict_resolution": false,
+  "metadata": {
+    "user_note": null,
+    "taxonomy_category": "character",
+    "flagged_as_noise": false
+  }
+}

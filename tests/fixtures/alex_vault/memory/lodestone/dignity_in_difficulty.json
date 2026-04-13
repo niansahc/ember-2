@@ -1,0 +1,17 @@
+{
+  "id": "2026-03-26T11-40-18",
+  "timestamp": "2026-03-26T11-40-18",
+  "type": "lodestone",
+  "value": "Dignity in difficulty — refuses to perform struggle or invite pity. Handles hard things by continuing to function, not by broadcasting pain.",
+  "acquisition_path": "inferred",
+  "source": "reflection_engine",
+  "supporting_evidence": "Consistent pattern across grief mentions and work stress: understates difficulty, redirects to action, resists emotional check-ins from others. Stated after father's death: 'I don't need people to feel bad for me. I need them to let me do what I need to do.'",
+  "recurrence_count": 4,
+  "confirmed": true,
+  "conflict_resolution": false,
+  "metadata": {
+    "user_note": null,
+    "taxonomy_category": "character",
+    "flagged_as_noise": false
+  }
+}

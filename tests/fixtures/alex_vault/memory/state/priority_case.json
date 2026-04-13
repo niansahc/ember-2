@@ -1,0 +1,11 @@
+{
+  "id": "2026-04-02T21-50-00",
+  "timestamp": "2026-04-02T21-50-00",
+  "type": "priority",
+  "text": "Henderson case filing due April 13. Second amended complaint received, outline requires significant rework. Late nights expected through deadline.",
+  "source": "state_extractor",
+  "tags": ["work", "case", "deadline"],
+  "metadata": {
+    "resolved": false
+  }
+}

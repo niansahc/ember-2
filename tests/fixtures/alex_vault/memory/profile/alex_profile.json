@@ -1,0 +1,14 @@
+{
+  "id": "2026-03-15T09-30-00",
+  "timestamp": "2026-03-15T09-30-00",
+  "type": "profile",
+  "text": "Alex is an attorney at a mid-size firm. Works long hours, direct communication style, dislikes being managed or talked around. Prefers honesty over comfort — would rather hear a hard truth than a soft evasion. Outside of law, performs clowning at events and takes it seriously as a craft, not a hobby. Has a partner who comes up occasionally. Father died recently. Processes difficulty by talking through things rather than sitting with them. Tends to understate how hard something is — will say 'it's a lot' when it's clearly overwhelming.",
+  "source": "onboarding",
+  "tags": ["profile", "identity", "working_style", "interests"],
+  "metadata": {
+    "role": "attorney",
+    "interests": ["clowning", "performance"],
+    "relational_context": "has a partner, father recently deceased",
+    "communication_style": "direct, dislikes being managed, prefers honesty"
+  }
+}

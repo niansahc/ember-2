@@ -1,0 +1,12 @@
+{
+  "id": "2026-04-06T06-00-00",
+  "timestamp": "2026-04-06T06-00-00",
+  "type": "reflection",
+  "text": "The week was dominated by the Henderson case. Alex described the workload as manageable but the pattern suggests otherwise — late nights, deferred personal commitments, and visible impatience with colleagues who check in rather than execute. The case deadline is functioning as an organizing pressure that crowds out everything else. Grief for his father surfaced once, briefly, triggered by a passing association rather than deliberate reflection. The understatement pattern held: 'it doesn't cross my mind' followed immediately by a vivid childhood memory that clearly carried weight. Clowning appeared as a counterbalance — the one domain where patience and timing are practiced deliberately rather than deployed under pressure. The tension between the two modes is worth noting: at work, Alex pushes through discomfort quickly; in performance, he is learning to sit in the pause.",
+  "source": "reflection_engine",
+  "tags": ["weekly", "reflection", "synthesis"],
+  "metadata": {
+    "period": "2026-03-31 to 2026-04-06",
+    "domains_covered": ["work", "grief", "clowning"]
+  }
+}

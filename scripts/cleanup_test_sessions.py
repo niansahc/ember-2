@@ -72,6 +72,13 @@ _GOLDEN_CASE_FINGERPRINTS: list[str] = [
     "what have i been working on lately",
 ]
 
+# From manual testing — common test phrases that ended up in the vault
+_MANUAL_TEST_FINGERPRINTS: list[str] = [
+    "tell me about quantum computing",
+    "what is the weather today",
+    "tell me about myself",
+]
+
 # From tools/eval_web_search.py (subset — most distinctive)
 _WEB_SEARCH_EVAL_FINGERPRINTS: list[str] = [
     "what are the top news headlines today",
@@ -92,6 +99,7 @@ _WEB_SEARCH_EVAL_FINGERPRINTS: list[str] = [
 ALL_EVAL_FINGERPRINTS: list[str] = (
     _EVAL_MANUAL_FINGERPRINTS
     + _GOLDEN_CASE_FINGERPRINTS
+    + _MANUAL_TEST_FINGERPRINTS
     + _WEB_SEARCH_EVAL_FINGERPRINTS
 )
 
@@ -165,11 +173,28 @@ def find_conversation_turns(vault: Path, session_ids: set[str]) -> list[dict]:
     return turns
 
 
+_last_cleanup_ts: str = ""
+
+
 def soft_delete_session(vault: Path, session_rec: dict) -> Path:
-    """Write a new session record with deleted=True. Append-only."""
+    """Write a new session record with deleted=True. Append-only.
+
+    Uses microsecond-precision timestamps with collision guard to prevent
+    overwrites when deleting many sessions in rapid succession.
+    """
+    global _last_cleanup_ts
     session_dir = vault / "memory" / "session"
     now = datetime.now(timezone.utc)
-    ts = now.strftime("%Y-%m-%dT%H-%M-%S")
+
+    # Microsecond-precision timestamp with collision guard
+    while True:
+        ts = now.strftime("%Y-%m-%dT%H-%M-%S-%f")
+        if ts != _last_cleanup_ts:
+            _last_cleanup_ts = ts
+            break
+        # Spin until microsecond changes
+        now = datetime.now(timezone.utc)
+
     meta = session_rec.get("metadata", {}).copy()
     meta["deleted"] = True
 
@@ -187,11 +212,20 @@ def soft_delete_session(vault: Path, session_rec: dict) -> Path:
     return file_path
 
 
+_last_turn_ts: str = ""
+
+
 def soft_delete_conversation_turn(vault: Path, turn_rec: dict) -> Path:
     """Write a new conversation record with deleted=True. Append-only."""
+    global _last_turn_ts
     conv_dir = vault / "memory" / "conversation"
     now = datetime.now(timezone.utc)
-    ts = now.strftime("%Y-%m-%dT%H-%M-%S-%f")
+    while True:
+        ts = now.strftime("%Y-%m-%dT%H-%M-%S-%f")
+        if ts != _last_turn_ts:
+            _last_turn_ts = ts
+            break
+        now = datetime.now(timezone.utc)
     meta = turn_rec.get("metadata", {}).copy()
     meta["deleted"] = True
 

@@ -1215,6 +1215,18 @@ def developer_vaults_endpoint():
     ]
 
 
+# ── Vault storage endpoint ─────────────────────────────────────────────
+
+
+@app.get("/v1/vault/storage")
+def vault_storage_endpoint():
+    """Return vault storage analysis: size, breakdown, growth rate, projection."""
+    from src.core.config import get_private_vault_path
+    from src.memory.vault_storage import analyze_vault
+    vault_path = get_private_vault_path()
+    return analyze_vault(vault_path)
+
+
 # ── Preferences endpoints ──────────────────────────────────────────────
 
 

@@ -1262,6 +1262,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                         daemon=True,
                     ).start()
 
+                # 3.6. Coaching-frame filter — post-generation, pre-stream
+                from src.llm.coaching_filter import filter_coaching_frame
+                full_reply = filter_coaching_frame(full_reply, _intent_class, _is_conversational)
+
                 # 4. Re-stream verified response word by word
                 tokens = full_reply.split(" ")
                 for i, token in enumerate(tokens):
@@ -1341,6 +1345,12 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 yield "data: [DONE]\n\n"
 
                 full_reply = "".join(accumulated)
+                # Coaching-frame filter — applied to accumulated text.
+                # In the fast streaming path, the user has already seen
+                # the raw stream. The filter cleans the version stored
+                # to memory so retrieval doesn't resurface coaching patterns.
+                from src.llm.coaching_filter import filter_coaching_frame
+                full_reply = filter_coaching_frame(full_reply, _intent_class, _is_conversational)
                 _post_stream_cleanup(full_reply)
 
         response_headers = {
@@ -1368,6 +1378,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         suppress_relational_lodestone=suppress_relational_lodestone,
         temperature=_inference_temperature,
     )
+
+    # Coaching-frame filter — post-generation, pre-return
+    from src.llm.coaching_filter import filter_coaching_frame as _filter_cf
+    reply = _filter_cf(reply, _intent_class, _is_conversational)
 
     write_memory(
         text=latest_user_message,

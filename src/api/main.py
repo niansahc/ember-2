@@ -1241,6 +1241,35 @@ def vault_storage_endpoint():
     return analyze_vault(vault_path)
 
 
+# ── Vault toggle endpoint ─────────────────────────────────────────────
+
+
+@app.post("/v1/settings/vault-enabled")
+def set_vault_toggle_endpoint(request: Request, body: dict):
+    """Enable or disable the per-conversation vault toggle feature.
+
+    When vault_toggle_enabled=True (default), individual requests can
+    set vault_enabled=False to run in stateless mode.
+    When vault_toggle_enabled=False, the toggle feature is disabled
+    and all requests use the vault normally regardless of per-request setting.
+
+    Body: {"vault_toggle_enabled": true/false}
+    """
+    from src.core.preferences import update as update_prefs, read as read_prefs
+    enabled = body.get("vault_toggle_enabled")
+    if enabled is None:
+        raise HTTPException(status_code=400, detail="Missing vault_toggle_enabled field")
+    update_prefs({"vault_toggle_enabled": bool(enabled)})
+    return {"vault_toggle_enabled": read_prefs().get("vault_toggle_enabled", True)}
+
+
+@app.get("/v1/settings/vault-enabled")
+def get_vault_toggle_endpoint():
+    """Return current vault toggle setting."""
+    from src.core.preferences import read as read_prefs
+    return {"vault_toggle_enabled": read_prefs().get("vault_toggle_enabled", True)}
+
+
 # ── Preferences endpoints ──────────────────────────────────────────────
 
 

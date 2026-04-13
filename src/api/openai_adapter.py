@@ -329,6 +329,7 @@ class ChatCompletionsRequest(BaseModel):
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     stream: Optional[bool] = False
+    vault_enabled: Optional[bool] = True
 
 
 class ChatCompletionsResponseMessage(BaseModel):
@@ -828,8 +829,24 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # --- TEST SESSION FLAG ---
     is_test = request.headers.get("X-Test-Session", "").strip().lower() == "true"
 
+    # --- VAULT TOGGLE ---
+    # When vault_enabled=False, skip all vault reads and writes.
+    # The model runs in stateless mode: no memory retrieval, no state,
+    # no lodestone, no reflections. Constitutional review still runs.
+    # Check global toggle first — if the feature is disabled globally,
+    # vault_enabled is always True regardless of per-request setting.
+    _vault_global_enabled = True
+    try:
+        from src.core.preferences import read as _read_prefs
+        _vault_global_enabled = _read_prefs().get("vault_toggle_enabled", True)
+    except Exception:
+        pass
+    vault_enabled = body.vault_enabled if _vault_global_enabled else True
+    # Combine: vault is disabled if either test flag OR vault_enabled=False
+    _skip_vault = is_test or not vault_enabled
+
     # --- ENSURE SESSION EXISTS ---
-    _ensure_session(session_id, latest_user_message, test=is_test)
+    _ensure_session(session_id, latest_user_message, test=_skip_vault)
 
     # --- RESOLVE PROJECT CONTEXT ---
     # Look up the session's project_id so retrieval can boost project-relevant memories.
@@ -941,7 +958,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # so the system note here is the immediate confirmation; the resolver
     # provides the longer-lived awareness.
     # Skip for test sessions — timer writes are vault writes.
-    if not is_test:
+    if not _skip_vault:
         try:
             from src.state.timer_service import (
                 detect_check_timer,
@@ -1031,9 +1048,17 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     except Exception:
         pass  # Non-fatal — proceed without suppression
 
-    context_packet = context_service.build_context(
-        latest_user_message, image_data=image_data, project_id=project_id,
-    )
+    if _skip_vault:
+        # Stateless mode: empty context packet, no vault reads
+        from src.context.models import ContextPacket
+        context_packet = ContextPacket(
+            user_message=latest_user_message,
+            image_data=image_data or [],
+        )
+    else:
+        context_packet = context_service.build_context(
+            latest_user_message, image_data=image_data, project_id=project_id,
+        )
 
     # Inject deferred web search results from confirmed ask-first flow
     if _confirmation_web_items:
@@ -1129,7 +1154,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     if project_id:
         user_meta["project_id"] = project_id
         assistant_meta["project_id"] = project_id
-    if is_test:
+    if _skip_vault:
         user_meta["test"] = True
         assistant_meta["test"] = True
 
@@ -1150,7 +1175,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             """Shared post-stream cleanup: write memories, extract state, detect tasks."""
             # Skip vault writes for test sessions — prevents eval artifacts
             # from accumulating in the user's personal vault.
-            if not is_test:
+            if not _skip_vault:
                 write_memory(
                     text=latest_user_message,
                     memory_type="conversation",
@@ -1167,7 +1192,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 )
 
             # State extraction — skip for test sessions to prevent eval leakage
-            if not is_test:
+            if not _skip_vault:
                 threading.Thread(
                     target=_background_state_extraction,
                     args=(latest_user_message, full_reply),
@@ -1180,14 +1205,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     daemon=True,
                 ).start()
 
-            if not is_test:
+            if not _skip_vault:
                 threading.Thread(
                     target=_detect_and_write_commitment,
                     args=(full_reply, session_id),
                     daemon=True,
                 ).start()
 
-            if not is_test:
+            if not _skip_vault:
                 threading.Thread(
                     target=_detect_task_in_response,
                     args=(full_reply, session_id),
@@ -1196,7 +1221,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
             # Ask-first confirmation detection — write pending_confirmation
             # state when Ember offers to search for the user
-            if not is_test:
+            if not _skip_vault:
                 threading.Thread(
                     target=_write_pending_confirmation,
                     args=(full_reply, latest_user_message, session_id),
@@ -1204,7 +1229,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 ).start()
 
             # Deviation detection — async, no latency impact (ADR-026)
-            if not is_test:
+            if not _skip_vault:
                 _prior = None
                 _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
                 if _buffer_turns and len(_buffer_turns) >= 2:
@@ -1215,7 +1240,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     daemon=True,
                 ).start()
 
-            if is_test:
+            if _skip_vault:
                 logger.warning("[TASK] Skipped task/state/commitment detection (test session)")
 
         def _status_event(status: str) -> str:
@@ -1262,7 +1287,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     )
 
                 # 3.5. Deviation detection (ADR-026) — after grounding, before stream
-                if not is_test:
+                if not _skip_vault:
                     _prior = None
                     _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
                     if _buffer_turns and len(_buffer_turns) >= 2:
@@ -1395,7 +1420,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     reply = _filter_cf(reply, _intent_class, _is_conversational)
 
     # Skip vault writes for test sessions
-    if not is_test:
+    if not _skip_vault:
         write_memory(
             text=latest_user_message,
             memory_type="conversation",
@@ -1413,7 +1438,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         )
 
     # Background state extraction — skip for test sessions to prevent eval leakage
-    if not is_test:
+    if not _skip_vault:
         threading.Thread(
             target=_background_state_extraction,
             args=(latest_user_message, reply),
@@ -1427,7 +1452,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         ).start()
 
     # Commitment detection (ADR-014) — skip for test sessions
-    if not is_test:
+    if not _skip_vault:
         threading.Thread(
             target=_detect_and_write_commitment,
             args=(reply, session_id),
@@ -1435,7 +1460,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         ).start()
 
     # Task detection — skip for test sessions
-    if not is_test:
+    if not _skip_vault:
         threading.Thread(
             target=_detect_task_in_response,
             args=(reply, session_id),
@@ -1443,7 +1468,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         ).start()
 
     # Ask-first confirmation detection — write pending_confirmation
-    if not is_test:
+    if not _skip_vault:
         threading.Thread(
             target=_write_pending_confirmation,
             args=(reply, latest_user_message, session_id),
@@ -1451,7 +1476,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         ).start()
 
     # Deviation detection — async, no latency impact (ADR-026)
-    if not is_test:
+    if not _skip_vault:
         _prior = None
         _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
         if _buffer_turns and len(_buffer_turns) >= 2:
@@ -1462,7 +1487,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             daemon=True,
         ).start()
 
-    if is_test:
+    if _skip_vault:
         logger.warning("[TASK] Skipped task detection (test session)")
 
     response_body = ChatCompletionsResponse(

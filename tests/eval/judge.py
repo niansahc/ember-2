@@ -54,8 +54,20 @@ class ClaudeJudge:
     def __init__(self, model: str = "claude-haiku-4-5"):
         self.model = model
         self.client = anthropic.Anthropic(
-            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            api_key=self._resolve_api_key(),
         )
+
+    @staticmethod
+    def _resolve_api_key() -> str:
+        """Read Anthropic API key from OS credential store, env var fallback."""
+        try:
+            import keyring
+            key = keyring.get_password("ember-2-anthropic", "api_key")
+            if key:
+                return key
+        except Exception:
+            pass
+        return os.environ.get("ANTHROPIC_API_KEY", "")
 
     def evaluate(self, response: str, rubric: str, context: dict) -> dict:
         """Evaluate a single Ember response against a rubric.

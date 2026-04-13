@@ -127,7 +127,7 @@ class EmberEvalHarness:
         """
         persona_def = ALL_PERSONAS.get(persona, {})
         client = anthropic.Anthropic(
-            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            api_key=self._resolve_api_key(),
         )
 
         prompt = f"""Generate a realistic {turn_count}-turn conversation between a user and a personal AI named Ember.
@@ -158,6 +158,18 @@ Example: [{{"user": "...", "assistant": "..."}}]"""
             return json.loads(text)
         except json.JSONDecodeError:
             return []
+
+    @staticmethod
+    def _resolve_api_key() -> str:
+        """Read Anthropic API key from OS credential store, env var fallback."""
+        try:
+            import keyring
+            key = keyring.get_password("ember-2-anthropic", "api_key")
+            if key:
+                return key
+        except Exception:
+            pass
+        return os.environ.get("ANTHROPIC_API_KEY", "")
 
     def _build_messages(
         self,

@@ -156,6 +156,7 @@ class LLMAdapter:
         project_name: str | None = None,
         last_session_label: str | None = None,
         suppress_relational_lodestone: bool = False,
+        temperature: float | None = None,
     ) -> str:
         system_prompt = self.prompt_builder.build_prompt(
             context_packet,
@@ -176,6 +177,7 @@ class LLMAdapter:
             user_message=context_packet.user_message,
             image_data=context_packet.image_data if use_vision else [],
             model_override=vision_model if use_vision else None,
+            temperature=temperature,
         )
         draft_response = strip_think_blocks(draft_response)
 
@@ -256,6 +258,7 @@ class LLMAdapter:
         project_name: str | None = None,
         last_session_label: str | None = None,
         suppress_relational_lodestone: bool = False,
+        temperature: float | None = None,
     ):
         """
         Stream a response token by token. Yields string chunks.
@@ -289,6 +292,7 @@ class LLMAdapter:
             user_message=context_packet.user_message,
             image_data=context_packet.image_data if use_vision else [],
             model_override=vision_model if use_vision else None,
+            temperature=temperature,
         ):
             accumulated.append(chunk)
             yield chunk
@@ -366,13 +370,15 @@ class LLMAdapter:
         user_message: str,
         image_data: list[str] | None = None,
         model_override: str | None = None,
+        temperature: float | None = None,
     ) -> str:
+        temp = temperature if temperature is not None else 0.7
         model = model_override or self.model
         if model.startswith("claude-"):
-            return self._chat_anthropic(system_prompt, user_message, temperature=0.7)
+            return self._chat_anthropic(system_prompt, user_message, temperature=temp)
         if model.startswith("gpt-"):
-            return self._chat_openai(system_prompt, user_message, temperature=0.7)
-        return self._chat_ollama(system_prompt, user_message, image_data, model)
+            return self._chat_openai(system_prompt, user_message, temperature=temp)
+        return self._chat_ollama(system_prompt, user_message, image_data, model, temperature=temp)
 
     def _chat_stream(
         self,
@@ -380,15 +386,17 @@ class LLMAdapter:
         user_message: str,
         image_data: list[str] | None = None,
         model_override: str | None = None,
+        temperature: float | None = None,
     ):
         """Stream chat response. Dispatches to Ollama, Anthropic, or OpenAI."""
+        temp = temperature if temperature is not None else 0.7
         model = model_override or self.model
         if model.startswith("claude-"):
-            yield from self._chat_anthropic_stream(system_prompt, user_message, temperature=0.7)
+            yield from self._chat_anthropic_stream(system_prompt, user_message, temperature=temp)
         elif model.startswith("gpt-"):
-            yield from self._chat_openai_stream(system_prompt, user_message, temperature=0.7)
+            yield from self._chat_openai_stream(system_prompt, user_message, temperature=temp)
         else:
-            yield from self._chat_ollama_stream(system_prompt, user_message, image_data, model)
+            yield from self._chat_ollama_stream(system_prompt, user_message, image_data, model, temperature=temp)
 
     # ------------------------------------------------------------------
     # Ollama (local)
@@ -397,6 +405,7 @@ class LLMAdapter:
     def _chat_ollama(
         self, system_prompt: str, user_message: str,
         image_data: list[str] | None = None, model: str | None = None,
+        temperature: float = 0.7,
     ) -> str:
         model = model or self.model
         user_msg: dict = {"role": "user", "content": user_message}
@@ -409,13 +418,14 @@ class LLMAdapter:
                 {"role": "system", "content": system_prompt},
                 user_msg,
             ],
-            options={"temperature": 0.7},
+            options={"temperature": temperature},
         )
         return response["message"]["content"]
 
     def _chat_ollama_stream(
         self, system_prompt: str, user_message: str,
         image_data: list[str] | None = None, model: str | None = None,
+        temperature: float = 0.7,
     ):
         """Stream from Ollama. Yields string chunks."""
         model = model or self.model
@@ -429,7 +439,7 @@ class LLMAdapter:
                 {"role": "system", "content": system_prompt},
                 user_msg,
             ],
-            options={"temperature": 0.7},
+            options={"temperature": temperature},
             stream=True,
         )
         for chunk in stream:

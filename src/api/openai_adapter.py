@@ -1060,6 +1060,12 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # keyboard is recognized identically to "I'm tired".
     _is_conversational = is_conversational_query(latest_user_message)
 
+    # Temperature override slot — currently unused. Infrastructure for
+    # per-intent temperature experiments. Tested 0.3 for emotional intent
+    # (v0.15.3): net negative — suppressed coaching frame on one case but
+    # caused template collapse and register degradation on two others.
+    _inference_temperature: float | None = None
+
     if not context_packet.web_items and not _is_conversational:
         non_profile_memory = [
             i for i in context_packet.memory_items
@@ -1222,6 +1228,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     project_name=project_name,
                     last_session_label=last_session_label,
                     suppress_relational_lodestone=suppress_relational_lodestone,
+                    temperature=_inference_temperature,
                 )
 
                 # 3. Grounding check
@@ -1307,6 +1314,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     project_name=project_name,
                     last_session_label=last_session_label,
                     suppress_relational_lodestone=suppress_relational_lodestone,
+                    temperature=_inference_temperature,
                 ):
                     filtered = think_filter.filter(chunk)
                     if filtered:
@@ -1358,6 +1366,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         project_name=project_name,
         last_session_label=last_session_label,
         suppress_relational_lodestone=suppress_relational_lodestone,
+        temperature=_inference_temperature,
     )
 
     write_memory(

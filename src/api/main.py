@@ -452,21 +452,35 @@ def create_task_endpoint(request: Request, body: TaskCreateRequest):
 
 @app.get("/v1/tasks")
 def list_tasks_endpoint(status: str | None = None, project_id: str | None = None):
-    """List tasks with optional status and project filters."""
+    """List tasks with optional status and project filters.
+
+    Resolves to latest record per task ID before filtering. A task
+    that has been cancelled or completed is excluded from active listings
+    even if earlier records for the same ID had status=active.
+    """
     if status and status not in VALID_TASK_STATUSES:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid status '{status}'. Valid: {sorted(VALID_TASK_STATUSES)}",
         )
 
+    # Resolve to latest per task ID (read_all is newest-first)
+    all_records = task_service.read_all()
+    latest_by_id: dict[str, object] = {}
+    for r in all_records:
+        if r.id not in latest_by_id:
+            latest_by_id[r.id] = r
+    resolved = list(latest_by_id.values())
+
+    # Apply filters on resolved records
     if status and project_id:
-        records = [r for r in task_service.read_by_project(project_id) if r.status == status]
+        records = [r for r in resolved if r.status == status and r.project_id == project_id]
     elif status:
-        records = task_service.read_by_status(status)
+        records = [r for r in resolved if r.status == status]
     elif project_id:
-        records = task_service.read_by_project(project_id)
+        records = [r for r in resolved if r.project_id == project_id]
     else:
-        records = task_service.read_all()
+        records = resolved
 
     return {
         "tasks": [

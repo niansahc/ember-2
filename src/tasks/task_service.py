@@ -241,9 +241,17 @@ class TaskService:
         """
         Read all proposed and active task records, newest first.
 
-        These are tasks that are still open and should be surfaced in context.
+        Resolves to latest record per task ID before filtering by status.
+        A task that was cancelled or completed is excluded even if an
+        earlier record for the same ID had status=active.
         """
-        return [r for r in self.read_all() if r.status in {"proposed", "active"}]
+        all_records = self.read_all()
+        # Resolve to latest per task ID (read_all is newest-first)
+        latest_by_id: dict[str, TaskRecord] = {}
+        for r in all_records:
+            if r.id not in latest_by_id:
+                latest_by_id[r.id] = r
+        return [r for r in latest_by_id.values() if r.status in {"proposed", "active"}]
 
     def read_by_id(self, task_id: str) -> TaskRecord | None:
         """

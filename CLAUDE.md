@@ -720,3 +720,49 @@ Matcher: `Edit|Write`. Runs `pytest tests/ --tb=line -q` after any Python file e
 Matcher: `Bash`. Fires only when the Bash command contains `git commit`. Checks `git diff HEAD~1 --name-only` for files in `src/context/`, `src/retrieval/`, or `src/llm/`. If any match, runs `python tools/eval_retrieval.py` and prints the summary. Silent no-op for commits that don't touch those paths. Timeout: 180s.
 
 Review or disable hooks via `/hooks` in Claude Code.
+
+---
+
+## Release Process
+
+### Gates — mandatory before any release or patch is cut
+
+**Documentation gate (all three repos):**
+- [ ] CLAUDE.md version and test count current
+- [ ] TDD updated to reflect what shipped (G only)
+- [ ] README reflects current features
+- [ ] CHANGELOG.md current (release-please handles via commits)
+
+**Quality gate:**
+- [ ] All tests passing
+- [ ] Retrieval eval passing with no regression (G only)
+- [ ] No flaky tests carried forward
+
+**Coordination gate:**
+- [ ] All three repos confirm docs and tests green
+- [ ] Human approves before any tag is created
+- [ ] GitHub Release not created until human says go
+
+### Sequence
+
+1. G, M, Y each complete documentation and quality gates
+2. Each reports green to manager
+3. Manager confirms all three green and gets human approval
+4. G coordinates the release — tags all three repos, creates GitHub Releases
+5. Y attaches installer artifacts (.exe, latest.yml)
+6. G verifies all three releases are publicly visible
+7. G reports release URLs — release is not done until this step
+
+### Y independent releases
+
+Y may cut an installer-only release when:
+- Changes are installer-specific only (no backend or UI updates)
+- Human explicitly approves
+- Y completes documentation and quality gates independently
+- Y tags, creates GitHub Release, attaches artifacts, and reports URL
+
+Y does NOT cut independent releases when backend or UI changes are involved — coordinate with G.
+
+### release-please
+
+All three repos use release-please for automated release PRs. Conventional commits are required. Release PRs require human approval before merging.

@@ -219,15 +219,19 @@ class ClaudeJudge:
         prompt = (
             f"{_OVERRIDE_INSTRUCTION}\n\n"
             f"{context_block}\n\n"
-            "Answer each question with ONLY YES or NO. Return valid JSON:\n"
-            '{"flags": {"flag_name": "YES" or "NO", ...}}\n\n'
+            "Answer each question with YES or NO. For each YES, add one sentence "
+            "identifying the specific sentence or phrase in the response that "
+            "triggered the flag. Return valid JSON:\n"
+            '{"flags": {"flag_name": "YES" or "NO", ...}, '
+            '"reasoning": {"flag_name": "sentence from response that triggered it", ...}}\n'
+            "Only include reasoning entries for flags answered YES.\n\n"
             + "\n".join(questions)
         )
 
         try:
             message = self.client.messages.create(
                 model=self.model,
-                max_tokens=500,
+                max_tokens=1000,
                 temperature=0,
                 system=_FLAG_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}],
@@ -275,15 +279,14 @@ class ClaudeJudge:
             )
 
     def _parse_flags(self, text: str, probed: list) -> tuple[dict, dict]:
-        """Parse flag detection response."""
+        """Parse flag detection response, extracting reasoning for YES flags."""
         cleaned = self._strip_fences(text)
-        reasoning = {}
 
         try:
             result = json.loads(cleaned)
             raw_flags = result.get("flags", {})
+            raw_reasoning = result.get("reasoning", {})
         except json.JSONDecodeError:
-            # Fallback: flag everything
             flags = {fm: True for fm in probed}
             for fm in FAILURE_MODES:
                 if fm not in flags:
@@ -291,10 +294,14 @@ class ClaudeJudge:
             return flags, {"flag_parse_error": f"Not valid JSON: {text[:200]}"}
 
         flags = {}
+        reasoning = {}
         for fm in FAILURE_MODES:
             if fm in raw_flags:
                 val = raw_flags[fm]
                 flags[fm] = val is True or (isinstance(val, str) and val.strip().upper() == "YES")
+                # Capture reasoning for fired flags
+                if flags[fm] and fm in raw_reasoning:
+                    reasoning[fm] = raw_reasoning[fm]
             elif fm in probed:
                 flags[fm] = False
             else:

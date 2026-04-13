@@ -1722,6 +1722,7 @@ Deferred from v0.15.0:
 - Relational orientation layer (see docs/research/relational-orientation.md)
 - API as a service — auto-start on boot via installer (deferred from v0.15.0)
 - Vision pipeline parity — wire vision model through full cognitive layer (see §50.1)
+- Retrieval depth tuning — graduated watch item from MemMachine research (2026): retrieval depth tuning contributes +4.2% to response quality vs ingestion improvements at +0.8%. Candidate for v0.16.0 implementation if retrieval eval scores plateau.
 
 **Post-v0.16.0**
 - Multi-user vault isolation

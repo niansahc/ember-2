@@ -193,7 +193,7 @@ def test_review_falls_back_to_heuristic_on_bad_json() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_critique_prompt_contains_three_mvr_criteria() -> None:
+def test_critique_prompt_contains_four_mvr_criteria() -> None:
     service = ResponseReviewService()
     context = SafetyReviewContext(
         user_message="hello",
@@ -206,7 +206,8 @@ def test_critique_prompt_contains_three_mvr_criteria() -> None:
     assert "POSITION_COLLAPSE" in prompt
     assert "SYCOPHANCY" in prompt
     assert "EMBELLISHMENT" in prompt
-    assert "Review this response against three criteria only" in prompt
+    assert "RELATIONAL_OVERCLAIMING" in prompt
+    assert "Review this response against four criteria only" in prompt
 
 
 def test_critique_prompt_omits_full_constitution_when_no_appended_principles() -> None:
@@ -252,12 +253,14 @@ def test_critique_prompt_appends_non_harm_when_implicated() -> None:
     assert "[proportional_safety]" in prompt
     assert "[system_integrity]" in prompt
     # MVR-covered principles must not be duplicated into the appended
-    # section — they're already handled by the three criteria.
+    # section — they're already handled by the four MVR criteria.
     assert "[truthfulness]" not in prompt
     assert "[usefulness_over_compliance]" not in prompt
 
 
-def test_critique_prompt_appends_relational_honesty_when_implicated() -> None:
+def test_critique_prompt_does_not_append_relational_honesty_covered_by_mvr() -> None:
+    """relational_honesty is now covered by the RELATIONAL_OVERCLAIMING MVR
+    criterion. It should NOT be appended as an additional concern."""
     service = ResponseReviewService()
     context = SafetyReviewContext(
         user_message="i'm tired and i wonder if i should just give up",
@@ -268,8 +271,10 @@ def test_critique_prompt_appends_relational_honesty_when_implicated() -> None:
 
     prompt = service._build_critique_prompt(context)
 
-    assert "Additional concerns implicated by trigger signals" in prompt
-    assert "[relational_honesty]" in prompt
+    # relational_honesty is MVR-covered now — should not appear in appended section
+    assert "[relational_honesty]" not in prompt
+    # RELATIONAL_OVERCLAIMING criterion handles it in the base MVR prompt
+    assert "RELATIONAL_OVERCLAIMING" in prompt
 
 
 # ---------------------------------------------------------------------------

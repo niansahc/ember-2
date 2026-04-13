@@ -647,8 +647,14 @@ def _ensure_session(session_id: str, first_user_message: str, *, test: bool = Fa
     """
     Create a session record if one doesn't exist for this session_id.
     Title is auto-generated from the first 50 chars of the first user message.
-    If test=True, session is flagged as a test session (eval harness).
+
+    When test=True (X-Test-Session header), skip vault writes entirely.
+    Test sessions don't need persistence — the conftest vault override
+    handles isolation during pytest, but eval tools hitting the live API
+    would otherwise accumulate sessions in the user's vault.
     """
+    if test:
+        return
     if session_exists(session_id):
         return
     title = first_user_message[:50].strip()
@@ -657,8 +663,8 @@ def _ensure_session(session_id: str, first_user_message: str, *, test: bool = Fa
     # Remove trailing partial words if we truncated
     if len(first_user_message) > 50 and " " in title:
         title = title.rsplit(" ", 1)[0] + "..."
-    create_session(session_id, title, test=test)
-    logger.info("[SESSION] Created session %s: %s%s", session_id, title, " (test)" if test else "")
+    create_session(session_id, title)
+    logger.info("[SESSION] Created session %s: %s", session_id, title)
 
 
 @router.post("/v1/chat/completions", response_model=ChatCompletionsResponse)
@@ -1140,20 +1146,23 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
         def _post_stream_cleanup(full_reply: str) -> None:
             """Shared post-stream cleanup: write memories, extract state, detect tasks."""
-            write_memory(
-                text=latest_user_message,
-                memory_type="conversation",
-                source="chat",
-                tags=["conversation"],
-                metadata=user_meta,
-            )
-            write_memory(
-                text=full_reply,
-                memory_type="conversation",
-                source="chat",
-                tags=["conversation"],
-                metadata=assistant_meta,
-            )
+            # Skip vault writes for test sessions — prevents eval artifacts
+            # from accumulating in the user's personal vault.
+            if not is_test:
+                write_memory(
+                    text=latest_user_message,
+                    memory_type="conversation",
+                    source="chat",
+                    tags=["conversation"],
+                    metadata=user_meta,
+                )
+                write_memory(
+                    text=full_reply,
+                    memory_type="conversation",
+                    source="chat",
+                    tags=["conversation"],
+                    metadata=assistant_meta,
+                )
 
             # State extraction — skip for test sessions to prevent eval leakage
             if not is_test:
@@ -1383,21 +1392,23 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     from src.llm.coaching_filter import filter_coaching_frame as _filter_cf
     reply = _filter_cf(reply, _intent_class, _is_conversational)
 
-    write_memory(
-        text=latest_user_message,
-        memory_type="conversation",
-        source="chat",
-        tags=["conversation"],
-        metadata=user_meta,
-    )
+    # Skip vault writes for test sessions
+    if not is_test:
+        write_memory(
+            text=latest_user_message,
+            memory_type="conversation",
+            source="chat",
+            tags=["conversation"],
+            metadata=user_meta,
+        )
 
-    write_memory(
-        text=reply,
-        memory_type="conversation",
-        source="chat",
-        tags=["conversation"],
-        metadata=assistant_meta,
-    )
+        write_memory(
+            text=reply,
+            memory_type="conversation",
+            source="chat",
+            tags=["conversation"],
+            metadata=assistant_meta,
+        )
 
     # Background state extraction — skip for test sessions to prevent eval leakage
     if not is_test:

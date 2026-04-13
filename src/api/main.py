@@ -1270,6 +1270,33 @@ def get_vault_toggle_endpoint():
     return {"vault_toggle_enabled": read_prefs().get("vault_toggle_enabled", True)}
 
 
+@app.post("/v1/settings/bare-mode")
+def set_bare_mode_endpoint(request: Request, body: dict):
+    """Toggle bare mode on or off.
+
+    When bare_mode=True, the prompt pipeline skips nature document,
+    lodestone layers, identity rules, and conversational style injection.
+    Constitutional review is limited to the three MVR criteria only
+    (position_collapse, sycophancy, embellishment). This produces a
+    minimal, personality-stripped inference path.
+
+    Body: {"bare_mode": true/false}
+    """
+    from src.core.preferences import update as update_prefs, read as read_prefs
+    enabled = body.get("bare_mode")
+    if enabled is None:
+        raise HTTPException(status_code=400, detail="Missing bare_mode field")
+    update_prefs({"bare_mode": bool(enabled)})
+    return {"bare_mode": read_prefs().get("bare_mode", False)}
+
+
+@app.get("/v1/settings/bare-mode")
+def get_bare_mode_endpoint():
+    """Return current bare mode setting."""
+    from src.core.preferences import read as read_prefs
+    return {"bare_mode": read_prefs().get("bare_mode", False)}
+
+
 # ── Preferences endpoints ──────────────────────────────────────────────
 
 

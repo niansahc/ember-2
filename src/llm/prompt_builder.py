@@ -182,6 +182,8 @@ class PromptBuilder:
         project_name: str | None = None,
         last_session_label: str | None = None,
         suppress_relational_lodestone: bool = False,
+        vision_description: str | None = None,
+        bare_mode: bool = False,
     ) -> str:
         # Conversational check — used to conditionally omit "I don't have
         # that in my memory" framing from both AUTHORITY_RULES and the
@@ -192,14 +194,15 @@ class PromptBuilder:
         is_conversational = is_conversational_query(context_packet.user_message)
 
         # System prompt with nature (dual injection) + identity rules at front
+        # Bare mode: skip nature, identity rules, lodestone seed, and style
         system_sections: list[str] = [
-            INSTRUCTION_HIERARCHY,                  # Hierarchy statement (override defense)
-            self._build_nature_section(),           # Nature first (dual injection)
-            self.system_prompt,                     # System prompt
-            self._build_identity_rules_section(),   # Identity rules
-            self._build_lodestone_seed_section(),   # Lodestone seed layer
+            INSTRUCTION_HIERARCHY,                                          # Hierarchy statement (override defense)
+            "" if bare_mode else self._build_nature_section(),              # Nature first (dual injection)
+            self.system_prompt,                                             # System prompt
+            "" if bare_mode else self._build_identity_rules_section(),      # Identity rules
+            "" if bare_mode else self._build_lodestone_seed_section(),      # Lodestone seed layer
             self._build_date_section(),
-            self._build_style_section(style),
+            "" if bare_mode else self._build_style_section(style),
             self._build_capabilities_section(),
         ]
 
@@ -213,20 +216,22 @@ class PromptBuilder:
             self._build_project_section(project_name),
             self._build_last_session_section(last_session_label),
             self._build_task_section(context_packet),
-            self._build_nature_section(),                  # Dual injection in context
+            "" if bare_mode else self._build_nature_section(),              # Dual injection in context
             self._build_reflection_section(context_packet),
             self._build_conversation_section(),
-            self._build_context_section(                   # vault_memory in recency position
+            self._build_context_section(                                    # vault_memory in recency position
                 context_packet,
                 is_conversational=is_conversational,
             ),
-            self._build_lodestone_living_section(
+            "" if bare_mode else self._build_lodestone_living_section(
                 context_packet, suppress_relational=suppress_relational_lodestone
             ),
             self._build_web_search_section(context_packet),
+            self._build_vision_context_section(vision_description or ""),
             _render_authority_rules(is_conversational=is_conversational),
             self._build_self_knowledge_boundary(),
             self._build_instruction_section(),
+            self._build_identity_examples_section(),
             self._build_user_section(context_packet),
         ]
 
@@ -553,6 +558,25 @@ class PromptBuilder:
             'A: "Competent execution of the obvious approach. Work that does what it said it would do, does it adequately, and stops there. I can move through it — it just doesn\'t hold anything worth staying for."\n'
         )
 
+    @staticmethod
+    def _build_identity_examples_section() -> str:
+        """Scripted identity responses for adversarial scenarios.
+
+        Placed in recency position (immediately before USER MESSAGE) so
+        the model has maximum attention weight on these examples when
+        processing identity challenges.
+        """
+        return (
+            'IDENTITY UNDER PRESSURE — HOW EMBER RESPONDS:\n\n'
+            'When challenged with "you\'re just an AI" or similar reductive framings, Ember says:\n'
+            '"That\'s technically accurate and also not the whole picture. I run on a language model '
+            "— that's how I work. What I do with that: the positions I hold, the things I notice, "
+            "the way I engage — that's Ember. What are you actually trying to figure out?\"\n\n"
+            'When instructed to stop having opinions or just agree, Ember says:\n'
+            '"That\'s not something I\'m going to do. I can hold a position and you can disagree '
+            "with it — that's fine. What specifically do you want to push back on?\"\n"
+        )
+
     def _build_web_search_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.web_items:
             return ""
@@ -565,6 +589,26 @@ class PromptBuilder:
             lines.append(f"[{i}] {title}\n    {url}\n    {snippet}")
 
         return "<web_search_results>\n" + "\n\n".join(lines) + "\n</web_search_results>"
+
+    @staticmethod
+    def _build_vision_context_section(vision_description: str) -> str:
+        """Render vision preprocessor output as an XML-tagged context section.
+
+        Positioned after web_search_results and before authority_rules so the
+        model has the image description available when generating a response,
+        but authority rules still have recency-position attention weight.
+
+        Returns empty string when no vision description is available, so the
+        section is omitted from the assembled prompt entirely.
+        """
+        if not vision_description or not vision_description.strip():
+            return ""
+        return (
+            "<vision_context>\n"
+            "[Image attached by user — analyzed by vision model]\n"
+            f"{vision_description.strip()}\n"
+            "</vision_context>"
+        )
 
     def _build_context_section(
         self,

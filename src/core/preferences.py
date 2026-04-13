@@ -29,6 +29,7 @@ PREFERENCE_DEFAULTS: dict = {
     "web_search_autonomous": False,
     "first_run_tour_complete": False,
     "context_length": 8192,
+    "bare_mode": False,
 }
 
 

@@ -36,12 +36,15 @@ model=EMBER_MODEL_ID
 router = APIRouter()
 
 
+from src.llm.vision_service import VisionService
+
 memory_service = MemoryService()
 context_service = ContextService()
 llm_adapter = LLMAdapter()
 onboarding_service = OnboardingService()
 state_extractor = StateExtractor()
 state_service = StateService()
+vision_service = VisionService()
 
 
 def _detect_and_write_commitment(reply: str, session_id: str) -> None:
@@ -1099,6 +1102,24 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # caused template collapse and register degradation on two others.
     _inference_temperature: float | None = None
 
+    # --- VISION PREPROCESSING ---
+    # When images are present, run the vision preprocessor to extract a text
+    # description BEFORE the main LLM call. The description is injected into
+    # the context packet as a <vision_context> section, so the primary model
+    # can reference image content through the full prompt pipeline (context
+    # assembly, identity rules, constitutional review). The legacy vision
+    # path in LLMAdapter remains as a fallback for direct vision model routing.
+    _vision_description: str | None = None
+    if image_data:
+        try:
+            _vision_description = vision_service.analyze(image_data)
+            if _vision_description:
+                logger.info("[VISION] Preprocessor returned %d chars", len(_vision_description))
+        except Exception as exc:
+            logger.warning("[VISION] Preprocessing failed (non-fatal): %s", exc)
+
+    used_vision = bool(_vision_description)
+
     if not context_packet.web_items and not _is_conversational:
         non_profile_memory = [
             i for i in context_packet.memory_items
@@ -1147,6 +1168,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # Read conversational style preference (casual/balanced/thoughtful)
     from src.core.preferences import get as get_pref
     conversational_style = get_pref("conversational_style", "balanced")
+
+    # Read bare mode preference — reduced pipeline, no personality layers
+    _bare_mode = bool(get_pref("bare_mode", False))
 
     # Build metadata for memory writes
     user_meta = {"role": "user", "content_kind": "user_content", "session_id": session_id}
@@ -1265,6 +1289,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     last_session_label=last_session_label,
                     suppress_relational_lodestone=suppress_relational_lodestone,
                     temperature=_inference_temperature,
+                    bare_mode=_bare_mode,
+                    vision_description=_vision_description,
                 )
 
                 # 3. Grounding check
@@ -1355,6 +1381,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     last_session_label=last_session_label,
                     suppress_relational_lodestone=suppress_relational_lodestone,
                     temperature=_inference_temperature,
+                    bare_mode=_bare_mode,
+                    vision_description=_vision_description,
                 ):
                     filtered = think_filter.filter(chunk)
                     if filtered:
@@ -1413,6 +1441,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         last_session_label=last_session_label,
         suppress_relational_lodestone=suppress_relational_lodestone,
         temperature=_inference_temperature,
+        bare_mode=_bare_mode,
+        vision_description=_vision_description,
     )
 
     # Coaching-frame filter — post-generation, pre-return

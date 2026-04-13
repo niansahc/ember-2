@@ -157,6 +157,8 @@ class LLMAdapter:
         last_session_label: str | None = None,
         suppress_relational_lodestone: bool = False,
         temperature: float | None = None,
+        bare_mode: bool = False,
+        vision_description: str | None = None,
     ) -> str:
         system_prompt = self.prompt_builder.build_prompt(
             context_packet,
@@ -164,6 +166,8 @@ class LLMAdapter:
             project_name=project_name,
             last_session_label=last_session_label,
             suppress_relational_lodestone=suppress_relational_lodestone,
+            bare_mode=bare_mode,
+            vision_description=vision_description,
         )
 
         vision_model = get_ember_vision_model()
@@ -200,13 +204,22 @@ class LLMAdapter:
         final_response = draft_response
 
         if trigger_result.triggered:
+            _active_principles = self.policy_service.get_active_principles(
+                trigger_result
+            )
+            # Bare mode: restrict review to MVR-covered principles only
+            # (position_collapse, sycophancy, embellishment). No appended
+            # principles like relational_honesty or flourishing_over_preference.
+            if bare_mode:
+                _mvr_set = ResponseReviewService._MVR_COVERED_PRINCIPLES
+                _active_principles = [
+                    p for p in _active_principles if p in _mvr_set
+                ]
             review_context = SafetyReviewContext(
                 user_message=context_packet.user_message,
                 draft_response=draft_response,
                 risk_signals=trigger_result.triggered_by,
-                active_principle_ids=self.policy_service.get_active_principles(
-                    trigger_result
-                ),
+                active_principle_ids=_active_principles,
             )
 
             review_result = self.review_service.review(review_context)
@@ -259,6 +272,8 @@ class LLMAdapter:
         last_session_label: str | None = None,
         suppress_relational_lodestone: bool = False,
         temperature: float | None = None,
+        bare_mode: bool = False,
+        vision_description: str | None = None,
     ):
         """
         Stream a response token by token. Yields string chunks.
@@ -277,6 +292,8 @@ class LLMAdapter:
             project_name=project_name,
             last_session_label=last_session_label,
             suppress_relational_lodestone=suppress_relational_lodestone,
+            bare_mode=bare_mode,
+            vision_description=vision_description,
         )
 
         vision_model = get_ember_vision_model()

@@ -868,7 +868,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # and route accordingly. Confirmation triggers web search on the original
     # query; decline clears the state and proceeds normally.
     _confirmation_web_items: list[dict] = []
-    _confirmation_result = _check_pending_confirmation(session_id, latest_user_message)
+    _confirmation_result = _check_pending_confirmation(session_id, latest_user_message) if not is_test else None
     if _confirmation_result is not None:
         if _confirmation_result["confirmed"] and _confirmation_result["action"] == "web_search":
             # Execute the deferred web search on the original query
@@ -898,7 +898,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         create_task as create_task_record,
     )
 
-    explicit_task_titles = detect_explicit_task_request(latest_user_message)
+    explicit_task_titles = detect_explicit_task_request(latest_user_message) if not is_test else []
     if explicit_task_titles:
         created_titles = []
         failed_titles = []
@@ -924,7 +924,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         session_id=session_id,
         user_message=latest_user_message,
         project_id=project_id,
-    )
+    ) if not is_test else None
     if pending_result is not None:
         if pending_result.created and pending_result.task_titles:
             titles_str = ", ".join(f'"{t}"' for t in pending_result.task_titles)
@@ -940,54 +940,56 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # Active timers are also surfaced via StateResolver into the context packet,
     # so the system note here is the immediate confirmation; the resolver
     # provides the longer-lived awareness.
-    try:
-        from src.state.timer_service import (
-            detect_check_timer,
-            detect_start_timer,
-            detect_stop_timer,
-            format_elapsed,
-            get_active_timers,
-            start_timer,
-            stop_timer,
-        )
+    # Skip for test sessions — timer writes are vault writes.
+    if not is_test:
+        try:
+            from src.state.timer_service import (
+                detect_check_timer,
+                detect_start_timer,
+                detect_stop_timer,
+                format_elapsed,
+                get_active_timers,
+                start_timer,
+                stop_timer,
+            )
 
-        timer_label = detect_start_timer(latest_user_message)
-        if timer_label:
-            try:
-                start_timer(label=timer_label, session_id=session_id)
-                latest_user_message = (
-                    f'[System: timer started for "{timer_label}"] {latest_user_message}'
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[TIMER] Failed to start timer: %s", exc)
-        elif detect_stop_timer(latest_user_message) or detect_check_timer(latest_user_message):
-            try:
-                active = get_active_timers()
-                wants_stop = detect_stop_timer(latest_user_message)
-                if active:
-                    statuses = []
-                    for t in active:
-                        started_at = (t.metadata or {}).get("started_at", "")
-                        statuses.append(f'"{t.text}" {format_elapsed(started_at)}')
-                    statuses_str = "; ".join(statuses)
-                    if wants_stop:
-                        most_recent = active[0]
-                        stop_timer(timer_id=most_recent.metadata["timer_id"])
-                        latest_user_message = (
-                            f"[System: timer stopped — was {statuses_str}] {latest_user_message}"
-                        )
+            timer_label = detect_start_timer(latest_user_message)
+            if timer_label:
+                try:
+                    start_timer(label=timer_label, session_id=session_id)
+                    latest_user_message = (
+                        f'[System: timer started for "{timer_label}"] {latest_user_message}'
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[TIMER] Failed to start timer: %s", exc)
+            elif detect_stop_timer(latest_user_message) or detect_check_timer(latest_user_message):
+                try:
+                    active = get_active_timers()
+                    wants_stop = detect_stop_timer(latest_user_message)
+                    if active:
+                        statuses = []
+                        for t in active:
+                            started_at = (t.metadata or {}).get("started_at", "")
+                            statuses.append(f'"{t.text}" {format_elapsed(started_at)}')
+                        statuses_str = "; ".join(statuses)
+                        if wants_stop:
+                            most_recent = active[0]
+                            stop_timer(timer_id=most_recent.metadata["timer_id"])
+                            latest_user_message = (
+                                f"[System: timer stopped — was {statuses_str}] {latest_user_message}"
+                            )
+                        else:
+                            latest_user_message = (
+                                f"[System: active timers — {statuses_str}] {latest_user_message}"
+                            )
                     else:
-                        latest_user_message = (
-                            f"[System: active timers — {statuses_str}] {latest_user_message}"
-                        )
-                else:
-                    note = "no active timer to stop" if wants_stop else "no active timers"
-                    latest_user_message = f"[System: {note}] {latest_user_message}"
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[TIMER] Failed to query/stop timers: %s", exc)
-    except Exception as exc:  # noqa: BLE001
-        # Defensive: timer module load failures should never break a chat request.
-        logger.warning("[TIMER] Detection block failed: %s", exc)
+                        note = "no active timer to stop" if wants_stop else "no active timers"
+                        latest_user_message = f"[System: {note}] {latest_user_message}"
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[TIMER] Failed to query/stop timers: %s", exc)
+        except Exception as exc:  # noqa: BLE001
+            # Defensive: timer module load failures should never break a chat request.
+            logger.warning("[TIMER] Detection block failed: %s", exc)
 
     # --- RELATIONAL INTENSITY AMPLIFICATION GATE ---
     # Pre-generation check: if the user's message contains markers that

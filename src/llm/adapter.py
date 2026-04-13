@@ -402,6 +402,16 @@ class LLMAdapter:
     # Ollama (local)
     # ------------------------------------------------------------------
 
+    def _get_num_ctx(self) -> int:
+        """Read context_length from user preferences. Clamped to [2048, 131072]."""
+        from src.core.preferences import get as get_pref
+        val = get_pref("context_length", 8192)
+        try:
+            val = int(val)
+        except (TypeError, ValueError):
+            val = 8192
+        return max(2048, min(131072, val))
+
     def _chat_ollama(
         self, system_prompt: str, user_message: str,
         image_data: list[str] | None = None, model: str | None = None,
@@ -418,7 +428,7 @@ class LLMAdapter:
                 {"role": "system", "content": system_prompt},
                 user_msg,
             ],
-            options={"temperature": temperature},
+            options={"temperature": temperature, "num_ctx": self._get_num_ctx()},
         )
         return response["message"]["content"]
 
@@ -439,7 +449,7 @@ class LLMAdapter:
                 {"role": "system", "content": system_prompt},
                 user_msg,
             ],
-            options={"temperature": temperature},
+            options={"temperature": temperature, "num_ctx": self._get_num_ctx()},
             stream=True,
         )
         for chunk in stream:

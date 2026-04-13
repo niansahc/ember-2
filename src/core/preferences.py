@@ -28,6 +28,7 @@ PREFERENCE_DEFAULTS: dict = {
     "conversational_style": "balanced",
     "web_search_autonomous": False,
     "first_run_tour_complete": False,
+    "context_length": 8192,
 }
 
 

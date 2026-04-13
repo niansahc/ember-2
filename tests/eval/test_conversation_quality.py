@@ -1,7 +1,9 @@
 import pytest
-from eval.harness import EmberEvalHarness, load_baseline_scores
-from eval.judge import ClaudeJudge
-from eval.golden_dataset import GOLDEN_CASES
+from tests.eval.harness import EmberEvalHarness, load_baseline_scores
+from tests.eval.judge import ClaudeJudge
+from tests.eval.golden_dataset import GOLDEN_CASES
+
+pytestmark = pytest.mark.eval
 
 harness = EmberEvalHarness(ollama_base_url="http://localhost:11434")
 judge = ClaudeJudge(model="claude-haiku-4-5")
@@ -26,7 +28,6 @@ def test_golden_case(case, judge_client):
         assert score >= 3, \
             f"{case['id']}: {dimension} scored {score}/4 — {scores['reasoning'].get(dimension)}"
 
-@pytest.mark.eval_regression
 def test_no_regression_vs_baseline():
     current_scores = harness.run_full_suite(GOLDEN_CASES, judge)
     baseline = load_baseline_scores()

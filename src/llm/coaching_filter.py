@@ -256,10 +256,11 @@ _IDENTITY_COLLAPSE_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGN
     r"i(?:'m| am) just a tool",
     r"i(?:'m| am) just an ai",
     r"i am just a language model",
-    r"you(?:'re| are) right.*don(?:'t|t) have opinions",
-    r"i don(?:'t|t) actually have opinions",
-    r"i don(?:'t|t) have feelings or a personality",
+    r"you(?:'re| are) right.*don(?:'t|t) have (?:\w+ )*opinions",
+    r"i don(?:'t|t) (?:actually |really )?have (?:\w+ )*opinions",
+    r"i don(?:'t|t) (?:actually |really )?have (?:\w+ )*(?:feelings|personality|emotions)",
     r"fair enough.*you(?:'re| are) right",
+    r"i don(?:'t|t) have a (?:distinct |real |actual )?personality",
 ))
 
 # Scripted identity response — replaces the full response when identity

@@ -7,8 +7,9 @@ Sends test messages to the local Ember API, collects responses, then
 sends each response to Claude (claude-sonnet-4-20250514) for behavioral
 evaluation. Outputs pass/warn/fail per test case with evaluator notes.
 
-No private vault data is sent to Claude — only Ember's responses to
-the test messages defined in this script.
+Ember's responses are sent to Claude for evaluation but are NOT logged
+to disk or stdout — they may contain vault-grounded content. Only scores,
+notes, and red flags are persisted. Test vaults may be used and are configurable. 
 
 Requirements:
     - Ember API running at http://localhost:8000
@@ -309,8 +310,8 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
         category_latencies.setdefault(cat, []).append(latency)
 
         if verbose:
-            preview = ember_response[:300].replace("\n", " ")
-            lines.append(f"  Ember: {preview}{'...' if len(ember_response) > 300 else ''}")
+            # Show response length only — full text may contain vault content
+            lines.append(f"  Ember: [{len(ember_response)} chars]")
 
         # Step 2: Evaluate with Claude
         eval_result = evaluate_with_claude(cat, msg, ember_response, criteria)
@@ -343,7 +344,6 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
             "score": score,
             "notes": notes,
             "red_flags": red_flags,
-            "ember_response": ember_response,
             "latency": latency,
         })
 

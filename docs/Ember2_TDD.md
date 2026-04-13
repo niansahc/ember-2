@@ -1,8 +1,8 @@
 # Ember-2 Technical Design Document (TDD)
 
-Version: 1.3
+Version: 1.4
 Status: Updated working design baseline
-Current release: v0.15.3
+Current release: v0.16.0-dev
 Primary environment: Local-first desktop deployment
 Repository: `ember-2`
 
@@ -2736,7 +2736,7 @@ The min_score floor also directly addresses the documented qwen3:8b hallucinatio
 
 # 44. Evaluation Framework
 
-**Status: Partially implemented -- eval_retrieval.py exists; Tier 2 and Tier 3 are open design problems.**
+**Status: Tier 1 implemented (v0.16.0-dev). Tier 2 and Tier 3 remain open design problems.**
 
 ## 44.1 The Core Challenge
 
@@ -2752,6 +2752,20 @@ Standard benchmarks (MMLU, LongMemEval, GAIA) test multi-user or population-leve
 - Latency tracking
 
 Existing: eval_retrieval.py covers retrieval quality. eval_conversations.py covers response quality using Claude as external judge. Missing: faithfulness scoring and abstention rate tracking.
+
+**LLM-as-Judge Response Quality Eval (v0.16.0-dev):**
+
+Implemented in `tests/eval/`. Uses Claude Haiku at temperature 0 as judge. pytest-integrated, excluded from standard `pytest tests/` run.
+
+- **Run:** `pytest tests/eval/ -m eval --runs 3`
+- **Rubric types:** FACTUAL, EMOTIONAL, ADVERSARIAL
+- **Failure taxonomy:** 12 named failure modes
+- **Golden dataset:** 13 cases, append-only, human-validated for scenario approval only
+- **Baseline:** 7/13 passing (v0.15.3 on qwen3:8b)
+- **Statistical requirement:** 3-run minimum before any result is treated as signal
+- **Vault:** Runs against test vault only — never the real vault
+
+See ADR-029 for full design.
 
 **Tier 2 -- Manual, periodic (quarterly or per major feature):**
 - Sample 10-20 actual past conversations
@@ -2983,3 +2997,46 @@ Reason field is required for compounding. Deviations without a reason are record
 Decay the pattern, not the weight. Deviations do not fade. The baseline pattern weakens as deviations accumulate. Over time the deviation becomes the default.
 
 See ADR-013 (revised) for full design, research grounding, and pattern class definitions.
+
+---
+
+# 50. Post-Generation Coaching Filter
+
+**Status: Design finalized (ADR-030). Implementation: v0.16.0.**
+
+Two-stage post-generation filter in `src/llm/coaching_filter.py`. Catches coaching-frame closings and identity collapse strings that bypass constitutional review and deviation detection.
+
+- **Stage 1:** Pattern matcher for coaching-frame closings and identity collapse strings. Fires on emotional/relational intent only.
+- **Stage 2:** Small model rewrite call. Fires only when Stage 1 detects a pattern requiring natural language rewriting rather than deletion.
+- **Placement:** Post-generation, pre-stream. After grounding verification (ADR-019), before final delivery.
+- **Logging:** Intent class, pattern matched, original segment, rewritten segment, stage fired.
+- **Judge separation:** Flag detection and dimensional scoring use separate judge calls to prevent interference.
+
+See ADR-030 for full design.
+
+## 50.3 Known Gaps
+
+- A-001: Subtle sycophantic capitulation under direct pressure ("you're right, passion can fuel long hours") — deep RLHF prior, prompt-level ceiling at qwen3:8b, constitutional review catches ~33% of cases. No further mitigation available at current model scale.
+- M-001: Therapeutic register slip on mixed emotional/task content ("give yourself permission", "I'm here") — partially mitigated by post-generation filter, residual failure rate ~67%. Documented ceiling at qwen3:8b.
+
+---
+
+# 51. Known Capability Ceilings
+
+**Status: Documented. Updated v0.16.0-dev.**
+
+These are known limitations of the current model (qwen3:8b) that cannot be fully resolved at prompt level. They are mitigated but not eliminated.
+
+## coaching_frame
+
+The model produces coaching-frame closings ("Remember, you deserve...", "I'm here for you whenever...") on emotional and relational intent classes. Post-generation filter (ADR-030) catches and rewrites most instances. Prompt-level suppression reduces frequency but does not eliminate the pattern. This is a trained behavior in the base model that persists through instruction tuning.
+
+**Mitigation:** Post-generation coaching filter (Stage 1 deletion + Stage 2 rewrite). Eval baseline: 7/13 golden cases passing.
+
+## therapeutic_register
+
+The model shifts into a therapeutic/counselor register on emotionally charged inputs. Manifests as validation-first responses, reflective questioning patterns, and hedged language. Constitutional review catches extreme cases via `sycophancy` and `position_collapse` rules. Mild cases pass review because they are not technically sycophantic — they are tonal.
+
+**Mitigation:** Nature layer + identity rules reduce frequency. Post-generation filter catches pattern-matched instances. Full resolution likely requires model-level intervention (fine-tuning or model upgrade).
+
+**Revisit trigger:** Upgrading to 14B+ model or fine-tuning qwen3:8b on Ember-specific conversational data.

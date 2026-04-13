@@ -355,7 +355,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 
 # Current State
 
-## Working (v0.15.3)
+## Working (v0.16.0-dev)
 
 **Core systems:**
 - Append-only JSON vault with typed memory enforcement (19 types validated at write time)
@@ -407,6 +407,12 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - Model selection guide with real eval data (docs/model_guide.md)
 - Vault health audit (7 checks, GREEN/YELLOW/RED health score)
 - 1260 pytest tests passing
+- LLM-as-judge response quality eval (`tests/eval/`, Claude Haiku judge, 13 golden cases, 7/13 baseline)
+
+**Running the eval suite:**
+```bash
+pytest tests/eval/ -m eval --runs 3   # 3-run minimum for signal
+```
 
 > Note: Eval harness results reflect personal vault contents and are not generic benchmarks.
 
@@ -526,6 +532,7 @@ src/
 │   └ suppress_assistant_noise.py Flag low-quality ingested records
 │
 ├ tests/                  Pytest suite (1260 tests)
+│   └ eval/               LLM-as-judge response quality eval (excluded from standard pytest run)
 ├ prompts/                LLM prompt templates
 ├ logs/                   Audit logs, safety review logs (gitignored)
 ├ ui/                     Built Ember UI frontend (gitignored, built from ember-2-ui)

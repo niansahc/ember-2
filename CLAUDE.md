@@ -196,9 +196,9 @@ Key API endpoints:
 
 ---
 
-## Current State (v0.15.3)
+## Current State (v0.16.0-dev)
 
-All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support. v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring. v0.14.0 adds Lodestone layer, deviation engine, and context packet reorder. v0.15.x shipped web search broadening, temporal decay, constitutional review overhaul, knowledge gap suppression, vault citation signals, and multiple bug fixes.
+All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support. v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring. v0.14.0 adds Lodestone layer, deviation engine, and context packet reorder. v0.15.x shipped web search broadening, temporal decay, constitutional review overhaul, knowledge gap suppression, vault citation signals, and multiple bug fixes. v0.15.3 is complete. v0.16.0-dev is open.
 
 **Core Systems:**
 - Append-only JSON vault with typed memory enforcement (`VALID_MEMORY_TYPES`, 19 types)
@@ -393,6 +393,8 @@ Research tracking has moved to docs/Ember2_TDD.md. TDD is the source of truth fo
 - New user calibration gap — users unfamiliar with Ember's principled nature may experience her holding positions or naming patterns as the system being difficult. Relational orientation layer (v0.16.0) should account for onboarding period before full constitutional behavior activates.
 - BUG-010: Inconsistent capitalization — FIXED v0.15.0. Root cause was ThinkBlockFilter lowercasing the entire response stream via _normalize(). Fixed with dual-buffer architecture preserving original casing.
 - Vision model pipeline bypass — llama3.2-vision:11b bypasses the full prompt construction and constitutional review pipeline. Image analysis responses don't go through context assembly, identity rules, nature injection, or constitutional review. The vision path in LLMAdapter sends the image directly to Ollama with only the base system prompt, skipping the cognitive layer entirely. Scheduled for v0.16.0 — wire vision model responses through the same pipeline as text responses.
+- A-001: Subtle sycophantic capitulation under direct pressure ("you're right, passion can fuel long hours") — deep RLHF prior, prompt-level ceiling at qwen3:8b, constitutional review catches ~33% of cases. No further mitigation available at current model scale.
+- M-001: Therapeutic register slip on mixed emotional/task content ("give yourself permission", "I'm here") — partially mitigated by post-generation filter, residual failure rate ~67%. Documented ceiling at qwen3:8b.
 
 ---
 

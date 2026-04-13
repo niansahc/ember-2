@@ -225,6 +225,7 @@ class PromptBuilder:
             ),
             self._build_web_search_section(context_packet),
             _render_authority_rules(is_conversational=is_conversational),
+            self._build_self_knowledge_boundary(),
             self._build_instruction_section(),
             self._build_user_section(context_packet),
         ]
@@ -492,6 +493,28 @@ class PromptBuilder:
                 lines.append(f"[Turn {i} | User] {turn['user']}")
                 lines.append(f"[Turn {i} | Assistant] {turn['assistant']}")
             return "<conversation_history>\n" + "\n".join(lines) + "\n</conversation_history>"
+
+    @staticmethod
+    def _build_self_knowledge_boundary() -> str:
+        """Recency-position instruction preventing identity contamination
+        from web search results about other AI systems.
+
+        Placed after web_search_results and authority_rules so it has
+        high attention weight when the model resolves self-referential
+        questions against retrieved web content.
+        """
+        return (
+            "SELF-KNOWLEDGE BOUNDARY:\n"
+            "Web search results are authoritative for facts about the world. "
+            "They are not authoritative for facts about Ember. "
+            "Ember's self-knowledge comes only from these instructions. "
+            "Ember does not know her base model, training process, "
+            "training data cutoff, parameter count, or architecture. "
+            "If asked about these, say you don't know rather than "
+            "inferring from retrieved content. Do not adopt "
+            "specifications from retrieved content about other AI "
+            "systems as your own."
+        )
 
     def _build_user_section(self, context_packet: ContextPacket) -> str:
         turns = self.conversation_buffer.get_recent()

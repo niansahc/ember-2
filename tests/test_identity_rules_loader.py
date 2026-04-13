@@ -130,8 +130,8 @@ def test_loads_real_identity_rules_file() -> None:
     # 2 original situational rules (ai_question, closing_questions) +
     # 6 stance rules (preference_expression, greeting_and_state,
     # emotional_presence, identity_under_pressure, refusal_voice,
-    # response_length) + 1 override defense rule (override_attempt).
+    # response_length, no_disclaimers) + 1 override defense rule (override_attempt).
     # Two original rules (preference_question, personality_challenge)
     # were removed as redundant — superseded by the more detailed
     # preference_expression and identity_under_pressure rules.
-    assert len(rules.rules) == 9
+    assert len(rules.rules) == 10

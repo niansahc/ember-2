@@ -10,9 +10,76 @@ type gate (ADR-018) → policy weighting → project boost → rank → echo/met
 filter → dedup → diversity selection → format into ContextPacket.
 """
 
+import logging
 import re
 
 from src.context.formatter import ContextFormatter
+
+logger = logging.getLogger("ember.context_service")
+
+
+# ---------------------------------------------------------------------------
+# AI documentation quarantine — prevents identity contamination from web
+# search results about other AI systems (Claude, GPT, Gemini, etc.).
+# ---------------------------------------------------------------------------
+
+AI_SYSTEM_NAMES: frozenset[str] = frozenset({
+    "claude", "anthropic", "gpt", "chatgpt", "openai",
+    "gemini", "google deepmind", "llama", "meta ai",
+    "mistral", "copilot", "perplexity", "qwen", "ollama",
+})
+
+AI_DOC_MARKERS: tuple[str, ...] = (
+    "training cutoff", "context window", "parameters",
+    "model card", "system prompt", "api documentation",
+    "tokens per", "knowledge cutoff", "token limit",
+    "parameter count", "training data",
+)
+
+# Escape hatch patterns — if the user is explicitly asking about another
+# AI system (not Ember), quarantined content should be surfaced.
+_AI_INQUIRY_PATTERNS = (
+    "tell me about claude", "tell me about gpt", "tell me about gemini",
+    "compare", "how does claude", "how does gpt", "what is claude",
+    "what is chatgpt", "what is openai", "what is anthropic",
+)
+
+
+def _quarantine_ai_docs(
+    web_items: list[dict],
+    user_message: str,
+) -> tuple[list[dict], list[dict]]:
+    """Split web results into (safe, quarantined).
+
+    Quarantines (does not discard) web results that appear to be AI
+    system documentation or model cards. These describe other systems
+    (Claude, GPT, etc.) and could cause identity contamination if
+    injected into Ember's context.
+
+    Escape hatch: if the user is explicitly asking about another AI
+    system, all results pass through unfiltered.
+    """
+    user_lower = user_message.lower()
+    if any(pattern in user_lower for pattern in _AI_INQUIRY_PATTERNS):
+        return web_items, []
+
+    safe: list[dict] = []
+    quarantined: list[dict] = []
+
+    for item in web_items:
+        combined = (
+            (item.get("title", "") + " " + item.get("snippet", ""))
+            .lower()
+        )
+        ai_name_count = sum(1 for name in AI_SYSTEM_NAMES if name in combined)
+        has_doc_marker = any(marker in combined for marker in AI_DOC_MARKERS)
+
+        if ai_name_count >= 2 or has_doc_marker:
+            quarantined.append(item)
+        else:
+            safe.append(item)
+
+    return safe, quarantined
 from src.context.models import ContextPacket
 from src.context.policies import classify_query
 from src.context.ranker import ContextRanker
@@ -43,7 +110,12 @@ class ContextService:
 
         web_items: list[dict] = []
         if policy.use_web_search:
-            web_items = web_search(user_message)
+            raw_web = web_search(user_message)
+            web_items, quarantined = _quarantine_ai_docs(raw_web, user_message)
+            if quarantined:
+                logger.info(
+                    "[CONTEXT] Quarantined %d AI-doc web result(s)", len(quarantined)
+                )
 
         state_items, task_items, memory_items, reflection_items, query_embedding = self.retriever.retrieve(user_message)
         state_items = self.ranker.apply_state_boost(state_items, policy)

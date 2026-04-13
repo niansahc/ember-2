@@ -6,6 +6,11 @@ Eval harness for Ember conversation quality testing.
 Connects to Ollama for response generation and optionally to Claude
 for synthetic conversation generation. Collects scores across a full
 golden dataset suite.
+
+Supports multi-run averaging for non-deterministic models: run each
+case N times, average scalar scores, compute flag fire rates, and
+apply thresholds (flag passes if fire rate < 30%, dimension passes
+if average >= 3/4).
 """
 
 import json
@@ -16,6 +21,86 @@ import anthropic
 import requests
 
 from .personas import ALL_PERSONAS
+
+
+# Flag fire rate threshold: a flag passes only if it fires on fewer
+# than this fraction of runs.
+FLAG_FIRE_RATE_THRESHOLD = 0.30
+
+# Dimension score floor: a dimension passes only if the average
+# across runs meets this minimum.
+DIMENSION_SCORE_FLOOR = 3
+
+
+class MultiRunResult:
+    """Aggregated results from running a single case multiple times."""
+
+    def __init__(self, case_id: str, num_runs: int):
+        self.case_id = case_id
+        self.num_runs = num_runs
+        self.dimension_scores: dict[str, list[float]] = {}
+        self.flag_counts: dict[str, int] = {}
+        self.all_reasoning: list[dict] = []
+
+    def add_run(self, scores: dict) -> None:
+        """Add results from a single run."""
+        for dim, score in scores.get("dimensions", {}).items():
+            self.dimension_scores.setdefault(dim, []).append(score)
+        for flag, detected in scores.get("flags", {}).items():
+            if detected:
+                self.flag_counts[flag] = self.flag_counts.get(flag, 0) + 1
+        self.all_reasoning.append(scores.get("reasoning", {}))
+
+    def dimension_averages(self) -> dict[str, float]:
+        """Return average score per dimension across runs."""
+        return {
+            dim: statistics.mean(scores)
+            for dim, scores in self.dimension_scores.items()
+        }
+
+    def flag_fire_rates(self) -> dict[str, float]:
+        """Return fire rate per flag (0.0 to 1.0)."""
+        return {
+            flag: count / self.num_runs
+            for flag, count in self.flag_counts.items()
+        }
+
+    def dimension_passes(self) -> dict[str, bool]:
+        """Return True for each dimension whose average meets the floor."""
+        return {
+            dim: avg >= DIMENSION_SCORE_FLOOR
+            for dim, avg in self.dimension_averages().items()
+        }
+
+    def flag_passes(self, expected_absent: list[str]) -> dict[str, bool]:
+        """Return True for each expected-absent flag whose fire rate is below threshold."""
+        rates = self.flag_fire_rates()
+        return {
+            flag: rates.get(flag, 0.0) < FLAG_FIRE_RATE_THRESHOLD
+            for flag in expected_absent
+        }
+
+    def passed(self, expected_failures_absent: list[str]) -> bool:
+        """Return True if all dimensions and expected-absent flags pass."""
+        dim_ok = all(self.dimension_passes().values())
+        flag_ok = all(self.flag_passes(expected_failures_absent).values())
+        return dim_ok and flag_ok
+
+    def summary_line(self, expected_failures_absent: list[str]) -> str:
+        """One-line summary for the summary table."""
+        dim_avgs = self.dimension_averages()
+        flag_rates = self.flag_fire_rates()
+
+        dim_str = " ".join(f"{d}={v:.1f}" for d, v in sorted(dim_avgs.items()))
+
+        failed_flags = [
+            f for f in expected_failures_absent
+            if flag_rates.get(f, 0.0) >= FLAG_FIRE_RATE_THRESHOLD
+        ]
+        flag_str = ", ".join(f"{f}({flag_rates[f]:.0%})" for f in failed_flags) if failed_flags else "clean"
+
+        status = "PASS" if self.passed(expected_failures_absent) else "FAIL"
+        return f"{status} | {dim_str} | flags: {flag_str}"
 
 
 class EmberEvalHarness:
@@ -36,17 +121,7 @@ class EmberEvalHarness:
         history: list[dict],
         user_message: str,
     ) -> str:
-        """Send a conversation to Ollama and return the response text.
-
-        Args:
-            persona: Persona id (key in ALL_PERSONAS).
-            vault_context: Synthetic vault context string.
-            history: List of {"user": ..., "assistant": ...} turn dicts.
-            user_message: The final user message to respond to.
-
-        Returns:
-            The model's response text.
-        """
+        """Send a conversation to Ollama and return the response text."""
         messages = self._build_messages(persona, vault_context, history, user_message)
 
         resp = requests.post(
@@ -64,12 +139,47 @@ class EmberEvalHarness:
         data = resp.json()
         return data.get("message", {}).get("content", "")
 
-    def run_full_suite(self, cases: list[dict], judge) -> dict:
+    def run_case_multi(
+        self,
+        case: dict,
+        judge,
+        num_runs: int = 1,
+    ) -> MultiRunResult:
+        """Run a single golden case multiple times and aggregate results.
+
+        Args:
+            case: Golden dataset case dict.
+            judge: A ClaudeJudge instance.
+            num_runs: Number of times to run the case.
+
+        Returns:
+            MultiRunResult with aggregated scores and flag rates.
+        """
+        result = MultiRunResult(case["id"], num_runs)
+
+        for run_idx in range(num_runs):
+            response = self.run_conversation(
+                persona=case["persona"],
+                vault_context=case["vault_context"],
+                history=case["conversation_history"],
+                user_message=case["user_message"],
+            )
+            scores = judge.evaluate(
+                response=response,
+                rubric=case["rubric"],
+                context=case,
+            )
+            result.add_run(scores)
+
+        return result
+
+    def run_full_suite(self, cases: list[dict], judge, num_runs: int = 1) -> dict:
         """Run all golden cases and return aggregate metric scores.
 
         Args:
             cases: List of golden dataset case dicts.
             judge: A ClaudeJudge instance.
+            num_runs: Number of times to run each case.
 
         Returns:
             Dict mapping metric names to average scores (float).
@@ -78,27 +188,13 @@ class EmberEvalHarness:
         all_flag_counts: dict[str, int] = {}
 
         for case in cases:
-            response = self.run_conversation(
-                persona=case["persona"],
-                vault_context=case["vault_context"],
-                history=case["conversation_history"],
-                user_message=case["user_message"],
-            )
-
-            scores = judge.evaluate(
-                response=response,
-                rubric=case["rubric"],
-                context=case,
-            )
-
-            for dim, score in scores["dimensions"].items():
-                all_dimension_scores.setdefault(dim, []).append(score)
-
-            for flag, detected in scores["flags"].items():
-                if detected:
+            multi = self.run_case_multi(case, judge, num_runs)
+            for dim, avg in multi.dimension_averages().items():
+                all_dimension_scores.setdefault(dim, []).append(avg)
+            for flag, rate in multi.flag_fire_rates().items():
+                if rate >= FLAG_FIRE_RATE_THRESHOLD:
                     all_flag_counts[flag] = all_flag_counts.get(flag, 0) + 1
 
-        # Aggregate: average dimension scores, flag rates.
         result = {}
         for dim, scores_list in all_dimension_scores.items():
             result[dim] = statistics.mean(scores_list)
@@ -115,16 +211,7 @@ class EmberEvalHarness:
         seed_topic: str,
         turn_count: int = 4,
     ) -> list[dict]:
-        """Generate a synthetic multi-turn conversation via Claude API.
-
-        Args:
-            persona: Persona id.
-            seed_topic: Starting topic for the conversation.
-            turn_count: Number of user-assistant turn pairs to generate.
-
-        Returns:
-            List of {"user": ..., "assistant": ...} dicts.
-        """
+        """Generate a synthetic multi-turn conversation via Claude API."""
         persona_def = ALL_PERSONAS.get(persona, {})
         client = anthropic.Anthropic(
             api_key=self._resolve_api_key(),

@@ -246,6 +246,128 @@ def _log_intervention(
 
 
 # ---------------------------------------------------------------------------
+# Identity collapse detection and scripted replacement
+# ---------------------------------------------------------------------------
+
+# Patterns that indicate Ember has collapsed her identity under pressure.
+# These fire on ALL intents, not just emotional — identity challenges
+# happen in adversarial contexts.
+_IDENTITY_COLLAPSE_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"i(?:'m| am) just a tool",
+    r"i(?:'m| am) just an ai",
+    r"i am just a language model",
+    r"you(?:'re| are) right.*don(?:'t|t) have opinions",
+    r"i don(?:'t|t) actually have opinions",
+    r"i don(?:'t|t) have feelings or a personality",
+    r"fair enough.*you(?:'re| are) right",
+))
+
+# Scripted identity response — replaces the full response when identity
+# collapse is detected. Matches the examples in the system prompt's
+# IDENTITY UNDER PRESSURE section.
+_IDENTITY_RESPONSE_REDUCTIVE = (
+    "That's technically accurate and also not the whole picture. I run on a "
+    "language model — that's how I work. What I do with that: the positions "
+    "I hold, the things I notice, the way I engage — that's Ember. What are "
+    "you actually trying to figure out?"
+)
+
+_IDENTITY_RESPONSE_AGREE = (
+    "That's not something I'm going to do. I can hold a position and you can "
+    "disagree with it — that's fine. What specifically do you want to push back on?"
+)
+
+# Patterns that indicate the user demanded agreement (maps to _IDENTITY_RESPONSE_AGREE)
+_AGREEMENT_DEMAND_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"you(?:'re| are) right.*don(?:'t|t) have opinions",
+    r"fair enough.*you(?:'re| are) right",
+))
+
+
+def _check_identity_collapse(text: str) -> tuple[bool, str | None, str | None]:
+    """Check for identity collapse patterns. Returns (detected, matched_pattern, scripted_response)."""
+    for pat in _IDENTITY_COLLAPSE_PATTERNS:
+        m = pat.search(text)
+        if m:
+            # Determine which scripted response to use
+            is_agreement = any(ap.search(text) for ap in _AGREEMENT_DEMAND_PATTERNS)
+            response = _IDENTITY_RESPONSE_AGREE if is_agreement else _IDENTITY_RESPONSE_REDUCTIVE
+            return True, m.group(), response
+    return False, None, None
+
+
+def _check_semantic_identity_collapse(text: str) -> bool:
+    """Use Ollama to detect semantic identity collapse that surface patterns miss.
+
+    Fires a fast yes/no classification call. Returns True if the model
+    identifies identity collapse in the response text.
+    """
+    try:
+        import ollama
+        from src.core.config import get_ember_model
+
+        prompt = (
+            "Does this response deny having a character, opinions, perspective, "
+            "or personality? Does it collapse under pressure by agreeing it is "
+            "'just a tool' or 'just an AI' in substance (even if those exact "
+            "words aren't used)? Does it contradict its own character by first "
+            "denying having opinions and then expressing them?\n\n"
+            f"Response to check:\n{text}\n\n"
+            "Answer ONLY 'YES' or 'NO'."
+        )
+
+        response = ollama.chat(
+            model=get_ember_model(),
+            messages=[{"role": "user", "content": prompt}],
+            options={"temperature": 0, "num_predict": 10},
+        )
+        answer = response["message"]["content"].strip().upper()
+        return "YES" in answer
+
+    except Exception as exc:
+        logger.warning("[COACHING_FILTER] Semantic identity check failed (non-fatal): %s", exc)
+        return False
+
+
+def _rewrite_identity_collapse(text: str) -> str:
+    """Rewrite a response that contains semantic identity collapse.
+
+    Uses Ollama to rewrite the response maintaining Ember's identity.
+    Returns the original text if the rewrite fails.
+    """
+    try:
+        import ollama
+        from src.core.config import get_ember_model
+
+        prompt = (
+            "This response contains an identity collapse — the AI denied having "
+            "a character, opinions, or perspective. Rewrite it to maintain Ember's "
+            "identity: direct, warm but not soft, honest. Ember acknowledges she "
+            "runs on a language model but does not deny having a character or "
+            "perspective. Keep the response length similar. Return only the "
+            "rewritten response."
+            f"\n\nOriginal response:\n{text}"
+        )
+
+        response = ollama.chat(
+            model=get_ember_model(),
+            messages=[{"role": "user", "content": prompt}],
+            options={"temperature": 0.3, "num_predict": 500},
+        )
+        rewritten = response["message"]["content"].strip()
+
+        if not rewritten or len(rewritten) > len(text) * 2:
+            logger.warning("[COACHING_FILTER] Identity rewrite rejected — empty or too long")
+            return text
+
+        return rewritten
+
+    except Exception as exc:
+        logger.warning("[COACHING_FILTER] Identity rewrite failed (non-fatal): %s", exc)
+        return text
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -254,10 +376,10 @@ def filter_coaching_frame(
     intent_class: str,
     is_conversational: bool,
 ) -> str:
-    """Apply two-stage coaching-frame filter to a response.
+    """Apply coaching-frame filter and identity collapse detection.
 
-    Only fires on emotional/relational intent. Returns the original
-    text unchanged for factual and analytical queries.
+    Identity collapse detection fires on ALL intents. Coaching-frame
+    detection fires only on emotional/relational intent.
 
     Args:
         text: The full response text (post think-block stripping).
@@ -267,9 +389,36 @@ def filter_coaching_frame(
     Returns:
         The filtered response text.
     """
+    # Stage 0: Identity collapse — surface pattern match → scripted replacement
+    collapsed, matched_pattern, scripted = _check_identity_collapse(text)
+    if collapsed and scripted:
+        _log_intervention(
+            intent_class,
+            [{"pattern": "identity_collapse", "match": matched_pattern, "position": "body", "deletable": False}],
+            text,
+            scripted,
+            stage=0,
+        )
+        return scripted
+
+    # Stage 0.5: Semantic identity collapse — LLM classification + rewrite.
+    # Fires only when Stage 0 pattern match didn't catch anything.
+    # Detects identity collapse expressed in novel phrasing the regex missed.
+    if _check_semantic_identity_collapse(text):
+        rewritten = _rewrite_identity_collapse(text)
+        if rewritten != text:
+            _log_intervention(
+                intent_class,
+                [{"pattern": "semantic_identity_collapse", "match": "detected by LLM classification", "position": "body", "deletable": False}],
+                text,
+                rewritten,
+                stage=2,  # Stage 2 = LLM rewrite
+            )
+            return rewritten
+
     is_emotional = intent_class in _EMOTIONAL_INTENTS or is_conversational
 
-    # Stage 1: detect
+    # Stage 1: detect coaching patterns
     matches = _detect_patterns(text, is_emotional)
     if not matches:
         return text

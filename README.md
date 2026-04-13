@@ -355,34 +355,37 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 
 # Current State
 
-## Working (v0.14.2)
+## Working (v0.15.3)
 
 **Core systems:**
-- Append-only JSON vault with typed memory enforcement (17 types validated at write time)
+- Append-only JSON vault with typed memory enforcement (19 types validated at write time)
 - Ingestion pipeline (ChatGPT, PDF, DOCX, CSV, TXT, GDrive, POST /ingest/upload multipart)
 - Semantic retrieval via vector indexes (cached in memory, no disk load per query)
-- Context assembly with policy-weighted ranking, diversity selection, project-scoped boost
+- Context assembly with policy-weighted ranking, diversity selection, project-scoped boost, temporal decay
 - SSE streaming responses from Ollama or Anthropic through FastAPI
 - Cloud model provider support — Anthropic Claude and OpenAI via LLMAdapter
 - Provider API key storage via OS credential store (Windows, macOS, Linux)
 - Auto state extraction from conversation turns (background thread)
-- State layer (StateService, StateResolver, 8 categories, context packet integration)
+- State layer (StateService, StateResolver, 9 categories including timer, context packet integration)
 - Multi-record state categories for open_loop and next_action (capped at 5)
 - Commitment detection — post-generation detector writes open_loop state records
 - Daily, weekly, and session reflection generation
-- Constitutional review (9 principles, constitution v0.6, streaming-compatible)
+- Constitutional review (9 principles, constitution v0.7, streaming-compatible — MVR prompt optimization)
 - Conversation sessions with projects, rename, soft-delete, auto-title
 - Task layer — create and track tasks through conversation or direct request
 - Task sidebar tray in the UI with checkbox completion
-- Temporal awareness — staleness penalties, age labels, hedging rules for old memories
+- Temporal awareness — staleness penalties, age labels, hedging rules, multiplicative temporal decay
 - Self-echo prevention (role-labeled context, metadata-aware scoring)
-- Web search via local SearXNG with transparency indicator
+- Web search via local SearXNG with transparency indicator, ask-first interaction mode, broadened triggers
 - Vision model support with graceful text-only fallback
+- Knowledge gap suppression and anti-embellishment rules
+- Vault citation signal (X-Ember-Vault-Used header, vault_sources SSE event)
 - Default model: qwen3:8b (best local model tested)
 
-**User-facing features (v0.12.0):**
+**User-facing features (v0.12.0+):**
 - Task creation and tracking through natural conversation
 - PIN/passphrase lock — secure Ember with bcrypt, idle timeout, and recovery
+- PIN change endpoint (POST /v1/security/pin/change)
 - Conversational style settings — Casual, Balanced, or Thoughtful
 - Multi-image upload — send multiple images in a single message
 - Web search transparency indicator — see when web search was used
@@ -395,13 +398,15 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - Rate limiting, path traversal protection, JSON audit logging
 - Dependency security policy — native fetch, no axios
 - SearXNG and API bound to localhost
+- Disk encryption status detection (GET /v1/system/disk-encryption) — BitLocker/FileVault/LUKS
 
 **Evaluation & Tooling:**
 - Retrieval evaluation (15 benchmark cases, pass/warn/fail scoring)
 - Conversation quality eval with Claude as external evaluator
+- Web search accuracy eval (30 questions, 5 categories, latency tracking)
 - Model selection guide with real eval data (docs/model_guide.md)
 - Vault health audit (7 checks, GREEN/YELLOW/RED health score)
-- 779 pytest tests passing
+- 1260 pytest tests passing
 
 > Note: Eval harness results reflect personal vault contents and are not generic benchmarks.
 
@@ -412,8 +417,8 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 **v0.13.0** — Embedding upgrade (nomic-embed-text 768-dim), SQLite index migration, memory tiering (ADR-015), nature layer (ADR-016), grounding verification (ADR-019), intent-aware type gating (ADR-018), XML context sections, monthly reflection, JSON import, identity rules layer ✓
 **v0.14.0** — Identity foundation: Lodestone layer, deviation engine, context packet reorder, release automation ✓
 **v0.14.1** — Patch: timer functions, identity stance rules, constitutional review fixes, vault hygiene ✓
-**v0.15.0** — Quality of life improvements: vault encryption, token reduction, constitutional review optimization, web search interaction mode, hallucination reduction, API auto-start, quality of life testing
-**v0.16.0** — Health + agent orchestration: health data ingestion, self-evaluation loops, trace-driven learning, relational orientation layer
+**v0.15.0** — Quality of life improvements: web search broadening and ask-first mode, constitutional review overhaul (MVR, constitution v0.7), temporal decay, knowledge gap suppression, vault citation signals, BUG-008/009/010 fixes, developer tooling ✓
+**v0.16.0** — Health + agent orchestration: health data ingestion, self-evaluation loops, trace-driven learning, relational orientation layer, API auto-start, vision pipeline parity
 **Post-v0.16.0** — Multi-user vault isolation, full platform parity
 
 ---
@@ -520,7 +525,7 @@ src/
 │   ├ audit_assistant_chunks.py   Audit assistant-generated chunks
 │   └ suppress_assistant_noise.py Flag low-quality ingested records
 │
-├ tests/                  Pytest suite (779 tests)
+├ tests/                  Pytest suite (1260 tests)
 ├ prompts/                LLM prompt templates
 ├ logs/                   Audit logs, safety review logs (gitignored)
 ├ ui/                     Built Ember UI frontend (gitignored, built from ember-2-ui)

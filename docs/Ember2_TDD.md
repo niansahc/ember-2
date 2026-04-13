@@ -1,8 +1,8 @@
 # Ember-2 Technical Design Document (TDD)
 
-Version: 1.2
+Version: 1.3
 Status: Updated working design baseline
-Current release: v0.14.0
+Current release: v0.15.3
 Primary environment: Local-first desktop deployment
 Repository: `ember-2`
 
@@ -1673,16 +1673,44 @@ Infrastructure:
 - Release Please + GitHub Actions automation (replaces manual release process across all three repos)
 - Launcher script (launch_ember.bat / launch_ember.sh)
 
-**v0.15.0 — Quality of Life Improvements**
-- Vault encryption at rest (five-layer envelope architecture — see TDD §38)
-- Web search interaction mode — ask-first (default) with opt-in autonomous toggle; ask-first pattern: Ember says "I don't have enough on this — want me to search?" when she identifies a gap she can't answer confidently. Autonomous mode (Ember searches without asking) is v0.16.0; the toggle and ask-first pattern are v0.15.0.
-- Web search trigger broadening — current 14 explicit markers require the user to say "search"/"google"/"look up"; broaden to temporal currency markers ("yesterday", "this week") and factual uncertainty markers ("is it true", "has there been")
-- API as a service — auto-start on boot via installer (Windows startup task, Linux systemd unit, macOS launchd plist)
-- Hallucination reduction — surface uncertainty on vault-retrieved claims; identify knowledge gaps and offer to look up rather than fabricate
-- Source citation on vault-retrieved content — extend the existing web search citation pattern to vault memories
-- Local model quality improvements — token reduction, latency optimization
-- Constitutional review optimization — reduce false positive trigger rate
-- Quality of life testing — first non-developer user on local model
+**v0.15.0 — Quality of Life Improvements** (complete, shipped v0.15.0–v0.15.3)
+
+Web search:
+- ~~Web search interaction mode — ask-first (default) with opt-in autonomous toggle~~ ✓ — web_search_autonomous preference field, ask-first pattern when Ember identifies a gap
+- ~~Web search trigger broadening~~ ✓ — temporal currency markers, factual uncertainty markers, entity-type triggers (Layer 1 regex), implicit recency and episodic domain triggers, AI system documentation quarantine from web results
+
+Constitutional review:
+- ~~Constitutional review optimization~~ ✓ — MVR (Minimum Viable Review) prompt with three fixed criteria, trigger-signal-to-principle append for non-MVR principles
+- ~~Constitution v0.7~~ ✓ — flourishing_over_preference v0.2 rewritten with four-condition fire gate, default-to-silence, stated-values-only constraint
+
+Retrieval and quality:
+- ~~Multiplicative temporal decay weighting~~ ✓ — graduated age penalties in ContextRanker
+- ~~Hallucination reduction~~ ✓ — knowledge gap suppression across all three injection paths, anti-embellishment rule, self-knowledge boundary rule, retrieval confidence metadata injection
+- ~~Source citation on vault-retrieved content~~ — partially shipped: X-Ember-Vault-Used header and vault_sources SSE event work; citation quality fixes still in progress
+- ~~Embedding batching~~ ✓ — 3 Ollama embedding calls reduced to 1 per query
+- ~~Relational intensity amplification gate~~ ✓ — suppresses lodestone relational records during relational trigger activation
+- ~~Contrastive few-shot examples~~ ✓ — preference expression identity rules
+
+Bug fixes:
+- ~~BUG-008~~ ✓ — repetitive parenthetical questions (closing_questions rule, parenthetical filter, session-sticky suppression)
+- ~~BUG-009~~ ✓ — topic fixation (decline resolution, retrieval suppression, session-sticky decline notes)
+- ~~BUG-010~~ ✓ — inconsistent capitalization (ThinkBlockFilter dual-buffer architecture)
+- ~~Think block stripping~~ ✓ — full pipeline with unicode italic and case variant handling
+
+Infrastructure:
+- ~~PIN change endpoint~~ ✓ — POST /v1/security/pin/change with current PIN verification
+- ~~Disk encryption status~~ ✓ — GET /v1/system/disk-encryption (BitLocker/FileVault/LUKS detection)
+- ~~Service health/restart/developer status endpoints~~ ✓ — docker field, restart, developer status and vaults
+- ~~Runtime vault swap~~ ✓ — POST /v1/developer/vault/swap (dev-mode gated)
+- ~~DEVEmberVault structure~~ ✓ — demo and test vaults with synthetic seed data
+- ~~Claude Code hooks~~ ✓ — vault guard, auto-test, retrieval eval
+- ~~Cross-platform watchdog~~ ✓ — API restart and stop
+- ~~Streaming SSE regression test~~ ✓ — added to Tier 3 release gate
+
+Deferred from v0.15.0:
+- Vault encryption at rest — delegated to OS disk encryption; detection endpoint shipped; five-layer envelope deferred indefinitely
+- API as a service — auto-start on boot deferred to v0.16.0
+- Quality of life testing — not yet started
 - Connectors removed from near-term roadmap indefinitely
 
 **v0.16.0 — Health + Agent Orchestration**
@@ -1692,6 +1720,8 @@ Infrastructure:
 - Controlled tool writes with stricter policy gates
 - Trace-driven learning
 - Relational orientation layer (see docs/research/relational-orientation.md)
+- API as a service — auto-start on boot via installer (deferred from v0.15.0)
+- Vision pipeline parity — wire vision model through full cognitive layer (see §50.1)
 
 **Post-v0.16.0**
 - Multi-user vault isolation
@@ -1701,14 +1731,14 @@ Infrastructure:
 
 - add multimodal and voice layers
 - support more proactive assistance
-- session reflection mode — end-of-session reflection prompt distinct from daily/weekly cadence
-- embedding upgrade to nomic-embed-text
+- ~~session reflection mode~~ — complete (v0.12.0): ADR-009, end-of-session capture
+- ~~embedding upgrade to nomic-embed-text~~ — complete (v0.13.0)
 - desktop/browser integrations (system tray, clipboard, ambient presence)
 - ~~model selector~~ — complete (v0.7.4): GET/POST /model, settings UI dropdown
 - ~~onboarding conversation flow~~ — complete (v0.9.0): guided 7-question first-run that seeds profile records
-- ~~add controlled tools~~ → moved to v0.15.0 roadmap
-- ~~add agentic workflows~~ → moved to v0.15.0 roadmap
-- ~~add decision-memory and self-evaluation loops~~ → moved to v0.15.0 roadmap
+- ~~add controlled tools~~ → moved to v0.16.0 roadmap
+- ~~add agentic workflows~~ → moved to v0.16.0 roadmap
+- ~~add decision-memory and self-evaluation loops~~ → moved to v0.16.0 roadmap
 
 ---
 
@@ -1883,8 +1913,8 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 
 *Each gap is either addressed (version assigned) or open (no version yet). Gaps with no roadmap path are design problems, not backlog items.*
 
-- **Vault encryption at rest** — five-layer envelope architecture decided (see TDD §38, GOVERNANCE.md). Implementation deferred.
-  → addressed: v0.15.0
+- **Vault encryption at rest** — five-layer envelope architecture documented (see TDD §38). Delegated to OS disk encryption; GET /v1/system/disk-encryption endpoint detects BitLocker/FileVault/LUKS (shipped v0.15.0). Application-level envelope encryption deferred indefinitely.
+  → addressed: v0.15.0 (detection only; envelope deferred)
 
 - **~~Mac/Linux installer~~** — complete.
   → addressed: v0.12.0
@@ -1905,13 +1935,13 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
   → open: trigger: retrieval latency degrades at scale
 
 - **Social sycophancy / face preservation** — deviation engine has no explicit detection triggers for face-preservation patterns (excessive validation without correction, moral endorsement without challenge). ELEPHANT benchmark (Cheng et al., Stanford/CMU/Oxford, 2025; arXiv:2505.13995): LLMs preserve face 47% more than humans on open-ended questions, affirm inappropriate behavior in 42% of advice-seeking scenarios. flourishing_over_preference constitutional principle (v0.15.0) covers the behavior at governance level. Detection has no triggers yet.
-  → open: close before relational orientation layer ships (v0.15.0)
+  → open: close before relational orientation layer ships (v0.16.0)
 
 - **Memory staleness vs. importance are orthogonal** — STATE_STALENESS_DAYS applies a time-based penalty but importance and staleness are independent dimensions. A frequently-retrieved memory can become confidently wrong rather than just outdated. Confirmed open research problem (State of AI Agent Memory, 2026). Related to MemPalace validity window pattern (see Active Watch Items).
-  → open: revisit when connector layer (v0.15.0) increases volume of external facts entering the vault
+  → open: revisit when connector layer increases volume of external facts entering the vault (no version assigned)
 
 - **MemPalace verbatim baseline eval question** — how much does Ember's 17-type taxonomy and hot/warm/cold tiering actually add over a naive verbatim + embedding baseline? Retrieval eval with typed structure disabled required before adding further retrieval complexity.
-  → open: run before v0.15.0 retrieval work begins
+  → open: run before next retrieval architecture change (no version assigned)
 
 ---
 
@@ -2592,13 +2622,13 @@ Not a near-term priority. The architecture supports it (vault path is configurab
 
 # 38. Vault Encryption at Rest
 
-**Status: Planned (v0.14.0) -- deferred from v0.13.0; architecture decided; BitLocker covers current single-user hardware.**
+**Status: Deferred indefinitely — delegated to OS disk encryption. GET /v1/system/disk-encryption endpoint (v0.15.0) detects BitLocker/FileVault/LUKS. Five-layer envelope architecture documented below for reference if revisited.**
 
 ## Current State
 
 The vault is plain JSON files on disk. BitLocker (Windows) / FileVault (Mac) provides full-disk encryption covering the vault for current single-user deployment. This is adequate for single-user, single-device use.
 
-## Planned Architecture (v0.14.0)
+## Reference Architecture (deferred)
 
 Five-layer envelope encryption design. Reference implementation: Cryptomator (open source, well-audited).
 

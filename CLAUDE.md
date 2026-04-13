@@ -196,9 +196,9 @@ Key API endpoints:
 
 ---
 
-## Current State (v0.14.2)
+## Current State (v0.15.3)
 
-All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support. v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring. v0.14.0 adds Lodestone layer, deviation engine, and context packet reorder.
+All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support. v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring. v0.14.0 adds Lodestone layer, deviation engine, and context packet reorder. v0.15.x shipped web search broadening, temporal decay, constitutional review overhaul, knowledge gap suppression, vault citation signals, and multiple bug fixes.
 
 **Core Systems:**
 - Append-only JSON vault with typed memory enforcement (`VALID_MEMORY_TYPES`, 19 types)
@@ -215,7 +215,7 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - Auto state extraction from conversation turns (StateExtractor, background thread, threshold: 10 words)
 - State layer (StateService, StateResolver, 9 categories including timer, context packet integration)
 - Daily and weekly reflection generation (multi-source, junk-filtered, suppression tools)
-- Constitutional review (9 principles, constitution v0.6, streaming-compatible — includes relational_honesty v0.5 and flourishing_over_preference v0.1)
+- Constitutional review (9 principles, constitution v0.7, streaming-compatible — includes relational_honesty v0.5 and flourishing_over_preference v0.2, MVR prompt optimization)
 - Conversation sessions (session_id, project_id, rename, soft-delete, auto-title)
 - Projects backend (CRUD, conversation assignment, project-scoped retrieval)
 - Self-echo prevention (role-labeled context, metadata-aware scoring, -0.25 assistant penalty)
@@ -265,6 +265,23 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - Runtime vault swap (POST /v1/developer/vault/swap) — dev-mode gated, in-memory override, clears vector indexes
 - Claude Code hooks (.claude/hooks/) — vault guard, auto-test on .py edit, retrieval eval on context/retrieval/llm commits
 - DEVEmberVault structure — demo and test vaults with synthetic seed data
+
+**v0.15.x additions:**
+- Web search trigger broadening — temporal currency markers, factual uncertainty markers, entity-type triggers (Layer 1 regex), implicit recency and episodic domain triggers, AI system documentation quarantine from web results
+- Web search ask-first interaction mode — Ember says "I don't have enough on this — want me to search?" when she identifies a gap; web_search_autonomous preference field (default False) for opt-in autonomous mode
+- Multiplicative temporal decay weighting in ContextRanker — older records receive graduated penalties
+- Vault citation signal — X-Ember-Vault-Used response header and vault_sources SSE event (partially shipped — indicator works, citation quality fixes still in progress)
+- Retrieval confidence metadata injection for hallucination reduction
+- Knowledge gap suppression strengthened — anti-embellishment rule for personal queries, self-knowledge boundary rule, anti-disclaimer rule
+- BUG-010 fix: ThinkBlockFilter dual-buffer architecture preserving original casing
+- Think block stripping — full pipeline (strip, orphaned close tags, orphaned open tags), unicode italic and case variant handling
+- Contrastive few-shot examples for preference expression in identity rules
+- Relational intensity amplification gate — suppresses lodestone relational records during relational trigger activation
+- Embedding batching — 3 Ollama embedding calls reduced to 1 per query
+- Cross-platform watchdog for API restart and stop
+- Streaming SSE regression test added to release gate (Tier 3)
+- Launch-installer endpoint, version/release triggers in prompt
+- Eval improvements — --compare flag with Haiku as external evaluator, auto-cleanup after runs, test vault isolation, web search eval rework with latency tracking
 
 **Security:**
 - API key auth via OS credential store (Windows Credential Manager, macOS Keychain, Linux SecretService)
@@ -318,7 +335,7 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - Electron 33 (upgraded from 28.3.3, unblocks Playwright e2e tests)
 
 **Tests:**
-- ember-2 backend: 779 pytest tests passing
+- ember-2 backend: 1260 pytest tests passing
 - ember-2-ui: 64 Playwright e2e tests passing (includes BUG-001 regression test)
 - ember-2-installer: 48 Playwright e2e tests passing (v0.5.9)
 
@@ -328,17 +345,18 @@ All items from the original TDD §25 build order are complete through step 7. Th
 
 **v0.14.0 — Identity Foundation** ✓ (shipped 2026-04-06)
 **v0.14.1 — Patch** ✓ (shipped 2026-04-09)
+**v0.15.0 — Quality of Life Improvements** ✓ (shipped v0.15.0–v0.15.3)
 
-**v0.15.0 — Quality of Life Improvements:**
-- Vault encryption at rest (five-layer envelope architecture — see TDD §38)
-- Local model quality improvements — token reduction, latency optimization
-- Constitutional review optimization — reduce false positive trigger rate, review prompt efficiency
-- Web search interaction mode — ask-first (default: "I don't have enough on this — want me to search?") with opt-in autonomous toggle in Settings (autonomous behavior itself is v0.16.0; toggle and ask-first pattern are v0.15.0)
-- Web search trigger broadening — current triggers require explicit "search"/"google"/"look up"; broaden to temporal currency markers and factual uncertainty
-- API as a service — auto-start on boot for non-developer users (Windows startup task, Linux systemd unit, macOS launchd plist via installer)
-- Hallucination reduction — surface uncertainty on vault-retrieved claims, not just web search; identify knowledge gaps and offer to look up rather than fabricate
-- Source citation on vault-retrieved content — currently only web search responses show sources
-- Quality of life testing — first non-developer user testing on local model
+**Shipped in v0.15.x:**
+- ~~Constitutional review optimization~~ ✓ — MVR prompt, trigger-signal append, constitution v0.7
+- ~~Web search interaction mode~~ ✓ — ask-first pattern shipped, autonomous toggle via preferences API
+- ~~Web search trigger broadening~~ ✓ — temporal currency, factual uncertainty, entity-type triggers (Layer 1)
+- ~~Hallucination reduction~~ ✓ — knowledge gap suppression, anti-embellishment rule, retrieval confidence metadata, self-knowledge boundary
+- ~~Source citation on vault-retrieved content~~ — partially shipped: vault citation signal (header + SSE event) works; citation quality fixes still in progress
+- ~~BUG-010 fix~~ ✓ — ThinkBlockFilter casing
+- Vault encryption at rest — DEFERRED (delegated to OS disk encryption; GET /v1/system/disk-encryption added for BitLocker/FileVault/LUKS detection)
+- API as a service — not yet started (v0.16.0 candidate)
+- Quality of life testing — not yet started
 - Connectors removed from near-term roadmap indefinitely
 
 **v0.16.0 — Health + Agent Orchestration:**
@@ -366,9 +384,9 @@ Research tracking has moved to docs/Ember2_TDD.md. TDD is the source of truth fo
 - Relational intensity amplification gate — relational_honesty, flourishing_over_preference, and the lodestone relational category can all activate in the same conversation. The compounding risk is addressed by a retrieval-side gate in src/llm/prompt_builder.py that suppresses lodestone records with taxonomy_category="relational" when relational_hedging or preference_compliance triggers fire. Implemented; no longer a documented risk in constitution.yaml as of v0.7.
 - flourishing_over_preference v0.2 (constitution v0.7) — the principle uses a four-condition fire gate (stated value, clear conflict, not already named in session, agency intact), defaults to silence under uncertainty, and only fires against stated values rather than inferred ones. Cross-session pattern detection is still out of scope because the review service has no vault memory access (see "Constitutional review service context blindness" above) — if that architectural gap is closed, the fire conditions may need to expand to include cross-session observation.
 - Vault-retrieved content has no uncertainty signal — Ember presents vault-grounded claims with the same confidence as directly stated facts. When retrieval returns low-scoring or old records, the response should surface uncertainty ("based on what I have from a few weeks ago...") rather than presenting stale or weakly-matched content as certain. Currently only web search responses show source attribution.
-- Knowledge gap fabrication — when Ember has no relevant vault content and no web search triggers, she sometimes fabricates plausible-sounding answers rather than saying she doesn't know and offering to look it up. The grounding verification layer (ADR-019) partially addresses this for identity queries but the gap is broader. v0.15.0 scope.
-- Web search triggers too restrictive — queries about recent events, current facts, and time-sensitive topics only trigger web search if the user explicitly says "search", "google", or "look up". Natural questions like "what happened yesterday" or "who won the game" don't trigger. Broadening planned for v0.15.0.
-- API requires manual start — non-developer users must run start_api.bat or launch_ember.sh manually. No auto-start mechanism (Windows startup task, Linux systemd unit, macOS launchd plist) exists. v0.15.0 scope via installer.
+- Knowledge gap fabrication — partially addressed in v0.15.x via knowledge gap suppression across all three injection paths, anti-embellishment rule, and retrieval confidence metadata. Remaining gap: vault-retrieved content still presents with uniform confidence regardless of match quality or age.
+- Web search triggers broadened in v0.15.x — temporal currency markers, factual uncertainty markers, entity-type triggers (Layer 1). Layer 2 pre-classifier remains a research item if Layer 1 coverage proves insufficient.
+- API requires manual start — non-developer users must run start_api.bat or launch_ember.sh manually. No auto-start mechanism (Windows startup task, Linux systemd unit, macOS launchd plist) exists. Deferred to v0.16.0 via installer.
 - eval_conversations.py unconditionally writes full Ember response text to logs/eval_conversations/latest.json — violates vault privacy rule. Fix before next use.
 - BUG-008: Repetitive parenthetical questions — FIXED v0.14.2. Three-part fix: closing_questions identity rule strengthened with explicit persistence clause and negative parenthetical example; post-generation `strip_trailing_parenthetical_question` filter when question_suppressed flag active; session-sticky "[System: user has requested no questions]" note in conversation buffer.
 - BUG-009: Topic fixation — FIXED v0.14.2. Three-part fix: `resolve_open_loops_by_topic` in StateService writes resolution records on user decline; retrieval suppression via keyword matching in `_build_context_section`; session-sticky decline notes in conversation buffer.

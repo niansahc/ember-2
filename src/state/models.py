@@ -38,6 +38,7 @@ VALID_STATE_CATEGORIES: frozenset[str] = frozenset(
         "next_action",     # A concrete next step to take
         "onboarding",      # System-level onboarding flow state
         "timer",           # An active timer with a start timestamp
+        "pending_confirmation",  # An action awaiting user yes/no (e.g. ask-first web search)
     }
 )
 

@@ -133,6 +133,138 @@ def _background_deviation_detection(
         logger.warning("[DEVIATION] Background detection failed (non-fatal): %s", exc)
 
 
+def _check_pending_confirmation(
+    session_id: str,
+    user_message: str,
+) -> dict | None:
+    """Check for a pending_confirmation state record and interpret the user's response.
+
+    Uses the LLM to determine whether the user is confirming or declining
+    a pending action — no keyword matching. Returns a dict with the action
+    details if confirmed, None if no pending confirmation exists, or a dict
+    with confirmed=False if declined.
+    """
+    try:
+        resolver = state_service._state_resolver if hasattr(state_service, '_state_resolver') else None
+        # Read pending_confirmation records directly
+        records = state_service.read_by_category("pending_confirmation")
+        if not records:
+            return None
+
+        # Latest pending confirmation that is not resolved
+        pending = None
+        for r in records:
+            if not (r.metadata or {}).get("resolved"):
+                pending = r
+                break
+
+        if not pending:
+            return None
+
+        action = (pending.metadata or {}).get("action", "unknown")
+        action_query = (pending.metadata or {}).get("query", "")
+        offer_text = pending.text
+
+        # Use LLM to interpret the user's response in context
+        import ollama
+        from src.core.config import get_ember_model
+
+        interpret_prompt = (
+            f"Ember asked the user: \"{offer_text}\"\n"
+            f"The user responded: \"{user_message}\"\n\n"
+            "Is the user confirming (yes) or declining (no) Ember's offer? "
+            "Consider context — affirmative responses include 'yes', 'sure', "
+            "'go ahead', 'please do', 'yeah', or any response that indicates "
+            "agreement. Declining includes 'no', 'nah', 'never mind', 'skip it', "
+            "or any response that indicates rejection.\n\n"
+            "If the user's response is clearly about something else entirely "
+            "(a new topic, unrelated question), treat it as a decline.\n\n"
+            "Respond with ONLY 'YES' or 'NO'."
+        )
+
+        response = ollama.chat(
+            model=get_ember_model(),
+            messages=[{"role": "user", "content": interpret_prompt}],
+            options={"temperature": 0, "num_predict": 10},
+        )
+        answer = response["message"]["content"].strip().upper()
+
+        # Resolve the pending confirmation regardless of outcome
+        resolve_record = state_service.make_record(
+            state_type="pending_confirmation",
+            text=f"Resolved: {offer_text}",
+            source="confirmation_resolver",
+            metadata={
+                "resolved": True,
+                "action": action,
+                "query": action_query,
+                "user_confirmed": "YES" in answer,
+                "session_id": session_id,
+            },
+        )
+        state_service.write(resolve_record)
+
+        if "YES" in answer:
+            logger.info("[CONFIRM] User confirmed pending %s action", action)
+            return {"confirmed": True, "action": action, "query": action_query}
+        else:
+            logger.info("[CONFIRM] User declined pending %s action", action)
+            return {"confirmed": False, "action": action, "query": action_query}
+
+    except Exception as exc:
+        logger.warning("[CONFIRM] Pending confirmation check failed (non-fatal): %s", exc)
+        return None
+
+
+def _write_pending_confirmation(
+    reply: str, user_message: str, session_id: str,
+) -> None:
+    """Detect ask-first offers in Ember's response and write pending_confirmation state."""
+    try:
+        # Detect the ask-first pattern: Ember offering to search
+        ask_patterns = [
+            "want me to search",
+            "want me to look",
+            "shall i search",
+            "should i search",
+            "i can search",
+            "i could search",
+            "i could look that up",
+            "i can look that up",
+            "want me to find",
+            "shall i look",
+        ]
+        reply_lower = reply.lower()
+        if not any(p in reply_lower for p in ask_patterns):
+            return
+
+        # Extract the question Ember asked (use the sentence containing the offer)
+        offer_sentence = ""
+        for sentence in reply.replace("?", "?|").split("|"):
+            if any(p in sentence.lower() for p in ask_patterns):
+                offer_sentence = sentence.strip()
+                break
+
+        if not offer_sentence:
+            offer_sentence = reply[-200:]  # Fallback: last portion
+
+        record = state_service.make_record(
+            state_type="pending_confirmation",
+            text=offer_sentence,
+            source="ask_first_detector",
+            metadata={
+                "action": "web_search",
+                "query": user_message,
+                "session_id": session_id,
+                "resolved": False,
+            },
+        )
+        state_service.write(record)
+        logger.info("[ASK_FIRST] Wrote pending_confirmation: %s", offer_sentence[:80])
+    except Exception as exc:
+        logger.warning("[ASK_FIRST] Detection failed (non-fatal): %s", exc)
+
+
 import re
 
 # --- Override detection patterns (jailbreak-class) ---
@@ -724,6 +856,33 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # the section is omitted from the prompt entirely.
     last_session_label = _resolve_last_session_label(session_id)
 
+    # --- PENDING CONFIRMATION CHECK (pre-generation) ---
+    # If Ember previously asked "want me to search for that?" and the user
+    # is now responding, interpret the response via LLM (no keyword matching)
+    # and route accordingly. Confirmation triggers web search on the original
+    # query; decline clears the state and proceeds normally.
+    _confirmation_web_items: list[dict] = []
+    _confirmation_result = _check_pending_confirmation(session_id, latest_user_message)
+    if _confirmation_result is not None:
+        if _confirmation_result["confirmed"] and _confirmation_result["action"] == "web_search":
+            # Execute the deferred web search on the original query
+            try:
+                from src.tools.web_search import web_search
+                _confirmation_web_items = web_search(_confirmation_result["query"])
+                latest_user_message = (
+                    f"[System: user confirmed web search. Results injected for: "
+                    f"\"{_confirmation_result['query']}\"] {latest_user_message}"
+                )
+                logger.info("[CONFIRM] Executing deferred web search for: %s",
+                            _confirmation_result["query"][:80])
+            except Exception as exc:
+                logger.warning("[CONFIRM] Deferred web search failed: %s", exc)
+        elif not _confirmation_result["confirmed"]:
+            latest_user_message = (
+                "[System: user declined the search offer. Respond normally.] "
+                + latest_user_message
+            )
+
     # --- TASK CREATION (pre-generation) ---
     # Path 1: Explicit task request ("create a task for X")
     # Path 2: Pending offer confirmation ("yes" after Ember offered a task)
@@ -868,6 +1027,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         latest_user_message, image_data=image_data, project_id=project_id,
     )
 
+    # Inject deferred web search results from confirmed ask-first flow
+    if _confirmation_web_items:
+        context_packet.web_items = _confirmation_web_items
+
     # Get intent class for grounding check (ADR-019)
     from src.context.policies import classify_query
     _policy = classify_query(latest_user_message)
@@ -1011,6 +1174,15 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 threading.Thread(
                     target=_detect_task_in_response,
                     args=(full_reply, session_id),
+                    daemon=True,
+                ).start()
+
+            # Ask-first confirmation detection — write pending_confirmation
+            # state when Ember offers to search for the user
+            if not is_test:
+                threading.Thread(
+                    target=_write_pending_confirmation,
+                    args=(full_reply, latest_user_message, session_id),
                     daemon=True,
                 ).start()
 
@@ -1231,6 +1403,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         threading.Thread(
             target=_detect_task_in_response,
             args=(reply, session_id),
+            daemon=True,
+        ).start()
+
+    # Ask-first confirmation detection — write pending_confirmation
+    if not is_test:
+        threading.Thread(
+            target=_write_pending_confirmation,
+            args=(reply, latest_user_message, session_id),
             daemon=True,
         ).start()
 

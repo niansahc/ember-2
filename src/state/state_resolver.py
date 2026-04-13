@@ -172,7 +172,7 @@ class StateResolver:
         )
 
         # Categories exempt from staleness filtering.
-        _STALENESS_EXEMPT = {"onboarding", "timer"}
+        _STALENESS_EXEMPT = {"onboarding", "timer", "pending_confirmation"}
 
         # Separate records by single vs multi-record categories.
         # Timer records have their own resolution semantics (latest-per-

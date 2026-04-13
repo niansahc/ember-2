@@ -31,7 +31,7 @@ from src.state.models import VALID_STATE_CATEGORIES, StateRecord
 logger = logging.getLogger("ember.state_extractor")
 
 # Categories eligible for auto-extraction (exclude system-level ones)
-EXTRACTABLE_CATEGORIES = VALID_STATE_CATEGORIES - {"onboarding"}
+EXTRACTABLE_CATEGORIES = VALID_STATE_CATEGORIES - {"onboarding", "pending_confirmation"}
 
 # Minimum word count to attempt extraction — short messages rarely contain state
 MIN_WORDS_FOR_EXTRACTION = 10

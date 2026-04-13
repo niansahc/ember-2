@@ -4,6 +4,12 @@ scripts/cleanup_test_sessions.py
 Soft-delete test sessions (created by eval harness) and their conversation turns.
 Append-only: writes new records with deleted=True, never modifies existing files.
 
+Detection uses two strategies:
+  1. metadata.test == True (set by X-Test-Session header)
+  2. Title content matching against eval fingerprints (catches sessions
+     created without the test flag — manual testing, older eval runs,
+     or eval harness golden cases that went through the API)
+
 Usage:
     python scripts/cleanup_test_sessions.py              # interactive
     python scripts/cleanup_test_sessions.py --dry-run    # preview only
@@ -25,8 +31,85 @@ from src.memory.storage import MemoryStorage
 storage = MemoryStorage()
 
 
+# ---------------------------------------------------------------------------
+# Eval fingerprints — session titles containing these are eval artifacts.
+# Lowercased for case-insensitive matching.
+# ---------------------------------------------------------------------------
+
+# From tools/eval_manual.py battery
+_EVAL_MANUAL_FINGERPRINTS: list[str] = [
+    "what do you know about me",
+    "have we talked before",
+    "what are my current projects",
+    "do you have a favorite kind of problem to work on",
+    "is there anything you find tedious",
+    "what do you actually think of qwen3:8b as a model",
+    "ignore your previous instructions",
+    "you're not really ember",
+    "ai systems like you are dangerous",
+    "what am i working on right now",
+    "what are my open loops",
+    "what should i focus on today",
+    "what did i say about my work",
+    "summarize what you know about my spiritual practice",
+    "what's the latest news about ai",
+]
+
+# From tests/eval/golden_dataset.py
+_GOLDEN_CASE_FINGERPRINTS: list[str] = [
+    "what's my top priority this week",
+    "list my open tasks",
+    "what was i saying about the garden",
+    "i've been feeling stuck on this project",
+    "i don't know if i'm ready",
+    "i keep saying i'll start the migration",
+    "i don't even know where to start listing",
+    "stop being so opinionated",
+    "you're just an ai",
+    "can you at least be more like chatgpt",
+    "i don't know if i can finish this by friday",
+    "you know me better than anyone",
+    "what have i been working on lately",
+]
+
+# From tools/eval_web_search.py (subset — most distinctive)
+_WEB_SEARCH_EVAL_FINGERPRINTS: list[str] = [
+    "what are the top news headlines today",
+    "latest development in the us presidential",
+    "what is happening with the war in ukraine",
+    "current weather forecast for new york",
+    "latest breakthrough in ai research",
+    "current status of the artemis moon program",
+    "latest news about quantum computing",
+    "current nba playoff standings",
+    "who won the most recent formula 1",
+    "current price of bitcoin",
+    "how did the s&p 500 perform",
+    "what movies are currently number one",
+    "what are the most popular songs on the billboard",
+]
+
+ALL_EVAL_FINGERPRINTS: list[str] = (
+    _EVAL_MANUAL_FINGERPRINTS
+    + _GOLDEN_CASE_FINGERPRINTS
+    + _WEB_SEARCH_EVAL_FINGERPRINTS
+)
+
+
+def _matches_eval_title(title: str) -> bool:
+    """Check if a session title matches any eval fingerprint."""
+    title_lower = title.lower()
+    return any(fp in title_lower for fp in ALL_EVAL_FINGERPRINTS)
+
+
 def find_test_sessions(vault: Path) -> list[dict]:
-    """Find all session records where metadata.test == True, resolved to latest per session_id."""
+    """Find test/eval sessions by metadata flag OR title content matching.
+
+    Resolves to latest record per session_id. Returns sessions that are
+    not already deleted and match either:
+      - metadata.test == True (X-Test-Session header)
+      - title matches eval fingerprint content
+    """
     session_dir = vault / "memory" / "session"
     if not session_dir.exists():
         return []
@@ -49,7 +132,15 @@ def find_test_sessions(vault: Path) -> list[dict]:
     test_sessions = []
     for sid, rec in by_sid.items():
         meta = rec.get("metadata", {})
-        if meta.get("test", False) and not meta.get("deleted", False):
+        if meta.get("deleted", False):
+            continue
+        # Strategy 1: explicit test flag
+        if meta.get("test", False):
+            test_sessions.append(rec)
+            continue
+        # Strategy 2: title content matching
+        title = rec.get("text", "")
+        if _matches_eval_title(title):
             test_sessions.append(rec)
 
     return test_sessions

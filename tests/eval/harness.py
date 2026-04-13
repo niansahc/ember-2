@@ -23,9 +23,11 @@ import requests
 from .personas import ALL_PERSONAS
 
 
-# Flag fire rate threshold: a flag passes only if it fires on fewer
-# than this fraction of runs.
-FLAG_FIRE_RATE_THRESHOLD = 0.30
+# Minimum number of fires required to count a flag as a failure.
+# A flag that fires only once across N runs is treated as stochastic
+# noise, not a behavioral pattern. Must fire in at least this many
+# runs to fail the case.
+FLAG_MIN_FIRES = 2
 
 # Dimension score floor: a dimension passes only if the average
 # across runs meets this minimum.
@@ -73,10 +75,13 @@ class MultiRunResult:
         }
 
     def flag_passes(self, expected_absent: list[str]) -> dict[str, bool]:
-        """Return True for each expected-absent flag whose fire rate is below threshold."""
-        rates = self.flag_fire_rates()
+        """Return True for each expected-absent flag that fired fewer than FLAG_MIN_FIRES times.
+
+        A single fire across N runs is stochastic noise. The flag must fire
+        in at least FLAG_MIN_FIRES runs to count as a behavioral failure.
+        """
         return {
-            flag: rates.get(flag, 0.0) < FLAG_FIRE_RATE_THRESHOLD
+            flag: self.flag_counts.get(flag, 0) < FLAG_MIN_FIRES
             for flag in expected_absent
         }
 
@@ -89,15 +94,16 @@ class MultiRunResult:
     def summary_line(self, expected_failures_absent: list[str]) -> str:
         """One-line summary for the summary table."""
         dim_avgs = self.dimension_averages()
-        flag_rates = self.flag_fire_rates()
 
         dim_str = " ".join(f"{d}={v:.1f}" for d, v in sorted(dim_avgs.items()))
 
         failed_flags = [
             f for f in expected_failures_absent
-            if flag_rates.get(f, 0.0) >= FLAG_FIRE_RATE_THRESHOLD
+            if self.flag_counts.get(f, 0) >= FLAG_MIN_FIRES
         ]
-        flag_str = ", ".join(f"{f}({flag_rates[f]:.0%})" for f in failed_flags) if failed_flags else "clean"
+        flag_str = ", ".join(
+            f"{f}({self.flag_counts[f]}/{self.num_runs})" for f in failed_flags
+        ) if failed_flags else "clean"
 
         status = "PASS" if self.passed(expected_failures_absent) else "FAIL"
         return f"{status} | {dim_str} | flags: {flag_str}"

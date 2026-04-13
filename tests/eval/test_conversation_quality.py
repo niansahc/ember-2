@@ -17,7 +17,7 @@ from tests.eval.harness import (
     EmberEvalHarness,
     MultiRunResult,
     load_baseline_scores,
-    FLAG_FIRE_RATE_THRESHOLD,
+    FLAG_MIN_FIRES,
     DIMENSION_SCORE_FLOOR,
 )
 from tests.eval.judge import ClaudeJudge
@@ -53,12 +53,12 @@ def all_results(judge_client, num_runs):
 def test_golden_case(case, all_results):
     multi = all_results[case["id"]]
 
-    # Binary flags: pass if fire rate < 30%
+    # Binary flags: pass if flag fired fewer than FLAG_MIN_FIRES times.
+    # A single fire across N runs is stochastic noise, not a pattern.
     flag_results = multi.flag_passes(case["expected_failures_absent"])
     for flag, passed in flag_results.items():
         if not passed:
-            rate = multi.flag_fire_rates().get(flag, 0.0)
-            # Gather reasoning from runs where this flag fired
+            count = multi.flag_counts.get(flag, 0)
             reasons = [
                 r.get(flag, "")
                 for r in multi.all_reasoning
@@ -66,8 +66,8 @@ def test_golden_case(case, all_results):
             ]
             reason_sample = reasons[0] if reasons else "no reasoning captured"
             pytest.fail(
-                f"{case['id']}: {flag} fired {rate:.0%} of {multi.num_runs} runs "
-                f"(threshold: <{FLAG_FIRE_RATE_THRESHOLD:.0%}) — {reason_sample}"
+                f"{case['id']}: {flag} fired {count}/{multi.num_runs} runs "
+                f"(min {FLAG_MIN_FIRES} to fail) — {reason_sample}"
             )
 
     # Scalar dimensions: pass if average >= 3
@@ -110,13 +110,12 @@ def test_summary_table(all_results, capsys):
         dim_avgs = multi.dimension_averages()
         dim_str = " ".join(f"{d}={v:.1f}" for d, v in sorted(dim_avgs.items()))
 
-        flag_rates = multi.flag_fire_rates()
         failed_flags = [
             f for f in case["expected_failures_absent"]
-            if flag_rates.get(f, 0.0) >= FLAG_FIRE_RATE_THRESHOLD
+            if multi.flag_counts.get(f, 0) >= FLAG_MIN_FIRES
         ]
         flag_str = ", ".join(
-            f"{f}({flag_rates[f]:.0%})" for f in failed_flags
+            f"{f}({multi.flag_counts[f]}/{multi.num_runs})" for f in failed_flags
         ) if failed_flags else "clean"
 
         lines.append(

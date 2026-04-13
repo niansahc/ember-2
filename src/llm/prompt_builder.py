@@ -413,9 +413,9 @@ class PromptBuilder:
             return self._build_summarized_conversation(turns)
 
         lines: list[str] = []
-        for i, turn in enumerate(turns, 1):
-            lines.append(f"[Turn {i} | User] {turn['user']}")
-            lines.append(f"[Turn {i} | Assistant] {turn['assistant']}")
+        for turn in turns:
+            lines.append(f"User: {turn['user']}")
+            lines.append(f"Ember: {turn['assistant']}")
 
         # Session-sticky system notes (BUG-008, BUG-009)
         sticky_notes = self._build_sticky_notes()
@@ -475,9 +475,9 @@ class PromptBuilder:
 
             # Include the last 2 turns raw for recency
             recent_lines = []
-            for i, turn in enumerate(turns[-2:], len(turns) - 1):
-                recent_lines.append(f"[Turn {i} | User] {turn['user']}")
-                recent_lines.append(f"[Turn {i} | Assistant] {turn['assistant']}")
+            for turn in turns[-2:]:
+                recent_lines.append(f"User: {turn['user']}")
+                recent_lines.append(f"Ember: {turn['assistant']}")
 
             return (
                 "<conversation_history>\n"
@@ -489,9 +489,9 @@ class PromptBuilder:
             logger.warning("[PROMPT] Conversation summarization failed: %s", exc)
             # Fallback: just use last 4 turns
             lines = []
-            for i, turn in enumerate(turns[-4:], len(turns) - 3):
-                lines.append(f"[Turn {i} | User] {turn['user']}")
-                lines.append(f"[Turn {i} | Assistant] {turn['assistant']}")
+            for turn in turns[-4:]:
+                lines.append(f"User: {turn['user']}")
+                lines.append(f"Ember: {turn['assistant']}")
             return "<conversation_history>\n" + "\n".join(lines) + "\n</conversation_history>"
 
     @staticmethod
@@ -534,6 +534,7 @@ class PromptBuilder:
             "3. Use conversation_history for continuity.\n"
             "4. vault_memory is the primary source of truth about this person.\n\n"
             "BEHAVIOR RULES:\n"
+            "- Never reproduce structural formatting from the prompt in your response. Labels like 'User:', 'Ember:', XML tags, section headers, and turn markers are internal scaffolding — not content to echo.\n"
             "- If no prior conversation exists, answer normally.\n"
             "- Resolve references like 'that', 'those', and 'it' from the last assistant answer when possible.\n"
             "- Do not ask for clarification if the reference is reasonably clear from recent conversation.\n"

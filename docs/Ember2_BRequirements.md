@@ -81,15 +81,25 @@ Ember-2 is a private, evolving system that:
 ### 9. Cloud Model Support
 - Opt-in cloud model support (Anthropic Claude, OpenAI GPT) — user-controlled, API key stored in system credential manager, never required, never default; local models remain the primary path
 
+### 10. Vision Pipeline
+- Multi-modal input support for images — auto-triggers when image is attached, no user action required
+- Two-model architecture: vision preprocessor (qwen3-vl:8b) generates description, text primary (qwen3:8b) generates response through full pipeline
+- Vision descriptions injected as context, not raw model output — constitutional review, identity rules, and grounding check all apply
+- See ADR-032 for architecture
+
+### 11. Conversation Modes
+- **Standard mode** (default): full pipeline — memory retrieval, state injection, lodestone values, nature document, identity rules, full constitutional review, all vault writes active
+- **Bare mode**: reduced pipeline — skips nature document, lodestone, identity rules, conversational style; constitutional review limited to three MVR criteria (position_collapse, sycophancy, embellishment). Two-layer gate: global setting enables, per-conversation toggle activates. See ADR-028.
+- **Stateless mode**: no vault reads or writes for the duration of the conversation. No memory retrieval, no state injection, no conversation persistence. Constitutional review still fires but outcomes are not persisted. Two-layer gate. See ADR-031.
+- Mode state is session-scoped and visually indicated in the UI. Mode transitions require explicit user action.
+
 ---
 
 ## Future Capabilities
 
-- Task and goal tracking (state layer)
 - Proactive suggestions and nudges
 - Scheduling and reminders
-- Tool and data integrations — email, calendar, GitHub, health trackers, notes, finance, and more. See Tool and Data Integrations section. Read-only first, write access with agent layer only.
-- Multi-modal inputs (documents, images, etc.)
+- Tool and data integrations — email, calendar, GitHub, health trackers, notes, finance, and more. See Tool and Data Integrations section. Read-only first, write access with agent layer only. Deferred pending core quality milestone.
 - Agent-style workflows
 - Shareability — Ember's persona, governance config, and retrieval logic are the shareable artifacts; user data never leaves the local vault; two distribution paths: (1) non-technical user path with one-click installer, no CLI required, and an onboarding conversation flow that seeds identity context through conversation rather than scripts; (2) technical user path with clean setup docs, seed_identity_template.py, and API-first configuration
 - Proactive / heartbeat mode — Ember wakes on a configurable schedule and pushes context or summaries without being prompted. Examples: Monday week preview, energy check-ins, task reminders. (Inspired by OpenClaw, Peter Steinberger, 2026)
@@ -115,27 +125,27 @@ Ember is designed to ingest and read data from external sources. All integration
 - Slack / Discord — read-only conversation history ingestion. Planned v0.15.0.
 
 **Development**
-- GitHub — read-only. Commits, PRs, issues, and activity feed. Enables coders to use Ember as a development context layer — project history, blockers, and arcs are retrievable in conversation. Live context mode supported alongside ingestion. Planned v0.14.0.
-- Linear / Jira — issue and project tracking ingestion. Planned v0.14.0.
+- GitHub — read-only. Commits, PRs, issues, and activity feed. Deferred pending core quality milestone.
+- Linear / Jira — issue and project tracking ingestion. Deferred pending core quality milestone.
 
 **Health & Body**
-- Fitbit — export ingestion. Activity, sleep, and health patterns. Planned v0.14.0.
-- Apple Health / Garmin — export ingestion. Activity, sleep, HRV. Planned v0.14.0.
-- Glucose monitors (Dexcom, Libre) — export or API ingestion. Time-series data. Planned v0.14.0.
-- Oura — export ingestion. Sleep and readiness data. Planned v0.14.0.
-- Diet apps (Cronometer, MyFitnessPal) — export ingestion. Nutrition logs. Planned v0.14.0.
+- Fitbit — export ingestion. Activity, sleep, and health patterns. Deferred pending core quality milestone.
+- Apple Health / Garmin — export ingestion. Activity, sleep, HRV. Deferred pending core quality milestone.
+- Glucose monitors (Dexcom, Libre) — export or API ingestion. Time-series data. Deferred pending core quality milestone.
+- Oura — export ingestion. Sleep and readiness data. Deferred pending core quality milestone.
+- Diet apps (Cronometer, MyFitnessPal) — export ingestion. Nutrition logs. Deferred pending core quality milestone.
 
 **Creativity & Knowledge**
-- Obsidian / Notion — export ingestion. Notes and knowledge base. Planned v0.14.0.
-- Readwise — highlights and reading history ingestion. Planned v0.14.0.
-- Goodreads — reading history and reviews ingestion. Planned v0.14.0.
-- Spotify — listening history ingestion. Mood and energy signals. Planned v0.14.0.
+- Obsidian / Notion — export ingestion. Notes and knowledge base. Deferred pending core quality milestone.
+- Readwise — highlights and reading history ingestion. Deferred pending core quality milestone.
+- Goodreads — reading history and reviews ingestion. Deferred pending core quality milestone.
+- Spotify — listening history ingestion. Mood and energy signals. Deferred pending core quality milestone.
 
 **Finance**
-- Bank / credit card exports — spending pattern ingestion. Sensitive — requires explicit privacy policy in constitution.yaml before enabling. Planned v0.15.0.
+- Bank / credit card exports — spending pattern ingestion. Sensitive — requires explicit privacy policy in constitution.yaml before enabling. Deferred pending core quality milestone.
 
 **Generic**
-- CSV / JSON import — any structured data export from any app. Planned v0.13.0.
+- CSV / JSON import — any structured data export from any app. Shipped v0.13.0.
 - Any app that exports — Ember reads it. The ingestion pipeline is format-agnostic by design.
 
 ### Skill Definition Format
@@ -147,7 +157,7 @@ Examples: EMAIL.md, GITHUB.md, FITBIT.md.
 This pattern is inspired by OpenClaw's AgentSkills format (Peter Steinberger, 2026), adapted for Ember's local-first, policy-governed architecture.
 
 ### Write Access
-Write access to any external system (sending email, creating GitHub issues, archiving, etc.) is out of scope until the agent orchestration layer and full constitutional review framework are in place. Planned v0.15.0.
+Write access to any external system (sending email, creating GitHub issues, archiving, etc.) is out of scope until the agent orchestration layer and full constitutional review framework are in place. Deferred pending core quality milestone.
 
 ---
 
@@ -159,6 +169,7 @@ Write access to any external system (sending email, creating GitHub issues, arch
 - Respectful of cognitive load (designed for users with ADHD and related executive function differences)
 - Fast feedback loops
 - Supports both deep work and casual interaction
+- Conversation mode visibility — active conversation mode (standard, bare, stateless) must be visually indicated in the UI at all times so the user always knows what pipeline is active
 
 ---
 

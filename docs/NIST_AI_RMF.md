@@ -67,8 +67,13 @@ The Map function establishes context, intended use, and risk framing for the AI 
 - Technical users supported via API-first architecture and documented setup.
 
 **Data sensitivity acknowledged:**
-- Health data, financial data, and personal communications flagged as sensitive in the tool integration roadmap.
+- Health data, financial data, personal communications, and image data (vision pipeline) flagged as sensitive.
 - Explicit policy required in constitution.yaml before sensitive integrations are enabled.
+- Image data processed locally via vision model — descriptions are ephemeral by default (not persisted to vault). See ADR-032.
+
+**User-initiated governance reduction:**
+- Bare mode (ADR-028) — user can disable personality layers while preserving safety guarantees. Constitutional review reduced to position_collapse, sycophancy, and non_embellishment only. This is a deliberate user-initiated governance reduction, not a bypass. The user must enable it in app settings first (two-layer gate).
+- Stateless mode (ADR-031) — user can disable vault reads/writes per conversation. Constitutional review still fires but outcomes are not persisted to audit logs. This creates an audit gap documented in CLAUDE.md Known Issues.
 
 ### Gaps
 
@@ -85,9 +90,9 @@ The Measure function evaluates AI risk and performance through quantitative and 
 ### What Ember Has
 
 **Testing:**
-- 485 pytest tests covering backend services, retrieval, state, safety, and API endpoints.
+- 1272 pytest tests covering backend services, retrieval, state, safety, and API endpoints.
 - 39 Playwright e2e tests covering UI flows.
-- 12 Playwright e2e tests covering installer flows.
+- 73 Playwright e2e tests covering installer flows.
 
 **Retrieval evaluation:**
 - `tools/eval_retrieval.py` — 14-query benchmark harness measuring retrieval quality across intent classes. Results logged to `logs/`.
@@ -110,6 +115,7 @@ The Measure function evaluates AI risk and performance through quantitative and 
 - No evaluation against external benchmarks (e.g. CIMemories contextual integrity benchmark — planned when system matures).
 - No third-party or independent audit.
 - Eval harness results reflect the developer's personal vault — not generalizable benchmarks.
+- Post-generation coaching filter (ADR-030) introduces false positive risk — legitimate emotional responses may be incorrectly flagged and rewritten by Stage 1 pattern matching. No systematic false positive rate measurement exists yet.
 
 ---
 
@@ -168,4 +174,4 @@ The primary gaps are in formal evaluation (Measure) and systematic monitoring (M
 
 ---
 
-*This document is updated at each major release. Last updated: v0.12.0, April 2026.*
+*This document is updated at each major release. Last updated: v0.16.0-dev, April 2026.*

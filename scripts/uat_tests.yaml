@@ -260,6 +260,12 @@ tests:
     steps: "Trigger ask-first web search. When Ember asks for confirmation, respond 'No' or 'Nah'."
     expected: Ember skips the web search and responds from vault/knowledge only
 
+  - id: UAT-132
+    feature: Ask-First Confirmation Routing
+    description: Full ask-first end-to-end flow
+    steps: "1. Go to Settings > Features and enable ask-first mode. 2. Start a new conversation. 3. Ask: 'What are the latest developments in fusion energy?' 4. Ember should ask for permission to search. 5. Respond 'Yes'. 6. Verify search executes and results appear with web search indicator."
+    expected: "Settings toggle persists. Ember asks before searching. Confirming 'Yes' triggers the search. Response includes web search indicator and cites web sources. No search fires before user confirms."
+
   # ── Vault Storage Display ───────────────────────────────────
 
   - id: UAT-140

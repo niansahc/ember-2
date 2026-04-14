@@ -272,7 +272,7 @@ tests:
     feature: Vault Storage Display
     description: Vault storage shows on Done screen (installer)
     steps: "Open the installer Done screen after API is running."
-    expected: "Vault size: X MB" and "30-day projection: Y MB" are displayed
+    expected: "Vault size and 30-day projection are displayed with values from the API"
 
   - id: UAT-141
     feature: Vault Storage Display
@@ -378,7 +378,7 @@ tests:
     feature: Installer Done Screen
     description: Vault storage estimate displays
     steps: "Reach the Done screen with the API running."
-    expected: "Vault size: X MB" and "30-day projection: Y MB" are displayed below the startup task toggle
+    expected: "Vault size and 30-day projection are displayed below the startup task toggle"
 
   - id: UAT-221
     feature: Installer Done Screen

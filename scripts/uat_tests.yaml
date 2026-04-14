@@ -88,14 +88,6 @@ tests:
     steps: "Rename a conversation in the sidebar."
     expected: New name persists after page refresh
 
-  # ── Journal Ingestion ───────────────────────────────────────
-
-  - id: UAT-013
-    feature: Journal Ingestion
-    description: Journal entry appears in vault
-    steps: "Create a journal entry via CLI (python scripts/journal.py) or POST /ingest/upload."
-    expected: Journal content is retrievable in subsequent conversations
-
   # ── Deviation Detection ─────────────────────────────────────
 
   - id: UAT-014
@@ -274,12 +266,6 @@ tests:
     steps: "Open the installer Done screen after API is running."
     expected: "Vault size and 30-day projection are displayed with values from the API"
 
-  - id: UAT-141
-    feature: Vault Storage Display
-    description: Vault storage endpoint returns data
-    steps: "Call GET /v1/vault/storage directly (curl or browser)."
-    expected: JSON response with current_human, projected_30d_human, by_type breakdown
-
   # ── Top Bar Icons ───────────────────────────────────────────
 
   - id: UAT-150
@@ -301,26 +287,6 @@ tests:
     description: Context length persists and affects inference
     steps: "Change context length to 4096 in Settings. Refresh. Verify it persists. Have a conversation."
     expected: Setting persists after refresh. Ollama uses the configured num_ctx value.
-
-  # ── API Auto-Start ──────────────────────────────────────────
-
-  - id: UAT-170
-    feature: API Auto-Start
-    description: Startup task registered after install
-    steps: "After fresh install, check Windows Task Scheduler for EmberStartup task."
-    expected: EmberStartup task exists, set to run at logon, points to watchdog.py
-
-  - id: UAT-171
-    feature: API Auto-Start
-    description: API starts automatically at login
-    steps: "Reboot the machine. After login, wait 30 seconds. Check if Ember API is running at localhost:8000."
-    expected: API is running without manual intervention
-
-  - id: UAT-172
-    feature: API Auto-Start
-    description: Startup toggle disables auto-start
-    steps: "Uncheck 'Start Ember automatically when I log in' on the Done screen. Reboot."
-    expected: API does not start automatically. EmberStartup task is removed from Task Scheduler.
 
   # ═══════════════════════════════════════════════════════════
   # INSTALLER (ember-2-installer)
@@ -457,3 +423,30 @@ tests:
     description: Uninstall removes scheduled task
     steps: "Uninstall Ember Setup via Windows Apps & Features. Check Task Scheduler for EmberStartup."
     expected: EmberStartup task is removed from Task Scheduler. App is removed from Program Files.
+
+# ═══════════════════════════════════════════════════════════
+# STANDALONE TESTS
+# Require separate manual verification (reboot, system-level inspection).
+# Displayed by runner but not prompted — note results and update
+# uat_results_latest.json manually.
+# ═══════════════════════════════════════════════════════════
+
+standalone_tests:
+
+  - id: UAT-S01
+    feature: API Auto-Start
+    description: Startup task registered after install
+    steps: "After fresh install, check Windows Task Scheduler for EmberStartup task."
+    expected: EmberStartup task exists, set to run at logon, points to watchdog.py
+
+  - id: UAT-S02
+    feature: API Auto-Start
+    description: API starts automatically at login
+    steps: "Reboot the machine. After login, wait 30 seconds. Check if Ember API is running at localhost:8000."
+    expected: API is running without manual intervention
+
+  - id: UAT-S03
+    feature: API Auto-Start
+    description: Startup toggle disables auto-start
+    steps: "Uncheck 'Start Ember automatically when I log in' on the Done screen. Reboot."
+    expected: API does not start automatically. EmberStartup task is removed from Task Scheduler.

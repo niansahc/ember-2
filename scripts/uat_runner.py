@@ -33,21 +33,41 @@ LATEST_FILE = LOG_DIR / "uat_results_latest.json"
 HISTORY_FILE = LOG_DIR / "uat_results_history.json"
 
 
-def load_tests(filter_term: str | None = None) -> list[dict]:
-    """Load test cases from YAML. Optionally filter by ID or feature name."""
+def load_tests(filter_term: str | None = None) -> tuple[list[dict], list[dict]]:
+    """Load test cases from YAML. Returns (tests, standalone_tests)."""
     with open(TEST_PLAN, encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
     tests = data.get("tests", [])
+    standalone = data.get("standalone_tests", [])
     if filter_term:
         term = filter_term.lower()
-        tests = [
-            t for t in tests
-            if term in t.get("id", "").lower()
-            or term in t.get("feature", "").lower()
-            or term in t.get("description", "").lower()
-        ]
-    return tests
+        def matches(t):
+            return (
+                term in t.get("id", "").lower()
+                or term in t.get("feature", "").lower()
+                or term in t.get("description", "").lower()
+            )
+        tests = [t for t in tests if matches(t)]
+        standalone = [t for t in standalone if matches(t)]
+    return tests, standalone
+
+
+def display_standalone(standalone: list[dict]) -> None:
+    """Display standalone tests without prompting for results."""
+    if not standalone:
+        return
+    print(f"\n{'=' * 60}")
+    print("  STANDALONE TESTS")
+    print("  The following tests require separate manual verification.")
+    print("  Note your results and update uat_results_latest.json manually.")
+    print(f"{'=' * 60}\n")
+    for i, test in enumerate(standalone, 1):
+        print(f"  [{i}/{len(standalone)}] {test.get('id')}")
+        print(f"  Feature:  {test.get('feature', '')}")
+        print(f"  Desc:     {test.get('description', '')}")
+        print(f"  Do:       {test.get('steps', '')}")
+        print(f"  Expect:   {test.get('expected', '')}\n")
 
 
 def prompt_result() -> str:
@@ -175,14 +195,17 @@ def main():
         print(f"ERROR: Test plan not found at {TEST_PLAN}")
         sys.exit(1)
 
-    tests = load_tests(args.filter)
-    if not tests:
+    tests, standalone = load_tests(args.filter)
+    if not tests and not standalone:
         print("No tests matched the filter." if args.filter else "No tests found in test plan.")
         sys.exit(1)
 
-    results = run(tests)
-    summary = write_results(results)
-    print_summary(summary)
+    if tests:
+        results = run(tests)
+        summary = write_results(results)
+        print_summary(summary)
+
+    display_standalone(standalone)
 
 
 if __name__ == "__main__":

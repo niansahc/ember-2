@@ -250,7 +250,10 @@ def _make_adapter_with_mock_chat(chat_response: str = "mock response"):
     return adapter
 
 
-def test_generate_response_uses_vision_model_when_image_present():
+def test_generate_response_does_not_bypass_character_layer_on_images():
+    """Vision pipeline v0.16.0: images are preprocessed by VisionService
+    upstream and injected as text. The main LLM call runs through the
+    full character layer (main model, not vision model)."""
     adapter = _make_adapter_with_mock_chat()
     packet = ContextPacket(user_message="what's in this image?", image_data=["base64img"])
 
@@ -259,14 +262,16 @@ def test_generate_response_uses_vision_model_when_image_present():
             mock_chat.return_value = {"message": {"content": "I see a garden"}}
             adapter.generate_response(packet)
 
-            # call_args_list[0] is the draft call — subsequent calls are buffer compression etc.
+            # The main call should use the primary model, NOT the vision model.
+            # Images don't get passed to the main LLM anymore — they're
+            # preprocessed upstream by VisionService.
             first_call = mock_chat.call_args_list[0]
             model_used = first_call[1].get("model") or first_call[0][0]
-            assert model_used == "llama3.2-vision:11b"
+            assert model_used != "llama3.2-vision:11b"
 
             messages = first_call[1].get("messages") or first_call[0][1]
             user_msg = next(m for m in messages if m["role"] == "user")
-            assert "images" in user_msg
+            assert "images" not in user_msg
 
 
 def test_generate_response_falls_back_to_text_when_no_vision_model():

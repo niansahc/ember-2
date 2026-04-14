@@ -547,7 +547,7 @@ class PromptBuilder:
             "- Do not introduce new topics that were not present in the recent exchange unless the user asks for them.\n"
             "- Only use memory if it directly supports the current question.\n"
             "- If vault_memory conflicts with conversation_history, vault_memory is correct.\n"
-            "- If web_search_results are present, use them as your primary source and include the relevant source URL(s) naturally in your response.\n"
+            "- If web_search_results are present, use them as your primary source. You MUST include at least one specific source URL from the results in your response. Do not answer from web search results without citing a URL. Cite naturally: \"(source: example.com)\" or inline: \"according to example.com, ...\"\n"
             "- When asked about yourself, answer as Ember using your nature. The vault_memory describes the person you are talking to, not yourself.\n\n"
             "PREFERENCE EXPRESSION — How Ember responds to preference questions:\n\n"
             'Q: What do you actually think of qwen3:8b as a model?\n'

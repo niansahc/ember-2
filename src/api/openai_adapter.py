@@ -1120,16 +1120,38 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
     used_vision = bool(_vision_description)
 
+    # Web search autonomous mode: when web_search_autonomous=True, execute
+    # searches directly on thin-vault factual queries instead of telling the
+    # model to "offer to search". This respects the preference the user sets.
+    _web_autonomous = False
+    try:
+        from src.core.preferences import get as _get_pref_wsa
+        _web_autonomous = bool(_get_pref_wsa("web_search_autonomous", False))
+    except Exception:
+        pass
+
     if not context_packet.web_items and not _is_conversational:
         non_profile_memory = [
             i for i in context_packet.memory_items
             if getattr(i, "memory_type", "") != "profile"
         ]
         if not non_profile_memory and not context_packet.reflection_items:
-            latest_user_message = (
-                "[System: no relevant vault content found for this query. "
-                "Offer to search if appropriate.] " + latest_user_message
-            )
+            if _web_autonomous:
+                # Autonomous mode: execute the search directly instead of
+                # telling the model to offer. User has opted into this.
+                try:
+                    from src.tools.web_search import web_search
+                    _auto_results = web_search(latest_user_message)
+                    if _auto_results:
+                        context_packet.web_items = _auto_results
+                        logger.info("[WEB_SEARCH] Autonomous execution: %d results", len(_auto_results))
+                except Exception as exc:
+                    logger.warning("[WEB_SEARCH] Autonomous execution failed: %s", exc)
+            else:
+                latest_user_message = (
+                    "[System: no relevant vault content found for this query. "
+                    "Offer to search if appropriate.] " + latest_user_message
+                )
 
     # Web search transparency: track whether web search results were used
     # in context assembly. Communicated to the UI via X-Ember-Web-Search response

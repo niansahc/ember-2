@@ -170,17 +170,16 @@ class LLMAdapter:
             vision_description=vision_description,
         )
 
-        vision_model = get_ember_vision_model()
-        use_vision = bool(context_packet.image_data) and bool(vision_model)
-
-        if use_vision:
-            print(f"[VISION] Image request — using model: {vision_model}")
-
+        # Vision pipeline: the VisionService preprocessor (called upstream
+        # in openai_adapter.py) extracts a text description that's already
+        # injected into system_prompt via vision_description. The main
+        # LLM call runs through the full character layer without the
+        # legacy direct-vision path that bypassed nature/identity rules.
         draft_response = self._chat(
             system_prompt=system_prompt,
             user_message=context_packet.user_message,
-            image_data=context_packet.image_data if use_vision else [],
-            model_override=vision_model if use_vision else None,
+            image_data=[],
+            model_override=None,
             temperature=temperature,
         )
         draft_response = strip_think_blocks(draft_response)
@@ -250,6 +249,17 @@ class LLMAdapter:
         if self.prompt_builder.conversation_buffer.question_suppressed:
             final_response = strip_trailing_parenthetical_question(final_response)
 
+        # Empty response guard — if the draft collapsed to nothing after
+        # think block stripping, or review returned empty reviewed_text,
+        # or the coaching filter rewrite returned empty, surface a
+        # recoverable error rather than sending a blank response to the user.
+        if not final_response or not final_response.strip():
+            logger.warning("[RESPONSE] Empty final_response — surfacing fallback message")
+            final_response = (
+                "I had trouble generating a response to that. Try rephrasing, "
+                "or let me know what you're actually trying to figure out."
+            )
+
         self.prompt_builder.conversation_buffer.add_turn(
             context_packet.user_message,
             final_response,
@@ -296,19 +306,17 @@ class LLMAdapter:
             vision_description=vision_description,
         )
 
-        vision_model = get_ember_vision_model()
-        use_vision = bool(context_packet.image_data) and bool(vision_model)
-
-        if use_vision:
-            print(f"[VISION] Image request — using model: {vision_model}")
-
+        # Vision pipeline: images are preprocessed upstream by VisionService
+        # and injected as text via vision_description. The streaming path
+        # runs through the main LLM with full character layer — no direct
+        # vision model routing that bypasses personality.
         # Stream from Ollama, accumulate full text
         accumulated = []
         for chunk in self._chat_stream(
             system_prompt=system_prompt,
             user_message=context_packet.user_message,
-            image_data=context_packet.image_data if use_vision else [],
-            model_override=vision_model if use_vision else None,
+            image_data=[],
+            model_override=None,
             temperature=temperature,
         ):
             accumulated.append(chunk)

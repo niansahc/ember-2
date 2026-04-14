@@ -48,11 +48,15 @@ VOLATILE_ENTITY_SIGNALS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNOREC
 
 STATE_QUERY_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
     # What/who/where/how + auxiliary or common past-tense event verb
-    r"^(?:what|who|where|when|how|how much|how many)\b.*\b(?:is|are|does|do|has|have|was|were|did|won|released|announced|scored|traded|happened)\b",
+    # Added "trading" and "currently" to catch "what is NVDA trading at"
+    r"(?:^|\b)(?:what|who|where|when|how|how much|how many)\b.*\b(?:is|are|does|do|has|have|was|were|did|won|released|announced|scored|traded|happened|trading|currently)\b",
     # Auxiliary-first questions (yes/no form)
     r"^(?:is|are|does|do|has|have|can|will|did)\b",
     # Contractions
     r"^(?:what's|who's|where's|how's)\b",
+    # Short queries with time/state marker (e.g. "bitcoin now", "weather today")
+    # Excludes possessive forms (my, our) which indicate vault queries
+    r"(?<!\bmy\s)(?<!\bour\s)\b(?:now|today|right now|this (?:week|month|year))\b",
 ))
 
 

@@ -321,3 +321,139 @@ tests:
     description: Startup toggle disables auto-start
     steps: "Uncheck 'Start Ember automatically when I log in' on the Done screen. Reboot."
     expected: API does not start automatically. EmberStartup task is removed from Task Scheduler.
+
+  # ═══════════════════════════════════════════════════════════
+  # INSTALLER (ember-2-installer)
+  # ═══════════════════════════════════════════════════════════
+
+  # ── Fresh Install Flow ──────────────────────────────────────
+
+  - id: UAT-200
+    feature: Installer Fresh Install
+    description: NSIS wizard completes and launches app
+    steps: "Run the Ember Setup .exe. Choose install directory (default Program Files). Click Install. Wait for NSIS to finish."
+    expected: NSIS installs files, finish page appears, app launches automatically after clicking Finish
+
+  - id: UAT-201
+    feature: Installer Fresh Install
+    description: Prerequisite detection screen
+    steps: "After app launches, observe the prerequisites screen."
+    expected: All prerequisites (Git, Python, Node, Ollama, Docker) are detected with green checkmarks or show install buttons for missing items
+
+  - id: UAT-202
+    feature: Installer Fresh Install
+    description: Full happy path from Welcome to Done
+    steps: "Walk through all screens: Welcome → Prerequisites → Install Location → Model Selection → Vault → Summary → AGPL → Install → Done."
+    expected: Each screen loads correctly, Next/Back navigation works, install completes, Done screen shows 'You're all set' with Ember running
+
+  - id: UAT-203
+    feature: Installer Fresh Install
+    description: Install to custom directory
+    steps: "On the Install Location screen, change the path to a custom directory (e.g., D:\\Ember-2)."
+    expected: Installer clones ember-2 and ember-2-ui to the chosen directory. Done screen shows correct path.
+
+  # ── Update Flow ─────────────────────────────────────────────
+
+  - id: UAT-210
+    feature: Installer Update Flow
+    description: Existing install detected on launch
+    steps: "Launch the installer when ember-2 is already installed."
+    expected: Welcome screen shows subtle 'Updates available' banner (if updates exist) rather than forcing the update screen
+
+  - id: UAT-211
+    feature: Installer Update Flow
+    description: Update All completes with celebration
+    steps: "Click 'View updates' banner → Update screen shows rows for backend/UI/installer with versions → Click 'Update All'."
+    expected: Each row animates during update, checkmarks appear on completion, celebration card shows for ~8 seconds after all updates finish
+
+  - id: UAT-212
+    feature: Installer Update Flow
+    description: Skip button bypasses updates
+    steps: "On the Update screen, click Skip."
+    expected: Returns to Welcome screen without applying updates. No changes made.
+
+  # ── Done Screen Features ────────────────────────────────────
+
+  - id: UAT-220
+    feature: Installer Done Screen
+    description: Vault storage estimate displays
+    steps: "Reach the Done screen with the API running."
+    expected: "Vault size: X MB" and "30-day projection: Y MB" are displayed below the startup task toggle
+
+  - id: UAT-221
+    feature: Installer Done Screen
+    description: Launch Services button starts Docker + API
+    steps: "On the Done screen, click 'Launch Services'."
+    expected: Button shows 'Launching...', status message appears, services start. Button re-enables after ~10 seconds.
+
+  - id: UAT-222
+    feature: Installer Done Screen
+    description: Open Ember button opens browser
+    steps: "With API running, click 'Open Ember' on the Done screen."
+    expected: Default browser opens to Ember UI (localhost:8000 or Tailscale URL)
+
+  - id: UAT-223
+    feature: Installer Done Screen
+    description: Version display shows correct version
+    steps: "Check the 'Ember version: X' label on the Done screen."
+    expected: Shows the correct installed backend version (not 'unknown' or 'checking...')
+
+  - id: UAT-224
+    feature: Installer Done Screen
+    description: Startup task auto-registers on first install
+    steps: "Complete a fresh install. Check the startup task toggle on the Done screen."
+    expected: Toggle is checked (enabled) by default. Status shows 'Ember will start automatically at logon.'
+
+  - id: UAT-225
+    feature: Installer Done Screen
+    description: Check for updates button works
+    steps: "On the Done screen, click 'Check for updates'."
+    expected: Shows 'Checking...' then reports result ('Everything is up to date' or version available)
+
+  # ── Developer Mode ──────────────────────────────────────────
+
+  - id: UAT-230
+    feature: Installer Developer Mode
+    description: Developer mode toggle triggers Matrix animation
+    steps: "On the Done screen, check the 'Enable developer mode' checkbox."
+    expected: Fullscreen Matrix-style animation plays (orange rain, hearts, kitties, gems, typed message). ESC to skip.
+
+  - id: UAT-231
+    feature: Installer Developer Mode
+    description: Developer mode reveals vault path fields
+    steps: "After Matrix animation completes (or ESC to skip), observe the dev mode panel."
+    expected: Panel shows demo vault and test vault path inputs, pre-populated with default paths (C:\\DEVEmberVault\\demo_vault, C:\\DEVEmberVault\\test_vault)
+
+  - id: UAT-232
+    feature: Installer Developer Mode
+    description: Apply creates vault directories
+    steps: "With dev mode panel visible, click Apply."
+    expected: Status shows 'Developer mode enabled. Vault directories created.' Directories exist on disk.
+
+  - id: UAT-233
+    feature: Installer Developer Mode
+    description: Second toggle does not replay animation
+    steps: "Uncheck and recheck the developer mode toggle."
+    expected: Panel toggles visibility without replaying the Matrix animation
+
+  # ── Installer Self-Update ───────────────────────────────────
+
+  - id: UAT-240
+    feature: Installer Self-Update
+    description: No update popup on launch
+    steps: "Launch the installed Ember Setup app."
+    expected: No installer-update-banner appears at the top of the window. Updates are shown via the subtle Welcome screen banner only.
+
+  - id: UAT-241
+    feature: Installer Self-Update
+    description: No NSIS installer relaunches unprompted
+    steps: "After installing, use the app normally for several minutes. Close and reopen."
+    expected: The NSIS setup wizard does NOT appear on its own. No grey installer window pops up.
+
+  # ── Uninstall ───────────────────────────────────────────────
+
+  - id: UAT-250
+    feature: Installer Uninstall
+    description: Uninstall removes scheduled task
+    steps: "Uninstall Ember Setup via Windows Apps & Features. Check Task Scheduler for EmberStartup."
+    expected: EmberStartup task is removed from Task Scheduler. App is removed from Program Files.

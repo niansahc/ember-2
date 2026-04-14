@@ -591,6 +591,7 @@ A release is not complete at commit. A release is not complete at tag. A release
 - [ ] Constitution, nature, and Lodestone layers reviewed for coherence
 - [ ] Deviation drift check — review deviation record distribution against nature document; verify accumulated character is consistent with intended character
 - [ ] Research review: any watch items ready to graduate to roadmap?
+- [ ] UAT manual testing — run `python scripts/uat_runner.py`, all critical cases pass or documented exceptions approved by human. Results logged to `logs/uat_results_latest.json` and `logs/uat_results_history.json`.
 
 **ember-2-ui (frontend):**
 - [ ] All Playwright tests passing: npm run test:e2e

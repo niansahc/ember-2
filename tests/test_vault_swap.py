@@ -58,12 +58,14 @@ class TestConfigOverride:
             "VAULT_PATH_LIVE": "/vaults/live",
             "VAULT_PATH_DEMO": "/vaults/demo",
             "VAULT_PATH_TEST": "/vaults/test",
+            "PRIVATE_VAULT_PATH": "/vaults/private",
         }):
             paths = get_known_vault_paths()
         assert paths == {
             "live": "/vaults/live",
             "demo": "/vaults/demo",
             "test": "/vaults/test",
+            "private_vault": "/vaults/private",
         }
 
     def test_known_vault_paths_skips_unset(self):

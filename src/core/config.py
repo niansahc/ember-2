@@ -54,13 +54,22 @@ def get_vault_label() -> str:
 
 
 def get_known_vault_paths() -> dict[str, str]:
-    """Read known vault paths from .env (VAULT_PATH_LIVE, etc.)."""
+    """Read known vault paths from .env (VAULT_PATH_LIVE, etc.).
+
+    Includes the personal vault under the label 'private_vault' so the
+    swap endpoint can return to it without requiring an API restart.
+    """
     paths: dict[str, str] = {}
     for label in ("live", "demo", "test"):
         env_key = f"VAULT_PATH_{label.upper()}"
         val = os.getenv(env_key)
         if val:
             paths[label] = val
+    # The personal vault from PRIVATE_VAULT_PATH is always available as
+    # 'private_vault' so the swap endpoint can revert to it.
+    private_path = os.getenv("PRIVATE_VAULT_PATH")
+    if private_path:
+        paths["private_vault"] = private_path
     return paths
 
 

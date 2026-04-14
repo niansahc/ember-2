@@ -1,0 +1,28 @@
+name: Business Hours Check
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  business-hours-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check push time against US Eastern business hours
+        run: |
+          python3 - <<'PY'
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          import sys
+
+          now = datetime.now(ZoneInfo("America/New_York"))
+          if now.weekday() < 5 and 9 <= now.hour < 17:
+              print(f"::error::Push occurred during US East business hours ({now.strftime('%A %H:%M %Z')}).")
+              print("::error::Push blocked during US East business hours (9am-5pm ET Mon-Fri). Commit locally and push after 5pm.")
+              sys.exit(1)
+          print(f"Push time OK: {now.strftime('%A %H:%M %Z')}")
+          PY

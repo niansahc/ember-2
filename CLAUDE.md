@@ -591,6 +591,7 @@ A release is not complete at commit. A release is not complete at tag. A release
 - [ ] Constitution, nature, and Lodestone layers reviewed for coherence
 - [ ] Deviation drift check — review deviation record distribution against nature document; verify accumulated character is consistent with intended character
 - [ ] Research review: any watch items ready to graduate to roadmap?
+- [ ] API restarted with all v0.16.0 code active before UAT
 - [ ] UAT manual testing — run `python scripts/uat_runner.py`, all critical cases pass or documented exceptions approved by human. Results logged to `logs/uat_results_latest.json` and `logs/uat_results_history.json`.
 
 **ember-2-ui (frontend):**
@@ -599,6 +600,7 @@ A release is not complete at commit. A release is not complete at tag. A release
 - [ ] package.json version bumped
 - [ ] All changes committed and pushed to main: git push origin main
 - [ ] UI rebuilt from correct source: npm ci && npm run build
+- [ ] Production UI bundle built and copied to ember-2/ui/ — `npm ci && npm run build`, confirm FastAPI is serving the new bundle
 
 **ember-2-installer (installer):**
 - [ ] All Playwright tests passing

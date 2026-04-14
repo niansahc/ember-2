@@ -73,7 +73,7 @@ The Map function establishes context, intended use, and risk framing for the AI 
 
 **User-initiated governance reduction:**
 - Bare mode (ADR-028) — user can disable personality layers while preserving safety guarantees. Constitutional review reduced to position_collapse, sycophancy, and non_embellishment only. This is a deliberate user-initiated governance reduction, not a bypass. The user must enable it in app settings first (two-layer gate).
-- Stateless mode (ADR-031) — user can disable vault reads/writes per conversation. Constitutional review still fires but outcomes are not persisted to audit logs. This creates an audit gap documented in CLAUDE.md Known Issues.
+- Stateless mode (ADR-031) — user can disable vault reads/writes per conversation. Constitutional review still fires and outcomes ARE persisted to logs/safety_reviews/ — governance logging is mode-invariant because safety logs are repo-local, independent of vault state.
 
 ### Gaps
 
@@ -137,7 +137,7 @@ The Manage function addresses risk response, monitoring, and improvement over ti
 
 **Monitoring:**
 - Audit logs at `logs/audit/` — all API requests logged as JSON.
-- Safety review logs at `logs/safety_reviews/` — constitutional review outcomes.
+- Safety review logs at `logs/safety_reviews/` — constitutional review outcomes. Mode-invariant: logs persist in all conversation modes including stateless (vault off). Safety logs are repo-local, not vault-dependent.
 - Retrieval eval run before each release.
 
 **Improvement:**

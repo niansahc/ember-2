@@ -163,3 +163,73 @@ class TestAnalyzeVault:
         assert isinstance(result["projected_30d_human"], str)
         for entry in result["by_type"].values():
             assert isinstance(entry["human"], str)
+
+
+# ── Endpoint tests ────────────────────────────────────────────────────
+
+
+class TestVaultStorageEndpoint:
+    """Test GET /v1/vault/storage via FastAPI TestClient."""
+
+    MOCK_ANALYSIS = {
+        "current_bytes": 204800,
+        "current_human": "200.0 KB",
+        "by_type": {
+            "conversation": {"bytes": 102400, "human": "100.0 KB"},
+            "journal": {"bytes": 51200, "human": "50.0 KB"},
+            "embeddings": {"bytes": 51200, "human": "50.0 KB"},
+        },
+        "growth_rate_bytes_per_day": 1024,
+        "projected_30d_bytes": 204800 + (1024 * 30),
+        "projected_30d_human": "230.0 KB",
+        "sampled_days": 14,
+    }
+
+    def _get(self):
+        """Helper: create TestClient with auth bypassed and analyze_vault mocked."""
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        from src.api.main import app
+
+        with patch("src.api.main.get_ember_api_key", return_value=None), \
+             patch("src.memory.vault_storage.analyze_vault", return_value=self.MOCK_ANALYSIS):
+            return TestClient(app).get("/v1/vault/storage")
+
+    def test_endpoint_returns_200(self):
+        """GET /v1/vault/storage returns 200."""
+        resp = self._get()
+        assert resp.status_code == 200
+
+    def test_response_schema(self):
+        """Response contains all required top-level fields."""
+        data = self._get().json()
+        required = {
+            "current_bytes",
+            "current_human",
+            "by_type",
+            "growth_rate_bytes_per_day",
+            "projected_30d_bytes",
+            "projected_30d_human",
+            "sampled_days",
+        }
+        assert required.issubset(data.keys())
+
+    def test_current_bytes_is_integer(self):
+        """current_bytes is an integer."""
+        data = self._get().json()
+        assert isinstance(data["current_bytes"], int)
+
+    def test_by_type_is_dict(self):
+        """by_type is a dict with bytes and human per entry."""
+        data = self._get().json()
+        assert isinstance(data["by_type"], dict)
+        for key, entry in data["by_type"].items():
+            assert "bytes" in entry, f"Missing 'bytes' in by_type[{key!r}]"
+            assert "human" in entry, f"Missing 'human' in by_type[{key!r}]"
+            assert isinstance(entry["bytes"], int)
+            assert isinstance(entry["human"], str)
+
+    def test_projected_exceeds_current(self):
+        """projected_30d_bytes >= current_bytes (growth is non-negative)."""
+        data = self._get().json()
+        assert data["projected_30d_bytes"] >= data["current_bytes"]

@@ -142,7 +142,11 @@ class TestDateSection:
     def test_date_format_is_natural_language(self):
         pb = PromptBuilder()
         date_str = pb._build_date_section()
-        assert date_str.startswith("It's ")
+        # v0.16.0-dev: date section reframed as authoritative temporal anchor
+        # (UAT-131). Still contains day + time + comma, just no longer opens
+        # with "It's ".
+        assert date_str.startswith("CURRENT DATE")
+        assert "authoritative" in date_str.lower()
         assert "," in date_str
 
 

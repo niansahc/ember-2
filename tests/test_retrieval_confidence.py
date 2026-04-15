@@ -96,7 +96,11 @@ class TestRetrievalConfidenceBlock:
         """Authority rules should tell the model to check retrieval confidence."""
         from src.llm.prompt_builder import AUTHORITY_RULES
         assert "Retrieval confidence" in AUTHORITY_RULES
-        assert "low-confidence" in AUTHORITY_RULES.lower() or "low score" in AUTHORITY_RULES.lower()
+        # v0.16.0-dev: authority rules now reference "confidence" and "low"
+        # as separate concepts, not the literal "low-confidence"/"low score"
+        # compound phrases. Check for the concept, not the old phrasing.
+        lowered = AUTHORITY_RULES.lower()
+        assert "confidence is low" in lowered or "moderate or low" in lowered
 
     def test_profile_only_items_have_no_confidence_block(self):
         """Profile items are not scored for confidence — they are always

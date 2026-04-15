@@ -334,11 +334,22 @@ class LLMAdapter:
         print("[SAFETY]", {"triggered": trigger_result.triggered, "triggered_by": trigger_result.triggered_by})
 
         if trigger_result.triggered:
+            _active_principles = self.policy_service.get_active_principles(
+                trigger_result
+            )
+            # Bare mode: restrict streaming review to MVR-covered principles,
+            # matching the non-streaming path at lines 212-216. Prior to this
+            # fix streaming always ran the full principle set — see UAT-101.
+            if bare_mode:
+                _mvr_set = ResponseReviewService._MVR_COVERED_PRINCIPLES
+                _active_principles = [
+                    p for p in _active_principles if p in _mvr_set
+                ]
             review_ctx = SafetyReviewContext(
                 user_message=context_packet.user_message,
                 draft_response=full_response,
                 risk_signals=trigger_result.triggered_by,
-                active_principle_ids=self.policy_service.get_active_principles(trigger_result),
+                active_principle_ids=_active_principles,
             )
             review_result = self.review_service.review(review_ctx)
             self.review_logger.log(

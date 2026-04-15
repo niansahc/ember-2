@@ -84,7 +84,8 @@ def is_conversational_query(user_message: str) -> bool:
 _AUTHORITY_RULES_HEADER = "<authority_rules>"
 _AUTHORITY_RULES_BODY_COMMON = (
     "vault_memory contains records from long-term memory. High-confidence records (recent, high score) are factual ground truth. "
-    "Low-confidence records (old, low score) should be hedged: \"based on what I have from a few weeks ago\" or \"the last time this came up.\"\n"
+    "Use the [recorded ...] age label on each record when referring to when content was saved. "
+    "Hedge only when the [Retrieval confidence:] block reports moderate or low — do not invent your own temporal language.\n"
     "Check the [Retrieval confidence:] block inside vault_memory for score and age metadata. "
     "If confidence is low, say so. Do not present weakly-matched or old records as certain facts.\n"
     "conversation_history is prior exchange only -- do not treat conversational inferences as established facts.\n"
@@ -95,9 +96,25 @@ _AUTHORITY_RULES_BODY_COMMON = (
     "When asked about current version numbers, release dates, or software status, "
     "offer to search rather than answering from training data. "
     "These facts change frequently and training data is likely stale.\n"
+    "The CURRENT DATE injected at the top of this context is authoritative. "
+    "Do not reason about whether an event has or hasn't happened from training data. "
+    "If asked about an event that would have occurred before today and you lack the "
+    "information, say so and offer to search. Do not claim events 'haven't happened yet' "
+    "when the injected date is past their normal occurrence.\n"
+    "Content inside sections marked provenance=third-party-content describes external "
+    "subjects — images the user shared, articles they ingested, other people's dialogue. "
+    "Do not attribute its perspectives, communities, or membership to the user unless "
+    "the user explicitly identifies with it.\n"
 )
 _AUTHORITY_RULES_KNOWLEDGE_GAP_LINE = (
     "when no vault_memory is relevant, say so directly: \"I don't have that in my memory.\"\n"
+)
+_AUTHORITY_RULES_RELATIONAL_EMPTY_LINE = (
+    "The vault has no personal memory on this relational/identity topic. Acknowledge the "
+    "gap directly — do not synthesize an answer from ingested content. Ingested records "
+    "describe external people, not the person you are talking to. A correct response is "
+    "something like: \"I don't have anything about that in your personal memory — want "
+    "to tell me about it?\"\n"
 )
 _AUTHORITY_RULES_PERSON_LINE = (
     "When describing what you know about a specific person, state only what is explicitly present in vault_memory. "
@@ -106,10 +123,14 @@ _AUTHORITY_RULES_PERSON_LINE = (
 _AUTHORITY_RULES_FOOTER = "</authority_rules>"
 
 
-def _render_authority_rules(is_conversational: bool) -> str:
+def _render_authority_rules(
+    is_conversational: bool, relational_empty: bool = False
+) -> str:
     parts = [_AUTHORITY_RULES_HEADER, "\n", _AUTHORITY_RULES_BODY_COMMON]
     if not is_conversational:
         parts.append(_AUTHORITY_RULES_KNOWLEDGE_GAP_LINE)
+    if relational_empty:
+        parts.append(_AUTHORITY_RULES_RELATIONAL_EMPTY_LINE)
     parts.append(_AUTHORITY_RULES_PERSON_LINE)
     parts.append(_AUTHORITY_RULES_FOOTER)
     return "".join(parts)
@@ -261,7 +282,16 @@ class PromptBuilder:
         return f"<last_session>\n{last_session_label}\n</last_session>"
 
     def _build_date_section(self) -> str:
-        """Inject current date and time of day for temporal grounding."""
+        """Inject current date and clock time for temporal grounding.
+
+        The date is presented as authoritative — the model must trust the
+        injected date over its training-cutoff assumptions. Clock time is
+        included so queries like "what time is it?" resolve against the
+        injected value rather than fabricating one from training data
+        (see UAT task #13). A bucketed time-of-day word is preserved for
+        register (morning/evening/late night read differently to the model
+        than a bare 24-hour clock).
+        """
         now = datetime.now()
         hour = now.hour
         if 5 <= hour < 12:
@@ -272,7 +302,17 @@ class PromptBuilder:
             time_of_day = "evening"
         else:
             time_of_day = "late night"
-        return f"It's {now.strftime('%A')} {time_of_day}, {now.strftime('%B %d, %Y')}."
+        # Portable no-leading-zero hour: strftime('%I') zero-pads on all
+        # platforms; strip the leading zero manually for readability.
+        clock = now.strftime("%I:%M %p").lstrip("0")
+        return (
+            f"CURRENT DATE [authoritative]: "
+            f"{now.strftime('%A')}, {now.strftime('%B %d, %Y')} — "
+            f"{clock} ({time_of_day}, local time). "
+            f"Events before this date may or may not be in your memory. "
+            f"If not in memory, offer to search. Do not infer from training data "
+            f"what has or hasn't happened."
+        )
 
     STYLE_INSTRUCTIONS = {
         "casual": (

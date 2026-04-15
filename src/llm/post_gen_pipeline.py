@@ -1,0 +1,125 @@
+"""
+src/llm/post_gen_pipeline.py
+
+Unified post-generation validator pipeline.
+
+Runs three validators in a fixed order against a completed response:
+
+  1. source allowlist (strip fabricated citations)
+  2. vision refusal (substitute when vision fired but model refused)
+  3. ask-first (substitute when web_search intent skipped the confirmation)
+
+Followed by an empty-response guard that fills zero-byte replies with a
+fallback so the streaming path never emits a blank message to the client
+(UAT-015 / task #22).
+
+The ordering is deliberate:
+  - Source stripping first so downstream validators see the cleaned text.
+  - Vision before ask-first: a vision refusal is a direct failure to use
+    the <vision_context> section, so it wins over any ask-first logic.
+  - Empty guard last: if earlier substitutions zeroed the reply somehow,
+    this catches it.
+
+Callers should log the returned `substitutions` list so eval can track
+intervention rates.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+
+from src.llm.ask_first_validator import validate_ask_first_response
+from src.llm.source_validator import (
+    extract_web_domains,
+    validate_and_strip_sources,
+)
+from src.llm.vision_refusal_validator import validate_vision_response
+
+logger = logging.getLogger(__name__)
+
+_EMPTY_FALLBACK = (
+    "I had trouble generating a response to that. Try rephrasing, or let me "
+    "know what you're actually trying to figure out."
+)
+
+
+@dataclass
+class PostGenResult:
+    reply: str
+    stripped_sources: list[str]
+    vision_substituted: bool
+    ask_first_substituted: bool
+    empty_fallback_fired: bool
+
+
+def run_post_gen_pipeline(
+    reply: str,
+    *,
+    intent_class: str,
+    web_search_autonomous: bool,
+    used_web_search: bool,
+    used_vault: bool,
+    used_vision: bool,
+    web_items: list | None = None,
+    vault_sources: list | None = None,
+    vision_description: str | None = None,
+) -> PostGenResult:
+    """Run source → vision → ask-first → empty-guard against a full reply.
+
+    ask_first_mode is computed internally as (intent == web_search AND
+    web_search_autonomous is False). Callers pass the raw signals and this
+    function applies the routing rule.
+    """
+
+    stripped_sources: list[str] = []
+    vision_substituted = False
+    ask_first_substituted = False
+    empty_fallback_fired = False
+
+    allowlist: list[str] = []
+    if web_items:
+        allowlist.extend(extract_web_domains(web_items))
+    if vault_sources:
+        for entry in vault_sources:
+            if isinstance(entry, dict):
+                vid = entry.get("id")
+                if isinstance(vid, str) and vid:
+                    allowlist.append(vid)
+
+    reply, stripped = validate_and_strip_sources(
+        reply,
+        allowed_sources=allowlist,
+        used_web=used_web_search,
+        used_vault=used_vault,
+        used_vision=used_vision,
+    )
+    if stripped:
+        stripped_sources = stripped
+        logger.info("[POSTGEN] stripped fabricated sources: %s", stripped)
+
+    reply, vision_substituted = validate_vision_response(
+        reply, used_vision=used_vision, vision_description=vision_description
+    )
+    if vision_substituted:
+        logger.info("[POSTGEN] vision refusal substituted")
+
+    ask_first_mode = intent_class == "web_search" and not web_search_autonomous
+    reply, ask_first_substituted = validate_ask_first_response(
+        reply, intent_class=intent_class, ask_first_mode=ask_first_mode
+    )
+    if ask_first_substituted:
+        logger.info("[POSTGEN] ask-first response substituted")
+
+    if not reply or not reply.strip():
+        reply = _EMPTY_FALLBACK
+        empty_fallback_fired = True
+        logger.warning("[POSTGEN] empty-response guard fired")
+
+    return PostGenResult(
+        reply=reply,
+        stripped_sources=stripped_sources,
+        vision_substituted=vision_substituted,
+        ask_first_substituted=ask_first_substituted,
+        empty_fallback_fired=empty_fallback_fired,
+    )

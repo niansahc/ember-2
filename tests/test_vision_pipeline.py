@@ -119,9 +119,13 @@ class TestBuildVisionContextSection:
         result = PromptBuilder._build_vision_context_section(
             "A photo of a sunset over the ocean."
         )
-        assert "<vision_context>" in result
+        # v0.16.0-dev: opening tag now carries provenance attribute, and
+        # the header is reframed as first-person observation to counter
+        # the RLHF "I can't see images" prior (UAT-120 / task #18).
+        assert "<vision_context" in result
+        assert 'provenance="third-party-content"' in result
         assert "</vision_context>" in result
-        assert "[Image attached by user — analyzed by vision model]" in result
+        assert "[You have analyzed this image. Your observations:]" in result
         assert "A photo of a sunset over the ocean." in result
 
     def test_returns_empty_for_none(self):
@@ -171,9 +175,11 @@ class TestVisionInBuildPrompt:
             vision_description="A screenshot showing an error message: KeyError",
         )
 
-        assert "<vision_context>" in prompt
+        # v0.16.0-dev: opening tag carries provenance, header is reframed.
+        assert "<vision_context" in prompt
+        assert 'provenance="third-party-content"' in prompt
         assert "A screenshot showing an error message: KeyError" in prompt
-        assert "[Image attached by user — analyzed by vision model]" in prompt
+        assert "[You have analyzed this image. Your observations:]" in prompt
 
     @patch.object(PromptBuilder, "_build_nature_section", return_value="")
     @patch.object(PromptBuilder, "_build_identity_rules_section", return_value="")

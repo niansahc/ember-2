@@ -643,10 +643,17 @@ class PromptBuilder:
         """
         if not vision_description or not vision_description.strip():
             return ""
+        # UAT-120 / task #18: reframe as first-person observation so the
+        # primary model treats the description as its own perception rather
+        # than an external report. This plus the injected identity rule
+        # (third_party_provenance / no canned image refusal) counters the
+        # trained "I can't see images directly" RLHF prior at 8B scale.
         return (
-            "<vision_context>\n"
-            "[Image attached by user — analyzed by vision model]\n"
+            '<vision_context provenance="third-party-content">\n'
+            "[You have analyzed this image. Your observations:]\n"
             f"{vision_description.strip()}\n"
+            "[Use these observations to answer. Do not say you cannot see "
+            "images — you have already processed this one.]\n"
             "</vision_context>"
         )
 

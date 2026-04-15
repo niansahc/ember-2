@@ -333,6 +333,9 @@ class ChatCompletionsRequest(BaseModel):
     max_tokens: Optional[int] = None
     stream: Optional[bool] = False
     vault_enabled: Optional[bool] = True
+    # Per-conversation bare mode override (UAT-103, task #17). When present,
+    # supersedes the preferences.json default. Absent → preferences fallback.
+    bare_mode: Optional[bool] = None
 
 
 class ChatCompletionsResponseMessage(BaseModel):
@@ -1191,8 +1194,15 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     from src.core.preferences import get as get_pref
     conversational_style = get_pref("conversational_style", "balanced")
 
-    # Read bare mode preference — reduced pipeline, no personality layers
-    _bare_mode = bool(get_pref("bare_mode", False))
+    # Bare mode — per-conversation override (body.bare_mode) takes precedence
+    # over the preferences.json default. UAT-103 / task #17: the UI presents
+    # bare mode as a per-conversation flame toggle, so the backend must honour
+    # the per-request flag when set. Absent → fall back to the stored default,
+    # matching the vault_enabled pattern at line 847.
+    if body.bare_mode is not None:
+        _bare_mode = bool(body.bare_mode)
+    else:
+        _bare_mode = bool(get_pref("bare_mode", False))
 
     # Build metadata for memory writes
     user_meta = {"role": "user", "content_kind": "user_content", "session_id": session_id}
@@ -1350,6 +1360,24 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 from src.llm.coaching_filter import filter_coaching_frame
                 full_reply = filter_coaching_frame(full_reply, _intent_class, _is_conversational)
 
+                # 3.7. Post-gen validators (source / vision / ask-first /
+                # empty-guard). Grounded streaming path — this runs before
+                # the word-by-word re-stream, so the client sees the
+                # validated text.
+                from src.llm.post_gen_pipeline import run_post_gen_pipeline
+                _postgen = run_post_gen_pipeline(
+                    full_reply,
+                    intent_class=_intent_class,
+                    web_search_autonomous=_web_autonomous,
+                    used_web_search=used_web_search,
+                    used_vault=used_vault,
+                    used_vision=used_vision,
+                    web_items=getattr(context_packet, "web_items", None),
+                    vault_sources=vault_sources,
+                    vision_description=_vision_description,
+                )
+                full_reply = _postgen.reply
+
                 # 4. Re-stream verified response word by word
                 tokens = full_reply.split(" ")
                 for i, token in enumerate(tokens):
@@ -1437,6 +1465,23 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 # to memory so retrieval doesn't resurface coaching patterns.
                 from src.llm.coaching_filter import filter_coaching_frame
                 full_reply = filter_coaching_frame(full_reply, _intent_class, _is_conversational)
+                # Post-gen validators. In the fast path the client has
+                # already seen the raw stream; this cleans the memory
+                # copy so fabricated sources, vision refusals, and empty
+                # replies don't re-emerge on retrieval.
+                from src.llm.post_gen_pipeline import run_post_gen_pipeline
+                _postgen = run_post_gen_pipeline(
+                    full_reply,
+                    intent_class=_intent_class,
+                    web_search_autonomous=_web_autonomous,
+                    used_web_search=used_web_search,
+                    used_vault=used_vault,
+                    used_vision=used_vision,
+                    web_items=getattr(context_packet, "web_items", None),
+                    vault_sources=vault_sources,
+                    vision_description=_vision_description,
+                )
+                full_reply = _postgen.reply
                 _post_stream_cleanup(full_reply)
 
         response_headers = {
@@ -1448,6 +1493,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             response_headers["X-Ember-Web-Search"] = "true"
         if used_vault:
             response_headers["X-Ember-Vault-Used"] = "true"
+        if used_vision:
+            response_headers["X-Ember-Vision-Used"] = "true"
 
         return StreamingResponse(
             _stream_sse(),
@@ -1470,6 +1517,22 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # Coaching-frame filter — post-generation, pre-return
     from src.llm.coaching_filter import filter_coaching_frame as _filter_cf
     reply = _filter_cf(reply, _intent_class, _is_conversational)
+
+    # Post-gen validators (source / vision / ask-first / empty-guard).
+    # Non-streaming path: runs before final JSONResponse return.
+    from src.llm.post_gen_pipeline import run_post_gen_pipeline as _run_postgen
+    _postgen_ns = _run_postgen(
+        reply,
+        intent_class=_intent_class,
+        web_search_autonomous=_web_autonomous,
+        used_web_search=used_web_search,
+        used_vault=used_vault,
+        used_vision=used_vision,
+        web_items=getattr(context_packet, "web_items", None),
+        vault_sources=vault_sources,
+        vision_description=_vision_description,
+    )
+    reply = _postgen_ns.reply
 
     # Skip vault writes for test sessions
     if not _skip_vault:
@@ -1563,4 +1626,6 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         non_stream_headers["X-Ember-Web-Search"] = "true"
     if used_vault:
         non_stream_headers["X-Ember-Vault-Used"] = "true"
+    if used_vision:
+        non_stream_headers["X-Ember-Vision-Used"] = "true"
     return JSONResponse(content=response_body.model_dump(), headers=non_stream_headers)

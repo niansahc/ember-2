@@ -118,6 +118,10 @@ class ContextRetriever:
                         "raw_score": result.get("raw_score", 0.0),
                     },
                     tier=result.get("tier", "hot"),
+                    # Cluster 8 / task #24: propagate authorship from the
+                    # SQLite index. Missing column returns "unknown" via
+                    # the store's fallback — safe default.
+                    authorship=result.get("authorship", "unknown"),
                 )
             )
 

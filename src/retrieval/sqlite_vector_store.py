@@ -70,7 +70,9 @@ class SqliteVectorStore:
         self._conn.row_factory = sqlite3.Row
         self._create_table()
         self._migrate_tiering_columns()
+        self._migrate_authorship_column()
         self._has_quality_column = self._check_column_exists("quality")
+        self._has_authorship_column = self._check_column_exists("authorship")
 
     # ------------------------------------------------------------------
     # Schema
@@ -202,6 +204,15 @@ class SqliteVectorStore:
             except (IndexError, KeyError):
                 pass
 
+            # Include authorship if the column exists (cluster 8 / task #24).
+            # Falls back to 'unknown' to match the column default so callers
+            # don't need a None-branch when comparing against the scoring map.
+            authorship = "unknown"
+            try:
+                authorship = row["authorship"] or "unknown"
+            except (IndexError, KeyError):
+                pass
+
             results.append(
                 {
                     "content": row["text"],
@@ -210,6 +221,7 @@ class SqliteVectorStore:
                     "memory_type": row["memory_type"],
                     "metadata": metadata,
                     "tier": tier,
+                    "authorship": authorship,
                 }
             )
 
@@ -246,6 +258,25 @@ class SqliteVectorStore:
                 self._conn.execute(col_def)
             except _sqlite3.OperationalError:
                 pass  # column already exists
+        self._conn.commit()
+
+    def _migrate_authorship_column(self) -> None:
+        """Add authorship column for identity-query retrieval filtering.
+
+        Schema migration for task #24 / cluster 8. Vault JSON records are
+        never mutated (append-only rule, CLAUDE.md §3); the authorship
+        value is an index-level derived fact, rebuildable from source and
+        role signals via scripts/rebuild_authorship_index.py.
+
+        Values: 'first_person', 'third_party', 'mixed', 'unknown' (default).
+        """
+        import sqlite3 as _sqlite3
+        try:
+            self._conn.execute(
+                "ALTER TABLE vectors ADD COLUMN authorship TEXT DEFAULT 'unknown'"
+            )
+        except _sqlite3.OperationalError:
+            pass  # column already exists
         self._conn.commit()
 
     def update_retrieval_stats(self, record_ids: list[str]) -> None:

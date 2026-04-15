@@ -145,6 +145,14 @@ class ContextService:
         memory_items = self.ranker.apply_policy(memory_items, policy)
         reflection_items = self.ranker.apply_policy(reflection_items, policy)
 
+        # Cluster 8 / task #24: authorship multiplier on relational queries.
+        # No-op on non-relational queries. When the query is about the user's
+        # personal relationships or identity domains ("my son", "my partner",
+        # "my health"), third-party ingested content is zeroed out so kinship
+        # answers don't synthesize from books or the user's old ChatGPT
+        # dialogue about other people.
+        memory_items = self.ranker.apply_authorship_scoring(memory_items, user_message)
+
         # Boost memories from the active project (ADR-007)
         memory_items = self.ranker.apply_project_boost(memory_items, project_id)
         reflection_items = self.ranker.apply_project_boost(reflection_items, project_id)
@@ -214,6 +222,30 @@ class ContextService:
         # Attach pre-computed query embedding for downstream use (lodestone
         # resolver in prompt builder). Avoids a redundant embed_text() call.
         packet.query_embedding = query_embedding
+
+        # Cluster 8 / task #24 zero-hit signal. If the query was relational
+        # AND every non-profile memory item zeroed out under authorship
+        # scoring, flag the packet so the prompt builder renders the
+        # "no personal memory on this topic — don't synthesize from ingested
+        # content" authority-rules line. Profile records don't count — they
+        # surface on every turn and aren't evidence of specific personal
+        # grounding for this query.
+        from src.context.policies import _matches_relational_query
+        if _matches_relational_query(user_message):
+            non_profile = [
+                i for i in selected_memory
+                if getattr(i, "memory_type", "") != "profile"
+            ]
+            if non_profile and all(
+                float(getattr(i, "score", 0.0)) == 0.0 for i in non_profile
+            ):
+                packet.relational_query_empty = True
+            elif not non_profile:
+                # Nothing but profile items — also treat as empty for this
+                # signal. Kinship/identity questions should surface the gap
+                # rather than answer from onboarding boilerplate.
+                packet.relational_query_empty = True
+
         return packet
 
     def _update_retrieval_stats(self, items: list) -> None:

@@ -71,6 +71,56 @@ def _matches_state_query(q: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Relational / identity query classifier (cluster 8 / task #24)
+# ---------------------------------------------------------------------------
+# Queries about the user's personal relationships or identity domains.
+# When a query matches, retrieval filters third-party ingested content out
+# of the score pool — a kinship question should not resolve against books,
+# articles, or the user's old ChatGPT dialogue about other people's kids.
+# See UAT-005 investigation (task #21) for the failure pattern this closes.
+
+RELATIONAL_KINSHIP_NOUNS: tuple[str, ...] = (
+    "son", "daughter", "child", "kid", "kids", "children",
+    "partner", "spouse", "husband", "wife", "boyfriend", "girlfriend",
+    "mother", "father", "mom", "dad", "parent", "parents",
+    "brother", "sister", "sibling", "siblings",
+    "family", "friend", "friends", "colleague", "coworker", "boss",
+    "roommate", "neighbor",
+)
+
+RELATIONAL_IDENTITY_DOMAINS: tuple[str, ...] = (
+    "job", "work", "career", "health", "home", "house", "body", "mood",
+    "relationship", "marriage", "religion", "spirituality", "practice",
+)
+
+_KINSHIP_PATTERN = re.compile(
+    r"\bmy\s+(" + "|".join(re.escape(n) for n in RELATIONAL_KINSHIP_NOUNS) + r")\b",
+    re.IGNORECASE,
+)
+_IDENTITY_DOMAIN_PATTERN = re.compile(
+    r"\bmy\s+(" + "|".join(re.escape(d) for d in RELATIONAL_IDENTITY_DOMAINS) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _matches_relational_query(q: str) -> bool:
+    """Return True if the query is about the user's personal relationships
+    or identity domains — "my son", "my partner", "my health".
+
+    The possessive prefix is required. Naked "son" or "health" in a general
+    knowledge query should not trigger; only the possessive form signals a
+    personal identity query that must ground against first-person memory.
+    """
+    if not q:
+        return False
+    if _KINSHIP_PATTERN.search(q):
+        return True
+    if _IDENTITY_DOMAIN_PATTERN.search(q):
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Tier 2: Implicit recency — always triggers web search alone
 # ---------------------------------------------------------------------------
 

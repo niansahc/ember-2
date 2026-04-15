@@ -261,7 +261,12 @@ class PromptBuilder:
             # Louder, more visible than the sticky-note pattern used for
             # question/topic suppression (UAT-130 / UAT-131, task #19/#20).
             self._build_per_turn_search_confirmation_block(ask_first_active),
-            _render_authority_rules(is_conversational=is_conversational),
+            _render_authority_rules(
+                is_conversational=is_conversational,
+                relational_empty=bool(
+                    getattr(context_packet, "relational_query_empty", False)
+                ),
+            ),
             self._build_self_knowledge_boundary(),
             self._build_instruction_section(),
             self._build_identity_examples_section(),

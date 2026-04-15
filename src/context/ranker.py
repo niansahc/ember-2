@@ -101,6 +101,49 @@ class ContextRanker:
 
         return adjusted
 
+    def apply_authorship_scoring(
+        self,
+        items: list[ContextItem],
+        user_message: str,
+    ) -> list[ContextItem]:
+        """Apply authorship multiplier on relational / identity queries.
+
+        Cluster 8 / task #24. When the query is about the user's personal
+        relationships or identity ("my son", "my partner", "my health"),
+        third-party ingested content (books, articles, other people's
+        conversations) must not be allowed to answer as if it were about
+        the user. See task #21 UAT-005 root cause analysis.
+
+        Multipliers — applied only when _matches_relational_query is True:
+          first_person: 1.0  (user-authored — conversation/journal/profile)
+          mixed:        0.3  (content of uncertain authorship)
+          third_party:  0.0  (books, articles, other voices — filtered out)
+          unknown:      0.5  (conservative middle pending re-tag)
+
+        On non-relational queries this is a no-op — ingested content remains
+        useful for general knowledge questions.
+        """
+        from src.context.policies import _matches_relational_query
+
+        if not _matches_relational_query(user_message):
+            return items
+
+        multipliers = {
+            "first_person": 1.0,
+            "mixed": 0.3,
+            "third_party": 0.0,
+            "unknown": 0.5,
+        }
+
+        for item in items:
+            authorship = getattr(item, "authorship", None)
+            if not authorship:
+                metadata = getattr(item, "metadata", {}) or {}
+                authorship = metadata.get("authorship") or "unknown"
+            item.score = float(item.score) * multipliers.get(authorship, 0.5)
+
+        return items
+
     def apply_state_boost(
         self,
         state_items: list[StateItem],

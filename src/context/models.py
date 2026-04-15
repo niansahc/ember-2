@@ -19,6 +19,11 @@ class ContextItem:
     # ADR-015: Memory tier (hot/warm/cold). Defaults to "hot" for
     # backward compatibility with items that predate tiering.
     tier: str = "hot"
+    # Cluster 8 / task #24: authorship signal sourced from the SQLite
+    # index column. One of: first_person, third_party, mixed, unknown.
+    # Defaults to "unknown" — the ranker's authorship multiplier falls
+    # back to a conservative 0.5x for unknown items on relational queries.
+    authorship: str = "unknown"
 
 
 @dataclass
@@ -44,6 +49,12 @@ class ContextPacket:
     # prompt builder. Avoids a redundant embed_text() call (perf: 3→1
     # embedding calls per request).
     query_embedding: list[float] | None = None
+    # Cluster 8 / task #24 zero-hit signal: True when the query was
+    # classified as relational/identity AND the authorship multiplier
+    # zeroed out every candidate item. Prompt builder renders an extra
+    # authority-rules line instructing the model to acknowledge the gap
+    # explicitly rather than synthesize from ingested content.
+    relational_query_empty: bool = False
 
     def all_items(self) -> list[ContextItem]:
         # Order matches TDD context packet order:

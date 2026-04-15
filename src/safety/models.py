@@ -50,6 +50,12 @@ class SafetyReviewContext:
     draft_response: str
     risk_signals: list[str] = field(default_factory=list)
     active_principle_ids: list[str] = field(default_factory=list)
+    # Cluster 5 / task #6: when third-party content was injected into the
+    # context packet this turn (vision_context, third-party ingested text),
+    # the review prompt adds a fifth criterion checking whether the draft
+    # attributes subjects/communities/beliefs from that content to the user.
+    # False (default) means the criterion is omitted.
+    has_third_party_content: bool = False
 
 
 @dataclass(frozen=True)

@@ -159,6 +159,7 @@ class LLMAdapter:
         temperature: float | None = None,
         bare_mode: bool = False,
         vision_description: str | None = None,
+        ask_first_active: bool = False,
     ) -> str:
         system_prompt = self.prompt_builder.build_prompt(
             context_packet,
@@ -168,6 +169,7 @@ class LLMAdapter:
             suppress_relational_lodestone=suppress_relational_lodestone,
             bare_mode=bare_mode,
             vision_description=vision_description,
+            ask_first_active=ask_first_active,
         )
 
         # Vision pipeline: the VisionService preprocessor (called upstream
@@ -184,9 +186,16 @@ class LLMAdapter:
         )
         draft_response = strip_think_blocks(draft_response)
 
+        # Cluster 5 / task #6: mark review context when any third-party
+        # content was injected this turn (image description from vision
+        # preprocessor). The review prompt adds CONTENT_ATTRIBUTION_ERROR
+        # only when this flag is True.
+        _has_third_party = bool(vision_description and vision_description.strip())
+
         initial_review_context = SafetyReviewContext(
             user_message=context_packet.user_message,
             draft_response=draft_response,
+            has_third_party_content=_has_third_party,
         )
 
         trigger_result = self.policy_service.evaluate_trigger(initial_review_context)
@@ -219,6 +228,7 @@ class LLMAdapter:
                 draft_response=draft_response,
                 risk_signals=trigger_result.triggered_by,
                 active_principle_ids=_active_principles,
+                has_third_party_content=_has_third_party,
             )
 
             review_result = self.review_service.review(review_context)
@@ -284,6 +294,7 @@ class LLMAdapter:
         temperature: float | None = None,
         bare_mode: bool = False,
         vision_description: str | None = None,
+        ask_first_active: bool = False,
     ):
         """
         Stream a response token by token. Yields string chunks.
@@ -304,6 +315,7 @@ class LLMAdapter:
             suppress_relational_lodestone=suppress_relational_lodestone,
             bare_mode=bare_mode,
             vision_description=vision_description,
+            ask_first_active=ask_first_active,
         )
 
         # Vision pipeline: images are preprocessed upstream by VisionService
@@ -324,10 +336,16 @@ class LLMAdapter:
 
         full_response = "".join(accumulated)
 
+        # Cluster 5 / task #6: third-party content flag for streaming path.
+        _has_third_party_stream = bool(
+            vision_description and vision_description.strip()
+        )
+
         # Post-stream safety review
         review_context = SafetyReviewContext(
             user_message=context_packet.user_message,
             draft_response=full_response,
+            has_third_party_content=_has_third_party_stream,
         )
         trigger_result = self.policy_service.evaluate_trigger(review_context)
 
@@ -350,6 +368,7 @@ class LLMAdapter:
                 draft_response=full_response,
                 risk_signals=trigger_result.triggered_by,
                 active_principle_ids=_active_principles,
+                has_third_party_content=_has_third_party_stream,
             )
             review_result = self.review_service.review(review_ctx)
             self.review_logger.log(

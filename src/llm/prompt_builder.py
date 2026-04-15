@@ -205,6 +205,7 @@ class PromptBuilder:
         suppress_relational_lodestone: bool = False,
         vision_description: str | None = None,
         bare_mode: bool = False,
+        ask_first_active: bool = False,
     ) -> str:
         # Conversational check — used to conditionally omit "I don't have
         # that in my memory" framing from both AUTHORITY_RULES and the
@@ -249,6 +250,17 @@ class PromptBuilder:
             ),
             self._build_web_search_section(context_packet),
             self._build_vision_context_section(vision_description or ""),
+            # Per-turn vision block — immediately after vision_context so the
+            # directive sits adjacent to the observations it refers to. Only
+            # rendered when vision actually fired this turn. Primary defence
+            # against the RLHF "I can't see images" override (UAT-120 /
+            # task #18, Deep research recommendation).
+            self._build_per_turn_vision_block(vision_description),
+            # Per-turn search confirmation block — fires only when the
+            # classifier routed to web_search AND ask-first mode is active.
+            # Louder, more visible than the sticky-note pattern used for
+            # question/topic suppression (UAT-130 / UAT-131, task #19/#20).
+            self._build_per_turn_search_confirmation_block(ask_first_active),
             _render_authority_rules(is_conversational=is_conversational),
             self._build_self_knowledge_boundary(),
             self._build_instruction_section(),
@@ -629,6 +641,52 @@ class PromptBuilder:
             lines.append(f"[{i}] {title}\n    {url}\n    {snippet}")
 
         return "<web_search_results>\n" + "\n\n".join(lines) + "\n</web_search_results>"
+
+    @staticmethod
+    def _build_per_turn_vision_block(vision_description: str | None) -> str:
+        """Per-turn instruction block that fires only when vision ran.
+
+        Placed immediately after <vision_context> so the directive is
+        adjacent to the observations it refers to. This is the primary
+        defence against the RLHF "I can't see images" override at 8B
+        scale — the identity rule is a general policy, this block is a
+        per-turn command (UAT-120 / task #18).
+        """
+        if not vision_description or not vision_description.strip():
+            return ""
+        return (
+            "<vision_instruction>\n"
+            "NOTE: You have processed the image the user attached. Your "
+            "analysis is in <vision_context> above. Answer as Ember using "
+            "that analysis. Do not state that you cannot see images — you "
+            "have already seen this one. Do not suggest external image "
+            "tools. Do not invent tool names or URLs.\n"
+            "</vision_instruction>"
+        )
+
+    @staticmethod
+    def _build_per_turn_search_confirmation_block(active: bool) -> str:
+        """Per-turn block that instructs Ember to ask before searching.
+
+        Fires when the classifier routed this query to web_search intent
+        AND web_search_autonomous is False (ask-first mode). The block is
+        deliberately louder than sticky-note style injection — a dedicated
+        XML tag with an imperative instruction — because the RLHF prior
+        for factual/stock/current-events questions is strong and a subtle
+        hint loses (UAT-130 / UAT-131, task #19/#20).
+        """
+        if not active:
+            return ""
+        return (
+            "<search_confirmation>\n"
+            "SEARCH CONFIRMATION REQUIRED: This query needs current data "
+            "not in memory. Before searching, ask the user to confirm. "
+            "Your response should be one sentence, something like: "
+            "\"I don't have that — want me to search?\" "
+            "Do not answer the question. Do not state limitations. Do not "
+            "suggest external websites or tools. Ask to search, then stop.\n"
+            "</search_confirmation>"
+        )
 
     @staticmethod
     def _build_vision_context_section(vision_description: str) -> str:

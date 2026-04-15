@@ -1133,6 +1133,15 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     except Exception:
         pass
 
+    # Ask-first mode is active when the classifier routed to web_search AND
+    # the user has NOT opted into autonomous search. Passed into the prompt
+    # builder so the per-turn <search_confirmation> block fires (task #19/#20),
+    # and into the post-gen pipeline so the ask-first validator knows when
+    # to substitute a canned RLHF refusal with the scripted confirmation.
+    _ask_first_active = bool(
+        _intent_class == "web_search" and not _web_autonomous
+    )
+
     if not context_packet.web_items and not _is_conversational:
         non_profile_memory = [
             i for i in context_packet.memory_items
@@ -1323,6 +1332,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     temperature=_inference_temperature,
                     bare_mode=_bare_mode,
                     vision_description=_vision_description,
+                    ask_first_active=_ask_first_active,
                 )
 
                 # 3. Grounding check
@@ -1433,6 +1443,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     temperature=_inference_temperature,
                     bare_mode=_bare_mode,
                     vision_description=_vision_description,
+                    ask_first_active=_ask_first_active,
                 ):
                     filtered = think_filter.filter(chunk)
                     if filtered:
@@ -1512,6 +1523,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         temperature=_inference_temperature,
         bare_mode=_bare_mode,
         vision_description=_vision_description,
+        ask_first_active=_ask_first_active,
     )
 
     # Coaching-frame filter — post-generation, pre-return

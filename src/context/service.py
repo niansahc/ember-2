@@ -105,11 +105,16 @@ class ContextService:
         user_message: str,
         image_data: list[str] | None = None,
         project_id: str | None = None,
+        skip_web_search: bool = False,
     ) -> ContextPacket:
         policy = classify_query(user_message)
 
         web_items: list[dict] = []
-        if policy.use_web_search:
+        # skip_web_search=True when ask-first mode is active — the search
+        # should not execute until the user confirms. Without this gate,
+        # the context service fetches results during assembly and the SSE
+        # stream shows sources alongside the "want me to search?" question.
+        if policy.use_web_search and not skip_web_search:
             raw_web = web_search(user_message)
             web_items, quarantined = _quarantine_ai_docs(raw_web, user_message)
             if quarantined:

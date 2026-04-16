@@ -1065,8 +1065,17 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             image_data=image_data or [],
         )
     else:
+        # Read autonomous preference early so we can gate web search in
+        # context assembly. When ask-first is active (autonomous=False),
+        # skip the search during assembly — it should only execute after
+        # the user confirms.
+        from src.core.preferences import get as _get_pref_early
+        _web_autonomous_early = bool(_get_pref_early("web_search_autonomous", False))
         context_packet = context_service.build_context(
-            latest_user_message, image_data=image_data, project_id=project_id,
+            latest_user_message,
+            image_data=image_data,
+            project_id=project_id,
+            skip_web_search=not _web_autonomous_early,
         )
 
     # Inject deferred web search results from confirmed ask-first flow

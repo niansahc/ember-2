@@ -659,7 +659,15 @@ class PromptBuilder:
             snippet = item.get("snippet", "")
             lines.append(f"[{i}] {title}\n    {url}\n    {snippet}")
 
-        return "<web_search_results>\n" + "\n\n".join(lines) + "\n</web_search_results>"
+        # Reframe as Ember's own retrieval — the model engages with content
+        # attributed to its own actions more reliably than content framed as
+        # external injection (Deep Research, 2026-04-16).
+        return (
+            "<web_search_results>\n"
+            "[You searched for this. Here is what you found:]\n\n"
+            + "\n\n".join(lines)
+            + "\n</web_search_results>"
+        )
 
     @staticmethod
     def _build_per_turn_vision_block(vision_description: str | None) -> str:

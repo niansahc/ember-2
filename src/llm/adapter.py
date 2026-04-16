@@ -177,12 +177,23 @@ class LLMAdapter:
         # injected into system_prompt via vision_description. The main
         # LLM call runs through the full character layer without the
         # legacy direct-vision path that bypassed nature/identity rules.
+        # Assistant prefill: when web search results are in the context
+        # packet, inject a partial assistant message so the model continues
+        # from a grounded prefix. This prevents the RLHF "I don't have
+        # real-time data" refusal from winning the first-token distribution.
+        # The prefix is the highest-leverage intervention against trained-in
+        # refusal patterns at 8B scale (Deep Research, 2026-04-16).
+        _prefix = None
+        if context_packet.web_items:
+            _prefix = "Based on current search results, "
+
         draft_response = self._chat(
             system_prompt=system_prompt,
             user_message=context_packet.user_message,
             image_data=[],
             model_override=None,
             temperature=temperature,
+            assistant_prefix=_prefix,
         )
         draft_response = strip_think_blocks(draft_response)
 
@@ -318,10 +329,11 @@ class LLMAdapter:
             ask_first_active=ask_first_active,
         )
 
-        # Vision pipeline: images are preprocessed upstream by VisionService
-        # and injected as text via vision_description. The streaming path
-        # runs through the main LLM with full character layer — no direct
-        # vision model routing that bypasses personality.
+        # Assistant prefill for web-search-grounded turns (streaming path).
+        _prefix = None
+        if context_packet.web_items:
+            _prefix = "Based on current search results, "
+
         # Stream from Ollama, accumulate full text
         accumulated = []
         for chunk in self._chat_stream(
@@ -330,6 +342,7 @@ class LLMAdapter:
             image_data=[],
             model_override=None,
             temperature=temperature,
+            assistant_prefix=_prefix,
         ):
             accumulated.append(chunk)
             yield chunk
@@ -426,6 +439,7 @@ class LLMAdapter:
         image_data: list[str] | None = None,
         model_override: str | None = None,
         temperature: float | None = None,
+        assistant_prefix: str | None = None,
     ) -> str:
         temp = temperature if temperature is not None else 0.7
         model = model_override or self.model
@@ -433,7 +447,7 @@ class LLMAdapter:
             return self._chat_anthropic(system_prompt, user_message, temperature=temp)
         if model.startswith("gpt-"):
             return self._chat_openai(system_prompt, user_message, temperature=temp)
-        return self._chat_ollama(system_prompt, user_message, image_data, model, temperature=temp)
+        return self._chat_ollama(system_prompt, user_message, image_data, model, temperature=temp, assistant_prefix=assistant_prefix)
 
     def _chat_stream(
         self,
@@ -442,6 +456,7 @@ class LLMAdapter:
         image_data: list[str] | None = None,
         model_override: str | None = None,
         temperature: float | None = None,
+        assistant_prefix: str | None = None,
     ):
         """Stream chat response. Dispatches to Ollama, Anthropic, or OpenAI."""
         temp = temperature if temperature is not None else 0.7
@@ -451,7 +466,7 @@ class LLMAdapter:
         elif model.startswith("gpt-"):
             yield from self._chat_openai_stream(system_prompt, user_message, temperature=temp)
         else:
-            yield from self._chat_ollama_stream(system_prompt, user_message, image_data, model, temperature=temp)
+            yield from self._chat_ollama_stream(system_prompt, user_message, image_data, model, temperature=temp, assistant_prefix=assistant_prefix)
 
     # ------------------------------------------------------------------
     # Ollama (local)
@@ -471,26 +486,40 @@ class LLMAdapter:
         self, system_prompt: str, user_message: str,
         image_data: list[str] | None = None, model: str | None = None,
         temperature: float = 0.7,
+        assistant_prefix: str | None = None,
     ) -> str:
         model = model or self.model
         user_msg: dict = {"role": "user", "content": user_message}
         if image_data:
             user_msg["images"] = image_data
 
+        messages = [
+            {"role": "system", "content": system_prompt},
+            user_msg,
+        ]
+        # Assistant prefill: inject a partial assistant message so the
+        # model continues from a grounded prefix rather than starting
+        # fresh. Prevents RLHF refusal patterns from winning the first-
+        # token distribution on web-search-grounded turns. The prefix
+        # content is prepended to the model's output in the return value.
+        if assistant_prefix:
+            messages.append({"role": "assistant", "content": assistant_prefix})
+
         response = ollama.chat(
             model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                user_msg,
-            ],
+            messages=messages,
             options={"temperature": temperature, "num_ctx": self._get_num_ctx()},
         )
-        return response["message"]["content"]
+        generated = response["message"]["content"]
+        if assistant_prefix:
+            return assistant_prefix + generated
+        return generated
 
     def _chat_ollama_stream(
         self, system_prompt: str, user_message: str,
         image_data: list[str] | None = None, model: str | None = None,
         temperature: float = 0.7,
+        assistant_prefix: str | None = None,
     ):
         """Stream from Ollama. Yields string chunks."""
         model = model or self.model
@@ -498,12 +527,17 @@ class LLMAdapter:
         if image_data:
             user_msg["images"] = image_data
 
+        messages = [
+            {"role": "system", "content": system_prompt},
+            user_msg,
+        ]
+        if assistant_prefix:
+            messages.append({"role": "assistant", "content": assistant_prefix})
+            yield assistant_prefix
+
         stream = ollama.chat(
             model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                user_msg,
-            ],
+            messages=messages,
             options={"temperature": temperature, "num_ctx": self._get_num_ctx()},
             stream=True,
         )

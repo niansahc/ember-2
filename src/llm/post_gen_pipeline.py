@@ -3,11 +3,12 @@ src/llm/post_gen_pipeline.py
 
 Unified post-generation validator pipeline.
 
-Runs three validators in a fixed order against a completed response:
+Runs four validators in a fixed order against a completed response:
 
   1. source allowlist (strip fabricated citations)
-  2. vision refusal (substitute when vision fired but model refused)
-  3. ask-first (substitute when web_search intent skipped the confirmation)
+  2. web search refusal (deterministic fallback when model ignores web results)
+  3. vision refusal (substitute when vision fired but model refused)
+  4. ask-first (substitute when web_search intent skipped the confirmation)
 
 Followed by an empty-response guard that fills zero-byte replies with a
 fallback so the streaming path never emits a blank message to the client
@@ -15,6 +16,9 @@ fallback so the streaming path never emits a blank message to the client
 
 The ordering is deliberate:
   - Source stripping first so downstream validators see the cleaned text.
+  - Web search refusal before vision/ask-first: if the model had web
+    results and still refused, the deterministic fallback is the right
+    answer regardless of vision or ask-first state.
   - Vision before ask-first: a vision refusal is a direct failure to use
     the <vision_context> section, so it wins over any ask-first logic.
   - Empty guard last: if earlier substitutions zeroed the reply somehow,
@@ -35,6 +39,7 @@ from src.llm.source_validator import (
     validate_and_strip_sources,
 )
 from src.llm.vision_refusal_validator import validate_vision_response
+from src.llm.web_search_refusal_validator import validate_web_search_response
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,7 @@ _EMPTY_FALLBACK = (
 class PostGenResult:
     reply: str
     stripped_sources: list[str]
+    web_refusal_substituted: bool
     vision_substituted: bool
     ask_first_substituted: bool
     empty_fallback_fired: bool
@@ -73,6 +79,7 @@ def run_post_gen_pipeline(
     """
 
     stripped_sources: list[str] = []
+    web_refusal_substituted = False
     vision_substituted = False
     ask_first_substituted = False
     empty_fallback_fired = False
@@ -98,6 +105,16 @@ def run_post_gen_pipeline(
         stripped_sources = stripped
         logger.info("[POSTGEN] stripped fabricated sources: %s", stripped)
 
+    # Web search refusal: if web results were in context but the model
+    # still generated "I don't have real-time data" / "check CNN", build
+    # a response directly from the snippets. This is the deterministic
+    # fallback when prefix injection didn't fully prevent the RLHF refusal.
+    reply, web_refusal_substituted = validate_web_search_response(
+        reply, web_items=web_items
+    )
+    if web_refusal_substituted:
+        logger.info("[POSTGEN] web search refusal substituted with snippet response")
+
     reply, vision_substituted = validate_vision_response(
         reply, used_vision=used_vision, vision_description=vision_description
     )
@@ -119,6 +136,7 @@ def run_post_gen_pipeline(
     return PostGenResult(
         reply=reply,
         stripped_sources=stripped_sources,
+        web_refusal_substituted=web_refusal_substituted,
         vision_substituted=vision_substituted,
         ask_first_substituted=ask_first_substituted,
         empty_fallback_fired=empty_fallback_fired,

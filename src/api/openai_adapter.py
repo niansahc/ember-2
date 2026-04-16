@@ -1142,28 +1142,45 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         _intent_class == "web_search" and not _web_autonomous
     )
 
+    # Web search execution gate. Relaxed from the original triple condition
+    # (required vault to return NOTHING but profile records) which meant
+    # autonomous search almost never fired on a real vault with any content.
+    # New gate: intent classification is sufficient when autonomous mode is
+    # enabled. For ask-first mode, fire when vault is weak on temporal
+    # queries. Deep Research (2026-04-16): over-searching is annoying,
+    # under-searching is harmful. Err toward searching on temporal queries.
     if not context_packet.web_items and not _is_conversational:
-        non_profile_memory = [
-            i for i in context_packet.memory_items
-            if getattr(i, "memory_type", "") != "profile"
-        ]
-        if not non_profile_memory and not context_packet.reflection_items:
-            if _web_autonomous:
-                # Autonomous mode: execute the search directly instead of
-                # telling the model to offer. User has opted into this.
-                try:
-                    from src.tools.web_search import web_search
-                    _auto_results = web_search(latest_user_message)
-                    if _auto_results:
-                        context_packet.web_items = _auto_results
-                        logger.info("[WEB_SEARCH] Autonomous execution: %d results", len(_auto_results))
-                except Exception as exc:
-                    logger.warning("[WEB_SEARCH] Autonomous execution failed: %s", exc)
-            else:
+        _should_search = False
+
+        if _intent_class == "web_search" and _web_autonomous:
+            # Autonomous mode + web_search intent → always search.
+            # The classifier already validated this is a web-worthy query.
+            _should_search = True
+        elif _intent_class == "web_search" and not _web_autonomous:
+            # Ask-first mode — search gate doesn't apply; the model asks
+            # for confirmation. But set the thin-vault prefix so the model
+            # knows to ask rather than fabricate.
+            non_profile_memory = [
+                i for i in context_packet.memory_items
+                if getattr(i, "memory_type", "") != "profile"
+            ]
+            if not non_profile_memory or all(
+                float(getattr(i, "score", 0.0)) < 0.6 for i in non_profile_memory
+            ):
                 latest_user_message = (
                     "[System: no relevant vault content found for this query. "
                     "Offer to search if appropriate.] " + latest_user_message
                 )
+
+        if _should_search:
+            try:
+                from src.tools.web_search import web_search
+                _auto_results = web_search(latest_user_message)
+                if _auto_results:
+                    context_packet.web_items = _auto_results
+                    logger.info("[WEB_SEARCH] Autonomous execution: %d results", len(_auto_results))
+            except Exception as exc:
+                logger.warning("[WEB_SEARCH] Autonomous execution failed: %s", exc)
 
     # Web search transparency: track whether web search results were used
     # in context assembly. Communicated to the UI via X-Ember-Web-Search response

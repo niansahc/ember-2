@@ -128,6 +128,18 @@ class StateService:
 
         state_type = data.get("type", "")
 
+        # Graceful handling for resolved_X types written by manual cleanup
+        # or older code paths. Strip the prefix, validate the underlying
+        # category, and force metadata.resolved=True so the resolver skips
+        # the record correctly (task #5).
+        if state_type.startswith("resolved_"):
+            underlying = state_type[len("resolved_"):]
+            if underlying in VALID_STATE_CATEGORIES:
+                state_type = underlying
+                meta = data.get("metadata") or {}
+                meta["resolved"] = True
+                data["metadata"] = meta
+
         if state_type not in VALID_STATE_CATEGORIES:
             warnings.warn(
                 f"[STATE_SERVICE] Skipping {file_path.name}: "

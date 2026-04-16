@@ -333,6 +333,47 @@ def update_conversation_endpoint(session_id: str, body: ConversationUpdateReques
     return {"status": "updated", "session_id": session_id, "title": body.title, "project_id": body.project_id}
 
 
+def _cascade_soft_delete(session_id: str) -> None:
+    """Mark derived artifacts as deleted when their parent conversation is soft-deleted.
+
+    Task #9: auto-extracted state records, session reflections, and task
+    records carry session_id in metadata. Without cascade, deleting the
+    conversation leaves orphaned state records that surface as stale
+    open loops ("quarterly report", "busy day") on retrieval.
+
+    Append-only compliant — sets metadata.deleted=True on matching JSON
+    files, same pattern the conversation soft-delete uses.
+    """
+    import json
+    from src.core.config import get_private_vault_path
+
+    vault = get_private_vault_path()
+    target_folders = ("state", "session", "task", "deviation")
+    total = 0
+
+    for folder_name in target_folders:
+        folder = vault / "memory" / folder_name
+        if not folder.is_dir():
+            continue
+        for f in folder.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                meta = data.get("metadata", {})
+                if meta.get("session_id") == session_id and not meta.get("deleted"):
+                    meta["deleted"] = True
+                    data["metadata"] = meta
+                    f.write_text(
+                        json.dumps(data, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    total += 1
+            except Exception:
+                continue
+
+    if total:
+        logger.info("[CASCADE_DELETE] Soft-deleted %d derived records for session %s", total, session_id)
+
+
 @app.delete("/v1/conversations/{session_id}")
 def delete_conversation_endpoint(session_id: str):
     """Soft-delete a conversation session. Append-only: writes a new record with deleted: true.
@@ -354,6 +395,23 @@ def delete_conversation_endpoint(session_id: str):
     result = delete_session(session_id)
     if result is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+
+    # Task #9: cascade soft-delete to derived artifacts (state records,
+    # session reflections, task records) written by background threads
+    # during this conversation. Without this, auto-extracted state from a
+    # deleted conversation ("quarterly report", "busy day") persists as
+    # current open loops. Runs in a background thread — non-blocking,
+    # non-fatal.
+    try:
+        import threading
+        threading.Thread(
+            target=_cascade_soft_delete,
+            args=(session_id,),
+            daemon=True,
+        ).start()
+    except Exception as exc:
+        logger.warning("[CASCADE_DELETE] Failed to start cascade (non-fatal): %s", exc)
+
     return {"status": "deleted", "session_id": session_id}
 
 
@@ -1141,6 +1199,8 @@ def vault_swap_endpoint(body: VaultSwapRequest):
         is_dev_mode,
         get_known_vault_paths,
         set_vault_path_override,
+        clear_vault_path_override,
+        get_private_vault_path,
         get_vault_label,
     )
 
@@ -1153,8 +1213,20 @@ def vault_swap_endpoint(body: VaultSwapRequest):
     known = get_known_vault_paths()
     label = body.vault_label.lower()
 
+    # "default" reverts to the personal vault from PRIVATE_VAULT_PATH
+    # by clearing the runtime override. No env config needed.
+    if label == "default":
+        clear_vault_path_override()
+        from src.retrieval.vector_index import clear_index_cache
+        clear_index_cache()
+        return {
+            "status": "ok",
+            "active_vault": "default",
+            "vault_path": str(get_private_vault_path()),
+        }
+
     if label not in known:
-        available = ", ".join(sorted(known.keys())) if known else "none configured"
+        available = ", ".join(sorted(known.keys() | {"default"})) if known else "default"
         raise HTTPException(
             status_code=400,
             detail=f"Unknown vault label '{label}'. Available: {available}.",

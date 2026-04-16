@@ -36,6 +36,48 @@ EXTRACTABLE_CATEGORIES = VALID_STATE_CATEGORIES - {"onboarding", "pending_confir
 # Minimum word count to attempt extraction — short messages rarely contain state
 MIN_WORDS_FOR_EXTRACTION = 10
 
+# Conversational meta-action phrases that describe the dialogue itself,
+# not the user's actual operational state. Task #7: the state extractor
+# at 8B scale captures these as open_loop / next_action records, polluting
+# the state layer with entries like "answer your question" or "discuss
+# working together." Deterministic filter runs post-parse.
+_META_ACTION_PHRASES = (
+    "answer your question",
+    "answer the question",
+    "help you with",
+    "help with this",
+    "discuss working together",
+    "discuss this further",
+    "talk about",
+    "figure out",
+    "figure this out",
+    "explore this",
+    "explore further",
+    "move through the process",
+    "work through this",
+    "get back to you",
+    "let me know",
+    "follow up on this",
+    "provide more details",
+    "share more context",
+    "give you an update",
+    "keep you posted",
+    "search for this",
+    "look into this",
+    "check on this",
+    "clean up test data",
+    "cleanup test data",
+)
+
+
+def _is_conversational_meta(text: str) -> bool:
+    """Return True if the extracted text describes dialogue-about-the-dialogue."""
+    lowered = text.lower().strip()
+    for phrase in _META_ACTION_PHRASES:
+        if phrase in lowered:
+            return True
+    return False
+
 
 class StateExtractor:
     """
@@ -99,6 +141,12 @@ class StateExtractor:
             "- If no state signals are present, return {\"extractions\": []}\n"
             "- Keep text descriptions concise (under 100 characters)\n"
             "- Casual conversation, greetings, and questions about Ember produce NO extractions\n"
+            "- Do NOT extract meta-actions about the conversation itself: "
+            "'answer your question', 'discuss working together', 'help you with', "
+            "'move through the process', 'talk about', 'figure out', 'explore this'. "
+            "These describe the dialogue, not the user's actual state.\n"
+            "- Do NOT extract Ember's commitments or offers — only the user's actual "
+            "priorities, projects, blockers, and next actions.\n"
         )
 
         # Make the LLM call at low temperature for structured output
@@ -158,6 +206,16 @@ class StateExtractor:
 
             # Skip empty text
             if not text.strip():
+                continue
+
+            # Deterministic meta-action filter (task #7). The prompt
+            # instructs the LLM not to extract conversational meta-actions,
+            # but at 8B scale it may still do so. Belt-and-suspenders.
+            if _is_conversational_meta(text):
+                logger.info(
+                    "[STATE_EXTRACT] Filtered conversational meta: %s",
+                    text[:60],
+                )
                 continue
 
             record = StateRecord(

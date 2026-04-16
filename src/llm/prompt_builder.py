@@ -800,13 +800,17 @@ class PromptBuilder:
                 metadata = getattr(item, "metadata", {}) or {}
                 role = metadata.get("role", "")
                 date_str = self._format_item_date(item.timestamp)
+                # Task #10: deterministic per-item age label. The model
+                # must use this verbatim rather than inventing its own
+                # temporal language.
+                age_str = self._format_item_age(item.timestamp)
 
                 if item.item_type == "conversation" and role == "user":
-                    label = f"[you said{date_str}]"
+                    label = f"[you said{date_str}]{age_str}"
                 elif item.item_type == "conversation" and role == "assistant":
-                    label = f"[Ember said{date_str}]"
+                    label = f"[Ember said{date_str}]{age_str}"
                 else:
-                    label = f"({item.item_type}{date_str})"
+                    label = f"({item.item_type}{date_str}){age_str}"
 
                 other_lines.append(f"- {label} {content}")
 
@@ -883,6 +887,7 @@ class PromptBuilder:
         return oldest_days
 
     @staticmethod
+    @staticmethod
     def _format_item_date(timestamp: str | None) -> str:
         if not timestamp:
             return ""
@@ -896,6 +901,49 @@ class PromptBuilder:
             return f", {dt.strftime('%b %d')}"
         except (ValueError, TypeError):
             return ""
+
+    @staticmethod
+    def _format_item_age(timestamp: str | None) -> str:
+        """Compute a human-readable age label for a vault record.
+
+        Task #10: deterministic age labels the model should use verbatim
+        instead of inventing its own temporal language ("few weeks ago").
+        Returns a bracketed label like "[recorded moments ago]" or
+        "[recorded 3 days ago]". Returns empty string if unparseable.
+        """
+        if not timestamp:
+            return ""
+        try:
+            parts = timestamp.split("T")
+            if len(parts) == 2:
+                time_components = parts[1].split("-")
+                if len(time_components) >= 3:
+                    iso = f"{parts[0]}T{time_components[0]}:{time_components[1]}:{time_components[2]}"
+                    dt = datetime.fromisoformat(iso)
+                else:
+                    dt = datetime.strptime(parts[0], "%Y-%m-%d")
+            else:
+                dt = datetime.strptime(timestamp[:10], "%Y-%m-%d")
+        except (ValueError, TypeError):
+            return ""
+
+        gap = (datetime.now() - dt).total_seconds()
+        if gap < 300:
+            label = "moments ago"
+        elif gap < 3600:
+            label = f"{int(gap // 60)} minutes ago"
+        elif gap < 86400:
+            hours = int(gap // 3600)
+            label = f"{hours} hour{'s' if hours > 1 else ''} ago"
+        elif gap < 172800:
+            label = "yesterday"
+        elif gap < 604800:
+            days = int(gap // 86400)
+            label = f"{days} days ago"
+        else:
+            weeks = int(gap // 604800)
+            label = f"{weeks} week{'s' if weeks > 1 else ''} ago"
+        return f" [recorded {label}]"
 
     def _build_reflection_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.reflection_items:

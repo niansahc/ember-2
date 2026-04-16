@@ -907,10 +907,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             except Exception as exc:
                 logger.warning("[CONFIRM] Deferred web search failed: %s", exc)
         elif not _confirmation_result["confirmed"]:
-            latest_user_message = (
-                "[System: user declined the search offer. Respond normally.] "
-                + latest_user_message
-            )
+            # Silently move on. The pending_confirmation is already resolved
+            # (line 196-208 above). No prefix injection — the decline prefix
+            # was poisoning the classifier for all subsequent queries in the
+            # session by prepending "[System: user declined...]" to the
+            # normalized query string. A new question after an ask-first
+            # offer is not a decline — it's a topic change.
+            pass
 
     # --- TASK CREATION (pre-generation) ---
     # Path 1: Explicit task request ("create a task for X")

@@ -165,7 +165,9 @@ class TestWebSearchAuthorityInstruction:
         rules = _render_authority_rules(is_conversational=False)
         assert "live data" in rules
         assert "current as of today" in rules
-        assert "Cite specific URLs" in rules
+        # v0.16.0-dev: citation instruction rewritten from "Cite specific
+        # URLs" to answer-first-then-cite pattern.
+        assert "ANSWER THE QUESTION DIRECTLY" in rules
         assert "Do not discount" in rules
 
     def test_authority_rules_no_longer_hedge_web_results(self):

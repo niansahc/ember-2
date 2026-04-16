@@ -37,8 +37,12 @@ VOLATILE_ENTITY_SIGNALS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNOREC
     r"\b(?:weather|forecast|temperature|hurricane|earthquake|wildfire)\b",
     r"\b(?:score|match|standings|playoff|championship|tournament)\b",
     r"\b(?:nba|nfl|mlb|nhl|premier league|formula 1|f1|wimbledon)\b",
-    # Current state markers
-    r"\b(?:currently|still|now|latest|newest|most recent)\b",
+    # Current state markers — "current" added for UAT-001 (task #1): "what
+    # is the current population of Tokyo" was missed because the word list
+    # had "currently" but not the bare adjective form.
+    r"\b(?:current|currently|still|now|latest|newest|most recent|right now|these days)\b",
+    # Demographics / statistics — volatile at national/city scale
+    r"\b(?:population|gdp per capita|unemployment rate|birth rate|death rate|census)\b",
     # Version / release queries — facts that change frequently
     r"\bwhat version\b",
     r"\blatest (?:version|release|update)\b",

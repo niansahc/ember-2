@@ -1175,15 +1175,17 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # Vault citation: track whether non-profile vault records were retrieved.
     # Communicated to M via X-Ember-Vault-Used header + vault_sources SSE event.
     #
-    # Suppress when web search is the primary source AND the only vault
-    # items are profile records. Profile records are always injected and
-    # don't represent meaningful vault-grounded content — showing
-    # "Source: Vault" on a web search response confuses the user.
+    # When web search fired, vault is NEVER the primary source — suppress
+    # the vault badge entirely to avoid confusing the user. Prior logic
+    # only suppressed when vault had profile-only items, but even non-
+    # profile tangential vault hits shouldn't get badge credit when the
+    # answer came from web results. The model's response is driven by
+    # web_search_results (authority rule: "treat them as authoritative");
+    # vault items in the same packet are background context, not the
+    # answer source.
     vault_sources = _build_vault_sources(context_packet)
-    if used_web_search and vault_sources:
-        non_profile_vault = [s for s in vault_sources if s.get("type") != "profile"]
-        if not non_profile_vault:
-            vault_sources = []
+    if used_web_search:
+        vault_sources = []
     # Only signal vault-used when retrieval confidence is meaningful.
     # Low-scoring tangential matches (avg < 0.6) should not trigger the
     # vault citation — the model likely answered from training data, not
@@ -1193,7 +1195,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             i for i in context_packet.memory_items
             if getattr(i, "memory_type", "") != "profile"
         ]
-        if non_profile_items:
+        if not non_profile_items:
+            # Only profile items — not meaningful vault grounding
+            vault_sources = []
+        elif non_profile_items:
             avg_score = sum(getattr(i, "score", 0.0) for i in non_profile_items) / len(non_profile_items)
             if avg_score < 0.6:
                 vault_sources = []
@@ -1234,7 +1239,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             log_grounding_outcome,
         )
 
-        _needs_grounding = should_check_grounding(_intent_class)
+        # Force all responses through the grounded (buffer-then-stream) path
+        # so post-gen validators always run BEFORE the user sees the first
+        # token. The fast streaming path streams raw chunks then cleans the
+        # memory copy — but fabricated sources, vision refusals, and ask-first
+        # substitutions need to reach the user as the validated version, not
+        # the raw model output. Latency tradeoff: full generation before first
+        # token. Acceptable at current response lengths.
+        _needs_grounding = True
 
         def _post_stream_cleanup(full_reply: str) -> None:
             """Shared post-stream cleanup: write memories, extract state, detect tasks."""

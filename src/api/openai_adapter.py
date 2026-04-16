@@ -1326,13 +1326,12 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 ).start()
 
             # Ask-first confirmation detection — write pending_confirmation
-            # state when Ember offers to search for the user
+            # state when Ember offers to search for the user. SYNCHRONOUS
+            # — the background thread was causing a race condition where the
+            # user's "Yes" on the next turn arrived before the pending record
+            # was written, so the confirmation path never fired.
             if not _skip_vault:
-                threading.Thread(
-                    target=_write_pending_confirmation,
-                    args=(full_reply, latest_user_message, session_id),
-                    daemon=True,
-                ).start()
+                _write_pending_confirmation(full_reply, latest_user_message, session_id)
 
             # Deviation detection — async, no latency impact (ADR-026)
             if not _skip_vault:
@@ -1637,11 +1636,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
     # Ask-first confirmation detection — write pending_confirmation
     if not _skip_vault:
-        threading.Thread(
-            target=_write_pending_confirmation,
-            args=(reply, latest_user_message, session_id),
-            daemon=True,
-        ).start()
+        _write_pending_confirmation(reply, latest_user_message, session_id)
 
     # Deviation detection — async, no latency impact (ADR-026)
     if not _skip_vault:

@@ -52,6 +52,27 @@ _COACHING_CLOSINGS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) 
     r"trust (?:the|your) (?:process|journey|path|instinct)",
     r"(?:lean into|sit with|hold space for) (?:the|your|that)",
     r"(?:it(?:'s| is)|that(?:'s| is)) a (?:journey|process|marathon|practice)",
+    # Offer-to-help closings that function as coaching questions
+    r"would you like (?:me to )?(?:look|search|find|check|explore)",
+    r"want me to (?:look|find|check|dig|explore).*(?:for you|into)",
+    r"shall i (?:look|search|find|check|dig)",
+    r"(?:can|could) i help you (?:with|find|look|search)",
+))
+
+# Therapeutic mid-response patterns — not just openers/closers but
+# phrases that appear anywhere in the response body. The RLHF base
+# at 8B produces these even without personality layers (bare mode).
+_THERAPEUTIC_MID_RESPONSE: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"you(?:'re| are) not alone",
+    r"i(?:'m| am) here (?:as )?a steady presence",
+    r"i(?:'m| am) here for you",
+    r"that takes (?:real )?courage",
+    r"it(?:'s| is) okay to (?:not be okay|feel|struggle|take time)",
+    r"be (?:gentle|kind|patient) with yourself",
+    r"(?:honor|respect|validate) (?:your|those|the) (?:feelings?|emotions?)",
+    r"there(?:'s| is) no (?:right|wrong) way to (?:feel|process|grieve)",
+    r"your feelings are valid",
+    r"take (?:it |things )?one (?:step|day|moment) at a time",
 ))
 
 # Therapeutic openers — validate/normalize feelings in a clinical way.
@@ -111,6 +132,18 @@ def _detect_patterns(text: str, is_emotional: bool) -> list[dict]:
                 "match": m.group(),
                 "position": "head",
                 "deletable": False,  # Needs rewrite, not just deletion
+            })
+
+    # Therapeutic mid-response — scan entire text for RLHF therapeutic
+    # patterns that appear anywhere, not just openers/closers.
+    for pat in _THERAPEUTIC_MID_RESPONSE:
+        m = pat.search(text)
+        if m:
+            matches.append({
+                "pattern": "therapeutic_mid",
+                "match": m.group(),
+                "position": "body",
+                "deletable": False,
             })
 
     # Sycophantic openers — check the first 50 chars

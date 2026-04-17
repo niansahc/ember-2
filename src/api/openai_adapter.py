@@ -1253,7 +1253,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         if _should_search:
             try:
                 from src.tools.web_search import web_search
-                _auto_results = web_search(latest_user_message)
+                _auto_results = web_search(_raw_user_message)
                 if _auto_results:
                     context_packet.web_items = _auto_results
                     logger.info("[WEB_SEARCH] Autonomous execution: %d results", len(_auto_results))
@@ -1503,6 +1503,18 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 _suppress_vault_badge = (
                     _postgen.ask_first_substituted or _postgen.web_refusal_substituted
                 )
+
+                # FINAL empty guard — catches any case where coaching
+                # filter, post-gen pipeline, or constitutional review
+                # zeroed the response. UAT-015: blank responses must
+                # never reach the client.
+                if not full_reply or not full_reply.strip():
+                    full_reply = (
+                        "I had trouble generating a response to that. "
+                        "Try rephrasing, or let me know what you're "
+                        "actually trying to figure out."
+                    )
+                    logger.warning("[EMPTY_GUARD] Final guard fired before re-stream")
 
                 # 4. Re-stream verified response word by word
                 tokens = full_reply.split(" ")

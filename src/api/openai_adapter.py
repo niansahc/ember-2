@@ -184,17 +184,28 @@ def _check_pending_confirmation(
     """
     try:
         resolver = state_service._state_resolver if hasattr(state_service, '_state_resolver') else None
-        # Read pending_confirmation records directly
+        # Read pending_confirmation records directly, filtered to this
+        # session. Without the session filter, a pending from conversation A
+        # bleeds into conversation B (the user starts a new conversation and
+        # the old pending fires on the first message).
         records = state_service.read_by_category("pending_confirmation")
         if not records:
             return None
 
-        # Latest pending confirmation that is not resolved
+        # Latest pending confirmation that is not resolved AND belongs to
+        # this session. Cross-session pendings are stale — resolve them
+        # silently so they don't accumulate.
         pending = None
         for r in records:
-            if not (r.metadata or {}).get("resolved"):
+            if (r.metadata or {}).get("resolved"):
+                continue
+            r_session = (r.metadata or {}).get("session_id", "")
+            if r_session == session_id:
                 pending = r
                 break
+            else:
+                # Stale cross-session pending — resolve it silently
+                _resolve_original_pending(r)
 
         if not pending:
             return None
@@ -1382,6 +1393,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             if _skip_vault:
                 logger.warning("[TASK] Skipped task/state/commitment detection (test session)")
 
+        _suppress_vault_badge = False
+
         def _status_event(status: str) -> str:
             """Format a status SSE event for the UI."""
             return f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'status': status}, 'finish_reason': None}]})}\n\n"
@@ -1461,6 +1474,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     vision_description=_vision_description,
                 )
                 full_reply = _postgen.reply
+                # When the post-gen pipeline substituted the response
+                # (ask-first or web-refusal), the vault badge is stale —
+                # the substituted text didn't come from the vault.
+                nonlocal _suppress_vault_badge
+                _suppress_vault_badge = (
+                    _postgen.ask_first_substituted or _postgen.web_refusal_substituted
+                )
 
                 # 4. Re-stream verified response word by word
                 tokens = full_reply.split(" ")
@@ -1489,8 +1509,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     if sources:
                         yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
 
-                # 6. Vault sources event (if applicable)
-                if vault_sources:
+                # 6. Vault sources event (if applicable) — suppressed when
+                # the post-gen pipeline substituted the response.
+                if vault_sources and not _suppress_vault_badge:
                     yield f"data: {json.dumps({'type': 'vault_sources', 'sources': vault_sources})}\n\n"
 
                 # Final chunk
@@ -1576,7 +1597,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         }
         if used_web_search:
             response_headers["X-Ember-Web-Search"] = "true"
-        if used_vault:
+        if used_vault and not _suppress_vault_badge:
             response_headers["X-Ember-Vault-Used"] = "true"
         if used_vision:
             response_headers["X-Ember-Vision-Used"] = "true"
@@ -1619,6 +1640,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         vision_description=_vision_description,
     )
     reply = _postgen_ns.reply
+    if _postgen_ns.ask_first_substituted or _postgen_ns.web_refusal_substituted:
+        used_vault = False
+        vault_sources = []
 
     # Skip vault writes for test sessions
     if not _skip_vault:

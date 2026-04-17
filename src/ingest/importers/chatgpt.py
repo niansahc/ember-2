@@ -34,6 +34,7 @@ def load_chatgpt_export(folder_path: str):
             mapping = convo.get("mapping", {})
 
             messages = []
+            roles = []
 
             for node in mapping.values():
                 msg = node.get("message")
@@ -52,6 +53,10 @@ def load_chatgpt_export(folder_path: str):
                     continue
 
                 messages.append(f"{author.title()}: {text}")
+                # Task #25: store per-message role from the ChatGPT JSON
+                # source of truth. The chunker can use this directly
+                # instead of re-detecting from the text prefix.
+                roles.append(author)
 
             if not messages:
                 continue
@@ -67,6 +72,7 @@ def load_chatgpt_export(folder_path: str):
                         "type": "chatgpt_export",
                         "file": file.name,
                         "messages": messages,
+                        "roles": roles,
                     },
                 )
             )

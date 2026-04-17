@@ -132,13 +132,29 @@ class ContextService:
         if policy.name == "default":
             from src.core.config import get_retrieval_min_raw_score
             min_raw = get_retrieval_min_raw_score()
+            # Task #25: lower threshold for ingested items. ChatGPT exports
+            # have weaker embedding matches (longer chunks, mixed-role text)
+            # but are still useful context. Use 0.15 for ingested vs the
+            # standard threshold for other types.
+            _INGESTED_MIN_RAW = 0.15
             non_profile = [i for i in memory_items if getattr(i, "memory_type", "") != "profile"]
-            max_raw = max(
-                (getattr(i, "metadata", {}).get("raw_score", 0.0) for i in non_profile),
+            non_profile_non_ingested = [
+                i for i in non_profile if getattr(i, "memory_type", "") != "ingested"
+            ]
+            ingested_only = [
+                i for i in non_profile if getattr(i, "memory_type", "") == "ingested"
+            ]
+            max_raw_standard = max(
+                (getattr(i, "metadata", {}).get("raw_score", 0.0) for i in non_profile_non_ingested),
                 default=0.0,
             )
-            if max_raw < min_raw:
-                # Keep only profile items — suppress everything else
+            max_raw_ingested = max(
+                (getattr(i, "metadata", {}).get("raw_score", 0.0) for i in ingested_only),
+                default=0.0,
+            )
+            # Gate passes if EITHER standard types clear their threshold OR
+            # ingested clears its lower threshold.
+            if max_raw_standard < min_raw and max_raw_ingested < _INGESTED_MIN_RAW:
                 memory_items = [i for i in memory_items if getattr(i, "memory_type", "") == "profile"]
                 reflection_items = []
 

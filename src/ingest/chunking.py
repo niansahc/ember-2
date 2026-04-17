@@ -44,6 +44,10 @@ def chunk_document(
 
 def _chunk_chatgpt_document(doc: NormalizedDocument) -> list[ChunkedDocument]:
     raw_messages = doc.metadata.get("messages", [])
+    # Task #25: per-message roles from the importer (ChatGPT JSON source
+    # of truth). Falls back to text-prefix detection for pre-normalization
+    # imports that don't have the roles list.
+    raw_roles = doc.metadata.get("roles", [])
     chunks: list[ChunkedDocument] = []
 
     for raw_index, message in enumerate(raw_messages):
@@ -57,7 +61,11 @@ def _chunk_chatgpt_document(doc: NormalizedDocument) -> list[ChunkedDocument]:
         if _should_skip_chatgpt_message(normalized):
             continue
 
-        role = _detect_role(normalized)
+        # Prefer the importer-provided role; fall back to prefix detection
+        if raw_index < len(raw_roles) and raw_roles[raw_index]:
+            role = raw_roles[raw_index]
+        else:
+            role = _detect_role(normalized)
 
         chunks.append(
             ChunkedDocument(

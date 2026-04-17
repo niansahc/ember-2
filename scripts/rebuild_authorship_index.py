@@ -68,8 +68,10 @@ def _classify(source: str | None, text: str | None, metadata_str: str | None) ->
         if body.startswith("assistant:"):
             return "third_party"
 
-        # metadata.role fallback — present once task #25 lands. Harmless if
-        # absent today.
+        # metadata.role fallback — task #25 landed: the importer now sets
+        # metadata.roles per-message and the chunker propagates to
+        # metadata.role. The text-prefix branch above is retained as a
+        # safety net for pre-normalization records only.
         try:
             metadata = json.loads(metadata_str or "{}")
             role = (metadata.get("role") or "").lower()

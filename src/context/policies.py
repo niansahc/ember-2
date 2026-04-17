@@ -346,7 +346,7 @@ def classify_query(user_message: str) -> ContextPolicy:
             prefer_active_work=True,
             state_boost=2.0,
             # Status queries want operational context, not reference material
-            eligible_memory_types=["state", "task", "project", "profile", "conversation"],
+            eligible_memory_types=["state", "task", "project", "profile", "conversation", "ingested"],
         )
 
     if any(marker in q for marker in reflective_markers):

@@ -70,6 +70,7 @@ def run_post_gen_pipeline(
     web_items: list | None = None,
     vault_sources: list | None = None,
     vision_description: str | None = None,
+    confirmation_search_failed: bool = False,
 ) -> PostGenResult:
     """Run source → vision → ask-first → empty-guard against a full reply.
 
@@ -127,6 +128,15 @@ def run_post_gen_pipeline(
     )
     if ask_first_substituted:
         logger.info("[POSTGEN] ask-first response substituted")
+
+    # Search failure on confirmation turn — substitute with a retry offer
+    # instead of letting the model narrate or re-offer from scratch.
+    if confirmation_search_failed:
+        reply = (
+            "I tried searching but hit an error. Want me to try again?"
+        )
+        ask_first_substituted = True
+        logger.warning("[POSTGEN] confirmation search failed — retry offer substituted")
 
     if not reply or not reply.strip():
         reply = _EMPTY_FALLBACK

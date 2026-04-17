@@ -221,31 +221,19 @@ def _check_pending_confirmation(
         # metadata (same pattern as soft-delete and resolved_priority fix).
         _resolve_original_pending(pending)
 
-        # Use LLM to interpret the user's response in context
-        import ollama
-        from src.core.config import get_ember_model
+        # Deterministic keyword match for YES/NO — replaces the LLM call
+        # that added ~500ms latency and could misinterpret at 8B scale.
+        import re as _re
+        _cleaned = _re.sub(r"[^\w\s]", "", user_message.strip()).lower()
+        _affirm = {"yes", "yeah", "sure", "please", "go ahead", "do it",
+                    "yep", "ok", "okay", "search", "please search", "y"}
+        _words = set(_cleaned.split())
+        _confirmed = bool(_words & _affirm)
+        if not _confirmed:
+            logger.info("[CONFIRM] Unmatched response (treating as decline): %s",
+                        user_message[:80])
 
-        interpret_prompt = (
-            f"Ember asked the user: \"{offer_text}\"\n"
-            f"The user responded: \"{user_message}\"\n\n"
-            "Is the user confirming (yes) or declining (no) Ember's offer? "
-            "Consider context — affirmative responses include 'yes', 'sure', "
-            "'go ahead', 'please do', 'yeah', or any response that indicates "
-            "agreement. Declining includes 'no', 'nah', 'never mind', 'skip it', "
-            "or any response that indicates rejection.\n\n"
-            "If the user's response is clearly about something else entirely "
-            "(a new topic, unrelated question), treat it as a decline.\n\n"
-            "Respond with ONLY 'YES' or 'NO'."
-        )
-
-        response = ollama.chat(
-            model=get_ember_model(),
-            messages=[{"role": "user", "content": interpret_prompt}],
-            options={"temperature": 0, "num_predict": 10},
-        )
-        answer = response["message"]["content"].strip().upper()
-
-        if "YES" in answer:
+        if _confirmed:
             logger.info("[CONFIRM] User confirmed pending %s action", action)
             return {"confirmed": True, "action": action, "query": action_query}
         else:
@@ -288,6 +276,21 @@ def _write_pending_confirmation(
 
         if not offer_sentence:
             offer_sentence = reply[-200:]  # Fallback: last portion
+
+        # Duplicate write guard — don't create a second pending if one
+        # already exists for this session + query (prevents re-offer loops
+        # when the deferred search fails and the model falls back to the
+        # scripted ask-first response again).
+        existing = state_service.read_by_category("pending_confirmation")
+        for er in existing:
+            em = er.metadata or {}
+            if (
+                not em.get("resolved")
+                and em.get("session_id") == session_id
+                and em.get("query") == user_message
+            ):
+                logger.info("[ASK_FIRST] Duplicate suppressed for session %s", session_id)
+                return
 
         record = state_service.make_record(
             state_type="pending_confirmation",
@@ -936,28 +939,21 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # and route accordingly. Confirmation triggers web search on the original
     # query; decline clears the state and proceeds normally.
     _confirmation_web_items: list[dict] = []
+    _confirmation_search_failed = False
+    _confirmation_confirmed = False
     _confirmation_result = _check_pending_confirmation(session_id, latest_user_message) if not is_test else None
     if _confirmation_result is not None:
         if _confirmation_result["confirmed"] and _confirmation_result["action"] == "web_search":
-            # Execute the deferred web search on the original query
+            _confirmation_confirmed = True
             try:
                 from src.tools.web_search import web_search
                 _confirmation_web_items = web_search(_confirmation_result["query"])
-                latest_user_message = (
-                    f"[System: user confirmed web search. Results injected for: "
-                    f"\"{_confirmation_result['query']}\"] {latest_user_message}"
-                )
                 logger.info("[CONFIRM] Executing deferred web search for: %s",
                             _confirmation_result["query"][:80])
             except Exception as exc:
                 logger.warning("[CONFIRM] Deferred web search failed: %s", exc)
+                _confirmation_search_failed = True
         elif not _confirmation_result["confirmed"]:
-            # Silently move on. The pending_confirmation is already resolved
-            # (line 196-208 above). No prefix injection — the decline prefix
-            # was poisoning the classifier for all subsequent queries in the
-            # session by prepending "[System: user declined...]" to the
-            # normalized query string. A new question after an ask-first
-            # offer is not a decline — it's a topic change.
             pass
 
     # --- TASK CREATION (pre-generation) ---
@@ -1116,11 +1112,15 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         # the user confirms.
         from src.core.preferences import get as _get_pref_early
         _web_autonomous_early = bool(_get_pref_early("web_search_autonomous", False))
+        # Gate bypass: when the user explicitly confirmed a deferred search,
+        # skip_web_search must be False regardless of the autonomous preference.
+        # The user said "yes" — preference is irrelevant for this turn.
+        _skip_search = not _web_autonomous_early and not _confirmation_confirmed
         context_packet = context_service.build_context(
             latest_user_message,
             image_data=image_data,
             project_id=project_id,
-            skip_web_search=not _web_autonomous_early,
+            skip_web_search=_skip_search,
         )
 
     # Inject deferred web search results from confirmed ask-first flow
@@ -1472,6 +1472,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     web_items=getattr(context_packet, "web_items", None),
                     vault_sources=vault_sources,
                     vision_description=_vision_description,
+                    confirmation_search_failed=_confirmation_search_failed,
                 )
                 full_reply = _postgen.reply
                 # When the post-gen pipeline substituted the response
@@ -1586,6 +1587,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     web_items=getattr(context_packet, "web_items", None),
                     vault_sources=vault_sources,
                     vision_description=_vision_description,
+                    confirmation_search_failed=_confirmation_search_failed,
                 )
                 full_reply = _postgen.reply
                 _post_stream_cleanup(full_reply)
@@ -1638,6 +1640,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         web_items=getattr(context_packet, "web_items", None),
         vault_sources=vault_sources,
         vision_description=_vision_description,
+        confirmation_search_failed=_confirmation_search_failed,
     )
     reply = _postgen_ns.reply
     if _postgen_ns.ask_first_substituted or _postgen_ns.web_refusal_substituted:

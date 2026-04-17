@@ -356,7 +356,7 @@ class ChatCompletionsRequest(BaseModel):
     max_tokens: Optional[int] = None
     stream: Optional[bool] = False
     vault_enabled: Optional[bool] = True
-    # Per-conversation bare mode override (UAT-103, task #17). When present,
+    # Per-conversation bare mode override. When present,
     # supersedes the preferences.json default. Absent → preferences fallback.
     bare_mode: Optional[bool] = None
 
@@ -1187,7 +1187,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
     # Ask-first mode is active when the classifier routed to web_search AND
     # the user has NOT opted into autonomous search. Passed into the prompt
-    # builder so the per-turn <search_confirmation> block fires (task #19/#20),
+    # builder so the per-turn <search_confirmation> block fires,
     # and into the post-gen pipeline so the ask-first validator knows when
     # to substitute a canned RLHF refusal with the scripted confirmation.
     # Explicit search requests bypass ask-first — the user's words ARE
@@ -1283,7 +1283,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     conversational_style = get_pref("conversational_style", "balanced")
 
     # Bare mode — per-conversation override (body.bare_mode) takes precedence
-    # over the preferences.json default. UAT-103 / task #17: the UI presents
+    # over the preferences.json default. The UI presents
     # bare mode as a per-conversation flame toggle, so the backend must honour
     # the per-request flag when set. Absent → fall back to the stored default,
     # matching the vault_enabled pattern at line 847.

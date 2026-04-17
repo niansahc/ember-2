@@ -204,7 +204,7 @@ class SqliteVectorStore:
             except (IndexError, KeyError):
                 pass
 
-            # Include authorship if the column exists (cluster 8 / task #24).
+            # Include authorship if the column exists.
             # Falls back to 'unknown' to match the column default so callers
             # don't need a None-branch when comparing against the scoring map.
             authorship = "unknown"
@@ -263,7 +263,7 @@ class SqliteVectorStore:
     def _migrate_authorship_column(self) -> None:
         """Add authorship column for identity-query retrieval filtering.
 
-        Schema migration for task #24 / cluster 8. Vault JSON records are
+        Schema migration. Vault JSON records are
         never mutated (append-only rule, CLAUDE.md §3); the authorship
         value is an index-level derived fact, rebuildable from source and
         role signals via scripts/rebuild_authorship_index.py.

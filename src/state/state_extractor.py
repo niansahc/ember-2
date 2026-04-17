@@ -208,7 +208,7 @@ class StateExtractor:
             if not text.strip():
                 continue
 
-            # Deterministic meta-action filter (task #7). The prompt
+            # Deterministic meta-action filter. The prompt
             # instructs the LLM not to extract conversational meta-actions,
             # but at 8B scale it may still do so. Belt-and-suspenders.
             if _is_conversational_meta(text):

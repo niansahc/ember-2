@@ -12,7 +12,7 @@ Runs four validators in a fixed order against a completed response:
 
 Followed by an empty-response guard that fills zero-byte replies with a
 fallback so the streaming path never emits a blank message to the client
-(UAT-015 / task #22).
+.
 
 The ordering is deliberate:
   - Source stripping first so downstream validators see the cleaned text.

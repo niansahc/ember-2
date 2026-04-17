@@ -285,7 +285,7 @@ def query_intent_adjustment(query: str, mem_type: str, content: str) -> float:
         elif mem_type == "reflection":
             score += 0.08
         elif mem_type == "ingested":
-            # Reduced from -0.08 (task #25). The original penalty assumed
+            # Reduced from -0.08. The original penalty assumed
             # ingested content is generic reference material. ChatGPT exports
             # contain first-person work dialogue that's relevant to reflective
             # queries. -0.03 still deprioritizes vs conversation/reflection

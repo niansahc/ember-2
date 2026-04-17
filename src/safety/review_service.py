@@ -272,7 +272,7 @@ class ResponseReviewService:
                 f"{appended_text}"
             )
 
-        # Cluster 5 / task #6: fifth criterion only appears when third-party
+        # Fifth criterion only appears when third-party
         # content was injected this turn (image / ingested document / other
         # people's dialogue). Prevents false-positive firing on text-only
         # turns with no third-party material in context.

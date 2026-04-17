@@ -268,12 +268,12 @@ class PromptBuilder:
             # directive sits adjacent to the observations it refers to. Only
             # rendered when vision actually fired this turn. Primary defence
             # against the RLHF "I can't see images" override (UAT-120 /
-            # task #18, Deep research recommendation).
+            # Deep research recommendation).
             self._build_per_turn_vision_block(vision_description),
             # Per-turn search confirmation block — fires only when the
             # classifier routed to web_search AND ask-first mode is active.
             # Louder, more visible than the sticky-note pattern used for
-            # question/topic suppression (UAT-130 / UAT-131, task #19/#20).
+            # question/topic suppression.
             self._build_per_turn_search_confirmation_block(ask_first_active),
             _render_authority_rules(
                 is_conversational=is_conversational,
@@ -319,7 +319,7 @@ class PromptBuilder:
         injected date over its training-cutoff assumptions. Clock time is
         included so queries like "what time is it?" resolve against the
         injected value rather than fabricating one from training data
-        (see UAT task #13). A bucketed time-of-day word is preserved for
+        A bucketed time-of-day word is preserved for
         register (morning/evening/late night read differently to the model
         than a bare 24-hour clock).
         """
@@ -677,7 +677,7 @@ class PromptBuilder:
         adjacent to the observations it refers to. This is the primary
         defence against the RLHF "I can't see images" override at 8B
         scale — the identity rule is a general policy, this block is a
-        per-turn command (UAT-120 / task #18).
+        per-turn command.
         """
         if not vision_description or not vision_description.strip():
             return ""
@@ -700,7 +700,7 @@ class PromptBuilder:
         deliberately louder than sticky-note style injection — a dedicated
         XML tag with an imperative instruction — because the RLHF prior
         for factual/stock/current-events questions is strong and a subtle
-        hint loses (UAT-130 / UAT-131, task #19/#20).
+        hint loses.
         """
         if not active:
             return ""
@@ -728,7 +728,7 @@ class PromptBuilder:
         """
         if not vision_description or not vision_description.strip():
             return ""
-        # UAT-120 / task #18: reframe as first-person observation so the
+        # Reframe as first-person observation so the
         # primary model treats the description as its own perception rather
         # than an external report. This plus the injected identity rule
         # (third_party_provenance / no canned image refusal) counters the

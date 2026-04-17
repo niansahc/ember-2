@@ -197,7 +197,7 @@ class LLMAdapter:
         )
         draft_response = strip_think_blocks(draft_response)
 
-        # Cluster 5 / task #6: mark review context when any third-party
+        # Mark review context when any third-party
         # content was injected this turn (image description from vision
         # preprocessor). The review prompt adds CONTENT_ATTRIBUTION_ERROR
         # only when this flag is True.
@@ -349,7 +349,7 @@ class LLMAdapter:
 
         full_response = "".join(accumulated)
 
-        # Cluster 5 / task #6: third-party content flag for streaming path.
+        # Third-party content flag for streaming path.
         _has_third_party_stream = bool(
             vision_description and vision_description.strip()
         )

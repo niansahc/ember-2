@@ -131,7 +131,7 @@ class StateService:
         # Graceful handling for resolved_X types written by manual cleanup
         # or older code paths. Strip the prefix, validate the underlying
         # category, and force metadata.resolved=True so the resolver skips
-        # the record correctly (task #5).
+        # the record correctly.
         if state_type.startswith("resolved_"):
             underlying = state_type[len("resolved_"):]
             if underlying in VALID_STATE_CATEGORIES:

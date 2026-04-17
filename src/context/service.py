@@ -132,7 +132,7 @@ class ContextService:
         if policy.name == "default":
             from src.core.config import get_retrieval_min_raw_score
             min_raw = get_retrieval_min_raw_score()
-            # Task #25: lower threshold for ingested items. ChatGPT exports
+            # Lower threshold for ingested items. ChatGPT exports
             # have weaker embedding matches (longer chunks, mixed-role text)
             # but are still useful context. Use 0.15 for ingested vs the
             # standard threshold for other types.
@@ -166,7 +166,7 @@ class ContextService:
         memory_items = self.ranker.apply_policy(memory_items, policy)
         reflection_items = self.ranker.apply_policy(reflection_items, policy)
 
-        # Cluster 8 / task #24: authorship multiplier on relational queries.
+        # Authorship multiplier on relational queries.
         # No-op on non-relational queries. When the query is about the user's
         # personal relationships or identity domains ("my son", "my partner",
         # "my health"), third-party ingested content is zeroed out so kinship
@@ -244,7 +244,7 @@ class ContextService:
         # resolver in prompt builder). Avoids a redundant embed_text() call.
         packet.query_embedding = query_embedding
 
-        # Cluster 8 / task #24 zero-hit signal. If the query was relational
+        # Zero-hit signal. If the query was relational
         # AND every non-profile memory item zeroed out under authorship
         # scoring, flag the packet so the prompt builder renders the
         # "no personal memory on this topic — don't synthesize from ingested

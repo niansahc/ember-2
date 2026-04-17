@@ -108,11 +108,11 @@ class ContextRanker:
     ) -> list[ContextItem]:
         """Apply authorship multiplier on relational / identity queries.
 
-        Cluster 8 / task #24. When the query is about the user's personal
+        When the query is about the user's personal
         relationships or identity ("my son", "my partner", "my health"),
         third-party ingested content (books, articles, other people's
         conversations) must not be allowed to answer as if it were about
-        the user. See task #21 UAT-005 root cause analysis.
+        the user. See UAT-005 root cause analysis.
 
         Multipliers — applied only when _matches_relational_query is True:
           first_person: 1.0  (user-authored — conversation/journal/profile)

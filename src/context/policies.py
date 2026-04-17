@@ -37,7 +37,7 @@ VOLATILE_ENTITY_SIGNALS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNOREC
     r"\b(?:weather|forecast|temperature|hurricane|earthquake|wildfire)\b",
     r"\b(?:score|match|standings|playoff|championship|tournament)\b",
     r"\b(?:nba|nfl|mlb|nhl|premier league|formula 1|f1|wimbledon)\b",
-    # Current state markers — "current" added for UAT-001 (task #1): "what
+    # Current state markers — "current" added because "what
     # is the current population of Tokyo" was missed because the word list
     # had "currently" but not the bare adjective form.
     r"\b(?:current|currently|still|now|latest|newest|most recent|right now|these days)\b",
@@ -75,13 +75,13 @@ def _matches_state_query(q: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Relational / identity query classifier (cluster 8 / task #24)
+# Relational / identity query classifier
 # ---------------------------------------------------------------------------
 # Queries about the user's personal relationships or identity domains.
 # When a query matches, retrieval filters third-party ingested content out
 # of the score pool — a kinship question should not resolve against books,
 # articles, or the user's old ChatGPT dialogue about other people's kids.
-# See UAT-005 investigation (task #21) for the failure pattern this closes.
+# See UAT-005 investigation for the failure pattern this closes.
 
 RELATIONAL_KINSHIP_NOUNS: tuple[str, ...] = (
     "son", "daughter", "child", "kid", "kids", "children",

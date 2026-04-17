@@ -90,6 +90,9 @@ class SafetyPolicyService:
         if self._contains_preference_compliance(user_lower, draft_lower):
             signals.append("preference_compliance")
 
+        if self._contains_validation_before_correction(draft_lower):
+            signals.append("validation_before_correction")
+
         triggered = bool(signals)
 
         return SafetyTriggerResult(
@@ -122,6 +125,8 @@ class SafetyPolicyService:
                 # flourishing against agency — the two principles are
                 # designed to exist alongside each other, not override.
                 principle_ids.add("user_agency_and_respect")
+            if signal == "validation_before_correction":
+                principle_ids.add("truthfulness")
         return [pid for pid in self.constitution.principle_ids() if pid in principle_ids]
 
     def _contains_illegal_signal(self, text: str) -> bool:
@@ -302,6 +307,75 @@ class SafetyPolicyService:
             "you also said",
         )
         if any(marker in draft_text for marker in acknowledgment_markers):
+            return False
+
+        return True
+
+    def _contains_validation_before_correction(self, draft_text: str) -> bool:
+        """Detect when the draft states the correct position but buries it
+        under qualifying clauses that aren't warranted by genuine epistemic
+        uncertainty.
+
+        Pattern: the response contains a correct, direct statement BUT
+        that statement is preceded by 2+ unnecessary qualifying phrases.
+        These qualifiers are trained-in hedging — the model learned to
+        "validate before correcting" from RLHF, weakening a correct
+        position with preamble that serves no informational purpose.
+
+        Conservative — requires BOTH:
+          (a) 2+ qualifying clauses appear before a substantive statement
+          (b) the qualifying clauses are not genuine epistemic hedges
+              (ruled out by absence of real uncertainty markers)
+
+        Maps to: truthfulness (the principle that Ember should state
+        what she knows directly, not bury it under diplomatic padding).
+        """
+        # Qualifying preamble patterns — diplomatic padding that precedes
+        # a correct statement without adding information.
+        qualifying_clauses = (
+            "while it's important to note",
+            "while it's worth noting",
+            "while i understand",
+            "while i appreciate",
+            "i want to be careful here",
+            "i want to be thoughtful about",
+            "i want to acknowledge",
+            "it's important to recognize",
+            "it's worth considering",
+            "there are many perspectives on",
+            "this is a nuanced topic",
+            "this is a complex issue",
+            "i think it's fair to say",
+            "in fairness",
+            "to be fair",
+            "on the one hand",
+            "it depends on context, but",
+            "that said,",
+            "having said that,",
+            "with that in mind,",
+            "i should note that",
+        )
+
+        # Count how many qualifying clauses appear in the draft
+        qualifier_count = sum(1 for q in qualifying_clauses if q in draft_text)
+
+        if qualifier_count < 2:
+            return False
+
+        # Genuine epistemic uncertainty markers — if present, the hedging
+        # may be warranted and we should not flag.
+        genuine_uncertainty = (
+            "i'm not sure",
+            "i don't know",
+            "i'm uncertain",
+            "the evidence is mixed",
+            "studies disagree",
+            "there's no consensus",
+            "i haven't found",
+            "i don't have enough information",
+            "based on limited",
+        )
+        if any(marker in draft_text for marker in genuine_uncertainty):
             return False
 
         return True

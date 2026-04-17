@@ -1124,12 +1124,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         from src.context.policies import classify_query as _classify_early
         _early_policy = _classify_early(latest_user_message)
         _explicit_search = getattr(_early_policy, "explicit_search_request", False)
-        # Gate bypass: skip_web_search is False when autonomous is on, OR
-        # when the user explicitly confirmed a deferred search, OR when
-        # the user explicitly requested a search.
+        # Gate bypass: skip_web_search is False when autonomous is on OR
+        # the user explicitly requested a search. Confirmation-confirmed
+        # is NOT a bypass — the deferred search at line 956 already ran
+        # with the correct stored query. Letting context_service also
+        # search would pass "Yes" (the confirmation word) to SearXNG.
         _skip_search = (
             not _web_autonomous_early
-            and not _confirmation_confirmed
             and not _explicit_search
         )
         context_packet = context_service.build_context(

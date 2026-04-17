@@ -225,10 +225,16 @@ def _check_pending_confirmation(
         # that added ~500ms latency and could misinterpret at 8B scale.
         import re as _re
         _cleaned = _re.sub(r"[^\w\s]", "", user_message.strip()).lower()
-        _affirm = {"yes", "yeah", "sure", "please", "go ahead", "do it",
-                    "yep", "ok", "okay", "search", "please search", "y"}
+        # Single-word affirmatives checked via set intersection;
+        # multi-word phrases checked via substring match on cleaned text.
+        _single_affirm = {"yes", "yeah", "sure", "please", "yep", "ok",
+                          "okay", "search", "y"}
+        _phrase_affirm = ("go ahead", "do it", "please search")
         _words = set(_cleaned.split())
-        _confirmed = bool(_words & _affirm)
+        _confirmed = (
+            bool(_words & _single_affirm)
+            or any(p in _cleaned for p in _phrase_affirm)
+        )
         if not _confirmed:
             logger.info("[CONFIRM] Unmatched response (treating as decline): %s",
                         user_message[:80])

@@ -178,8 +178,8 @@ class TestCheckPendingConfirmation:
     # 6. Writes a resolution record regardless of outcome
     # -------------------------------------------------------------------
 
-    def test_writes_resolution_record_on_yes(self, svc, vault):
-        """Confirming writes a resolved=True record to the vault."""
+    def test_marks_original_resolved_on_yes(self, svc, vault):
+        """Confirming marks the ORIGINAL pending record as resolved."""
         self._seed_pending(svc, query="weather forecast")
 
         mock_response = {"message": {"content": "YES"}}
@@ -190,16 +190,17 @@ class TestCheckPendingConfirmation:
         ):
             from src.api.openai_adapter import _check_pending_confirmation
 
-            _check_pending_confirmation("sess_test_010", "Yes please")
+            result = _check_pending_confirmation("sess_test_010", "Yes please")
 
+        assert result is not None
+        assert result["confirmed"] is True
+        # The original record should now be marked resolved on disk
         records = svc.read_by_category("pending_confirmation")
-        resolved = [r for r in records if r.metadata.get("resolved") is True]
-        assert len(resolved) == 1
-        assert resolved[0].source == "confirmation_resolver"
-        assert resolved[0].metadata["user_confirmed"] is True
+        unresolved = [r for r in records if not (r.metadata or {}).get("resolved")]
+        assert len(unresolved) == 0
 
-    def test_writes_resolution_record_on_no(self, svc, vault):
-        """Declining also writes a resolved=True record to the vault."""
+    def test_marks_original_resolved_on_no(self, svc, vault):
+        """Declining also marks the ORIGINAL pending record as resolved."""
         self._seed_pending(svc, query="weather forecast")
 
         mock_response = {"message": {"content": "NO"}}
@@ -210,12 +211,13 @@ class TestCheckPendingConfirmation:
         ):
             from src.api.openai_adapter import _check_pending_confirmation
 
-            _check_pending_confirmation("sess_test_010", "No thanks")
+            result = _check_pending_confirmation("sess_test_010", "No thanks")
 
+        assert result is not None
+        assert result["confirmed"] is False
         records = svc.read_by_category("pending_confirmation")
-        resolved = [r for r in records if r.metadata.get("resolved") is True]
-        assert len(resolved) == 1
-        assert resolved[0].metadata["user_confirmed"] is False
+        unresolved = [r for r in records if not (r.metadata or {}).get("resolved")]
+        assert len(unresolved) == 0
 
 
 # ---------------------------------------------------------------------------

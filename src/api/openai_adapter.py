@@ -136,6 +136,41 @@ def _background_deviation_detection(
         logger.warning("[DEVIATION] Background detection failed (non-fatal): %s", exc)
 
 
+def _resolve_original_pending(pending) -> None:
+    """Mark the original pending_confirmation vault file as resolved.
+
+    Without this, the original record stays metadata.resolved=False and
+    _check_pending_confirmation re-finds it on every subsequent turn,
+    creating an infinite confirmation loop. Writing a separate resolution
+    record (the old approach) doesn't help because the filter at line 159
+    looks for unresolved records — the original stays unresolved.
+
+    Uses the same metadata-flag-update pattern as soft-delete and the
+    resolved_priority fix (task #5).
+    """
+    import json
+
+    state_dir = state_service._get_state_dir()
+    if not state_dir.is_dir():
+        return
+
+    # Find the file by matching the record ID in the filename or content
+    record_id = pending.id
+    for f in state_dir.glob("*.json"):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            if data.get("id") == record_id and data.get("type") == "pending_confirmation":
+                meta = data.get("metadata") or {}
+                if not meta.get("resolved"):
+                    meta["resolved"] = True
+                    data["metadata"] = meta
+                    f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                    logger.info("[CONFIRM] Marked original pending %s as resolved", f.name)
+                break
+        except Exception:
+            continue
+
+
 def _check_pending_confirmation(
     session_id: str,
     user_message: str,
@@ -168,6 +203,13 @@ def _check_pending_confirmation(
         action_query = (pending.metadata or {}).get("query", "")
         offer_text = pending.text
 
+        # Mark the ORIGINAL pending record as resolved FIRST — before
+        # the LLM interpretation. This prevents the infinite loop where
+        # the original record stays unresolved and gets re-found on every
+        # subsequent turn. The append-only rule is preserved by updating
+        # metadata (same pattern as soft-delete and resolved_priority fix).
+        _resolve_original_pending(pending)
+
         # Use LLM to interpret the user's response in context
         import ollama
         from src.core.config import get_ember_model
@@ -191,21 +233,6 @@ def _check_pending_confirmation(
             options={"temperature": 0, "num_predict": 10},
         )
         answer = response["message"]["content"].strip().upper()
-
-        # Resolve the pending confirmation regardless of outcome
-        resolve_record = state_service.make_record(
-            state_type="pending_confirmation",
-            text=f"Resolved: {offer_text}",
-            source="confirmation_resolver",
-            metadata={
-                "resolved": True,
-                "action": action,
-                "query": action_query,
-                "user_confirmed": "YES" in answer,
-                "session_id": session_id,
-            },
-        )
-        state_service.write(resolve_record)
 
         if "YES" in answer:
             logger.info("[CONFIRM] User confirmed pending %s action", action)

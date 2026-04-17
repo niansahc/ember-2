@@ -311,29 +311,19 @@ class ContextService:
         Applied before ranking so ineligible candidates never compete for slots.
         Profile items bypass type gating — identity context is never suppressed.
         """
-        filtered = items
+        suppress = policy.suppress_memory_types
+        eligible = policy.eligible_memory_types
+        min_score = policy.min_score
 
-        if policy.suppress_memory_types:
-            filtered = [
-                i for i in filtered
-                if getattr(i, "memory_type", None) not in policy.suppress_memory_types
-                or getattr(i, "memory_type", None) == "profile"
-            ]
-
-        if policy.eligible_memory_types is not None:
-            filtered = [
-                i for i in filtered
-                if getattr(i, "memory_type", None) in policy.eligible_memory_types
-                or getattr(i, "memory_type", None) == "profile"
-            ]
-
-        filtered = [
-            i for i in filtered
-            if getattr(i, "score", 0.0) >= policy.min_score
-            or getattr(i, "memory_type", None) == "profile"
+        return [
+            i for i in items
+            if getattr(i, "memory_type", None) == "profile"
+            or (
+                (not suppress or getattr(i, "memory_type", None) not in suppress)
+                and (eligible is None or getattr(i, "memory_type", None) in eligible)
+                and getattr(i, "score", 0.0) >= min_score
+            )
         ]
-
-        return filtered
 
     def _memory_limit_for_policy(self, policy_name: str) -> int:
         if policy_name == "reflective":

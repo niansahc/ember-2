@@ -325,6 +325,36 @@ class StateService:
 
         return resolved_count
 
+    def mark_resolved(self, record_id: str) -> bool:
+        """Set metadata.resolved=True on the vault file matching *record_id*.
+
+        In-place metadata update — same pattern as soft-delete. Returns True
+        if a matching unresolved record was found and updated, False otherwise.
+        """
+        import json as _json
+
+        state_dir = self._get_state_dir()
+        if not state_dir.is_dir():
+            return False
+
+        for f in state_dir.glob("*.json"):
+            try:
+                data = _json.loads(f.read_text(encoding="utf-8"))
+                if data.get("id") == record_id:
+                    meta = data.get("metadata") or {}
+                    if meta.get("resolved"):
+                        return False
+                    meta["resolved"] = True
+                    data["metadata"] = meta
+                    f.write_text(
+                        _json.dumps(data, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    return True
+            except Exception:
+                continue
+        return False
+
     @staticmethod
     def make_record(
         state_type: str,

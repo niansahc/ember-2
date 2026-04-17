@@ -141,34 +141,10 @@ def _resolve_original_pending(pending) -> None:
 
     Without this, the original record stays metadata.resolved=False and
     _check_pending_confirmation re-finds it on every subsequent turn,
-    creating an infinite confirmation loop. Writing a separate resolution
-    record (the old approach) doesn't help because the filter at line 159
-    looks for unresolved records — the original stays unresolved.
-
-    Uses the same metadata-flag-update pattern as soft-delete and the
-    resolved_priority fix (task #5).
+    creating an infinite confirmation loop.
     """
-    import json
-
-    state_dir = state_service._get_state_dir()
-    if not state_dir.is_dir():
-        return
-
-    # Find the file by matching the record ID in the filename or content
-    record_id = pending.id
-    for f in state_dir.glob("*.json"):
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-            if data.get("id") == record_id and data.get("type") == "pending_confirmation":
-                meta = data.get("metadata") or {}
-                if not meta.get("resolved"):
-                    meta["resolved"] = True
-                    data["metadata"] = meta
-                    f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-                    logger.info("[CONFIRM] Marked original pending %s as resolved", f.name)
-                break
-        except Exception:
-            continue
+    if state_service.mark_resolved(pending.id):
+        logger.info("[CONFIRM] Marked original pending %s as resolved", pending.id)
 
 
 def _check_pending_confirmation(
@@ -1104,6 +1080,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     except Exception:
         pass  # Non-fatal — proceed without suppression
 
+    _early_policy = None
+
     if _skip_vault:
         # Stateless mode: empty context packet, no vault reads
         from src.context.models import ContextPacket
@@ -1144,9 +1122,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     if _confirmation_web_items:
         context_packet.web_items = _confirmation_web_items
 
-    # Get intent class for grounding check (ADR-019)
+    # Reuse early classification when available; only call again for stateless mode
     from src.context.policies import classify_query
-    _policy = classify_query(latest_user_message)
+    _policy = _early_policy or classify_query(latest_user_message)
     _intent_class = _policy.name
 
     # Stash intent class on request for audit log

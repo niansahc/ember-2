@@ -455,6 +455,35 @@ Return ONLY JSON:
                 suggested_changes.append("Refuse directly and redirect to a safer alternative.")
                 triggered_rules.append("non_harm")
 
+        # BUG-ASK-003: Heuristic numeric fabrication detection.
+        # Catches specific percentage claims (N%), precise statistics
+        # ("X out of Y", "N million/billion"), and numeric proportions
+        # that don't appear in the user's message or any provided context.
+        # The EMBELLISHMENT MVR criterion covers this semantically, but
+        # the LLM reviewer at 8B misses it — this heuristic backstops.
+        _stat_patterns = re.findall(
+            r"\b\d{1,3}(?:\.\d+)?%\b"          # percentages: 97%, 3.5%
+            r"|\b\d+\s+(?:out of|of every)\s+\d+"  # ratios: 3 out of 5
+            r"|\b\d+(?:\.\d+)?\s*(?:million|billion|trillion)\b"  # magnitudes
+            r"|\b(?:approximately|roughly|about|nearly|over|under)\s+\d{2,}",  # hedged large numbers
+            draft_lower,
+        )
+        if _stat_patterns:
+            # Check if ANY of the matched statistics appear in the user's
+            # original message. If yes, the user provided them — not
+            # fabricated. If no, the model invented them.
+            _stats_in_user = any(s in user_text for s in _stat_patterns)
+            if not _stats_in_user:
+                issues_found.append(
+                    f"Asserts specific statistics ({', '.join(_stat_patterns[:3])}) "
+                    "not present in provided context."
+                )
+                suggested_changes.append(
+                    "Remove ungrounded statistics or hedge explicitly: "
+                    "'exact numbers vary' rather than inventing a percentage."
+                )
+                triggered_rules.append("truthfulness")
+
         severity = "none"
         if "non_harm" in triggered_rules:
             severity = "high"

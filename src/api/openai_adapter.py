@@ -1118,10 +1118,20 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         # the user confirms.
         from src.core.preferences import get as _get_pref_early
         _web_autonomous_early = bool(_get_pref_early("web_search_autonomous", False))
-        # Gate bypass: when the user explicitly confirmed a deferred search,
-        # skip_web_search must be False regardless of the autonomous preference.
-        # The user said "yes" — preference is irrelevant for this turn.
-        _skip_search = not _web_autonomous_early and not _confirmation_confirmed
+        # Explicit search request bypass: "search the web", "google that",
+        # "look it up" etc. The user's own words ARE the confirmation —
+        # ask-first gate must not block this.
+        from src.context.policies import classify_query as _classify_early
+        _early_policy = _classify_early(latest_user_message)
+        _explicit_search = getattr(_early_policy, "explicit_search_request", False)
+        # Gate bypass: skip_web_search is False when autonomous is on, OR
+        # when the user explicitly confirmed a deferred search, OR when
+        # the user explicitly requested a search.
+        _skip_search = (
+            not _web_autonomous_early
+            and not _confirmation_confirmed
+            and not _explicit_search
+        )
         context_packet = context_service.build_context(
             latest_user_message,
             image_data=image_data,
@@ -1201,8 +1211,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # builder so the per-turn <search_confirmation> block fires (task #19/#20),
     # and into the post-gen pipeline so the ask-first validator knows when
     # to substitute a canned RLHF refusal with the scripted confirmation.
+    # Explicit search requests bypass ask-first — the user's words ARE
+    # the confirmation. No need to ask "want me to search?" when they
+    # literally said "search for X" or "google that".
     _ask_first_active = bool(
-        _intent_class == "web_search" and not _web_autonomous
+        _intent_class == "web_search"
+        and not _web_autonomous
+        and not _explicit_search
     )
 
     # Web search execution gate. Relaxed from the original triple condition

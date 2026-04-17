@@ -191,6 +191,10 @@ class ContextPolicy:
     # When True, ContextService will call web_search() and inject results into
     # the ContextPacket before prompt assembly.
     use_web_search: bool = False
+    # True when the user explicitly asked to search ("google that", "look it
+    # up", "search the web"). Explicit requests bypass ask-first — the user's
+    # own words ARE the confirmation.
+    explicit_search_request: bool = False
     # ADR-018: Intent-aware memory type gating.
     # eligible_memory_types: which types are candidates. None = all eligible.
     # suppress_memory_types: types excluded from candidates.
@@ -401,6 +405,7 @@ def classify_query(user_message: str) -> ContextPolicy:
             recency_bias=0.0,
             diversity=False,
             use_web_search=True,
+            explicit_search_request=_explicit_web,
         )
 
     if any(marker in q for marker in factual_recall_markers):

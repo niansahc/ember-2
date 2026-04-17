@@ -1892,6 +1892,9 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 - **ELEPHANT** (ICLR 2026, arXiv) — social sycophancy as face-preservation. Theory: sycophancy is excessive preservation of the user's face via affirming (positive face) or avoiding challenge (negative face). Extends beyond explicit agreement detection to implicit face-preservation patterns. Cited via Kirk et al. socioaffective alignment framework. Design implication: the deviation engine's sycophancy detection currently catches explicit agreement-under-pushback (position_collapse) and hedging-as-avoidance (relational_hedging), but does not name face-preservation as a pattern class. Face-preservation is a distinct behavioral mode — affirming the user's self-image rather than agreeing with their claims. The deviation engine has no detector for this. Log as v0.16.0 candidate: add face-preservation as a named deviation pattern class alongside position_collapse and sycophancy.
   → informs: v0.16.0 (deviation engine pattern classes, sycophancy detection expansion)
 
+- **Vault knowledge linting (Karpathy LLM Wiki pattern, April 2026)** — Karpathy's LLM Wiki pattern (gist: karpathy/442a6bf555914893e9891c11519de94f, 5,000+ stars) describes a periodic LLM-driven "linting" pass over a knowledge base that scans for contradictions, superseded records, and missing connections between related memories. Ember has scripts/audit_memory.py (7 structural health checks) and tools/audit_reflections.py (junk detection), but no pass that looks for semantic contradictions or stale records that conflict with newer ones. The linting concept is distinct from structural health — it's a meaning-level check. Filing for future design work; not scheduled. Research basis: Karpathy (2026), LLM Wiki gist; VentureBeat coverage April 2026.
+  → informs: future (vault semantic integrity, no version assigned)
+
 ---
 
 ## 50.2 Graduated

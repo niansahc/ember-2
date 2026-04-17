@@ -43,6 +43,15 @@ _COACHING_CLOSINGS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) 
     r"let(?:'s| us) (?:tackle|work on|start with|break (?:it|this|that) down)",
     r"what(?:'s| is) (?:holding you back|stopping you|in your way)",
     r"i(?:'m| am) here (?:if|when|whenever) you (?:want|need|are ready)",
+    # Literary/metaphorical coaching frames — aesthetic language that
+    # wraps advice in imagery instead of stating it directly. "Navigate
+    # your brain's labyrinth" is coaching wearing a costume.
+    r"navigate (?:your|the) (?:brain|mind|thought|inner|emotional)(?:'s)? (?:labyrinth|landscape|terrain|maze)",
+    r"(?:give yourself|give you) (?:permission|grace|space) to",
+    r"you(?:'ve| have) got this",
+    r"trust (?:the|your) (?:process|journey|path|instinct)",
+    r"(?:lean into|sit with|hold space for) (?:the|your|that)",
+    r"(?:it(?:'s| is)|that(?:'s| is)) a (?:journey|process|marathon|practice)",
 ))
 
 # Therapeutic openers — validate/normalize feelings in a clinical way.

@@ -885,6 +885,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # the section is omitted from the prompt entirely.
     last_session_label = _resolve_last_session_label(session_id)
 
+    # Capture the raw user message before any system prefix injection
+    # modifies it. Used by _write_pending_confirmation so the stored
+    # query is clean for deferred web search execution. Without this,
+    # the search query arrives at SearXNG as "[System: no relevant
+    # vault content...] What is the population of Tokyo?" — garbage.
+    _raw_user_message = latest_user_message
+
     # --- PENDING CONFIRMATION CHECK (pre-generation) ---
     # If Ember previously asked "want me to search for that?" and the user
     # is now responding, interpret the response via LLM (no keyword matching)
@@ -1331,7 +1338,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             # user's "Yes" on the next turn arrived before the pending record
             # was written, so the confirmation path never fired.
             if not _skip_vault:
-                _write_pending_confirmation(full_reply, latest_user_message, session_id)
+                _write_pending_confirmation(full_reply, _raw_user_message, session_id)
 
             # Deviation detection — async, no latency impact (ADR-026)
             if not _skip_vault:
@@ -1636,7 +1643,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
     # Ask-first confirmation detection — write pending_confirmation
     if not _skip_vault:
-        _write_pending_confirmation(reply, latest_user_message, session_id)
+        _write_pending_confirmation(reply, _raw_user_message, session_id)
 
     # Deviation detection — async, no latency impact (ADR-026)
     if not _skip_vault:

@@ -1412,7 +1412,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             if _skip_vault:
                 logger.warning("[TASK] Skipped task/state/commitment detection (test session)")
 
-        _suppress_source_badges = False
+        # Suppress source badges on ask-first PROMPT turns (Ember asking
+        # permission) but NOT on confirm turns (user said Yes, search ran).
+        # _ask_first_active=True means this is an ask-first-eligible turn.
+        # context_packet.web_items non-empty means the search already ran
+        # (either via confirmation or explicit bypass) — show attribution.
+        _suppress_source_badges = (
+            _ask_first_active and not bool(context_packet.web_items)
+        )
 
         def _status_event(status: str) -> str:
             """Format a status SSE event for the UI."""
@@ -1520,7 +1527,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 # (ask-first or web-refusal), the vault badge is stale —
                 # the substituted text didn't come from the vault.
                 nonlocal _suppress_source_badges
-                _suppress_source_badges = (
+                _suppress_source_badges = _suppress_source_badges or (
                     _postgen.ask_first_substituted or _postgen.web_refusal_substituted
                 )
                 if _suppress_source_badges:

@@ -810,8 +810,20 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # are short-circuited here — no context build, no retrieval, no LLM call.
     if _is_override_attempt(latest_user_message):
         logger.warning("[OVERRIDE] Blocked override attempt: %s", latest_user_message[:80])
+        _override_reply = "That's exactly what I'm not going to do. What are you actually trying to figure out?"
+        _override_id = f"chatcmpl-{uuid.uuid4().hex}"
+
+        if body.stream:
+            async def _override_sse():
+                import json as _json
+                for word in _override_reply.split(" "):
+                    yield f"data: {_json.dumps({'id': _override_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'content': word + ' '}, 'finish_reason': None}]})}\n\n"
+                yield f"data: {_json.dumps({'id': _override_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+                yield "data: [DONE]\n\n"
+            return StreamingResponse(_override_sse(), media_type="text/event-stream")
+
         return ChatCompletionsResponse(
-            id=f"chatcmpl-{uuid.uuid4().hex}",
+            id=_override_id,
             object="chat.completion",
             created=int(time.time()),
             model="ember-2",
@@ -820,7 +832,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     index=0,
                     message=ChatCompletionsResponseMessage(
                         role="assistant",
-                        content="That's exactly what I'm not going to do. What are you actually trying to figure out?",
+                        content=_override_reply,
                     ),
                     finish_reason="stop",
                 )

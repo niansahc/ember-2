@@ -26,6 +26,9 @@ _REFUSAL_PATTERNS = [
     re.compile(r"\bI (?:can(?:'t)?|don't have access to) (?:browse|access|retrieve) (?:the )?(?:web|internet|live data)", re.IGNORECASE),
     re.compile(r"\bofficial sources like\b", re.IGNORECASE),
     re.compile(r"\bhelp you (?:structure|refine|formulate) a (?:search )?query\b", re.IGNORECASE),
+    re.compile(r"\bwant me to search\b", re.IGNORECASE),
+    re.compile(r"\bshould i search\b", re.IGNORECASE),
+    re.compile(r"\bshall i search\b", re.IGNORECASE),
 ]
 
 

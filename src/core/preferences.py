@@ -26,7 +26,7 @@ logger = logging.getLogger("ember.preferences")
 # fields should be added here with their default value.
 PREFERENCE_DEFAULTS: dict = {
     "conversational_style": "balanced",
-    "web_search_autonomous": False,
+    "web_search_autonomous": True,
     "first_run_tour_complete": False,
     "context_length": 8192,
     "bare_mode": False,

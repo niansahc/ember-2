@@ -24,7 +24,7 @@ class TestPreferencesStore:
         result = preferences.read(vault_path=tmp_path)
         assert result["conversational_style"] == "casual"
         # Defaults still present for fields not explicitly written
-        assert result["web_search_autonomous"] is False
+        assert result["web_search_autonomous"] is True
 
     def test_write_multiple_keys(self, tmp_path):
         preferences.write("conversational_style", "thoughtful", vault_path=tmp_path)
@@ -128,7 +128,7 @@ class TestPreferencesAPI:
         assert resp.status_code == 200
         data = resp.json()
         # Empty vault returns defaults for all known fields
-        assert data["web_search_autonomous"] is False
+        assert data["web_search_autonomous"] is True
         assert data["conversational_style"] == "balanced"
         assert data["first_run_tour_complete"] is False
 

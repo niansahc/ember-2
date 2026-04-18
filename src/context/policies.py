@@ -287,22 +287,25 @@ def classify_query(user_message: str) -> ContextPolicy:
 
     # Checked before factual_recall — "search the web" is more specific than
     # the bare "search" marker in factual_recall_markers.
-    web_search_markers = (
+    explicit_web_markers = (
         "search the web",
         "search online",
         "look up online",
         "look this up",
         "look it up",
         "google",
-        "what's the latest",
-        "what is the latest",
-        "current news",
-        "news about",
         "find online",
         "find this online",
         "find it online",
         "can you find",
         "web search",
+    )
+
+    implicit_web_markers = (
+        "what's the latest",
+        "what is the latest",
+        "current news",
+        "news about",
     )
 
     # Factual uncertainty — the user is asking whether something external
@@ -325,7 +328,7 @@ def classify_query(user_message: str) -> ContextPolicy:
     # The compound requirement prevents false positives on personal
     # temporal queries. Ask-first mode is the safety net.
     temporal_currency_words = (
-        "yesterday", "last night", "this morning",
+        "today", "yesterday", "last night", "this morning",
         "last week", "this month", "over the weekend",
     )
     event_context_words = (
@@ -359,9 +362,10 @@ def classify_query(user_message: str) -> ContextPolicy:
             prefer_experiences=True,
         )
 
-    # Web search: three trigger paths, all route to the same policy.
+    # Web search: multiple trigger paths, all route to the same policy.
     # 1. Explicit markers ("search the web", "google", etc.)
-    _explicit_web = any(marker in q for marker in web_search_markers)
+    _explicit_web = any(marker in q for marker in explicit_web_markers)
+    _implicit_web = any(marker in q for marker in implicit_web_markers)
     # 2. Factual uncertainty ("is it true that", "has there been", etc.)
     _factual_uncertainty = any(marker in q for marker in factual_uncertainty_markers)
     # 3. Temporal currency compound: temporal word + event context word.
@@ -386,10 +390,11 @@ def classify_query(user_message: str) -> ContextPolicy:
     # 7. "What happened" syntactic patterns: always triggers.
     _what_happened = _matches_what_happened(q)
 
-    if (_explicit_web or _factual_uncertainty or _temporal_currency
+    if (_explicit_web or _implicit_web or _factual_uncertainty or _temporal_currency
             or _entity_trigger or _implicit_recency or _episodic_event or _what_happened):
         _trigger = (
             "explicit" if _explicit_web
+            else "implicit_web" if _implicit_web
             else "factual_uncertainty" if _factual_uncertainty
             else "temporal_currency" if _temporal_currency
             else "entity_type" if _entity_trigger

@@ -1081,6 +1081,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         pass  # Non-fatal — proceed without suppression
 
     _early_policy = None
+    _explicit_search = False
 
     if _skip_vault:
         # Stateless mode: empty context packet, no vault reads
@@ -1198,6 +1199,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         and not _web_autonomous
         and not _explicit_search
     )
+    if _intent_class == "web_search":
+        logger.info(
+            "[ASK_FIRST] intent=web_search autonomous=%s explicit=%s → ask_first_active=%s",
+            _web_autonomous, _explicit_search, _ask_first_active,
+        )
 
     # Web search execution gate. Relaxed from the original triple condition
     # (required vault to return NOTHING but profile records) which meant
@@ -1393,7 +1399,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             if _skip_vault:
                 logger.warning("[TASK] Skipped task/state/commitment detection (test session)")
 
-        _suppress_vault_badge = False
+        _suppress_source_badges = False
 
         def _status_event(status: str) -> str:
             """Format a status SSE event for the UI."""
@@ -1468,6 +1474,15 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 if not _is_refusal:
                     from src.llm.coaching_filter import filter_coaching_frame
                     full_reply = filter_coaching_frame(full_reply, _intent_class, _is_conversational)
+                    # Post-coaching empty check — if coaching_filter
+                    # stripped the entire response (e.g. short refusal
+                    # matched a closing pattern), refill immediately.
+                    if not full_reply or not full_reply.strip():
+                        full_reply = (
+                            "I had trouble generating a response to that. "
+                            "Try rephrasing, or let me know what you're "
+                            "actually trying to figure out."
+                        )
 
                 # 3.7. Post-gen validators (source / vision / ask-first /
                 # empty-guard). Grounded streaming path — this runs before
@@ -1490,11 +1505,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 # When the post-gen pipeline substituted the response
                 # (ask-first or web-refusal), the vault badge is stale —
                 # the substituted text didn't come from the vault.
-                nonlocal _suppress_vault_badge
-                _suppress_vault_badge = (
+                nonlocal _suppress_source_badges
+                _suppress_source_badges = (
                     _postgen.ask_first_substituted or _postgen.web_refusal_substituted
                 )
-                if _suppress_vault_badge:
+                if _suppress_source_badges:
                     vault_sources.clear()
 
                 # FINAL empty guard — catches any case where coaching
@@ -1526,8 +1541,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     })
                     yield f"data: {sse_data}\n\n"
 
-                # 5. Web search sources event (if applicable)
-                if used_web_search and context_packet.web_items:
+                # 5. Web search sources event (if applicable) — suppressed
+                # when ask-first substituted (search hasn't run yet).
+                if used_web_search and context_packet.web_items and not _suppress_source_badges:
                     sources = [
                         {"title": item.get("title", ""), "url": item.get("url", "")}
                         for item in context_packet.web_items
@@ -1538,7 +1554,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
                 # 6. Vault sources event (if applicable) — suppressed when
                 # the post-gen pipeline substituted the response.
-                if vault_sources and not _suppress_vault_badge:
+                if vault_sources and not _suppress_source_badges:
                     yield f"data: {json.dumps({'type': 'vault_sources', 'sources': vault_sources})}\n\n"
 
                 # Final chunk
@@ -1623,9 +1639,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         }
-        if used_web_search:
+        if used_web_search and not _suppress_source_badges:
             response_headers["X-Ember-Web-Search"] = "true"
-        if used_vault and not _suppress_vault_badge:
+        if used_vault and not _suppress_source_badges:
             response_headers["X-Ember-Vault-Used"] = "true"
         if used_vision:
             response_headers["X-Ember-Vision-Used"] = "true"
@@ -1763,7 +1779,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         ],
     )
     non_stream_headers = {}
-    if used_web_search:
+    if used_web_search and not (_postgen_ns.ask_first_substituted or _postgen_ns.web_refusal_substituted):
         non_stream_headers["X-Ember-Web-Search"] = "true"
     if used_vault:
         non_stream_headers["X-Ember-Vault-Used"] = "true"

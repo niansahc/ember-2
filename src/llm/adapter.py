@@ -190,7 +190,7 @@ class LLMAdapter:
         draft_response = self._chat(
             system_prompt=system_prompt,
             user_message=context_packet.user_message,
-            image_data=[],
+            image_data=context_packet.image_data or [],
             model_override=None,
             temperature=temperature,
             assistant_prefix=_prefix,
@@ -339,7 +339,7 @@ class LLMAdapter:
         for chunk in self._chat_stream(
             system_prompt=system_prompt,
             user_message=context_packet.user_message,
-            image_data=[],
+            image_data=context_packet.image_data or [],
             model_override=None,
             temperature=temperature,
             assistant_prefix=_prefix,

@@ -1212,9 +1212,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         and not _explicit_search
     )
     if _intent_class == "web_search":
-        logger.info(
-            "[ASK_FIRST] intent=web_search autonomous=%s explicit=%s → ask_first_active=%s",
-            _web_autonomous, _explicit_search, _ask_first_active,
+        print(
+            f"[ASK_FIRST] intent=web_search autonomous={_web_autonomous} "
+            f"explicit={_explicit_search} ask_first_active={_ask_first_active}",
+            flush=True,
         )
 
     # Web search execution gate. Relaxed from the original triple condition
@@ -1512,6 +1513,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     vault_sources=vault_sources,
                     vision_description=_vision_description,
                     confirmation_search_failed=_confirmation_search_failed,
+                    explicit_search_request=_explicit_search,
                 )
                 full_reply = _postgen.reply
                 # When the post-gen pipeline substituted the response
@@ -1642,6 +1644,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     vault_sources=vault_sources,
                     vision_description=_vision_description,
                     confirmation_search_failed=_confirmation_search_failed,
+                    explicit_search_request=_explicit_search,
                 )
                 full_reply = _postgen.reply
                 _post_stream_cleanup(full_reply)

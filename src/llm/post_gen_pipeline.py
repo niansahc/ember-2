@@ -71,6 +71,7 @@ def run_post_gen_pipeline(
     vault_sources: list | None = None,
     vision_description: str | None = None,
     confirmation_search_failed: bool = False,
+    explicit_search_request: bool = False,
 ) -> PostGenResult:
     """Run source → vision → ask-first → empty-guard against a full reply.
 
@@ -122,7 +123,11 @@ def run_post_gen_pipeline(
     if vision_substituted:
         logger.info("[POSTGEN] vision refusal substituted")
 
-    ask_first_mode = intent_class == "web_search" and not web_search_autonomous
+    ask_first_mode = (
+        intent_class == "web_search"
+        and not web_search_autonomous
+        and not explicit_search_request
+    )
     reply, ask_first_substituted = validate_ask_first_response(
         reply, intent_class=intent_class, ask_first_mode=ask_first_mode
     )

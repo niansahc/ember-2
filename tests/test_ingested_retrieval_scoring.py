@@ -8,18 +8,20 @@ from src.context.policies import classify_query
 from src.retrieval.semantic_search import query_intent_adjustment
 
 
-class TestStatusStateIncludesIngested:
-    """status_state policy should include 'ingested' in eligible types."""
+class TestStatusStateExcludesIngested:
+    """status_state policy should NOT include 'ingested' — operational
+    queries should surface state/task/project/conversation, not ingested
+    third-party content (BUG-UAT-014 retrieval leakage fix)."""
 
     @pytest.mark.parametrize("query", [
         "what am i working on",
         "what are my priorities",
         "what's my current focus",
     ])
-    def test_ingested_in_eligible_types(self, query):
+    def test_ingested_not_in_eligible_types(self, query):
         policy = classify_query(query)
         if policy.eligible_memory_types is not None:
-            assert "ingested" in policy.eligible_memory_types
+            assert "ingested" not in policy.eligible_memory_types
 
 
 class TestReflectivePenalty:

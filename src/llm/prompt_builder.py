@@ -138,10 +138,15 @@ _AUTHORITY_RULES_FOOTER = "</authority_rules>"
 
 
 def _render_authority_rules(
-    is_conversational: bool, relational_empty: bool = False
+    is_conversational: bool,
+    relational_empty: bool = False,
+    has_web_items: bool = False,
 ) -> str:
     parts = [_AUTHORITY_RULES_HEADER, "\n", _AUTHORITY_RULES_BODY_COMMON]
-    if not is_conversational:
+    # Suppress knowledge gap line when web results are present — the model
+    # has search results to answer from, so "say I don't have that in my
+    # memory" is wrong and produces an orphaned phrase at response end.
+    if not is_conversational and not has_web_items:
         parts.append(_AUTHORITY_RULES_KNOWLEDGE_GAP_LINE)
     if relational_empty:
         parts.append(_AUTHORITY_RULES_RELATIONAL_EMPTY_LINE)
@@ -279,6 +284,9 @@ class PromptBuilder:
                 is_conversational=is_conversational,
                 relational_empty=bool(
                     getattr(context_packet, "relational_query_empty", False)
+                ),
+                has_web_items=bool(
+                    getattr(context_packet, "web_items", None)
                 ),
             ),
             self._build_self_knowledge_boundary(),

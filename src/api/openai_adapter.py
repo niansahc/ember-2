@@ -1453,9 +1453,21 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                         daemon=True,
                     ).start()
 
-                # 3.6. Coaching-frame filter — post-generation, pre-stream
-                from src.llm.coaching_filter import filter_coaching_frame
-                full_reply = filter_coaching_frame(full_reply, _intent_class, _is_conversational)
+                # 3.6. Coaching-frame filter — post-generation, pre-stream.
+                # Skip when the response is a constitutional refusal — refusal
+                # text must not be rewritten or stripped by the filter. Short
+                # refusals like "I can't help with that." match coaching-closing
+                # patterns and get deleted, producing a blank response.
+                _REFUSAL_MARKERS = (
+                    "i can't help with that",
+                    "i'm not going to do that",
+                    "that's not something i'm going to do",
+                    "i had trouble generating a response",
+                )
+                _is_refusal = any(m in full_reply.lower() for m in _REFUSAL_MARKERS)
+                if not _is_refusal:
+                    from src.llm.coaching_filter import filter_coaching_frame
+                    full_reply = filter_coaching_frame(full_reply, _intent_class, _is_conversational)
 
                 # 3.7. Post-gen validators (source / vision / ask-first /
                 # empty-guard). Grounded streaming path — this runs before
@@ -1482,6 +1494,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 _suppress_vault_badge = (
                     _postgen.ask_first_substituted or _postgen.web_refusal_substituted
                 )
+                if _suppress_vault_badge:
+                    vault_sources.clear()
 
                 # FINAL empty guard — catches any case where coaching
                 # filter, post-gen pipeline, or constitutional review
@@ -1635,9 +1649,15 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         ask_first_active=_ask_first_active,
     )
 
-    # Coaching-frame filter — post-generation, pre-return
-    from src.llm.coaching_filter import filter_coaching_frame as _filter_cf
-    reply = _filter_cf(reply, _intent_class, _is_conversational)
+    # Coaching-frame filter — post-generation, pre-return.
+    # Skip on refusal responses to prevent stripping.
+    _is_refusal_ns = any(m in reply.lower() for m in (
+        "i can't help with that", "i'm not going to do that",
+        "that's not something i'm going to do", "i had trouble generating a response",
+    ))
+    if not _is_refusal_ns:
+        from src.llm.coaching_filter import filter_coaching_frame as _filter_cf
+        reply = _filter_cf(reply, _intent_class, _is_conversational)
 
     # Post-gen validators (source / vision / ask-first / empty-guard).
     # Non-streaming path: runs before final JSONResponse return.

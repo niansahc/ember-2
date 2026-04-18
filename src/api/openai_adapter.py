@@ -482,6 +482,17 @@ def _build_vault_sources(context_packet) -> list[dict]:
     sources = []
     all_items = list(context_packet.memory_items) + list(context_packet.reflection_items)
 
+    for state_item in context_packet.state_items:
+        category = getattr(state_item, "category", "")
+        timestamp = getattr(state_item, "timestamp", "")
+        date_label = _format_source_date(timestamp)
+        summary = f"state ({category}) from {date_label}" if date_label else f"state ({category})"
+        sources.append({
+            "type": "state",
+            "timestamp": timestamp,
+            "summary": summary,
+        })
+
     for item in all_items:
         mem_type = getattr(item, "memory_type", "") or getattr(item, "item_type", "")
         if mem_type == "profile":
@@ -939,11 +950,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     if _confirmation_result is not None:
         if _confirmation_result["confirmed"] and _confirmation_result["action"] == "web_search":
             _confirmation_confirmed = True
+            _original_query = _confirmation_result["query"]
+            latest_user_message = _original_query
+            _raw_user_message = _original_query
             try:
                 from src.tools.web_search import web_search
-                _confirmation_web_items = web_search(_confirmation_result["query"])
+                _confirmation_web_items = web_search(_original_query)
                 logger.info("[CONFIRM] Executing deferred web search for: %s",
-                            _confirmation_result["query"][:80])
+                            _original_query[:80])
             except Exception as exc:
                 logger.warning("[CONFIRM] Deferred web search failed: %s", exc)
                 _confirmation_search_failed = True
@@ -1210,14 +1224,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         _intent_class == "web_search"
         and not _web_autonomous
         and not _explicit_search
+        and not _confirmation_confirmed
     )
-    if _intent_class == "web_search":
-        print(
-            f"[ASK_FIRST] intent=web_search autonomous={_web_autonomous} "
-            f"explicit={_explicit_search} ask_first_active={_ask_first_active}",
-            flush=True,
-        )
-
     # Web search execution gate. Relaxed from the original triple condition
     # (required vault to return NOTHING but profile records) which meant
     # autonomous search almost never fired on a real vault with any content.
@@ -1283,15 +1291,15 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # Low-scoring tangential matches (avg < 0.6) should not trigger the
     # vault citation — the model likely answered from training data, not
     # from the weakly-matched vault records in the context packet.
-    if vault_sources:
+    _has_state_sources = bool(context_packet.state_items)
+    if vault_sources and not _has_state_sources:
         non_profile_items = [
             i for i in context_packet.memory_items
             if getattr(i, "memory_type", "") != "profile"
         ]
         if not non_profile_items:
-            # Only profile items — not meaningful vault grounding
             vault_sources = []
-        elif non_profile_items:
+        else:
             avg_score = sum(getattr(i, "score", 0.0) for i in non_profile_items) / len(non_profile_items)
             if avg_score < 0.6:
                 vault_sources = []
@@ -1521,6 +1529,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     vision_description=_vision_description,
                     confirmation_search_failed=_confirmation_search_failed,
                     explicit_search_request=_explicit_search,
+                    ask_first_active=_ask_first_active,
                 )
                 full_reply = _postgen.reply
                 # When the post-gen pipeline substituted the response
@@ -1652,6 +1661,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     vision_description=_vision_description,
                     confirmation_search_failed=_confirmation_search_failed,
                     explicit_search_request=_explicit_search,
+                    ask_first_active=_ask_first_active,
                 )
                 full_reply = _postgen.reply
                 _post_stream_cleanup(full_reply)
@@ -1711,6 +1721,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         vault_sources=vault_sources,
         vision_description=_vision_description,
         confirmation_search_failed=_confirmation_search_failed,
+        ask_first_active=_ask_first_active,
     )
     reply = _postgen_ns.reply
     if _postgen_ns.ask_first_substituted or _postgen_ns.web_refusal_substituted:

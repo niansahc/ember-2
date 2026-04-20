@@ -45,3 +45,5 @@ Active as of v0.16.0. Fixed issues are removed from this file; see git history f
 - **Contextual integrity at retrieval** — Intent-aware memory type gating (ADR-018) reduces retrieval leakage but does not implement contextual integrity at the disclosure-context level. The same memory type can contain content disclosed in crisis, relational, and professional contexts; current retrieval policy treats these identically. CIMemories benchmark (Mireshghallah et al., ICLR 2026) is the evaluation target when the system matures. No fix scheduled; filed as architectural gap.
 
 - **GPT import retrieval relevance** — 16,728 records confirmed indexed in SQLite (`embeddings/memory.db`) and filesystem. Retrieval relevance quality for older GPT import content is below expectations. Root cause under investigation; fix deferred to v0.17.0.
+
+- **State contamination from ingested content** — StateExtractor may process ingested conversation turns (e.g. ChatGPT export) and write derived state records from them. Those records surface on state queries and are not distinguishable from user-authored state. Fix: gate StateExtractor to live conversation turns only. Deferred to v0.17.0.

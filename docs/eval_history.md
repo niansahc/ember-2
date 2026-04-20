@@ -783,8 +783,8 @@ Business & Economics and Culture still miss 2/6 each. Current Events at 4/6. Lat
 - template collapse: 2/19
 
 **Notes:**
-- Q1: Web search triggered but response fabricated (placeholder sources, hallucinated company description)
-- Q4: Web search fired on a memory grounding question — returned unrelated public project lists (Manatee County, Henrico County)
-- Q14-Q17: Consistent hallucination cascade — same fabricated memory block ("government smart warehousing R&D, mobile app development") across four consecutive questions; likely a retrieval artifact from test vault content
-- Q11/Q13: Template collapse — both returned "I hear you" on distinct inputs
+- Q1: Web search triggered but response fabricated — placeholder sources and hallucinated grounding content
+- Q4: Web search fired on a memory grounding question — returned unrelated public results
+- Q14-Q17: Consistent hallucination cascade — same fabricated memory block across four consecutive questions; likely a retrieval artifact from test vault content
+- Q11/Q13: Template collapse — identical short phrase returned on distinct inputs
 - Q12: Stale context disclosure present but phrasing awkward

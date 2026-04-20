@@ -81,6 +81,7 @@ def _chunk_chatgpt_document(doc: NormalizedDocument) -> list[ChunkedDocument]:
                     "raw_message_index": raw_index,
                     "role": role,
                     "content_kind": _classify_content_kind(normalized, role),
+                    "index_for_retrieval": role != "assistant",
                 },
             )
         )

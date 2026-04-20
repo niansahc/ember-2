@@ -1,9 +1,12 @@
 from pathlib import Path
 import json
+import logging
 
 from src.retrieval.embed_memory import embed_text
 from src.retrieval.vector_index import VectorIndex
 
+
+logger = logging.getLogger("ember.ingest.writers")
 
 vector_index = VectorIndex()
 
@@ -33,6 +36,18 @@ def write_chunks_to_vault(chunks, vault_path):
 
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(chunk_payload, f, ensure_ascii=False, indent=2)
+
+        # ADR-033: assistant-role chunks from ChatGPT import write to flat
+        # storage for thread reconstruction but are not embedded or indexed.
+        if not (chunk.metadata or {}).get("index_for_retrieval", True):
+            logger.info(
+                "[INGEST] Skipping vector index for chunk "
+                "(doc_id=%s chunk_id=%s role=%s)",
+                chunk.doc_id,
+                chunk.chunk_id,
+                (chunk.metadata or {}).get("role"),
+            )
+            continue
 
         embedding = embed_text(chunk.content)
 

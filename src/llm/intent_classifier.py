@@ -8,15 +8,13 @@ Classifies each user query as either:
   - vault_answerable : query should be answered from the user's personal vault
 
 Architecture (ADR-034):
-  Stage 1  Structural rules with compound first-person guard   ~2ms     (this file, commit 1)
+  Stage 1  Structural rules with compound first-person guard   ~2ms     (commit 1)
   Stage 2  Embedding similarity against labeled examples       ~30-50ms (commit 2)
   Stage 3  qwen3:8b non-thinking with JSON grammar, 800ms cap  ~300-800ms (commit 3)
 
-Only Stage 1 is active in this commit. Stages 2 and 3 are added in
-subsequent commits on the same branch. Until then, Stage 1 escalation
-falls through to the safe default: "vault_answerable". This matches the
-ADR-mandated timeout fallback for Stage 3, so the conservative default
-is consistent across the cascade.
+Only Stages 1 and 2 are active in this commit. Stage 3 lands in the next
+commit on the same branch. Until then, escalation from Stage 2 falls
+through to the safe default: "vault_answerable".
 
 TODO: SetFit upgrade when 150 labels/class accumulated from logs.
 """
@@ -26,19 +24,16 @@ from __future__ import annotations
 import logging
 import re
 
+import numpy as np
+
+from src.retrieval.embed_memory import embed_text, embed_texts
+
 logger = logging.getLogger("ember.intent_classifier")
 
 
 # ---------------------------------------------------------------------------
 # Stage 1: Structural rules with compound first-person guard
 # ---------------------------------------------------------------------------
-# The current keyword classifier in src/context/policies.py fails on
-# first-person queries containing volatile-sounding words. Stage 1 catches
-# the clearest internet-only signals (weather, stock price, headlines,
-# live scores) and applies a compound guard: a definite internet signal
-# only triggers when the query does NOT have a first-person marker
-# WITHOUT an external-world anchor. See ADR-034 Stage 1 for the full
-# rationale.
 
 DEFINITE_INTERNET_SIGNALS: tuple[re.Pattern, ...] = tuple(
     re.compile(p, re.IGNORECASE)
@@ -77,7 +72,7 @@ def _stage1_classify(query: str) -> str | None:
     for signal in DEFINITE_INTERNET_SIGNALS:
         if signal.search(query):
             # Compound guard: block the internet signal only when first-person
-            # is present AND there's no external-world anchor. Without this
+            # is present AND there's no external-world anchor. Without the
             # guard, "I'm currently watching the news" would route to internet
             # because of the news signal, even though it's a personal statement.
             if has_first_person and not has_external_anchor:
@@ -87,12 +82,91 @@ def _stage1_classify(query: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Stage 2: Embedding similarity against the labeled example pool
+# ---------------------------------------------------------------------------
+# Reuses the existing Ollama nomic-embed-text pipeline so no new dependency
+# is introduced. Example embeddings are lazy-loaded once per process and
+# cached in memory.
+
+_STAGE2_CONFIDENCE_THRESHOLD: float = 0.65
+
+_example_embeddings: list[tuple[str, list[float]]] | None = None
+
+
+def _get_example_embeddings() -> list[tuple[str, list[float]]] | None:
+    """Lazy-load and cache (label, embedding) pairs for the example pool.
+
+    Returns None on any failure so Stage 2 can escalate gracefully without
+    raising. The most common failure mode is Ollama being unreachable.
+    """
+    global _example_embeddings
+    if _example_embeddings is not None:
+        return _example_embeddings
+    try:
+        from src.llm.classifier_examples import EXAMPLES
+
+        texts = [ex["query"] for ex in EXAMPLES]
+        labels = [ex["label"] for ex in EXAMPLES]
+        embeddings = embed_texts(texts)
+        _example_embeddings = list(zip(labels, embeddings))
+        return _example_embeddings
+    except Exception as exc:
+        logger.warning(
+            "[INTENT_CLASSIFY] Stage 2 example embedding load failed (non-fatal): %s",
+            exc,
+        )
+        return None
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Cosine similarity of two vectors. Returns 0.0 on degenerate input."""
+    a_arr = np.asarray(a, dtype=np.float32)
+    b_arr = np.asarray(b, dtype=np.float32)
+    denom = float(np.linalg.norm(a_arr) * np.linalg.norm(b_arr))
+    if denom == 0.0:
+        return 0.0
+    return float(np.dot(a_arr, b_arr) / denom)
+
+
+def _stage2_classify(query: str) -> tuple[str | None, float | None]:
+    """Stage 2: embedding similarity against labeled examples.
+
+    Returns (label, confidence) when the top-1 similarity is at or above
+    the threshold; otherwise (None, top_confidence_or_none) so the caller
+    can escalate.
+    """
+    if not query:
+        return None, None
+
+    examples = _get_example_embeddings()
+    if not examples:
+        return None, None
+
+    try:
+        query_emb = embed_text(query)
+    except Exception as exc:
+        logger.warning(
+            "[INTENT_CLASSIFY] Stage 2 query embed failed (non-fatal): %s",
+            exc,
+        )
+        return None, None
+
+    scored = [(label, _cosine_similarity(query_emb, emb)) for label, emb in examples]
+    scored.sort(key=lambda item: item[1], reverse=True)
+    top_label, top_conf = scored[0]
+
+    if top_conf >= _STAGE2_CONFIDENCE_THRESHOLD:
+        return top_label, top_conf
+    return None, top_conf
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-# Safe default applied at every escalation path in this commit. Matches
-# ADR-034 Stage 3 timeout fallback: when uncertain, treat as vault-answerable
-# and let the user explicitly request a search if they want one.
+# Safe default applied at every escalation path. Matches the ADR-034 Stage 3
+# timeout fallback: when uncertain, treat as vault-answerable and let the
+# user explicitly request a search if they want one.
 _SAFE_DEFAULT: str = "vault_answerable"
 
 
@@ -109,7 +183,12 @@ def classify_intent(query: str) -> str:
         _log(stage="stage1", label=stage1, confidence=None, query=query)
         return stage1
 
-    # Stages 2 and 3 not yet implemented — escalate to safe default.
+    stage2_label, stage2_conf = _stage2_classify(query)
+    if stage2_label is not None:
+        _log(stage="stage2", label=stage2_label, confidence=stage2_conf, query=query)
+        return stage2_label
+
+    # Stage 3 not yet implemented on this branch — escalate to safe default.
     _log(stage="fallback", label=_SAFE_DEFAULT, confidence=None, query=query)
     return _SAFE_DEFAULT
 

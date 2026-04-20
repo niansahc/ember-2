@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.16.1](https://github.com/niansahc/ember-2/compare/v0.16.0...v0.16.1) (2026-04-20)
+
+
+### Features
+
+* add explicit anti-sycophancy and register rules to instruction section ([fcfb4d2](https://github.com/niansahc/ember-2/commit/fcfb4d256ee1266abd219507428977e3c3994766))
+* ask-first intent classifier (three-tier hybrid) ([d55ba86](https://github.com/niansahc/ember-2/commit/d55ba8611229522ca2a19c122477cb6dfcf3955c))
+* **context:** integrate intent classifier into classify_query ([fb9bf09](https://github.com/niansahc/ember-2/commit/fb9bf09cc7f55b0dd0c0793e1a909d454884257f))
+* extend coaching_filter with additional sycophancy and therapeutic register patterns ([958b720](https://github.com/niansahc/ember-2/commit/958b72013e92fa5b973fdab7b271731e58a5f7ea))
+* extend nature entries with anti-sycophancy and anti-softening language ([223b29f](https://github.com/niansahc/ember-2/commit/223b29f28030997c831f295ebea61c34949d1cd3))
+* **ingest:** skip embedding for assistant-role chunks from ChatGPT import ([15f598e](https://github.com/niansahc/ember-2/commit/15f598e057a354432619d3f664130b37e93a59c7))
+* **llm:** intent classifier stage 1 structural rules ([07b9ba8](https://github.com/niansahc/ember-2/commit/07b9ba81f322cfbd35f95280c9cc9833d934d97a))
+* **llm:** intent classifier stage 2 embedding similarity ([d5c6340](https://github.com/niansahc/ember-2/commit/d5c63401525a79d1831cdfc10d145dcac1899384))
+* **llm:** intent classifier stage 3 llm fallback with timeout ([1e4afa2](https://github.com/niansahc/ember-2/commit/1e4afa2484ad363a67166b9c9eb8e0b068908abb))
+* qwen3:8b response quality (A-001 sycophancy, M-001 register) ([0305bf3](https://github.com/niansahc/ember-2/commit/0305bf34beea4ad8fc55cf9492c8fdadfe083b87))
+* replace UAT suite with 22 behavioral acceptance tests ([1538232](https://github.com/niansahc/ember-2/commit/15382320e497e48072f3713f64c6682ca55fab59))
+* replace UAT suite with 22 behavioral acceptance tests ([522b88a](https://github.com/niansahc/ember-2/commit/522b88a1cbd6200b49d2362df361e1113e91bb2f))
+* **state:** gate StateExtractor to live conversation turns only ([7b99eb7](https://github.com/niansahc/ember-2/commit/7b99eb758ed112384cc97396f923215aef66fcb4))
+
+
+### Bug Fixes
+
+* **state:** ASCII-only skip log message for Windows cp1252 ([d7fb0fd](https://github.com/niansahc/ember-2/commit/d7fb0fd0b8966458b894df0f1d2f3df2fb63fbd6))
+
 ## v0.14.2 — 2026-04-10
 
 ### Security

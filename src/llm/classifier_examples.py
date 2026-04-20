@@ -112,12 +112,20 @@ _VAULT_ANSWERABLE: list[LabeledExample] = [
     # Personal relationships
     {"query": "what did my partner and I discuss about finances", "label": "vault_answerable"},
     {"query": "what did my mom say last time we talked", "label": "vault_answerable"},
+    # Conversational / greeting — low-information but local to the chat,
+    # not an external-world question. Including so Stage 2 can anchor
+    # these queries near vault rather than letting Stage 3 guess.
+    {"query": "how are you today", "label": "vault_answerable"},
+    {"query": "how are you doing", "label": "vault_answerable"},
+    {"query": "hello what is up", "label": "vault_answerable"},
 ]
 
 
 EXAMPLES: list[LabeledExample] = _NEEDS_INTERNET + _VAULT_ANSWERABLE
 
-# Sanity check at import so accidental class imbalance surfaces early.
-assert len(_NEEDS_INTERNET) == 30, f"needs_internet count is {len(_NEEDS_INTERNET)}, expected 30"
-assert len(_VAULT_ANSWERABLE) == 30, f"vault_answerable count is {len(_VAULT_ANSWERABLE)}, expected 30"
-assert len(EXAMPLES) == 60
+# Sanity check at import so accidental class drift surfaces early. The
+# vault class runs a little higher than needs_internet because of
+# conversational-greeting patterns added to catch "hello how are you"
+# style queries — acceptable, ADR-034 does not require exact balance.
+assert len(_NEEDS_INTERNET) >= 30, f"needs_internet count is {len(_NEEDS_INTERNET)}, expected at least 30"
+assert len(_VAULT_ANSWERABLE) >= 30, f"vault_answerable count is {len(_VAULT_ANSWERABLE)}, expected at least 30"

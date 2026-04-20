@@ -16,7 +16,12 @@ class TestExplicitSearchClassification:
         "look it up",
         "look this up for me",
         "search online for the latest news",
-        "can you find the answer",
+        # ADR-034 tightening: "can you find" alone is too broad — it was
+        # misclassifying vault lookups like "can you find my current focus"
+        # as explicit web requests. The marker now requires "online" to
+        # scope it to actual web requests.
+        "can you find online the latest inflation data",
+        "can you find it online please",
         "find this online please",
         "web search for NVIDIA stock price",
     ])

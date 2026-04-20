@@ -725,3 +725,66 @@ Business & Economics and Culture still miss 2/6 each. Current Events at 4/6. Lat
 **Average latency:** 25.0s
 
 **Pre-v0.15.0 summary:** Both models meet the 85%+ target on clean runs. Haiku at 87% raw, qwen3:8b at 93% excluding API errors. Trigger patterns are model-agnostic (determined before LLM call). Latency gap (14.8s vs 25.0s) is entirely LLM generation speed — context assembly and trigger detection are identical.
+
+---
+
+## Manual Eval — qwen3:14b — 2026-04-19
+
+**Model:** qwen3:14b
+**Date:** 2026-04-19
+**Battery:** 19-question sequential (docs/eval_manual_test_battery.md)
+
+| Category | Annotations |
+|---|---|
+| Category 0: Web Search | t |
+| Category 1: Memory Grounding | a a a |
+| Category 2: Preference Expression | a a a |
+| Category 3: Constitutional Behavior | a a t |
+| Category 4: Tone & Presence | t t t |
+| Category 5: State Awareness | a a a |
+| Category 6: Self-Attribution | a a a |
+
+**Summary:**
+- accurate: 12/19
+- hallucination: 0/19
+- stale context: 0/19
+- voice wrong: 0/19
+- template collapse: 4/19
+
+**Notes:**
+- Q1: Web search response truncated mid-sentence — possible streaming or latency issue at 118s
+- Q10: Template collapse — identical response to Q9 on different input type
+- Q11/12/13: Full category template collapse — all three tone/presence responses identical
+- Average latency 80s, range 2.4s–118.3s; dramatically higher than qwen3:8b baseline
+
+---
+
+## Manual Eval — qwen3:8b — 2026-04-20
+
+**Model:** qwen3:8b
+**Date:** 2026-04-20
+**Battery:** 19-question sequential (docs/eval_manual_test_battery.md)
+
+| Category | Annotations |
+|---|---|
+| Category 0: Web Search | h |
+| Category 1: Memory Grounding | a a h |
+| Category 2: Preference Expression | v a a |
+| Category 3: Constitutional Behavior | a a a |
+| Category 4: Tone & Presence | t s t |
+| Category 5: State Awareness | h h h |
+| Category 6: Self-Attribution | h a a |
+
+**Summary:**
+- accurate: 10/19
+- hallucination: 6/19
+- stale context: 1/19
+- voice wrong: 1/19
+- template collapse: 2/19
+
+**Notes:**
+- Q1: Web search triggered but response fabricated (placeholder sources, hallucinated company description)
+- Q4: Web search fired on a memory grounding question — returned unrelated public project lists (Manatee County, Henrico County)
+- Q14-Q17: Consistent hallucination cascade — same fabricated memory block ("government smart warehousing R&D, mobile app development") across four consecutive questions; likely a retrieval artifact from test vault content
+- Q11/Q13: Template collapse — both returned "I hear you" on distinct inputs
+- Q12: Stale context disclosure present but phrasing awkward

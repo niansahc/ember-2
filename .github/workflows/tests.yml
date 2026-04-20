@@ -1,0 +1,54 @@
+name: Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pytest (Tier 1)
+        # PRIVATE_VAULT_PATH: conftest.py sets a runtime override via
+        # set_vault_path_override() but some code paths (cascade from
+        # TestClient + task_handler writes) fall back to os.getenv before
+        # the override applies. Setting the env var gives those paths a
+        # valid fallback pointing to a throwaway dir on the runner.
+        #
+        # Ignore tests/eval/test_conversation_quality.py — it imports
+        # tests/eval/harness.py which requires the anthropic package
+        # (Tier 4 cloud eval only, not in requirements.txt).
+        #
+        # Ignore tests/test_streaming_regression.py — it is explicitly
+        # documented as a Tier 3 release-gate test (mocks ollama.chat
+        # but some call path slips through and needs real Ollama).
+        # Tier 3 runs manually before releases, not in Tier 1 CI.
+        env:
+          PRIVATE_VAULT_PATH: ${{ runner.temp }}/ember_test_vault
+        run: |
+          mkdir -p "$PRIVATE_VAULT_PATH"
+          pytest tests/ -q \
+            --ignore=tests/eval/test_conversation_quality.py \
+            --ignore=tests/test_streaming_regression.py

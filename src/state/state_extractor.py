@@ -120,7 +120,7 @@ class StateExtractor:
             if no state signals are found, or if is_live_turn is False.
         """
         if not is_live_turn:
-            logger.info("[STATE_EXTRACT] Skipped — is_live_turn=False")
+            logger.info("[STATE_EXTRACT] Skipped: is_live_turn=False")
             return []
         try:
             return self._do_extract(user_message, assistant_reply)

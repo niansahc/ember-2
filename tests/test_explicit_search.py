@@ -2,9 +2,33 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from src.context.policies import classify_query
+
+
+def _ollama_reachable() -> bool:
+    """Return True if a local Ollama instance responds to /api/version.
+
+    The ask-first classifier has three stages: structural rules (fast),
+    embedding similarity via nomic-embed-text (Ollama), and LLM fallback
+    via qwen3:8b (Ollama). Implicit-web-search queries like "what is the
+    current population of Tokyo" require stages 2/3. When Ollama is not
+    reachable (CI), classify_query falls back to stage 1 and those queries
+    classify as "default" instead of "web_search".
+    """
+    try:
+        httpx.get("http://localhost:11434/api/version", timeout=1.0)
+        return True
+    except Exception:
+        return False
+
+
+_NEEDS_OLLAMA = pytest.mark.skipif(
+    not _ollama_reachable(),
+    reason="stage 2/3 classifier needs Ollama (nomic-embed-text + qwen3:8b)",
+)
 
 
 class TestExplicitSearchClassification:
@@ -31,6 +55,7 @@ class TestExplicitSearchClassification:
         assert policy.use_web_search is True
         assert policy.explicit_search_request is True
 
+    @_NEEDS_OLLAMA
     @pytest.mark.parametrize("query", [
         "what is the current population of Tokyo",
         "who won the most recent Nobel Prize",
@@ -68,6 +93,7 @@ class TestExplicitSearchBypassesAskFirst:
         )
         assert _ask_first_active is False
 
+    @_NEEDS_OLLAMA
     def test_ask_first_active_on_implicit_search(self):
         policy = classify_query("what is the current stock price of NVIDIA")
         assert policy.explicit_search_request is False

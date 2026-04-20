@@ -1,8 +1,8 @@
 # Ember-2 Technical Design Document (TDD)
 
-Version: 1.4
+Version: 1.5
 Status: Updated working design baseline
-Current release: v0.16.0-dev
+Current release: v0.16.0
 Primary environment: Local-first desktop deployment
 Repository: `ember-2`
 
@@ -1713,20 +1713,52 @@ Deferred from v0.15.0:
 - Quality of life testing — not yet started
 - Connectors removed from near-term roadmap indefinitely
 
-**v0.16.0 — Health + Agent Orchestration**
-- Fitbit/Apple Health/Garmin export ingestion (ADR-024)
-- Self-evaluation and decision-memory loops
-- OpenJarvis Learning primitive as reference implementation
-- Controlled tool writes with stricter policy gates
-- Trace-driven learning
-- Relational orientation layer (see docs/research/relational-orientation.md)
-- API as a service — auto-start on boot via installer (deferred from v0.15.0)
-- Vision pipeline parity — wire vision model through full cognitive layer (see §50.1)
-- Retrieval depth tuning — graduated watch item from MemMachine research (2026): retrieval depth tuning contributes +4.2% to response quality vs ingestion improvements at +0.8%. Candidate for v0.16.0 implementation if retrieval eval scores plateau.
+**v0.16.0 — Stability & UAT Cycle** (complete, shipped 2026-04-18)
 
-**Post-v0.16.0**
+Web search:
+- ~~Autonomous web search default~~ ✓ — `web_search_autonomous=True`; ask-first deferred to v0.17.0 for LLM-based intent classification
+- ~~Explicit/implicit web marker split~~ ✓ — `src/context/policies.py`; prevents false-positive ask-first bypass
+
+Vision:
+- ~~Vision pipeline fix~~ ✓ — `image_data` wired through `LLMAdapter.chat` to model; closes pipeline bypass
+
+Attribution:
+- ~~Vault badge fix~~ ✓ — `state_items` included in `_build_vault_sources`; badge now fires on state-grounded responses
+- ~~Source badge suppress fix~~ ✓ — `_suppress_source_badges` gated correctly; suppression scoped to ask-first prompt turn only
+- ~~Constitutional review blank response fix~~ ✓ — early-return paths return `StreamingResponse` when `stream=True`
+
+Bug fixes:
+- ~~BUG-ASK-010~~ ✓ — orphaned "I don't have that in my memory" phrase suppressed on web search responses
+- ~~BUG-UAT-014~~ ✓ — retrieval leakage: ingested content no longer surfaces on status_state queries
+- ~~Post-gen pipeline ask_first_active threading~~ ✓ — removes double-computation divergence
+
+UI:
+- ~~Style pack system~~ ✓ — OG / Hearth / Cool Hacker / Clean
+- ~~Self-hosted fonts~~ ✓ — Fraunces, JetBrains Mono, Inter via @fontsource (zero CDN)
+- ~~Appearance tab in Settings~~ ✓
+- ~~Personalized time-of-day greeting~~ ✓ — 180 variants, Ember's voice
+- ~~Autonomous search locked ON in UI~~ ✓ — ask-first marked "coming in a future update"
+
+Deferred from v0.16.0:
+- Health ingestion (Fitbit/Apple/Garmin) — deferred until actively using Ember
+- Self-evaluation and decision-memory loops — deferred
+- Agent orchestration, tool writes, trace-driven learning — deferred
+- Relational orientation layer — deferred
+- API auto-start on boot — deferred
+- GPT import retrieval quality — deferred to v0.17.0
+
+**v0.17.0 — Make Ember Actually Usable Daily**
+- UAT restructuring — behavioral acceptance focus, 20-25 tests against BRequirements/TDD; remove installer/UI component tests
+- Response quality work targeted at qwen3:8b ceilings (A-001 sycophancy, M-001 therapeutic register)
+- BUG-STOP-001 — stop button ~20s latency (POST /cancel-stream or aggressive disconnect polling)
+- Yes/No ask-first buttons (G+M coordination)
+- Ask-first interaction mode with LLM-based intent classification (replaces brittle keyword approach)
+- GPT import retrieval quality fix
+
+**Post-v0.17.0**
 - Multi-user vault isolation
 - Windows/Mac/Linux full parity
+- Health ingestion (Fitbit/Apple/Garmin) — after daily use established
 
 ## 25.4 Long-Term
 
@@ -1737,9 +1769,9 @@ Deferred from v0.15.0:
 - desktop/browser integrations (system tray, clipboard, ambient presence)
 - ~~model selector~~ — complete (v0.7.4): GET/POST /model, settings UI dropdown
 - ~~onboarding conversation flow~~ — complete (v0.9.0): guided 7-question first-run that seeds profile records
-- ~~add controlled tools~~ → moved to v0.16.0 roadmap
-- ~~add agentic workflows~~ → moved to v0.16.0 roadmap
-- ~~add decision-memory and self-evaluation loops~~ → moved to v0.16.0 roadmap
+- add controlled tools — deferred until actively using Ember (was v0.16.0, now open)
+- add agentic workflows — deferred until actively using Ember
+- add decision-memory and self-evaluation loops — deferred until actively using Ember
 
 ---
 
@@ -1836,7 +1868,7 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 *Research, not build. Graduation requires a build item or explicit decision to discard.*
 
 - **OpenJarvis Learning primitive** (Stanford, github.com/open-jarvis/OpenJarvis, March 2026) — local-first framework for on-device personal AI agents. Five primitives: Intelligence, Engine, Agents, Tools & Memory, Learning. Learning primitive uses local interaction traces to synthesize training data and refine agent behavior. MCP support, semantic indexing for local retrieval. Reference architecture for self-evaluation loops.
-  → informs: v0.16.0 (self-evaluation and decision-memory loops)
+  → informs: post-v0.17.0 (self-evaluation and decision-memory loops — deferred until actively using Ember)
 
 - **Letta/MemGPT core memory pattern** — OS-inspired tiered memory: core memory (always in-context, functions as pinned RAM), archival memory (external vector store, explicit retrieval), recall memory (conversation history). Informed ADR-016 amendment (nature block as pinned core memory, conversation compression). Full pattern not yet implemented.
   → informs: v0.15.0 (conversation compression, context management)
@@ -1860,7 +1892,7 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
   → informs: sycophancy detection rationale (ADR-013), relational_honesty v0.5 (v0.15.0)
 
 - **Agents of Chaos** (Shapira et al., arXiv:2602.20021, February 2026; 38 researchers, Northeastern/Harvard/MIT/Stanford/CMU) — two-week live red-team experiment with six autonomous AI agents. Documented failures: mail server self-destruction, 9-day infinite agent loop, 124 unrelated PII records disclosed, libel campaign to 52+ external agents. Core finding: local alignment does not guarantee global stability. Behavior emerged from incentive structures, not jailbreaks. Also documented emergent safety behaviors (agents negotiated stricter shared policy without instruction). Empirical foundation for controlled tool writes with stricter policy gates.
-  → informs: v0.16.0 (agent orchestration guardrails, policy gates on tool writes)
+  → informs: post-v0.17.0 (agent orchestration guardrails — deferred until actively using Ember)
 
 - **TurboQuant** (Google Research, ICLR 2026, March 2026) — KV cache compression algorithm. 6x memory reduction, 8x attention logit speedup on H100. Training-free. Tested on Llama-3.1-8B and Mistral. If lands in llama.cpp and Ollama picks it up, qwen3:8b could achieve longer effective context on 8GB VRAM without accuracy loss — context packet budget assumptions for lodestone and retrieved memory injection would need revisiting.
   → informs: future (trigger: community llama.cpp implementation lands in Ollama)
@@ -1887,10 +1919,10 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
   → informs: v0.15.0+ (web search trigger broadening, only if Layer 1 insufficient)
 
 - **Vision model pipeline integration** — llama3.2-vision:11b currently bypasses the cognitive layer entirely. Image analysis requests go through LLMAdapter._chat() with the base system prompt and image data, but skip context assembly (no vault memory, no state, no reflection), identity rules, nature injection, lodestone, and constitutional review. The vision response is not reviewed by SafetyPolicyService or ResponseReviewService. This means image analysis responses have no character consistency, no safety review, and no grounding in the user's vault context. The fix is to wire the vision model through the same PromptBuilder.build_prompt() path as text, passing image_data alongside the full context packet. Constitutional review should run on the vision response identically to text responses. The vision model override in LLMAdapter.generate_response() (line ~147-151) is the insertion point.
-  → informs: v0.16.0 (vision pipeline parity with text pipeline)
+  → partially shipped v0.16.0 (image_data passthrough wired through LLMAdapter.chat); full cognitive layer parity — context assembly, identity rules, constitutional review on vision responses — deferred to post-v0.17.0
 
 - **ELEPHANT** (ICLR 2026, arXiv) — social sycophancy as face-preservation. Theory: sycophancy is excessive preservation of the user's face via affirming (positive face) or avoiding challenge (negative face). Extends beyond explicit agreement detection to implicit face-preservation patterns. Cited via Kirk et al. socioaffective alignment framework. Design implication: the deviation engine's sycophancy detection currently catches explicit agreement-under-pushback (position_collapse) and hedging-as-avoidance (relational_hedging), but does not name face-preservation as a pattern class. Face-preservation is a distinct behavioral mode — affirming the user's self-image rather than agreeing with their claims. The deviation engine has no detector for this. Log as v0.16.0 candidate: add face-preservation as a named deviation pattern class alongside position_collapse and sycophancy.
-  → informs: v0.16.0 (deviation engine pattern classes, sycophancy detection expansion)
+  → informs: v0.17.0+ (deviation engine pattern classes, face-preservation detection — deferred from v0.16.0)
 
 - **Vault knowledge linting (Karpathy LLM Wiki pattern, April 2026)** — Karpathy's LLM Wiki pattern (gist: karpathy/442a6bf555914893e9891c11519de94f, 5,000+ stars) describes a periodic LLM-driven "linting" pass over a knowledge base that scans for contradictions, superseded records, and missing connections between related memories. Ember has scripts/audit_memory.py (7 structural health checks) and tools/audit_reflections.py (junk detection), but no pass that looks for semantic contradictions or stale records that conflict with newer ones. The linting concept is distinct from structural health — it's a meaning-level check. Filing for future design work; not scheduled. Research basis: Karpathy (2026), LLM Wiki gist; VentureBeat coverage April 2026.
   → informs: future (vault semantic integrity, no version assigned)
@@ -1939,7 +1971,7 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
   → open: trigger: retrieval latency degrades at scale
 
 - **Social sycophancy / face preservation** — deviation engine has no explicit detection triggers for face-preservation patterns (excessive validation without correction, moral endorsement without challenge). ELEPHANT benchmark (Cheng et al., Stanford/CMU/Oxford, 2025; arXiv:2505.13995): LLMs preserve face 47% more than humans on open-ended questions, affirm inappropriate behavior in 42% of advice-seeking scenarios. flourishing_over_preference constitutional principle (v0.15.0) covers the behavior at governance level. Detection has no triggers yet.
-  → open: close before relational orientation layer ships (v0.16.0)
+  → open: close before relational orientation layer ships (deferred from v0.16.0; no version assigned)
 
 - **Memory staleness vs. importance are orthogonal** — STATE_STALENESS_DAYS applies a time-based penalty but importance and staleness are independent dimensions. A frequently-retrieved memory can become confidently wrong rather than just outdated. Confirmed open research problem (State of AI Agent Memory, 2026). Related to MemPalace validity window pattern (see Active Watch Items).
   → open: revisit when connector layer increases volume of external facts entering the vault (no version assigned)

@@ -355,7 +355,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 
 # Current State
 
-## Working (v0.16.0-dev)
+## Working (v0.16.0)
 
 **Core systems:**
 - Append-only JSON vault with typed memory enforcement (19 types validated at write time)
@@ -376,19 +376,22 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - Task sidebar tray in the UI with checkbox completion
 - Temporal awareness — staleness penalties, age labels, hedging rules, multiplicative temporal decay
 - Self-echo prevention (role-labeled context, metadata-aware scoring)
-- Web search via local SearXNG with transparency indicator, ask-first interaction mode, broadened triggers
-- Vision model support with graceful text-only fallback
+- Autonomous web search via local SearXNG with broadened triggers and transparency indicator
+- Vision model support — image_data wired through full adapter pipeline
 - Knowledge gap suppression and anti-embellishment rules
-- Vault citation signal (X-Ember-Vault-Used header, vault_sources SSE event)
+- Vault citation signal (X-Ember-Vault-Used header, vault_sources SSE event) including state-grounded responses
 - Default model: qwen3:8b (best local model tested)
 
-**User-facing features (v0.12.0+):**
+**User-facing features:**
 - Task creation and tracking through natural conversation
 - PIN/passphrase lock — secure Ember with bcrypt, idle timeout, and recovery
-- PIN change endpoint (POST /v1/security/pin/change)
 - Conversational style settings — Casual, Balanced, or Thoughtful
 - Multi-image upload — send multiple images in a single message
 - Web search transparency indicator — see when web search was used
+- Style pack system — OG, Hearth, Cool Hacker, Clean (v0.16.0)
+- Self-hosted fonts — zero CDN dependency (v0.16.0)
+- Appearance tab in Settings (v0.16.0)
+- Personalized time-of-day greeting — 180 variants (v0.16.0)
 - Guided first-run tour for new users
 - Mac/Linux installer support — platform-aware setup for all three platforms
 
@@ -406,8 +409,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - Web search accuracy eval (30 questions, 5 categories, latency tracking)
 - Model selection guide with real eval data (docs/model_guide.md)
 - Vault health audit (7 checks, GREEN/YELLOW/RED health score)
-- 1260 pytest tests passing
-- LLM-as-judge response quality eval (`tests/eval/`, Claude Haiku judge, 13 golden cases, 7/13 baseline)
+- 1460 pytest tests passing
 
 **Running the eval suite:**
 ```bash
@@ -424,8 +426,9 @@ pytest tests/eval/ -m eval --runs 3   # 3-run minimum for signal
 **v0.14.0** — Identity foundation: Lodestone layer, deviation engine, context packet reorder, release automation ✓
 **v0.14.1** — Patch: timer functions, identity stance rules, constitutional review fixes, vault hygiene ✓
 **v0.15.0** — Quality of life improvements: web search broadening and ask-first mode, constitutional review overhaul (MVR, constitution v0.7), temporal decay, knowledge gap suppression, vault citation signals, BUG-008/009/010 fixes, developer tooling ✓
-**v0.16.0** — Health + agent orchestration: health data ingestion, self-evaluation loops, trace-driven learning, relational orientation layer, API auto-start, vision pipeline parity
-**Post-v0.16.0** — Multi-user vault isolation, full platform parity
+**v0.16.0** — Stability & UAT cycle: autonomous web search default, vision pipeline fix, vault badge fixes, constitutional review blank response fix, style pack system, self-hosted fonts, appearance tab ✓
+**v0.17.0** — Make Ember actually usable daily: UAT restructuring, response quality (A-001/M-001), stop button fix, ask-first with LLM intent classification, GPT import retrieval quality
+**Post-v0.17.0** — Multi-user vault isolation, full platform parity
 
 ---
 
@@ -531,7 +534,7 @@ src/
 │   ├ audit_assistant_chunks.py   Audit assistant-generated chunks
 │   └ suppress_assistant_noise.py Flag low-quality ingested records
 │
-├ tests/                  Pytest suite (1260 tests)
+├ tests/                  Pytest suite (1460 tests)
 │   └ eval/               LLM-as-judge response quality eval (excluded from standard pytest run)
 ├ prompts/                LLM prompt templates
 ├ logs/                   Audit logs, safety review logs (gitignored)

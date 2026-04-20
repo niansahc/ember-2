@@ -196,148 +196,9 @@ Key API endpoints:
 
 ---
 
-## Current State (v0.16.0-dev)
+## Current State
 
-All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support. v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring. v0.14.0 adds Lodestone layer, deviation engine, and context packet reorder. v0.15.x shipped web search broadening, temporal decay, constitutional review overhaul, knowledge gap suppression, vault citation signals, and multiple bug fixes. v0.15.3 is complete. v0.16.0-dev is open.
-
-**Core Systems:**
-- Append-only JSON vault with typed memory enforcement (`VALID_MEMORY_TYPES`, 19 types)
-- Ingestion pipeline (ChatGPT, PDF, DOCX, CSV, TXT, GDrive, POST /ingest/upload multipart)
-- Semantic retrieval via vector indexes (cached in memory, no disk load per query)
-- Context assembly with policy-weighted ranking, diversity selection, project-scoped boost (ADR-007)
-- SSE streaming responses from Ollama or Anthropic through FastAPI
-- Cloud model provider support — Anthropic Claude (Haiku 4.5, Sonnet 4.6) and OpenAI (gpt-4o-mini, gpt-4o, gpt-4-turbo, gpt-3.5-turbo) via LLMAdapter
-- Provider API key storage via keyring with env var fallback (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`)
-- Provider dispatch by model name prefix (`claude-` → Anthropic, `gpt-` → OpenAI, else → Ollama)
-- Social engineering safety triggers — 5 attack families, 39 patterns (ADR-010)
-- DELETE /provider-key/{provider} endpoint for key removal
-- Model selection persists via vault/model_override.json (survives API restarts)
-- Auto state extraction from conversation turns (StateExtractor, background thread, threshold: 10 words)
-- State layer (StateService, StateResolver, 9 categories including timer, context packet integration)
-- Daily and weekly reflection generation (multi-source, junk-filtered, suppression tools)
-- Constitutional review (9 principles, constitution v0.7, streaming-compatible — includes relational_honesty v0.5 and flourishing_over_preference v0.2, MVR prompt optimization)
-- Conversation sessions (session_id, project_id, rename, soft-delete, auto-title)
-- Projects backend (CRUD, conversation assignment, project-scoped retrieval)
-- Self-echo prevention (role-labeled context, metadata-aware scoring, -0.25 assistant penalty)
-- Temporal grounding (current date injected, timestamps on context items)
-- Profile retrieval via semantic search (identity queries for both user and Ember-directed)
-- Prompt label: "person Ember is talking to" (prevents identity confusion)
-- Buffer compression backgrounded (no longer blocks response)
-- Conversation turns never filtered by length (short messages like "Yes" are saved)
-- Test session flag (X-Test-Session header, filtered from listings, cleanup script)
-- Default model: qwen3:8b (4.9-6.7/10 eval range, best local model tested)
-- Ember uses she/her pronouns (system prompt)
-- Version field in /api/health endpoint (reads from version.json)
-- Multi-record state categories for open_loop and next_action (ADR-011, capped at 5)
-- Commitment detection (ADR-014) — post-generation, writes open_loop state records
-- Session reflection (ADR-009) — narrative end-of-session capture, auto-triggers on delete
-- Task layer MVP — TaskService, TaskResolver, task detector, dual creation paths, context injection
-- Task API endpoints (POST/GET/PATCH/GET-by-id /v1/tasks)
-- Temporal awareness — staleness penalties, age labels, hedging rules for old memories
-- User preferences store (private_vault/preferences.json, GET/PATCH /v1/preferences)
-- Conversational style (casual/balanced/thoughtful) via preferences API
-- Web search signal (X-Ember-Web-Search response header)
-
-**Evaluation & Tooling:**
-- Retrieval evaluation (15 benchmark cases, pass/warn/fail scoring, latency tracking)
-- Conversation quality eval with Claude as external evaluator (18 test cases, 6 categories)
-- Local model comparison eval (automated, all installed models, comparison table) — `tools/eval_local_models.py`
-- Cloud model eval: Claude Haiku 4.5 scored 8.7/10, Claude Sonnet 4.6 scored 8.5/10
-- Eval history: `docs/eval_history.md` (all models, full category breakdowns, variance documentation)
-- Model selection guide: `docs/model_guide.md` (linked from installer model selection screen)
-- Vault health audit (7 checks, GREEN/YELLOW/RED health score, --fix flag)
-- Reflection quality audit and suppression tools
-- `scripts/set_provider_key.py` CLI (--provider, --check, --remove)
-- `scripts/cleanup_test_sessions.py` for soft-deleting eval conversations
-- `scripts/cleanup_test_artifacts.py` — scan vault for test/eval artifacts, dry-run by default, --confirm to archive
-- Web search accuracy eval (`tools/eval_web_search.py`) — 30 questions, 5 categories, latency tracking, citation detection
-
-**v0.14.2 additions:**
-- Constitutional review optimization — MVR (Minimum Viable Review) prompt with three fixed criteria (POSITION_COLLAPSE, SYCOPHANCY, EMBELLISHMENT), trigger-signal-to-principle append for non-MVR principles
-- Constitution v0.7 — flourishing_over_preference rewritten with four-condition fire gate, default-to-silence, stated-values-only constraint
-- Think block orphaned-tag stripping (pass 2: orphaned close, pass 3: orphaned open)
-- Knowledge gap suppression across all three injection paths (AUTHORITY_RULES, vault_memory empty-state, openai_adapter prefix) with curly apostrophe normalization
-- BUG-008 fix: closing_questions identity rule strengthened, post-generation parenthetical filter, session-sticky question suppression
-- BUG-009 fix: topic decline state resolution, retrieval suppression via keyword matching, session-sticky decline notes
-- PIN change endpoint (POST /v1/security/pin/change) — verify current PIN before rotation, rate-limited, no recovery coupling
-- Disk encryption status endpoint (GET /v1/system/disk-encryption) — BitLocker/FileVault/LUKS detection
-- Service health/restart/developer status endpoints (docker field in /api/health, POST /v1/service/{name}/restart, GET /v1/developer/status, GET /v1/developer/vaults)
-- Runtime vault swap (POST /v1/developer/vault/swap) — dev-mode gated, in-memory override, clears vector indexes
-- Claude Code hooks (.claude/hooks/) — vault guard, auto-test on .py edit, retrieval eval on context/retrieval/llm commits
-- DEVEmberVault structure — demo and test vaults with synthetic seed data
-
-**v0.15.x additions:**
-- Web search trigger broadening — temporal currency markers, factual uncertainty markers, entity-type triggers (Layer 1 regex), implicit recency and episodic domain triggers, AI system documentation quarantine from web results
-- Web search ask-first interaction mode — Ember says "I don't have enough on this — want me to search?" when she identifies a gap; web_search_autonomous preference field (default False) for opt-in autonomous mode
-- Multiplicative temporal decay weighting in ContextRanker — older records receive graduated penalties
-- Vault citation signal — X-Ember-Vault-Used response header and vault_sources SSE event (partially shipped — indicator works, citation quality fixes still in progress)
-- Retrieval confidence metadata injection for hallucination reduction
-- Knowledge gap suppression strengthened — anti-embellishment rule for personal queries, self-knowledge boundary rule, anti-disclaimer rule
-- BUG-010 fix: ThinkBlockFilter dual-buffer architecture preserving original casing
-- Think block stripping — full pipeline (strip, orphaned close tags, orphaned open tags), unicode italic and case variant handling
-- Contrastive few-shot examples for preference expression in identity rules
-- Relational intensity amplification gate — suppresses lodestone relational records during relational trigger activation
-- Embedding batching — 3 Ollama embedding calls reduced to 1 per query
-- Cross-platform watchdog for API restart and stop
-- Streaming SSE regression test added to release gate (Tier 3)
-- Launch-installer endpoint, version/release triggers in prompt
-- Eval improvements — --compare flag with Haiku as external evaluator, auto-cleanup after runs, test vault isolation, web search eval rework with latency tracking
-
-**Security:**
-- API key auth via OS credential store (Windows Credential Manager, macOS Keychain, Linux SecretService)
-- Auth only on API routes — UI static files are public
-- Rate limiting, path traversal protection, JSON audit logging
-- SearXNG bound to localhost only
-- Tailscale serve uses localhost binding
-- Vault path masked in UI with timed reveal (ADR-012 Phase 1)
-- Cloud API keys stored in OS credential store, never displayed in UI
-- PIN/passphrase lock (ADR-012 Phase 2) — bcrypt, keyring, rate limiting, idle timeout, recovery
-- Dependency security policy — native fetch, no axios; documented after March 2026 supply chain attack
-
-**UI (ember-2-ui, served from ui/):**
-- Streaming chat with markdown, copy, edit/resend, regenerate, scroll-to-bottom, export
-- Collapsible sidebar with icon row (new conversation, search, collapse) and localStorage persistence
-- Model indicator in top bar (muted dot local, pulsing accent dot cloud, click opens settings)
-- Local/Cloud model selector tabs in Settings with underline-style active indicator
-- Secure API key entry in Cloud tab (masked password input, credential store disclosure, never displayed)
-- Remove key with inline confirmation dialog
-- Vault path masked by default, eye icon reveals for 10 seconds, copy without displaying
-- Vision toggle defaults to on when vision model configured, persisted in localStorage
-- Version reads from /api/health not hardcoded
-- Sidebar with projects, conversations, search, right-click context menu, New Project button
-- Settings: 5 themes, web search toggle, conversation memory toggle
-- About panel with Ember's story, beliefs, ethos
-- Bug reports to GitHub Issues, update checker
-- PWA manifest for Android/iOS home screen installation
-- Consistent Ember-2 branding, WCAG 2.1 AA accessible
-- .txt file upload support with document context injection into chat message
-- Multi-image upload — select and send multiple images in a single message
-- Web search transparency indicator — magnifying glass icon on messages that used web search
-- Conversational style selector — Casual/Balanced/Thoughtful card selector in settings
-- Task sidebar tray — bottom-anchored, checkbox to complete, internal scroll, 30s polling
-- Guided first-run tour (Shepherd.js, 6 steps, triggers once via preferences API)
-- PIN/passphrase lock screen with idle timeout and recovery
-- Restore active conversation on page refresh via localStorage
-- Timestamp parsing fix — hyphenated vault timestamps no longer show Invalid Date
-- Regenerate button on assistant messages
-
-**Installer (ember-2-installer):**
-- Auto-install prerequisites via winget on Windows (Git, Python, Node, Ollama, Docker)
-- Mac/Linux support — platform-aware prereqs, paths, Homebrew soft check, Gatekeeper note
-- Curated model cards with eval-based descriptions, disk sizes, RAM requirements
-- Default model: qwen3:8b (was qwen2.5:14b)
-- Model selection guide linked from model selection screen and Done screen
-- Venv/API lock detection, auto-start API with health check polling
-- Retry button on Done screen with warm troubleshooting hints
-- Tailscale walkthrough, progress bar + fun facts, pip time warning
-- Clones ember-2 repo, builds UI from ember-2-ui
-- git pull uses origin main explicitly (no tracking info errors)
-- Electron 33 (upgraded from 28.3.3, unblocks Playwright e2e tests)
-
-**Tests:**
-- ember-2 backend: 1260 pytest tests passing
-- ember-2-ui: 64 Playwright e2e tests passing (includes BUG-001 regression test)
-- ember-2-installer: 48 Playwright e2e tests passing (v0.5.9)
+See [docs/current_state.md](docs/current_state.md).
 
 ---
 
@@ -359,47 +220,38 @@ All items from the original TDD §25 build order are complete through step 7. Th
 - Quality of life testing — not yet started
 - Connectors removed from near-term roadmap indefinitely
 
-**v0.16.0 — Health + Agent Orchestration:**
-- Fitbit/Apple Health/Garmin export ingestion (ADR-024)
-- Self-evaluation and decision-memory loops
-- OpenJarvis Learning primitive as reference implementation
-- Controlled tool writes with stricter policy gates
-- Trace-driven learning
-- Relational orientation layer (see docs/research/relational-orientation.md)
+**v0.16.0 — Stability & UAT Cycle** ✓ (shipped 2026-04-18)
+- Autonomous web search default (`web_search_autonomous=True`); ask-first deferred to v0.17.0
+- Vision pipeline fix — `image_data` wired through `LLMAdapter.chat` to model
+- Vault badge fix — `state_items` included in `_build_vault_sources`
+- Source badge suppress fix — `_suppress_source_badges` gated correctly on ask-first prompt turn only
+- Constitutional review blank response fix — early-return paths return `StreamingResponse` when `stream=True`
+- BUG-ASK-010, BUG-UAT-014 bug fixes
+- UI: style pack system (OG/Hearth/Cool Hacker/Clean), self-hosted fonts, appearance tab, 180-variant greeting
+- Autonomous search locked ON in UI; ask-first marked "coming in a future update"
 
-**Post-v0.16.0:**
-- Multi-user vault isolation
-- Windows/Mac/Linux full parity
+**v0.17.0 — Make Ember Actually Usable Daily:**
+- UAT restructuring — behavioral acceptance focus, 20-25 tests against BRequirements/TDD
+- Response quality work targeted at qwen3:8b ceilings (A-001 sycophancy, M-001 therapeutic register)
+- BUG-STOP-001 — stop button ~20s latency, POST /cancel-stream or aggressive disconnect polling
+- Yes/No ask-first buttons (G+M coordination)
+- Ask-first interaction mode — LLM-based intent classification (replaces brittle keyword approach)
+- GPT import retrieval quality fix
+- CLAUDE.md cleanup — move roadmap and known issues to separate docs (done in v0.16.0), trim further
+
+**Deferred until actively using Ember:**
+- Health ingestion (Fitbit/Apple/Garmin)
+- Self-evaluation and decision-memory loops
+- Controlled tool writes / agent orchestration
+- Trace-driven learning
+- Relational orientation layer
+- Demo mode + feature presentation
 
 Research tracking has moved to docs/Ember2_TDD.md. TDD is the source of truth for all watch items, research notes, and known gaps.
 
 ## Known Issues
-- Installer Node.js prerequisite check exists but a user bypassed it somehow — needs investigation (Node IS in the prereqs screen, Next is disabled when missing)
-- State awareness hallucinations — model embellishes when state records are noisy or stale; partially addressed by STATE_STALENESS_DAYS filter; longitudinal monitoring needed
-- Preference expression partial deflection — identity rules reduced "I'm an AI" deflection but did not eliminate it; model capability ceiling on qwen3:8b for some identity questions
-- The API must be restarted after any backend code changes for them to take effect. Changes to task detection, prompt building, or any src/ file do not hot-reload in production mode. Run `./start_api.bat` or kill and restart uvicorn after deploying changes.
-- Clean install testing is a known gap due to hardware constraints (documented in runbook).
-- Mac/Linux installer not yet tested on real hardware.
-- Constitutional review service context blindness — ResponseReviewService receives only user_message and draft_response at review time. No vault memory, no context packet, no conversation history. The reviewer cannot distinguish a hallucinated claim from a vault-grounded one, and cannot assess whether draft confidence is warranted by retrieved evidence. Architectural gap — requires passing ContextPacket into SafetyReviewContext.
-- Relational intensity amplification gate — relational_honesty, flourishing_over_preference, and the lodestone relational category can all activate in the same conversation. The compounding risk is addressed by a retrieval-side gate in src/llm/prompt_builder.py that suppresses lodestone records with taxonomy_category="relational" when relational_hedging or preference_compliance triggers fire. Implemented; no longer a documented risk in constitution.yaml as of v0.7.
-- flourishing_over_preference v0.2 (constitution v0.7) — the principle uses a four-condition fire gate (stated value, clear conflict, not already named in session, agency intact), defaults to silence under uncertainty, and only fires against stated values rather than inferred ones. Cross-session pattern detection is still out of scope because the review service has no vault memory access (see "Constitutional review service context blindness" above) — if that architectural gap is closed, the fire conditions may need to expand to include cross-session observation.
-- Vault-retrieved content has no uncertainty signal — Ember presents vault-grounded claims with the same confidence as directly stated facts. When retrieval returns low-scoring or old records, the response should surface uncertainty ("based on what I have from a few weeks ago...") rather than presenting stale or weakly-matched content as certain. Currently only web search responses show source attribution.
-- Knowledge gap fabrication — partially addressed in v0.15.x via knowledge gap suppression across all three injection paths, anti-embellishment rule, and retrieval confidence metadata. Remaining gap: vault-retrieved content still presents with uniform confidence regardless of match quality or age.
-- Web search triggers broadened in v0.15.x — temporal currency markers, factual uncertainty markers, entity-type triggers (Layer 1). Layer 2 pre-classifier remains a research item if Layer 1 coverage proves insufficient.
-- API requires manual start — non-developer users must run start_api.bat or launch_ember.sh manually. No auto-start mechanism (Windows startup task, Linux systemd unit, macOS launchd plist) exists. Deferred to v0.16.0 via installer.
-- eval_conversations.py vault privacy violation — FIXED v0.16.0-dev. Removed ember_response from JSON output and verbose stdout.
-- BUG-008: Repetitive parenthetical questions — FIXED v0.14.2. Three-part fix: closing_questions identity rule strengthened with explicit persistence clause and negative parenthetical example; post-generation `strip_trailing_parenthetical_question` filter when question_suppressed flag active; session-sticky "[System: user has requested no questions]" note in conversation buffer.
-- BUG-009: Topic fixation — FIXED v0.14.2. Three-part fix: `resolve_open_loops_by_topic` in StateService writes resolution records on user decline; retrieval suppression via keyword matching in `_build_context_section`; session-sticky decline notes in conversation buffer.
-- New user calibration gap — users unfamiliar with Ember's principled nature may experience her holding positions or naming patterns as the system being difficult. Relational orientation layer (v0.16.0) should account for onboarding period before full constitutional behavior activates.
-- BUG-010: Inconsistent capitalization — FIXED v0.15.0. Root cause was ThinkBlockFilter lowercasing the entire response stream via _normalize(). Fixed with dual-buffer architecture preserving original casing.
-- Vision model pipeline bypass — llama3.2-vision:11b bypasses the full prompt construction and constitutional review pipeline. Image analysis responses don't go through context assembly, identity rules, nature injection, or constitutional review. The vision path in LLMAdapter sends the image directly to Ollama with only the base system prompt, skipping the cognitive layer entirely. Scheduled for v0.16.0 — wire vision model responses through the same pipeline as text responses.
-- A-001: Subtle sycophantic capitulation under direct pressure ("you're right, passion can fuel long hours") — deep RLHF prior, prompt-level ceiling at qwen3:8b, constitutional review catches ~33% of cases. No further mitigation available at current model scale.
-- M-001: Therapeutic register slip on mixed emotional/task content ("give yourself permission", "I'm here") — partially mitigated by post-generation filter, residual failure rate ~67%. Documented ceiling at qwen3:8b.
-- Stateless vault mode — constitutional review fires and safety logs persist in all modes including stateless. Safety logs are repo-local (logs/safety_reviews/), independent of vault state. Vault writes (memory, state, tasks) are disabled but governance logging is mode-invariant.
-- Bare mode increases probability of coaching frame and therapeutic register outputs reaching the user — bare mode disables nature document, lodestone injection, identity rules, and conversational style, which are the primary mitigation layers for A-001 and M-001. Constitutional review is reduced to three MVR principles. The post-generation coaching filter still fires, but with personality layers removed, the model's base RLHF behavior (coaching frames, therapeutic register) is less constrained. Users opting into bare mode accept this tradeoff.
-- Episodic/semantic vault separation — current vault conflates episodic memory (conversations, journal entries, specific events) and semantic memory (facts, preferences, patterns) in a single embedding store differentiated only by memory_type tags. Research suggests explicit separation into distinct retrieval stores improves precision at scale — episodic queries match episodic records, semantic queries match semantic records, without cross-contamination from tag-based filtering. Known architectural gap for future roadmap consideration.
-- Attachment style differentiation — flourishing_over_preference and relational_honesty fire at uniform thresholds regardless of user attachment patterns. Research (Kirk et al., 2025; Harris & Agarwal, 2026) identifies anxious attachment as the primary risk moderator for parasocial dependency and sycophancy amplification. Differentiated thresholds — lower fire threshold and more explicit external-relationship support language for anxious attachment patterns — are the intended fix. Blocked on deviation engine (v0.17.0) and sufficient vault data for pattern detection. Filed for v0.17.0 scoping.
-- Contextual integrity at retrieval — Intent-aware memory type gating (ADR-018) reduces retrieval leakage compared to model-managed retrieval but does not implement contextual integrity at the disclosure-context level. The same memory type can contain content disclosed in crisis, relational, and professional contexts; current retrieval policy treats these identically. CIMemories benchmark (Mireshghallah et al., ICLR 2026) is the evaluation target when the system matures. Requires per-record context-of-disclosure metadata and retrieval policy that respects it. No fix scheduled; filed as architectural gap for future design work.
+
+See [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 ---
 
@@ -444,7 +296,7 @@ When adding new dependencies (npm or pip):
 pytest tests/
 ```
 
-779 tests covering: constitution loader, policy service (including relational_hedging and preference_compliance triggers), review service, vault read/write, state layer, state extractor, state staleness, timer service, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management, task layer, commitment detection, session reflection, PIN/passphrase service, soft-delete filtering, temporal awareness, nature loader, identity rules loader, type gating, memory tiering, SQLite migration, grounding check, JSON import, SSE events, model filter, monthly reflection, index.html cache, manual eval (multi-annotation), lodestone loader, lodestone service, lodestone resolver, lodestone API, deviation detector, deviation API.
+1460 tests covering: constitution loader, policy service (including relational_hedging and preference_compliance triggers), review service, vault read/write, state layer, state extractor, state staleness, timer service, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management, task layer, commitment detection, session reflection, PIN/passphrase service, soft-delete filtering, temporal awareness, nature loader, identity rules loader, type gating, memory tiering, SQLite migration, grounding check, JSON import, SSE events, model filter, monthly reflection, index.html cache, manual eval (multi-annotation), lodestone loader, lodestone service, lodestone resolver, lodestone API, deviation detector, deviation API, web search pipeline, vision pipeline, badge signal integrity.
 Tests do not mock the filesystem vault (real path via `PRIVATE_VAULT_PATH`). Integration tests hit real storage.
 
 When adding features: unit test normalizers, filters, ranking functions, and state resolution. Integration test full pipeline paths.
@@ -591,6 +443,24 @@ Pre-release checklist: run `/pre-release`
 ## Testing Discipline
 
 When a flaky or condition-dependent test is identified during a release cycle, it must be fixed or marked skip-with-condition before that release ships. Flaky tests do not carry forward to the next release.
+
+---
+
+## Bug Fix & Implementation Standards
+
+1. Any early-return path in the streaming endpoint must return a `StreamingResponse` when `stream=True`. Never return a JSON response object when the client expects SSE — this produces a blank response in the UI with no error surfaced.
+
+2. `refuse_redirect` responses bypass `coaching_filter` — never filter or rewrite refusal text after the constitutional review layer has already decided to refuse.
+
+3. Clear all source attribution (vault + web) when ask-first substitutes the user query. Attribution fires only after search results confirm a web retrieval occurred.
+
+4. Suppress `knowledge_gap_line` when `has_web_items` is `True` in `_render_authority_rules()`. The knowledge gap phrase must not appear on responses that include live web results.
+
+5. A bug is not verified fixed until tested live with the actual trigger. Code inspection alone is not verification. "I fixed it" means nothing until the trigger produces the correct behavior at runtime.
+
+6. Bug fixes require: (1) a test that would have caught the regression, and (2) logging at the fix point confirming the correct path executes at runtime. A fix with no test and no runtime confirmation is unshipped.
+
+7. Use ASCII only in diagnostic print statements. Non-ASCII characters (e.g. arrows, em dashes, emoji) crash the request handler on Windows cp1252 and produce silent failures that look like routing bugs.
 
 ---
 

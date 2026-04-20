@@ -4,7 +4,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-from src.llm.intent_classifier import classify_intent
+from src.llm.intent_classifier import NEEDS_INTERNET, classify_intent
 
 logger = logging.getLogger("ember.policies")
 
@@ -144,7 +144,7 @@ def classify_query(user_message: str) -> ContextPolicy:
     # block. classify_intent runs Stage 1 (regex) → Stage 2 (embedding) →
     # Stage 3 (LLM with timeout) and always returns one of the two labels.
     # On needs_internet, route to web_search with ask-first applied.
-    if classify_intent(user_message) == "needs_internet":
+    if classify_intent(user_message) == NEEDS_INTERNET:
         return _web_search_policy(explicit=False)
 
     state_markers = (

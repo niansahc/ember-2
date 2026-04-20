@@ -17,11 +17,13 @@ from __future__ import annotations
 import concurrent.futures
 import json
 
+import numpy as np
 import pytest
 
 import src.llm.intent_classifier as intent_classifier
 from src.llm.intent_classifier import (
-    _cosine_similarity,
+    NEEDS_INTERNET,
+    VAULT_ANSWERABLE,
     _stage1_classify,
     _stage2_classify,
     _stage3_classify_with_timeout,
@@ -220,21 +222,18 @@ class TestAdrRequiredCasesStage1:
 def _inject_stage2_cache(
     labels_and_vectors: list[tuple[str, list[float]]],
 ) -> None:
-    """Bypass the lazy loader by injecting a minimal example cache."""
-    intent_classifier._example_embeddings = labels_and_vectors
+    """Bypass the lazy loader by injecting a minimal pre-normalized cache.
 
-
-class TestCosineSimilarity:
-    """Internal helper — sanity checks for the cosine kernel."""
-
-    def test_parallel_vectors_return_one(self):
-        assert _cosine_similarity([1.0, 0.0], [2.0, 0.0]) == pytest.approx(1.0)
-
-    def test_orthogonal_vectors_return_zero(self):
-        assert _cosine_similarity([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
-
-    def test_zero_vector_returns_zero_without_crashing(self):
-        assert _cosine_similarity([0.0, 0.0], [1.0, 1.0]) == 0.0
+    Accepts the readable (label, vector) test form and stacks + unit-
+    normalizes the vectors to match the production cache layout.
+    """
+    labels = [label for label, _ in labels_and_vectors]
+    matrix = np.asarray(
+        [vec for _, vec in labels_and_vectors], dtype=np.float32
+    )
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms = np.where(norms == 0.0, 1.0, norms)
+    intent_classifier._example_embeddings = (labels, matrix / norms)
 
 
 class TestStage2HighConfidence:

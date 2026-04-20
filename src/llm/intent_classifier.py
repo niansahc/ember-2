@@ -8,14 +8,14 @@ Classifies each user query as either:
   - vault_answerable : query should be answered from the user's personal vault
 
 Architecture (ADR-034):
-  Stage 1  Structural rules with compound first-person guard   ~2ms     (commit 1)
-  Stage 2  Embedding similarity against labeled examples       ~30-50ms (commit 2)
-  Stage 3  qwen3:8b non-thinking with JSON grammar, 800ms cap  ~300-800ms (commit 3)
+  Stage 1  Structural rules with compound first-person guard   ~2ms
+  Stage 2  Embedding similarity against labeled examples       ~30-50ms
+  Stage 3  qwen3:8b non-thinking with JSON grammar, 800ms cap  ~300-800ms
 
-All three stages are active in this commit. Stage 3 runs qwen3:8b in a
-background thread with a hard timeout read from INTENT_CLASSIFIER_TIMEOUT_MS
-(default 800ms). On timeout, the classifier returns the safe default
-("vault_answerable") per ADR-034 behavioral contract.
+Stage 3 runs qwen3:8b in a background thread with a hard timeout read
+from INTENT_CLASSIFIER_TIMEOUT_MS (default 800ms). On timeout, the
+classifier returns the safe default (vault_answerable) per the ADR-034
+behavioral contract.
 
 TODO: SetFit upgrade when 150 labels/class accumulated from logs.
 """
@@ -34,6 +34,20 @@ from src.core.config import get_ember_model, get_intent_classifier_timeout_ms
 from src.retrieval.embed_memory import embed_text, embed_texts
 
 logger = logging.getLogger("ember.intent_classifier")
+
+
+# ---------------------------------------------------------------------------
+# Labels (ADR-034)
+# ---------------------------------------------------------------------------
+
+NEEDS_INTERNET: str = "needs_internet"
+VAULT_ANSWERABLE: str = "vault_answerable"
+_VALID_LABELS: frozenset[str] = frozenset({NEEDS_INTERNET, VAULT_ANSWERABLE})
+
+# Safe default applied at every escalation path. Matches the ADR-034 Stage 3
+# timeout fallback: when uncertain, treat as vault-answerable and let the
+# user explicitly request a search if they want one.
+_SAFE_DEFAULT: str = VAULT_ANSWERABLE
 
 
 # ---------------------------------------------------------------------------
@@ -65,8 +79,8 @@ EXTERNAL_WORLD_ANCHORS = re.compile(
 def _stage1_classify(query: str) -> str | None:
     """Stage 1: compound structural rules.
 
-    Returns "needs_internet" or "vault_answerable" when confident; None
-    when the query should escalate to Stage 2.
+    Returns NEEDS_INTERNET or VAULT_ANSWERABLE when confident; None when
+    the query should escalate to Stage 2.
     """
     if not query:
         return None
@@ -81,8 +95,8 @@ def _stage1_classify(query: str) -> str | None:
             # guard, "I'm currently watching the news" would route to internet
             # because of the news signal, even though it's a personal statement.
             if has_first_person and not has_external_anchor:
-                return "vault_answerable"
-            return "needs_internet"
+                return VAULT_ANSWERABLE
+            return NEEDS_INTERNET
     return None
 
 
@@ -91,15 +105,18 @@ def _stage1_classify(query: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Reuses the existing Ollama nomic-embed-text pipeline so no new dependency
 # is introduced. Example embeddings are lazy-loaded once per process and
-# cached in memory.
+# cached as a pre-normalized numpy matrix so each query only costs one
+# embed call + one matrix-vector dot product.
 
 _STAGE2_CONFIDENCE_THRESHOLD: float = 0.65
 
-_example_embeddings: list[tuple[str, list[float]]] | None = None
+# Cache shape: (labels_list, normalized_matrix) where matrix rows are unit
+# vectors so cosine similarity reduces to a pure dot product at query time.
+_example_embeddings: tuple[list[str], np.ndarray] | None = None
 
 
-def _get_example_embeddings() -> list[tuple[str, list[float]]] | None:
-    """Lazy-load and cache (label, embedding) pairs for the example pool.
+def _get_example_embeddings() -> tuple[list[str], np.ndarray] | None:
+    """Lazy-load and cache the (labels, normalized-matrix) pair.
 
     Returns None on any failure so Stage 2 can escalate gracefully without
     raising. The most common failure mode is Ollama being unreachable.
@@ -112,8 +129,15 @@ def _get_example_embeddings() -> list[tuple[str, list[float]]] | None:
 
         texts = [ex["query"] for ex in EXAMPLES]
         labels = [ex["label"] for ex in EXAMPLES]
-        embeddings = embed_texts(texts)
-        _example_embeddings = list(zip(labels, embeddings))
+        raw_embeddings = embed_texts(texts)
+        matrix = np.asarray(raw_embeddings, dtype=np.float32)
+        # Unit-normalize each row so cosine similarity becomes matrix @ q.
+        # Guard against zero-norm rows (shouldn't happen with real embeddings
+        # but defensive — np.where avoids the divide-by-zero warning).
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        norms = np.where(norms == 0.0, 1.0, norms)
+        matrix = matrix / norms
+        _example_embeddings = (labels, matrix)
         return _example_embeddings
     except Exception as exc:
         logger.warning(
@@ -121,16 +145,6 @@ def _get_example_embeddings() -> list[tuple[str, list[float]]] | None:
             exc,
         )
         return None
-
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Cosine similarity of two vectors. Returns 0.0 on degenerate input."""
-    a_arr = np.asarray(a, dtype=np.float32)
-    b_arr = np.asarray(b, dtype=np.float32)
-    denom = float(np.linalg.norm(a_arr) * np.linalg.norm(b_arr))
-    if denom == 0.0:
-        return 0.0
-    return float(np.dot(a_arr, b_arr) / denom)
 
 
 def _stage2_classify(query: str) -> tuple[str | None, float | None]:
@@ -143,9 +157,10 @@ def _stage2_classify(query: str) -> tuple[str | None, float | None]:
     if not query:
         return None, None
 
-    examples = _get_example_embeddings()
-    if not examples:
+    cached = _get_example_embeddings()
+    if cached is None:
         return None, None
+    labels, matrix = cached
 
     try:
         query_emb = embed_text(query)
@@ -156,9 +171,17 @@ def _stage2_classify(query: str) -> tuple[str | None, float | None]:
         )
         return None, None
 
-    scored = [(label, _cosine_similarity(query_emb, emb)) for label, emb in examples]
-    scored.sort(key=lambda item: item[1], reverse=True)
-    top_label, top_conf = scored[0]
+    query_vec = np.asarray(query_emb, dtype=np.float32)
+    query_norm = float(np.linalg.norm(query_vec))
+    if query_norm == 0.0:
+        return None, None
+    query_vec = query_vec / query_norm
+
+    # Matrix rows and query_vec are both unit-normalized → cosine is the dot.
+    scores = matrix @ query_vec
+    top_idx = int(np.argmax(scores))
+    top_conf = float(scores[top_idx])
+    top_label = labels[top_idx]
 
     if top_conf >= _STAGE2_CONFIDENCE_THRESHOLD:
         return top_label, top_conf
@@ -173,6 +196,12 @@ def _stage2_classify(query: str) -> tuple[str | None, float | None]:
 # (vault_answerable) rather than wait for the model to finish. A thread
 # left behind on timeout will drain naturally; we do not try to kill it,
 # but we do return immediately to the caller.
+#
+# The executor is per-call rather than a module singleton: with max_workers=1,
+# a stuck Ollama call would cascade-timeout every subsequent Stage 3 query
+# because later submissions would queue behind it. Per-call executors let
+# concurrent classify_intent calls attempt Stage 3 in parallel; the creation
+# overhead (~2-5ms) is noise next to the 800ms budget.
 
 _STAGE3_SYSTEM_PROMPT: str = (
     "You are a binary intent classifier. Decide whether the user's query "
@@ -202,7 +231,7 @@ def _stage3_llm_call(query: str) -> str:
         content = response["message"]["content"]
         data = json.loads(content)
         label = data.get("label")
-        if label in ("needs_internet", "vault_answerable"):
+        if label in _VALID_LABELS:
             return label
         logger.warning(
             "[INTENT_CLASSIFY] Stage 3 returned unknown label: %r", label
@@ -224,13 +253,10 @@ def _stage3_classify_with_timeout(query: str) -> tuple[str, bool]:
     try:
         future = executor.submit(_stage3_llm_call, query)
         try:
-            label = future.result(timeout=timeout_s)
-            return label, False
+            return future.result(timeout=timeout_s), False
         except concurrent.futures.TimeoutError:
             return _SAFE_DEFAULT, True
     finally:
-        # Do not wait for the background thread — it may still be running.
-        # Python will reclaim it when it naturally completes.
         executor.shutdown(wait=False)
 
 
@@ -238,14 +264,9 @@ def _stage3_classify_with_timeout(query: str) -> tuple[str, bool]:
 # Public API
 # ---------------------------------------------------------------------------
 
-# Safe default applied at every escalation path. Matches the ADR-034 Stage 3
-# timeout fallback: when uncertain, treat as vault-answerable and let the
-# user explicitly request a search if they want one.
-_SAFE_DEFAULT: str = "vault_answerable"
-
 
 def classify_intent(query: str) -> str:
-    """Classify a user query as needs_internet or vault_answerable.
+    """Classify a user query as NEEDS_INTERNET or VAULT_ANSWERABLE.
 
     Runs the full ADR-034 cascade. Always returns one of the two valid
     labels — never raises, never returns None. Emits exactly one

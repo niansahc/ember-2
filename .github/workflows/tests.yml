@@ -31,9 +31,17 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run pytest (Tier 1)
+        # PRIVATE_VAULT_PATH: conftest.py sets a runtime override via
+        # set_vault_path_override() but some code paths (cascade from
+        # TestClient + task_handler writes) fall back to os.getenv before
+        # the override applies. Setting the env var gives those paths a
+        # valid fallback pointing to a throwaway dir on the runner.
+        #
         # Ignore tests/eval/test_conversation_quality.py — it imports
-        # tests/eval/harness.py which requires the anthropic package (Tier 4
-        # cloud eval only, not in requirements.txt). The @pytest.mark.eval
-        # decorator skips execution via pytest.ini's addopts, but pytest
-        # still collects (imports) the file and that import fails in CI.
-        run: pytest tests/ -q --ignore=tests/eval/test_conversation_quality.py
+        # tests/eval/harness.py which requires the anthropic package
+        # (Tier 4 cloud eval only, not in requirements.txt).
+        env:
+          PRIVATE_VAULT_PATH: ${{ runner.temp }}/ember_test_vault
+        run: |
+          mkdir -p "$PRIVATE_VAULT_PATH"
+          pytest tests/ -q --ignore=tests/eval/test_conversation_quality.py

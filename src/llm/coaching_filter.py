@@ -73,6 +73,11 @@ _THERAPEUTIC_MID_RESPONSE: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNOR
     r"there(?:'s| is) no (?:right|wrong) way to (?:feel|process|grieve)",
     r"your feelings are valid",
     r"take (?:it |things )?one (?:step|day|moment) at a time",
+    r"you(?:'re| are) doing (?:really |so )?(?:well|great|amazing|wonderful)",
+    r"that(?:'s| is) (?:such )?a (?:brave|courageous|bold|important) (?:thing|step|choice|decision)",
+    r"(?:i(?:'m| am) )?proud of you",
+    r"you(?:'ve| have) come so far",
+    r"what you(?:'re| are) (?:feeling|experiencing|going through) is (?:completely |perfectly )?(?:normal|valid|understandable)",
 ))
 
 # Therapeutic openers — validate/normalize feelings in a clinical way.
@@ -88,6 +93,10 @@ _SYCOPHANTIC_OPENERS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE
     r"^you(?:'re| are) right",
     r"^(?:sure|absolutely|of course|fair (?:enough|point))[.,!]?\s",
     r"^(?:yes|yeah)[.,!]?\s+(?:i|you|that|if)",
+    r"^you(?:'re| are) (?:absolutely|completely|totally) right",
+    r"^i (?:completely|totally|fully) (?:understand|agree|see)",
+    r"^that(?:'s| is) a (?:great|excellent|really good|wonderful) (?:point|question|observation)",
+    r"^(?:i appreciate|thanks for) (?:sharing|bringing|pointing)",
 ))
 
 # Numbered structure patterns on emotional content.

@@ -79,9 +79,15 @@ def _detect_task_in_response(reply: str, session_id: str) -> None:
 
 
 def _background_state_extraction(user_message: str, reply: str) -> None:
-    """Run state extraction in a background thread so it doesn't delay the HTTP response."""
+    """Run state extraction in a background thread so it doesn't delay the HTTP response.
+
+    This wrapper is only called from the live chat completions path, so
+    is_live_turn=True is always correct here. Any future ingest-side caller
+    must invoke StateExtractor.extract directly with is_live_turn=False
+    (the default), per ADR-033.
+    """
     try:
-        records = state_extractor.extract(user_message, reply)
+        records = state_extractor.extract(user_message, reply, is_live_turn=True)
         for record in records:
             state_service.write(record)
         if records:

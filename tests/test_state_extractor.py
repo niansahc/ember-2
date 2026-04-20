@@ -21,13 +21,13 @@ class TestShortMessageSkipping:
 
     def test_very_short_message_returns_empty(self):
         extractor = StateExtractor()
-        result = extractor.extract("hi", "Hello!")
+        result = extractor.extract("hi", "Hello!", is_live_turn=True)
         assert result == []
 
     def test_under_threshold_returns_empty(self):
         extractor = StateExtractor()
         short = " ".join(["word"] * (MIN_WORDS_FOR_EXTRACTION - 1))
-        result = extractor.extract(short, "Some reply.")
+        result = extractor.extract(short, "Some reply.", is_live_turn=True)
         assert result == []
 
     def test_exactly_at_threshold_attempts_extraction(self):
@@ -38,7 +38,7 @@ class TestShortMessageSkipping:
             mock_ollama.chat.return_value = {
                 "message": {"content": '{"extractions": []}'}
             }
-            result = extractor.extract(at_threshold, "Reply.")
+            result = extractor.extract(at_threshold, "Reply.", is_live_turn=True)
             assert mock_ollama.chat.called
             assert result == []
 
@@ -56,7 +56,7 @@ class TestShortMessageSkipping:
             mock_ollama.chat.return_value = {
                 "message": {"content": response_json}
             }
-            result = extractor.extract(msg, "Got it.")
+            result = extractor.extract(msg, "Got it.", is_live_turn=True)
             assert mock_ollama.chat.called
             assert len(result) == 1
             assert result[0].type == "current_focus"
@@ -70,7 +70,7 @@ class TestErrorHandling:
         long_msg = "I need to work on the authentication system for the new project this week"
         with patch("src.state.state_extractor.ollama") as mock_ollama:
             mock_ollama.chat.side_effect = Exception("Connection refused")
-            result = extractor.extract(long_msg, "Sure, I can help.")
+            result = extractor.extract(long_msg, "Sure, I can help.", is_live_turn=True)
             assert result == []
 
     def test_invalid_json_returns_empty(self):
@@ -80,7 +80,7 @@ class TestErrorHandling:
             mock_ollama.chat.return_value = {
                 "message": {"content": "This is not JSON at all!"}
             }
-            result = extractor.extract(long_msg, "Sure thing.")
+            result = extractor.extract(long_msg, "Sure thing.", is_live_turn=True)
             assert result == []
 
     def test_malformed_json_returns_empty(self):
@@ -90,7 +90,7 @@ class TestErrorHandling:
             mock_ollama.chat.return_value = {
                 "message": {"content": '{"extractions": "not a list"}'}
             }
-            result = extractor.extract(long_msg, "Sure thing.")
+            result = extractor.extract(long_msg, "Sure thing.", is_live_turn=True)
             assert result == []
 
 
@@ -110,7 +110,7 @@ class TestConfidenceFiltering:
             mock_ollama.chat.return_value = {
                 "message": {"content": response_json}
             }
-            result = extractor.extract(long_msg, "Let me help with that.")
+            result = extractor.extract(long_msg, "Let me help with that.", is_live_turn=True)
             assert len(result) == 1
             assert result[0].type == "current_focus"
             assert result[0].text == "Database migration"
@@ -127,7 +127,7 @@ class TestConfidenceFiltering:
             mock_ollama.chat.return_value = {
                 "message": {"content": response_json}
             }
-            result = extractor.extract(long_msg, "Got it.")
+            result = extractor.extract(long_msg, "Got it.", is_live_turn=True)
             assert len(result) == 1
             assert result[0].type == "priority"
 
@@ -144,7 +144,7 @@ class TestConfidenceFiltering:
             mock_ollama.chat.return_value = {
                 "message": {"content": response_json}
             }
-            result = extractor.extract(long_msg, "Sure.")
+            result = extractor.extract(long_msg, "Sure.", is_live_turn=True)
             assert result == []
 
 
@@ -164,7 +164,7 @@ class TestCategoryValidation:
             mock_ollama.chat.return_value = {
                 "message": {"content": response_json}
             }
-            result = extractor.extract(long_msg, "Let me help.")
+            result = extractor.extract(long_msg, "Let me help.", is_live_turn=True)
             assert len(result) == 1
             assert result[0].type == "current_focus"
 
@@ -189,7 +189,7 @@ class TestRecordStructure:
             mock_ollama.chat.return_value = {
                 "message": {"content": response_json}
             }
-            result = extractor.extract(long_msg, "I see.")
+            result = extractor.extract(long_msg, "I see.", is_live_turn=True)
             assert len(result) == 1
             record = result[0]
             assert record.type == "blocker"
@@ -207,5 +207,5 @@ class TestRecordStructure:
             mock_ollama.chat.return_value = {
                 "message": {"content": response_json}
             }
-            result = extractor.extract(long_msg, "Okay.")
+            result = extractor.extract(long_msg, "Okay.", is_live_turn=True)
             assert result == []

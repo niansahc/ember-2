@@ -92,7 +92,12 @@ class StateExtractor:
     def __init__(self, model: str | None = None) -> None:
         self.model = model or get_ember_model()
 
-    def extract(self, user_message: str, assistant_reply: str) -> list[StateRecord]:
+    def extract(
+        self,
+        user_message: str,
+        assistant_reply: str,
+        is_live_turn: bool = False,
+    ) -> list[StateRecord]:
         """
         Analyze a conversation turn and extract state signals.
 
@@ -102,13 +107,21 @@ class StateExtractor:
             The user's message from this turn.
         assistant_reply : str
             Ember's response from this turn.
+        is_live_turn : bool
+            Must be True for extraction to proceed. Defaults to False so
+            any caller that forgets the flag skips extraction — which is
+            the safer failure mode (per ADR-033: ingest content must never
+            be treated as live user-authored content).
 
         Returns
         -------
         list[StateRecord]
-            Zero or more state records to write. Empty list on any error
-            or if no state signals are found.
+            Zero or more state records to write. Empty list on any error,
+            if no state signals are found, or if is_live_turn is False.
         """
+        if not is_live_turn:
+            logger.info("[STATE_EXTRACT] Skipped: is_live_turn=False")
+            return []
         try:
             return self._do_extract(user_message, assistant_reply)
         except Exception as exc:

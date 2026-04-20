@@ -141,6 +141,16 @@ def get_retrieval_min_raw_score() -> float:
     return float(os.getenv("RETRIEVAL_MIN_RAW_SCORE", "0.5"))
 
 
+def get_intent_classifier_timeout_ms() -> int:
+    """Hard timeout for Stage 3 of the ADR-034 intent classifier.
+
+    Per ADR-034, Stage 3 calls qwen3:8b in non-thinking mode; 800ms is
+    a conservative cap on target hardware. On timeout the classifier
+    falls back to vault_answerable (the behavioral-contract-safe default).
+    """
+    return int(os.getenv("INTENT_CLASSIFIER_TIMEOUT_MS", "800"))
+
+
 def get_ember_vision_model() -> str | None:
     """
     Returns the Ollama vision model for image analysis, or None if not configured.

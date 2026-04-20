@@ -4,74 +4,9 @@ import logging
 import re
 from dataclasses import dataclass, field
 
+from src.llm.intent_classifier import NEEDS_INTERNET, classify_intent
+
 logger = logging.getLogger("ember.policies")
-
-
-# ---------------------------------------------------------------------------
-# Layer 1: Entity-type web search triggers (volatile entity + state query)
-# ---------------------------------------------------------------------------
-# Dual-condition: query must match BOTH a volatile entity signal AND a
-# state query pattern to trigger web search. This prevents false positives
-# on vault-answerable questions while catching current-state questions
-# about external, time-sensitive entities.
-#
-# Layer 2 (future, TDD watch item): prompt-based pre-classifier using
-# a 50-token Ollama call when Layer 1 is uncertain. Not implemented.
-# ---------------------------------------------------------------------------
-
-VOLATILE_ENTITY_SIGNALS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
-    # Finance
-    r"\b(?:price|cost|trading|stock|crypto|bitcoin|btc|ethereum|eth)\b",
-    r"\b(?:interest rate|inflation|fed(?:eral)?|gdp|s&p|nasdaq|dow)\b",
-    r"\b(?:market|earnings|ipo|dividend|yield|forex)\b",
-    # Current roles
-    r"\b(?:ceo|president|prime minister|chancellor)\b",
-    r"\bwho (?:is|runs|leads|heads|founded)\b",
-    # Culture / entertainment
-    r"\b(?:trending|popular|top rated|number one|box office)\b",
-    r"\b(?:billboard|grammy|oscar|emmy|golden globe)\b",
-    r"\b(?:movies?|shows?|albums?|games?|songs?|episodes?|series)\b",
-    r"\b(?:streaming|netflix|spotify|disney|hbo|amazon prime)\b",
-    # Current events
-    r"\b(?:war|election|vote|policy|legislation|law|sanction)\b",
-    r"\b(?:weather|forecast|temperature|hurricane|earthquake|wildfire)\b",
-    r"\b(?:score|match|standings|playoff|championship|tournament)\b",
-    r"\b(?:nba|nfl|mlb|nhl|premier league|formula 1|f1|wimbledon)\b",
-    # Current state markers — "current" added because "what
-    # is the current population of Tokyo" was missed because the word list
-    # had "currently" but not the bare adjective form.
-    r"\b(?:current|currently|still|now|latest|newest|most recent|right now|these days)\b",
-    # Demographics / statistics — volatile at national/city scale
-    r"\b(?:population|gdp per capita|unemployment rate|birth rate|death rate|census)\b",
-    # Version / release queries — facts that change frequently
-    r"\bwhat version\b",
-    r"\blatest (?:version|release|update)\b",
-    r"\bcurrent (?:version|release|update)\b",
-    r"\bwhen did .* (?:release|launch|ship|come out)\b",
-))
-
-STATE_QUERY_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
-    # What/who/where/how + auxiliary or common past-tense event verb
-    # Added "trading" and "currently" to catch "what is NVDA trading at"
-    r"(?:^|\b)(?:what|who|where|when|how|how much|how many)\b.*\b(?:is|are|does|do|has|have|was|were|did|won|released|announced|scored|traded|happened|trading|currently)\b",
-    # Auxiliary-first questions (yes/no form)
-    r"^(?:is|are|does|do|has|have|can|will|did)\b",
-    # Contractions
-    r"^(?:what's|who's|where's|how's)\b",
-    # Short queries with time/state marker (e.g. "bitcoin now", "weather today")
-    # Excludes possessive forms (my, our) which indicate vault queries
-    r"(?<!\bmy\s)(?<!\bour\s)\b(?:now|today|right now|this (?:week|month|year))\b",
-))
-
-
-def _matches_volatile_entity(q: str) -> bool:
-    """Return True if the query references a volatile external entity."""
-    return any(p.search(q) for p in VOLATILE_ENTITY_SIGNALS)
-
-
-def _matches_state_query(q: str) -> bool:
-    """Return True if the query is a present-tense state question."""
-    return any(p.search(q) for p in STATE_QUERY_PATTERNS)
 
 
 # ---------------------------------------------------------------------------
@@ -124,56 +59,6 @@ def _matches_relational_query(q: str) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Tier 2: Implicit recency — always triggers web search alone
-# ---------------------------------------------------------------------------
-
-IMPLICIT_RECENCY_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
-    r"\b(?:this (?:month|week|weekend|season|year|quarter))\b",
-    r"\b(?:last (?:month|week|weekend|few weeks|few days))\b",
-    r"\b(?:upcoming|scheduled)\b",
-    r"\bjust (?:announced|released|launched)\b",
-    r"\bnewly (?:released|launched|opened)\b",
-))
-
-# ---------------------------------------------------------------------------
-# Tier 3: Episodic event domains — require event-class structure to trigger
-# ---------------------------------------------------------------------------
-
-EPISODIC_EVENT_DOMAINS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
-    # Business
-    r"\b(?:layoffs?|merger|acquisition|bankruptcy|funding round|scandal|recall|lawsuit)\b",
-    # Entertainment
-    r"\b(?:premiere|premiered|new (?:season|episode|film)|box office|award show|cancelled|renewed)\b",
-    # Sports
-    r"\b(?:standings|draft|trade|transfer)\b",
-    # Political
-    r"\b(?:election|voted?|passed|signed into law|appointed|resigned)\b",
-))
-
-# ---------------------------------------------------------------------------
-# Tier 3b: "What happened" syntactic patterns — always trigger
-# ---------------------------------------------------------------------------
-
-WHAT_HAPPENED_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
-    r"\bwhat\b.*\b(?:happened|is happening|are happening|going on)\b",
-    r"\bwhat\b.*\bto (?:watch|see|know|read)\b",
-    r"\b(?:this|next) (?:weekend|week|month|season)\b",
-))
-
-
-def _matches_implicit_recency(q: str) -> bool:
-    return any(p.search(q) for p in IMPLICIT_RECENCY_PATTERNS)
-
-
-def _matches_episodic_event(q: str) -> bool:
-    return any(p.search(q) for p in EPISODIC_EVENT_DOMAINS)
-
-
-def _matches_what_happened(q: str) -> bool:
-    return any(p.search(q) for p in WHAT_HAPPENED_PATTERNS)
-
-
 @dataclass
 class ContextPolicy:
     name: str
@@ -204,12 +89,63 @@ class ContextPolicy:
     min_score: float = 0.25
 
 
+# Explicit web-search phrases. These always bypass ask-first — the user's
+# own words ARE the confirmation (ADR-034 behavioral contract rule 3).
+# "can you find" was previously here in bare form but was overly broad —
+# "can you find my current focus" is a vault lookup, not a web request.
+_EXPLICIT_WEB_MARKERS: tuple[str, ...] = (
+    "search the web",
+    "search online",
+    "look up online",
+    "look this up",
+    "look it up",
+    "google",
+    "find online",
+    "find this online",
+    "find it online",
+    "can you find online",
+    "can you find it online",
+    "web search",
+)
+
+
+def _web_search_policy(explicit: bool) -> ContextPolicy:
+    """Construct the shared web_search policy shape.
+
+    `explicit=True` means the user explicitly requested a search — ask-first
+    is bypassed. `explicit=False` means the intent classifier routed here;
+    ask-first applies.
+    """
+    return ContextPolicy(
+        name="web_search",
+        memory_weight=0.5,
+        reflection_weight=0.3,
+        recency_bias=0.0,
+        diversity=False,
+        use_web_search=True,
+        explicit_search_request=explicit,
+    )
+
+
 def classify_query(user_message: str) -> ContextPolicy:
     q = user_message.lower()
     # Normalize curly apostrophes to straight so markers like "what's" match
     # regardless of input source (Open WebUI, mobile keyboards, etc.)
     q = q.replace("\u2018", "'").replace("\u2019", "'")
     logger.warning("[CLASSIFY] normalized query: %s", q[:120])
+
+    # Stage 0: explicit web-search request. User-stated instruction, not
+    # intent inference — bypass ask-first and skip the intent classifier.
+    if any(marker in q for marker in _EXPLICIT_WEB_MARKERS):
+        logger.warning("[CLASSIFY] intent=web_search trigger=explicit")
+        return _web_search_policy(explicit=True)
+
+    # Intent classifier (ADR-034): replaces the legacy multi-trigger keyword
+    # block. classify_intent runs Stage 1 (regex) → Stage 2 (embedding) →
+    # Stage 3 (LLM with timeout) and always returns one of the two labels.
+    # On needs_internet, route to web_search with ask-first applied.
+    if classify_intent(user_message) == NEEDS_INTERNET:
+        return _web_search_policy(explicit=False)
 
     state_markers = (
         "what am i working on",
@@ -285,58 +221,6 @@ def classify_query(user_message: str) -> ContextPolicy:
         "remember when",
     )
 
-    # Checked before factual_recall — "search the web" is more specific than
-    # the bare "search" marker in factual_recall_markers.
-    explicit_web_markers = (
-        "search the web",
-        "search online",
-        "look up online",
-        "look this up",
-        "look it up",
-        "google",
-        "find online",
-        "find this online",
-        "find it online",
-        "can you find",
-        "web search",
-    )
-
-    implicit_web_markers = (
-        "what's the latest",
-        "what is the latest",
-        "current news",
-        "news about",
-    )
-
-    # Factual uncertainty — the user is asking whether something external
-    # is true. These never resolve from the vault.
-    factual_uncertainty_markers = (
-        "is it true that",
-        "has there been",
-        "did they announce",
-        "have they released",
-        "is there a new",
-        "what's happening with",
-        "what is happening with",
-        "has anyone",
-        "have they",
-    )
-
-    # Temporal currency — temporal word + external-event context word.
-    # "What happened yesterday" → web search.
-    # "What did I do yesterday" → vault (recent_markers handles this).
-    # The compound requirement prevents false positives on personal
-    # temporal queries. Ask-first mode is the safety net.
-    temporal_currency_words = (
-        "today", "yesterday", "last night", "this morning",
-        "last week", "this month", "over the weekend",
-    )
-    event_context_words = (
-        "happened", "news", "announced", "released", "launched",
-        "update on", "latest on", "going on with", "situation with",
-        "election", "game", "match", "score", "weather",
-    )
-
     # Status/state queries resolve against current state first — checked before
     # reflective so "what am I working on" routes to state, not reflection.
     if any(marker in q for marker in state_markers):
@@ -360,57 +244,6 @@ def classify_query(user_message: str) -> ContextPolicy:
             recency_bias=0.2,
             diversity=True,
             prefer_experiences=True,
-        )
-
-    # Web search: multiple trigger paths, all route to the same policy.
-    # 1. Explicit markers ("search the web", "google", etc.)
-    _explicit_web = any(marker in q for marker in explicit_web_markers)
-    _implicit_web = any(marker in q for marker in implicit_web_markers)
-    # 2. Factual uncertainty ("is it true that", "has there been", etc.)
-    _factual_uncertainty = any(marker in q for marker in factual_uncertainty_markers)
-    # 3. Temporal currency compound: temporal word + event context word.
-    #    Requires both — "yesterday" alone is personal (vault), but
-    #    "what happened yesterday" is external (web).
-    _temporal_currency = (
-        any(t in q for t in temporal_currency_words)
-        and any(e in q for e in event_context_words)
-    )
-    # 4. Layer 1 entity-type: volatile entity signal + state query pattern.
-    #    Dual-condition prevents false positives on vault-answerable
-    #    questions while catching "What is the current price of Bitcoin?"
-    #    or "Who is the CEO of OpenAI?"
-    _entity_trigger = _matches_volatile_entity(q) and _matches_state_query(q)
-    # 5. Implicit recency: "this week", "last month", "just announced", etc.
-    #    Always triggers — any implicit recency marker = web search.
-    _implicit_recency = _matches_implicit_recency(q)
-    # 6. Episodic event domain + state query: "layoffs", "premiere", etc.
-    #    Requires event-class structure (episodic domain word present) to
-    #    reduce false positives on vault-answerable election/trade discussions.
-    _episodic_event = _matches_episodic_event(q) and _matches_state_query(q)
-    # 7. "What happened" syntactic patterns: always triggers.
-    _what_happened = _matches_what_happened(q)
-
-    if (_explicit_web or _implicit_web or _factual_uncertainty or _temporal_currency
-            or _entity_trigger or _implicit_recency or _episodic_event or _what_happened):
-        _trigger = (
-            "explicit" if _explicit_web
-            else "implicit_web" if _implicit_web
-            else "factual_uncertainty" if _factual_uncertainty
-            else "temporal_currency" if _temporal_currency
-            else "entity_type" if _entity_trigger
-            else "implicit_recency" if _implicit_recency
-            else "episodic_event" if _episodic_event
-            else "what_happened"
-        )
-        logger.warning("[CLASSIFY] intent=web_search trigger=%s", _trigger)
-        return ContextPolicy(
-            name="web_search",
-            memory_weight=0.5,
-            reflection_weight=0.3,
-            recency_bias=0.0,
-            diversity=False,
-            use_web_search=True,
-            explicit_search_request=_explicit_web,
         )
 
     if any(marker in q for marker in factual_recall_markers):

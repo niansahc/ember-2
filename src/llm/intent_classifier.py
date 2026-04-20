@@ -12,20 +12,25 @@ Architecture (ADR-034):
   Stage 2  Embedding similarity against labeled examples       ~30-50ms (commit 2)
   Stage 3  qwen3:8b non-thinking with JSON grammar, 800ms cap  ~300-800ms (commit 3)
 
-Only Stages 1 and 2 are active in this commit. Stage 3 lands in the next
-commit on the same branch. Until then, escalation from Stage 2 falls
-through to the safe default: "vault_answerable".
+All three stages are active in this commit. Stage 3 runs qwen3:8b in a
+background thread with a hard timeout read from INTENT_CLASSIFIER_TIMEOUT_MS
+(default 800ms). On timeout, the classifier returns the safe default
+("vault_answerable") per ADR-034 behavioral contract.
 
 TODO: SetFit upgrade when 150 labels/class accumulated from logs.
 """
 
 from __future__ import annotations
 
+import concurrent.futures
+import json
 import logging
 import re
 
 import numpy as np
+import ollama
 
+from src.core.config import get_ember_model, get_intent_classifier_timeout_ms
 from src.retrieval.embed_memory import embed_text, embed_texts
 
 logger = logging.getLogger("ember.intent_classifier")
@@ -161,6 +166,75 @@ def _stage2_classify(query: str) -> tuple[str | None, float | None]:
 
 
 # ---------------------------------------------------------------------------
+# Stage 3: qwen3:8b non-thinking JSON-grammar fallback with hard timeout
+# ---------------------------------------------------------------------------
+# Runs the local LLM in a background thread so the caller can impose a
+# hard timeout. On timeout we return the ADR-mandated safe default
+# (vault_answerable) rather than wait for the model to finish. A thread
+# left behind on timeout will drain naturally; we do not try to kill it,
+# but we do return immediately to the caller.
+
+_STAGE3_SYSTEM_PROMPT: str = (
+    "You are a binary intent classifier. Decide whether the user's query "
+    "requires current information from the internet, or can be answered "
+    "from the user's personal vault of memories and notes. Respond with "
+    'ONLY JSON in this exact form: {"label": "needs_internet"} or '
+    '{"label": "vault_answerable"}. No other text.'
+)
+
+
+def _stage3_llm_call(query: str) -> str:
+    """Single LLM call for Stage 3. Returns a label or the safe default.
+
+    Must not raise — all exceptions are caught and converted to the safe
+    default so the caller's timeout wrapper sees a clean return.
+    """
+    try:
+        response = ollama.chat(
+            model=get_ember_model(),
+            messages=[
+                {"role": "system", "content": _STAGE3_SYSTEM_PROMPT},
+                {"role": "user", "content": query[:500]},
+            ],
+            format="json",
+            options={"think": False},
+        )
+        content = response["message"]["content"]
+        data = json.loads(content)
+        label = data.get("label")
+        if label in ("needs_internet", "vault_answerable"):
+            return label
+        logger.warning(
+            "[INTENT_CLASSIFY] Stage 3 returned unknown label: %r", label
+        )
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        logger.warning("[INTENT_CLASSIFY] Stage 3 JSON parse failed: %s", exc)
+    except Exception as exc:
+        logger.warning("[INTENT_CLASSIFY] Stage 3 LLM call failed: %s", exc)
+    return _SAFE_DEFAULT
+
+
+def _stage3_classify_with_timeout(query: str) -> tuple[str, bool]:
+    """Stage 3 with a hard timeout from INTENT_CLASSIFIER_TIMEOUT_MS.
+
+    Returns (label, timed_out). On timeout the label is the safe default.
+    """
+    timeout_s = get_intent_classifier_timeout_ms() / 1000.0
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(_stage3_llm_call, query)
+        try:
+            label = future.result(timeout=timeout_s)
+            return label, False
+        except concurrent.futures.TimeoutError:
+            return _SAFE_DEFAULT, True
+    finally:
+        # Do not wait for the background thread — it may still be running.
+        # Python will reclaim it when it naturally completes.
+        executor.shutdown(wait=False)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -173,9 +247,9 @@ _SAFE_DEFAULT: str = "vault_answerable"
 def classify_intent(query: str) -> str:
     """Classify a user query as needs_internet or vault_answerable.
 
-    Runs the active stages of the ADR-034 cascade. Always returns one of
-    the two valid labels — never raises, never returns None. Emits exactly
-    one [INTENT_CLASSIFY] log line per call for the training-data pipeline
+    Runs the full ADR-034 cascade. Always returns one of the two valid
+    labels — never raises, never returns None. Emits exactly one
+    [INTENT_CLASSIFY] log line per call for the training-data pipeline
     described in ADR-034 Upgrade Path.
     """
     stage1 = _stage1_classify(query)
@@ -188,9 +262,14 @@ def classify_intent(query: str) -> str:
         _log(stage="stage2", label=stage2_label, confidence=stage2_conf, query=query)
         return stage2_label
 
-    # Stage 3 not yet implemented on this branch — escalate to safe default.
-    _log(stage="fallback", label=_SAFE_DEFAULT, confidence=None, query=query)
-    return _SAFE_DEFAULT
+    stage3_label, timed_out = _stage3_classify_with_timeout(query)
+    _log(
+        stage="timeout" if timed_out else "stage3",
+        label=stage3_label,
+        confidence=None,
+        query=query,
+    )
+    return stage3_label
 
 
 def _log(stage: str, label: str, confidence: float | None, query: str) -> None:

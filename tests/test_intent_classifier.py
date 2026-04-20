@@ -8,10 +8,14 @@ guard, and escalation when no signal matches.
 Stage 2 tests cover: lazy example-embedding cache, cosine similarity,
 confidence threshold, graceful escalation when the embedder fails.
 
-Stage 3 tests are added in a later commit on the same branch.
+Stage 3 tests cover: LLM happy path, JSON parse failure, unknown-label
+rejection, hard timeout fallback, log-line tagging.
 """
 
 from __future__ import annotations
+
+import concurrent.futures
+import json
 
 import pytest
 
@@ -20,6 +24,8 @@ from src.llm.intent_classifier import (
     _cosine_similarity,
     _stage1_classify,
     _stage2_classify,
+    _stage3_classify_with_timeout,
+    _stage3_llm_call,
     classify_intent,
 )
 
@@ -159,29 +165,10 @@ class TestClassifyIntentPublicAPI:
         assert "label=needs_internet" in matches[0].message
         assert "confidence=none" in matches[0].message
 
-    def test_fallback_log_line_emitted_when_all_stages_escalate(
-        self, caplog, monkeypatch
-    ):
-        """When Stage 1 escalates and Stage 2 can't reach a threshold,
-        commit-2 behavior is to fall back to the safe default. Stage 3
-        lands in the next commit.
-        """
-        # Force Stage 2 to escalate cleanly.
-        _inject_stage2_cache(
-            [
-                ("needs_internet", [1.0, 0.0, 0.0]),
-                ("vault_answerable", [0.0, 1.0, 0.0]),
-            ]
-        )
-        monkeypatch.setattr(intent_classifier, "embed_text", lambda q: [0.3, 0.3, 0.9])
-
-        with caplog.at_level("INFO", logger="ember.intent_classifier"):
-            label = classify_intent("deliberately ambiguous prompt text here")
-        matches = [r for r in caplog.records if "[INTENT_CLASSIFY]" in r.message]
-        assert len(matches) == 1
-        assert "stage=fallback" in matches[0].message
-        assert "label=vault_answerable" in matches[0].message
-        assert label == "vault_answerable"
+    # The previous commit's "fallback" log path no longer exists — Stage 3
+    # absorbs the escalation space. The Stage 3 tests below
+    # (TestClassifyIntentStage3Flow) cover the equivalent cases
+    # deterministically by mocking _stage3_classify_with_timeout.
 
 
 class TestLogLineIsAsciiOnly:
@@ -376,7 +363,9 @@ class TestClassifyIntentStage2Flow:
         assert "confidence=" in msg and "confidence=none" not in msg
         assert label == "needs_internet"
 
-    def test_stage2_escalation_falls_back_to_safe_default(self, caplog, monkeypatch):
+    def test_stage3_is_reached_when_stages_1_and_2_escalate(
+        self, caplog, monkeypatch
+    ):
         _inject_stage2_cache(
             [
                 ("needs_internet", [1.0, 0.0, 0.0]),
@@ -384,12 +373,162 @@ class TestClassifyIntentStage2Flow:
             ]
         )
         monkeypatch.setattr(intent_classifier, "embed_text", lambda q: [0.3, 0.3, 0.9])
-        query = "give me a completely ambiguous prompt please"
+        # Force Stage 3 to decisively return needs_internet so the log
+        # line tags stage=stage3, not fallback or stage2.
+        monkeypatch.setattr(
+            intent_classifier,
+            "_stage3_classify_with_timeout",
+            lambda q: ("needs_internet", False),
+        )
+        query = "genuinely ambiguous external question with no keyword signals"
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
             label = classify_intent(query)
-        # Commit 2 behavior: when Stage 2 escalates, Stage 3 is not yet
-        # implemented so classify_intent falls back to the safe default.
+        assert label == "needs_internet"
+        matches = [r for r in caplog.records if "[INTENT_CLASSIFY]" in r.message]
+        assert len(matches) == 1
+        assert "stage=stage3" in matches[0].message
+        assert "label=needs_internet" in matches[0].message
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 tests
+# ---------------------------------------------------------------------------
+
+class FakeOllama:
+    """Drop-in replacement for the ollama module at test time."""
+
+    def __init__(self, content: str | None = None, exc: Exception | None = None):
+        self._content = content
+        self._exc = exc
+        self.chat_calls: list[dict] = []
+
+    def chat(self, **kwargs):
+        self.chat_calls.append(kwargs)
+        if self._exc is not None:
+            raise self._exc
+        return {"message": {"content": self._content}}
+
+
+class TestStage3LlmCall:
+    """The raw Stage 3 LLM call — no timeout wrapping."""
+
+    def test_returns_needs_internet_on_valid_json(self, monkeypatch):
+        fake = FakeOllama(content=json.dumps({"label": "needs_internet"}))
+        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        assert _stage3_llm_call("some query") == "needs_internet"
+
+    def test_returns_vault_answerable_on_valid_json(self, monkeypatch):
+        fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
+        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        assert _stage3_llm_call("some query") == "vault_answerable"
+
+    def test_non_thinking_mode_is_sent_to_ollama(self, monkeypatch):
+        fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
+        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        _stage3_llm_call("anything")
+        call = fake.chat_calls[0]
+        assert call.get("options", {}).get("think") is False
+        assert call.get("format") == "json"
+
+    def test_query_is_truncated_at_500_chars(self, monkeypatch):
+        fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
+        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        _stage3_llm_call("x" * 10_000)
+        user_content = fake.chat_calls[0]["messages"][1]["content"]
+        assert len(user_content) == 500
+
+    def test_invalid_json_returns_safe_default(self, monkeypatch):
+        fake = FakeOllama(content="not JSON at all")
+        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        assert _stage3_llm_call("any query") == "vault_answerable"
+
+    def test_unknown_label_returns_safe_default(self, monkeypatch):
+        fake = FakeOllama(content=json.dumps({"label": "maybe_internet"}))
+        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        assert _stage3_llm_call("any query") == "vault_answerable"
+
+    def test_ollama_exception_returns_safe_default(self, monkeypatch):
+        fake = FakeOllama(exc=ConnectionError("Ollama unreachable"))
+        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        assert _stage3_llm_call("any query") == "vault_answerable"
+
+
+class TestStage3Timeout:
+    """Stage 3 must honor the configured hard timeout."""
+
+    def test_fast_llm_returns_label_with_timed_out_false(self, monkeypatch):
+        monkeypatch.setattr(
+            intent_classifier,
+            "_stage3_llm_call",
+            lambda q: "needs_internet",
+        )
+        label, timed_out = _stage3_classify_with_timeout("any query")
+        assert label == "needs_internet"
+        assert timed_out is False
+
+    def test_slow_llm_times_out_with_safe_default(self, monkeypatch):
+        import time
+
+        def slow_call(query):
+            time.sleep(2.0)
+            return "needs_internet"
+
+        monkeypatch.setattr(intent_classifier, "_stage3_llm_call", slow_call)
+        # Override timeout to 100ms so the test doesn't wait forever.
+        monkeypatch.setattr(
+            intent_classifier,
+            "get_intent_classifier_timeout_ms",
+            lambda: 100,
+        )
+        label, timed_out = _stage3_classify_with_timeout("any query")
+        assert label == "vault_answerable"
+        assert timed_out is True
+
+
+class TestClassifyIntentStage3Flow:
+    """Stage 3 result flows through classify_intent's top-level log line."""
+
+    def test_timeout_path_logs_stage_timeout(self, caplog, monkeypatch):
+        # Force both earlier stages to escalate.
+        _inject_stage2_cache(
+            [
+                ("needs_internet", [1.0, 0.0, 0.0]),
+                ("vault_answerable", [0.0, 1.0, 0.0]),
+            ]
+        )
+        monkeypatch.setattr(intent_classifier, "embed_text", lambda q: [0.3, 0.3, 0.9])
+        # Simulate a Stage 3 timeout.
+        monkeypatch.setattr(
+            intent_classifier,
+            "_stage3_classify_with_timeout",
+            lambda q: ("vault_answerable", True),
+        )
+        query = "intentionally hard to classify without signal"
+        with caplog.at_level("INFO", logger="ember.intent_classifier"):
+            label = classify_intent(query)
         assert label == "vault_answerable"
         matches = [r for r in caplog.records if "[INTENT_CLASSIFY]" in r.message]
         assert len(matches) == 1
-        assert "stage=fallback" in matches[0].message
+        assert "stage=timeout" in matches[0].message
+        assert "label=vault_answerable" in matches[0].message
+
+    def test_stage3_resolution_logs_stage_stage3(self, caplog, monkeypatch):
+        _inject_stage2_cache(
+            [
+                ("needs_internet", [1.0, 0.0, 0.0]),
+                ("vault_answerable", [0.0, 1.0, 0.0]),
+            ]
+        )
+        monkeypatch.setattr(intent_classifier, "embed_text", lambda q: [0.3, 0.3, 0.9])
+        monkeypatch.setattr(
+            intent_classifier,
+            "_stage3_classify_with_timeout",
+            lambda q: ("needs_internet", False),
+        )
+        query = "something that only the LLM can resolve cleanly"
+        with caplog.at_level("INFO", logger="ember.intent_classifier"):
+            label = classify_intent(query)
+        assert label == "needs_internet"
+        matches = [r for r in caplog.records if "[INTENT_CLASSIFY]" in r.message]
+        assert len(matches) == 1
+        assert "stage=stage3" in matches[0].message

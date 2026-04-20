@@ -31,4 +31,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run pytest (Tier 1)
-        run: pytest tests/ -q
+        # Ignore tests/eval/test_conversation_quality.py — it imports
+        # tests/eval/harness.py which requires the anthropic package (Tier 4
+        # cloud eval only, not in requirements.txt). The @pytest.mark.eval
+        # decorator skips execution via pytest.ini's addopts, but pytest
+        # still collects (imports) the file and that import fails in CI.
+        run: pytest tests/ -q --ignore=tests/eval/test_conversation_quality.py

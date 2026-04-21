@@ -1,8 +1,8 @@
-# Current State — Ember-2 v0.16.0
+# Current State — Ember-2 v0.17.0
 
 All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support.
 
-v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring. v0.14.0 adds Lodestone layer, deviation engine, and context packet reorder. v0.15.x shipped web search broadening, temporal decay, constitutional review overhaul, knowledge gap suppression, vault citation signals, and multiple bug fixes. v0.16.0 ships autonomous web search as default, vision pipeline fix, vault citation signal hardening, attribution badge fixes, and UAT-cycle stability work.
+v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring. v0.14.0 adds Lodestone layer, deviation engine, and context packet reorder. v0.15.x shipped web search broadening, temporal decay, constitutional review overhaul, knowledge gap suppression, vault citation signals, and multiple bug fixes. v0.16.0 ships autonomous web search as default, vision pipeline fix, vault citation signal hardening, attribution badge fixes, and UAT-cycle stability work. v0.17.0 ships an ask-first intent classifier (three-stage: structural, embedding, LLM fallback), ChatGPT import role separation for state extraction and embedding, and anti-sycophancy / coaching-register rule expansion; the UAT suite was rewritten as 22 behavioral acceptance tests and a CI pytest workflow was added.
 
 ## Core Systems
 
@@ -42,7 +42,7 @@ v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verif
 - User preferences store (private_vault/preferences.json, GET/PATCH /v1/preferences)
 - Conversational style (casual/balanced/thoughtful) via preferences API
 - Web search signal (X-Ember-Web-Search response header)
-- Autonomous web search default (web_search_autonomous=True) — ask-first deferred to v0.17.0
+- Autonomous web search default (web_search_autonomous=True); ask-first intent classifier landed in backend (ADR-034), UI re-enable pending
 - Vault citation signal — state_items now included in vault source builder (UAT-004 fix)
 - Vision pipeline — image_data forwarded through LLMAdapter to model (v0.16.0 fix)
 
@@ -102,6 +102,25 @@ v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verif
 - BUG-UAT-014 — retrieval leakage: ingested content no longer surfaces on status_state queries
 - Post-gen pipeline ask_first_active threaded directly from adapter (removes double-computation divergence)
 - Confirmation flow query handling — original query restored to context on Yes confirmation
+
+## v0.17.0 Additions
+
+- Ask-first intent classifier — three-stage pipeline (ADR-034): stage 1 structural rules, stage 2 embedding similarity, stage 3 LLM fallback with timeout
+- Intent classifier integrated into classify_query in context pipeline
+- StateExtractor gated to live conversation turns only (ADR-033) — prevents historical ChatGPT import content from writing state records
+- ChatGPT import: assistant-role chunks no longer embedded (ingest-side filter complements ADR-033)
+- Instruction section: explicit anti-sycophancy and register rules added
+- Nature entries extended with anti-sycophancy and anti-softening language
+- coaching_filter extended with additional sycophancy and therapeutic register patterns
+- UAT suite replaced with 22 behavioral acceptance tests
+- CI pytest workflow on pull requests (.github/workflows/tests.yml)
+- open_pr.sh developer helper script
+
+### In progress for v0.17.0 (not yet shipped)
+
+- BUG-STOP-001 — stop button latency under load
+- Header mobile collision fix
+- Ask-first UI re-enable (backend classifier ready; UI surface pending)
 
 ## Security
 

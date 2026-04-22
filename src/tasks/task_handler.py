@@ -44,8 +44,12 @@ EXPLICIT_TASK_PATTERNS = (
     r"track (.+?) as (?:a )?tasks?",
     # "add X to my task list" / "put X on my task list"
     r"(?:add|put) (.+?) (?:to|on) my task list",
-    # "remind me to X" / "I need to remember to X"
-    r"remind me to (.+)",
+    # "remind me to X" / "remind me at/in/tomorrow to X" / polite wrappers
+    # The optional non-greedy group absorbs time qualifiers like "at 5pm",
+    # "in 10 minutes", "tomorrow", "on Monday", etc. Polite prefixes like
+    # "can you", "could you", "i'd love it if you could" are matched via
+    # pattern.search() and stripped by _clean_title().
+    r"remind me(?:\s+[^,]*?)? to (.+)",
     r"i need to remember to (.+)",
 )
 

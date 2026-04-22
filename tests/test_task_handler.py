@@ -77,6 +77,31 @@ class TestExplicitTaskDetection:
         titles = detect_explicit_task_request("I need to remember to call the dentist")
         assert titles == ["Call the dentist"]
 
+    # --- Time-qualified and polite-wrapped reminder phrasings ---
+
+    def test_remind_me_at_time(self):
+        titles = detect_explicit_task_request("Remind me at 5pm to stop working")
+        assert titles == ["Stop working"]
+
+    def test_remind_me_tomorrow(self):
+        titles = detect_explicit_task_request("Remind me tomorrow to call the dentist")
+        assert titles == ["Call the dentist"]
+
+    def test_could_you_remind_me_at_time(self):
+        titles = detect_explicit_task_request("Could you remind me at 5pm to stop working")
+        assert titles == ["Stop working"]
+
+    def test_polite_wrapper_remind_me_at_time(self):
+        # Verbatim reproduction of the reported bug prompt.
+        titles = detect_explicit_task_request(
+            "I'd love it if you could remind me at 5pm to stop working"
+        )
+        assert titles == ["Stop working"]
+
+    def test_remind_me_in_duration(self):
+        titles = detect_explicit_task_request("Remind me in 10 minutes to check the oven")
+        assert titles == ["Check the oven"]
+
     # --- Multi-item lists ---
 
     def test_comma_separated_list(self):

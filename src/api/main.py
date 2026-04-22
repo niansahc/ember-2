@@ -13,14 +13,16 @@ a refactor candidate if the file exceeds ~1500 lines.
 
 import json
 import logging
+import os
 import secrets
+import signal
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 import ollama
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -1046,6 +1048,21 @@ def pin_change_endpoint(request: Request, body: PinChangeRequest):
 # ── Service management endpoints ─────────────────────────────────────
 
 
+def _shutdown_self(delay: float = 3.0) -> None:
+    """Send SIGTERM to our own process after a delay.
+
+    Fallback for dev runs without the watchdog. The delay lets a running
+    watchdog observe ember_stop.signal and kill us first, which prevents
+    the watchdog from seeing an "unexpected exit" and restarting
+    (scripts/watchdog.py:118).
+    """
+    time.sleep(delay)
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+    except Exception:
+        pass
+
+
 @app.post("/v1/service/{name}/restart")
 def service_restart_endpoint(name: str):
     """Restart a named service (api or docker).
@@ -1159,6 +1176,27 @@ def service_stop_endpoint(name: str):
             raise HTTPException(status_code=500, detail=f"Failed to stop docker: {exc}")
 
     raise HTTPException(status_code=400, detail=f"Unknown service: {name}. Valid: api, docker.")
+
+
+@app.post("/v1/service/shutdown")
+def service_shutdown_endpoint(background_tasks: BackgroundTasks):
+    """Shut down the Ember API permanently (no auto-restart).
+
+    Writes ember_stop.signal so the watchdog kills the API and exits
+    itself. Also schedules an in-process SIGTERM as a fallback for dev
+    runs without the watchdog. Returns immediately; the kill fires
+    after the response is flushed.
+
+    The 3s delay in _shutdown_self is load-bearing: it lets a running
+    watchdog observe the signal and stop the API first, avoiding the
+    watchdog's unexpected-exit restart path.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    signal_path = repo_root / "ember_stop.signal"
+    signal_path.write_text("stop", encoding="utf-8")
+
+    background_tasks.add_task(_shutdown_self)
+    return {"status": "shutting_down"}
 
 
 # ── System endpoints ──────────────────────────────────────────────────

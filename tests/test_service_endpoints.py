@@ -98,6 +98,62 @@ class TestServiceRestart:
         assert "Unknown service" in resp.json()["detail"]
 
 
+class TestServiceShutdown:
+    """POST /v1/service/shutdown."""
+
+    def _client(self):
+        with patch("src.api.main.get_ember_api_key", return_value=None):
+            from fastapi.testclient import TestClient
+            from src.api.main import app
+            return TestClient(app)
+
+    def _cleanup_signal(self):
+        from pathlib import Path
+        sig = Path(__file__).resolve().parents[1] / "ember_stop.signal"
+        if sig.exists():
+            sig.unlink()
+
+    def test_shutdown_returns_200_and_shutting_down_body(self):
+        # Patch the self-kill helper so the test runner doesn't die.
+        with patch("src.api.main.get_ember_api_key", return_value=None), \
+             patch("src.api.main._shutdown_self") as mock_kill:
+            resp = self._client().post("/v1/service/shutdown")
+        try:
+            assert resp.status_code == 200
+            assert resp.json() == {"status": "shutting_down"}
+            # Background task was scheduled and TestClient ran it.
+            mock_kill.assert_called_once()
+        finally:
+            self._cleanup_signal()
+
+    def test_shutdown_writes_stop_signal_file(self):
+        from pathlib import Path
+        sig = Path(__file__).resolve().parents[1] / "ember_stop.signal"
+        try:
+            with patch("src.api.main.get_ember_api_key", return_value=None), \
+                 patch("src.api.main._shutdown_self"):
+                resp = self._client().post("/v1/service/shutdown")
+            assert resp.status_code == 200
+            assert sig.exists()
+            assert sig.read_text(encoding="utf-8") == "stop"
+        finally:
+            self._cleanup_signal()
+
+    def test_shutdown_does_not_actually_kill_under_mock(self):
+        # Belt-and-suspenders: patch os.kill too so even if the helper
+        # ran (it shouldn't, since _shutdown_self is mocked), it can't
+        # take down the test process.
+        with patch("src.api.main.get_ember_api_key", return_value=None), \
+             patch("src.api.main._shutdown_self"), \
+             patch("src.api.main.os.kill") as mock_oskill:
+            resp = self._client().post("/v1/service/shutdown")
+        try:
+            assert resp.status_code == 200
+            mock_oskill.assert_not_called()
+        finally:
+            self._cleanup_signal()
+
+
 class TestDeveloperStatus:
     """GET /v1/developer/status."""
 

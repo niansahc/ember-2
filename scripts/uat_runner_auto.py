@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -49,14 +50,15 @@ if sys.platform == "win32":
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UAT_YAML = REPO_ROOT / "scripts" / "uat_tests.yaml"
-REPORT_PATH = REPO_ROOT.parent / "release-v0.17.0" / "uat_results_v017.md"
+VERSION_JSON = REPO_ROOT / "version.json"
+DEFAULT_REPORT_DIR = REPO_ROOT / "uat_results"
 
 EMBER_BASE_URL = os.getenv("EMBER_BASE_URL", "http://127.0.0.1:8000")
 EMBER_MODEL = os.getenv("UAT_EMBER_MODEL", "qwen3:8b")
 JUDGE_MODEL = os.getenv("UAT_JUDGE_MODEL", "claude-haiku-4-5-20251001")
 SESSION_ID = f"sess_uat_auto_{int(time.time())}"
 
-EMBER_TIMEOUT_S = 120.0
+EMBER_TIMEOUT_S = 180.0
 JUDGE_MAX_TOKENS = 200
 
 
@@ -87,8 +89,37 @@ def get_ember_api_key() -> str | None:
 
 def get_anthropic_api_key() -> str | None:
     return os.getenv("ANTHROPIC_API_KEY") or keyring.get_password(
-        "ember-2", "anthropic_api_key"
+        "ember-2-anthropic", "api_key"
     )
+
+
+def resolve_report_path(release_mode: bool, started_at: datetime) -> Path:
+    """Pick where this run's report lands.
+
+    Default: <repo>/uat_results/uat_YYYY-MM-DD_HH-MM.md (gitignored,
+    so each run gets its own file without polluting the repo).
+
+    --release: <parent>/release-v{full}/uat_results_v{padded_minor}.md
+    where {full} is the version in version.json and {padded_minor} is
+    the minor component padded to 3 digits (0.17.0 -> v017). This
+    matches the convention sprint plans use for release artifacts.
+    """
+    if release_mode:
+        try:
+            version = json.loads(VERSION_JSON.read_text(encoding="utf-8"))["version"]
+        except Exception as exc:
+            raise SystemExit(f"ERROR: cannot read version from {VERSION_JSON}: {exc}")
+        try:
+            minor = int(version.split(".")[1])
+        except (IndexError, ValueError):
+            raise SystemExit(f"ERROR: cannot parse minor from version '{version}'")
+        return (
+            REPO_ROOT.parent
+            / f"release-v{version}"
+            / f"uat_results_v{minor:03d}.md"
+        )
+    timestamp = started_at.strftime("%Y-%m-%d_%H-%M")
+    return DEFAULT_REPORT_DIR / f"uat_{timestamp}.md"
 
 
 def preflight(allow_non_test_vault: bool = False) -> tuple[str, str]:
@@ -102,8 +133,8 @@ def preflight(allow_non_test_vault: bool = False) -> tuple[str, str]:
     if not anthropic_key:
         print("ERROR: Anthropic API key not found.")
         print(
-            "  Set ANTHROPIC_API_KEY env var, "
-            "or store in keyring at ('ember-2', 'anthropic_api_key')."
+            "  Set ANTHROPIC_API_KEY env var, or run "
+            "`python scripts/set_provider_key.py --provider anthropic`."
         )
         sys.exit(2)
 
@@ -283,7 +314,7 @@ def filter_tests(tests: list[dict], term: str | None) -> list[dict]:
     ]
 
 
-def dry_run(tests: list[dict]) -> None:
+def dry_run(tests: list[dict], report_path: Path) -> None:
     print("=" * 60)
     print("  DRY RUN - no API calls will be made")
     print("=" * 60)
@@ -291,7 +322,7 @@ def dry_run(tests: list[dict]) -> None:
     print(f"EMBER_BASE_URL: {EMBER_BASE_URL}")
     print(f"EMBER_MODEL:    {EMBER_MODEL}")
     print(f"JUDGE_MODEL:    {JUDGE_MODEL}")
-    print(f"REPORT_PATH:    {REPORT_PATH}")
+    print(f"REPORT_PATH:    {report_path}")
     print(f"SESSION_ID:     {SESSION_ID}")
     print()
     print("--- JUDGE_SYSTEM ---")
@@ -328,6 +359,15 @@ def main() -> None:
         action="store_true",
         help="Bypass test-vault enforcement (NOT recommended)",
     )
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help=(
+            "Write report to ../release-v{version}/uat_results_v{minor}.md "
+            "(reads version from version.json). Default writes a timestamped "
+            "file under ./uat_results/."
+        ),
+    )
     args = parser.parse_args()
 
     if not UAT_YAML.exists():
@@ -341,15 +381,18 @@ def main() -> None:
         print("No tests matched filter.")
         sys.exit(0)
 
+    started_dt = datetime.now(timezone.utc)
+    report_path = resolve_report_path(release_mode=args.release, started_at=started_dt)
+
     if args.dry_run:
-        dry_run(tests)
+        dry_run(tests, report_path)
         return
 
     ember_key, anthropic_key = preflight(
         allow_non_test_vault=args.allow_non_test_vault
     )
 
-    started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    started_at = started_dt.isoformat(timespec="seconds")
     rows: list[dict] = []
     print(f"Running {len(tests)} test(s). Session: {SESSION_ID}")
     for i, test in enumerate(tests, 1):
@@ -408,10 +451,10 @@ def main() -> None:
         # Drop the response reference promptly; report has no use for it.
         del response_text
 
-    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REPORT_PATH.write_text(render_report(rows, started_at), encoding="utf-8")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(render_report(rows, started_at), encoding="utf-8")
     print()
-    print(f"Report written: {REPORT_PATH}")
+    print(f"Report written: {report_path}")
 
 
 if __name__ == "__main__":

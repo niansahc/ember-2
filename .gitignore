@@ -7,6 +7,9 @@ models/
 logs/
 cache/
 
+# UAT runner output (history of automated runs)
+uat_results/
+
 # Environment files
 .env
 .env.local

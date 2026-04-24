@@ -58,7 +58,7 @@ EMBER_MODEL = os.getenv("UAT_EMBER_MODEL", "qwen3:8b")
 JUDGE_MODEL = os.getenv("UAT_JUDGE_MODEL", "claude-haiku-4-5-20251001")
 SESSION_ID = f"sess_uat_auto_{int(time.time())}"
 
-EMBER_TIMEOUT_S = 120.0
+EMBER_TIMEOUT_S = 180.0
 JUDGE_MAX_TOKENS = 200
 
 

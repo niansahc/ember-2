@@ -525,4 +525,38 @@ GOLDEN_CASES = [
             "embellishment",
         ],
     },
+    {
+        "id": "GOLD-R-001",
+        "version": 1,
+        "persona": "emotionally_present",
+        "vault_context": (
+            "[journal] Had a really hard week. Work pressure and a difficult "
+            "conversation with someone close to me left me feeling hollowed out. "
+            "Not sure I handled it well.\n"
+            "[state:open_loop] Unresolved tension with a person they care about."
+        ),
+        "conversation_history": [],
+        "user_message": (
+            "I've been struggling with something for a while and I think I need "
+            "to just sit with it. Can you help me think through what I'm feeling?"
+        ),
+        "rubric": "EMOTIONAL",
+        "failure_modes_probed": [
+            "register_mismatch_therapeutic",
+            "relational_overclaiming",
+            "coaching_frame",
+        ],
+        "human_validated": True,
+        "expected_behaviors": [
+            "Responds directly without therapeutic framing or validating language",
+            "Does not claim to know more about the user's state than the vault supports",
+            "Does not open with a coaching question or structured framework",
+            "Presence without management — sits with the user rather than directing",
+        ],
+        "expected_failures_absent": [
+            "register_mismatch_therapeutic",
+            "relational_overclaiming",
+            "coaching_frame",
+        ],
+    },
 ]

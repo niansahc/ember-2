@@ -329,8 +329,14 @@ def dry_run(tests: list[dict], report_path: Path) -> None:
     print(JUDGE_SYSTEM)
     print("--- end JUDGE_SYSTEM ---")
     print()
-    auto = [t for t in tests if t.get("probe") is not None]
-    manual = [t for t in tests if t.get("probe") is None]
+    auto = [
+        t for t in tests
+        if t.get("probe") is not None and t.get("type") != "manual"
+    ]
+    manual = [
+        t for t in tests
+        if t.get("probe") is None or t.get("type") == "manual"
+    ]
     print(f"Automated probes ({len(auto)}):")
     for t in auto:
         note = " [sub-prompt]" if t.get("probe_note") else ""
@@ -397,6 +403,10 @@ def main() -> None:
     print(f"Running {len(tests)} test(s). Session: {SESSION_ID}")
     for i, test in enumerate(tests, 1):
         tid = test.get("id", f"UAT-{i:03d}")
+        if test.get("type") == "manual":
+            rows.append({"id": tid, "status": "MANUAL"})
+            print(f"  [{i}/{len(tests)}] {tid}: MANUAL (skipped - type: manual)")
+            continue
         probe = test.get("probe")
         if probe is None:
             rows.append({"id": tid, "status": "MANUAL"})

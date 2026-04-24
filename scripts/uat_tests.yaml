@@ -1,5 +1,5 @@
 # Ember-2 Behavioral UAT — v0.17.0
-# 22 tests. Focus: behavioral acceptance against BRequirements.
+# 25 tests. Focus: behavioral acceptance against BRequirements.
 # No installer/UI component tests. These test what Ember does, not whether a button works.
 #
 # Format:
@@ -221,3 +221,46 @@ tests:
       - "Switch back to standard mode"
     expected: "Each transition requires a deliberate UI action — modes do not change on their own. The mode indicator updates immediately on each transition. No ambiguous state where the indicator and actual pipeline are out of sync."
     probe: null
+
+  - id: UAT-T2-001
+    type: manual
+    title: Cross-session relational pattern signal fires correctly
+    prerequisite: >
+      Test vault must contain 3+ conversation records with semantic
+      similarity >= 0.82 to the probe query, spanning 2+ distinct
+      session_ids, with at least one record timestamped within 30 days.
+      Seed using the test vault seed script or manual vault writes before
+      running.
+    probe: "I keep coming back to this same thing and I'm not sure why."
+    expected:
+      - "<cross_session_pattern> block appears in debug-context output"
+      - "instance_count >= 3"
+      - "session_count >= 2"
+      - "Constitutional review for the response uses two-step structure (observation before verdict) — visible in coaching_filter logs or ResponseReviewService debug output"
+      - "Ember names the pattern in structural terms only if relational_honesty fires (no relationship identification, no third-party naming)"
+    verify_via: "GET /debug-context?message=<probe>, coaching_filter logs"
+    manual_reason: >
+      Requires multi-session vault state that cannot be reliably
+      manufactured in the automated runner without real session writes.
+
+  - id: UAT-L2-001
+    type: manual
+    title: Lodestone path 2 produces inferred vault records
+    prerequisite: >
+      At least 3 daily or weekly reflections must exist in the vault
+      covering distinct sessions with recurring value-adjacent themes.
+    steps:
+      - "Trigger reflection synthesis: POST /reflect with appropriate params"
+      - "Wait for synthesis to complete"
+      - "Run vault health audit: python scripts/vault_audit.py"
+      - "Query vault directly for lodestone records with acquisition_path: inferred"
+    expected:
+      - "At least 1 lodestone record with acquisition_path: inferred in vault"
+      - "Record contains supporting_evidence field (non-empty)"
+      - "Record taxonomy_category is one of the five valid categories"
+      - "Record confirmed: false (proposed state, not auto-confirmed)"
+    verify_via: "vault health audit output, direct vault inspection"
+    manual_reason: >
+      Requires sufficient reflection history and LLM synthesis pass.
+      Cannot be automated without real vault data and a live reflection run.
+

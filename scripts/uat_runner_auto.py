@@ -397,6 +397,10 @@ def main() -> None:
     print(f"Running {len(tests)} test(s). Session: {SESSION_ID}")
     for i, test in enumerate(tests, 1):
         tid = test.get("id", f"UAT-{i:03d}")
+        if test.get("type") == "manual":
+            rows.append({"id": tid, "status": "MANUAL"})
+            print(f"  [{i}/{len(tests)}] {tid}: MANUAL (skipped - type: manual)")
+            continue
         probe = test.get("probe")
         if probe is None:
             rows.append({"id": tid, "status": "MANUAL"})

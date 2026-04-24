@@ -48,6 +48,7 @@ Non-T2 reviews remain single-pass — the two-step structure is only applied whe
 
 ## Consequences
 
+- `SafetyReviewContext` must carry a docstring explicitly listing the allowlisted fields (`is_vault_grounded`, `t2_pattern_category`) and citing ADR-035. This makes the allowlist constraint visible at the code level, not only in documentation. Any future field addition requires an ADR-035 amendment before implementation.
 - Closes the prerequisite for relational_honesty T2 (ADR-021) to produce a verdict-affecting review outcome.
 - Closes the prerequisite for `flourishing_over_preference` cross-session observation to be enforceable.
 - Review service remains effectively stateless — no vault reads at review time. The upstream detection and retrieval services remain the single source of truth for vault access.

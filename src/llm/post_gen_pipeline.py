@@ -138,7 +138,7 @@ def run_post_gen_pipeline(
             "I tried searching but hit an error. Want me to try again?"
         )
         ask_first_substituted = True
-        logger.warning("[POSTGEN] confirmation search failed — retry offer substituted")
+        logger.warning("[POSTGEN] confirmation search failed - retry offer substituted")
 
     if not reply or not reply.strip():
         reply = _EMPTY_FALLBACK

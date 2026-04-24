@@ -130,7 +130,7 @@ async def api_key_auth(request: Request, call_next):
         provided_key = request.headers.get("X-API-Key", "")
 
     if not provided_key or not secrets.compare_digest(provided_key, expected_key):
-        logger.warning("[AUTH] Rejected request to %s — invalid or missing API key", request.url.path)
+        logger.warning("[AUTH] Rejected request to %s - invalid or missing API key", request.url.path)
         return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
 
     return await call_next(request)

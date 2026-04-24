@@ -410,7 +410,7 @@ def _extract_session_id(request: Request) -> str:
     session_id = request.headers.get("X-Session-ID", "").strip()
     if not session_id:
         session_id = f"sess_{uuid.uuid4().hex[:16]}"
-        logger.info("[SESSION] No X-Session-ID header — generated %s", session_id)
+        logger.info("[SESSION] No X-Session-ID header - generated %s", session_id)
     return session_id
 
 
@@ -794,7 +794,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # (3) ### Task: guard — Open WebUI injects a RAG wrapper as the last user message.
     #     The real user query is always the second-to-last user message.
     if latest_user_message.startswith("### Task:"):
-        logger.warning("[INTERCEPT] ### Task: injection detected — using prior user message")
+        logger.warning("[INTERCEPT] ### Task: injection detected - using prior user message")
         prior_user_messages = user_messages[:-1]
         if prior_user_messages:
             latest_user_message = prior_user_messages[-1].content or ""
@@ -804,7 +804,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # (1) Empty message guard — fires only when there is truly nothing:
     #     no text AND no image parts. Image-only uploads are not empty.
     if (not latest_user_message or not latest_user_message.strip()) and not image_parts:
-        logger.warning("[INTERCEPT] Empty user message — returning without pipeline")
+        logger.warning("[INTERCEPT] Empty user message - returning without pipeline")
         return ChatCompletionsResponse(
             id=f"chatcmpl-{uuid.uuid4().hex}",
             object="chat.completion",
@@ -858,7 +858,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
     # If image present but no text, use a placeholder so the pipeline runs.
     if image_parts and not latest_user_message.strip():
-        logger.warning("[IMAGE] Image upload with no text — %d image part(s)", len(image_parts))
+        logger.warning("[IMAGE] Image upload with no text - %d image part(s)", len(image_parts))
         latest_user_message = "Please describe what you see in this image."
 
     # Extract raw base64 strings from image_url parts (strip data URL prefix).

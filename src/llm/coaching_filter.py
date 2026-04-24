@@ -248,7 +248,7 @@ def _rewrite(text: str, matches: list[dict]) -> str:
 
         # Sanity check: rewrite should not be empty or drastically longer
         if not rewritten or len(rewritten) > len(text) * 2:
-            logger.warning("[COACHING_FILTER] Rewrite rejected — empty or too long")
+            logger.warning("[COACHING_FILTER] Rewrite rejected - empty or too long")
             return text
 
         return rewritten
@@ -409,7 +409,7 @@ def _rewrite_identity_collapse(text: str) -> str:
         rewritten = response["message"]["content"].strip()
 
         if not rewritten or len(rewritten) > len(text) * 2:
-            logger.warning("[COACHING_FILTER] Identity rewrite rejected — empty or too long")
+            logger.warning("[COACHING_FILTER] Identity rewrite rejected - empty or too long")
             return text
 
         return rewritten

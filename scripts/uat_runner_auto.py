@@ -87,7 +87,7 @@ def get_ember_api_key() -> str | None:
 
 def get_anthropic_api_key() -> str | None:
     return os.getenv("ANTHROPIC_API_KEY") or keyring.get_password(
-        "ember-2", "anthropic_api_key"
+        "ember-2-anthropic", "api_key"
     )
 
 
@@ -102,8 +102,8 @@ def preflight(allow_non_test_vault: bool = False) -> tuple[str, str]:
     if not anthropic_key:
         print("ERROR: Anthropic API key not found.")
         print(
-            "  Set ANTHROPIC_API_KEY env var, "
-            "or store in keyring at ('ember-2', 'anthropic_api_key')."
+            "  Set ANTHROPIC_API_KEY env var, or run "
+            "`python scripts/set_provider_key.py --provider anthropic`."
         )
         sys.exit(2)
 

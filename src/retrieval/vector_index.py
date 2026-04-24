@@ -68,7 +68,7 @@ class VectorIndex:
                 )
                 return []
 
-            logger.info("[VECTOR_INDEX] Cache miss — loading: %s (%.2f MB)", index_path.name, size_mb)
+            logger.info("[VECTOR_INDEX] Cache miss - loading: %s (%.2f MB)", index_path.name, size_mb)
 
             with index_path.open("r", encoding="utf-8") as f:
                 data = json.load(f)

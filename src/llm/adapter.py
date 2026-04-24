@@ -275,7 +275,7 @@ class LLMAdapter:
         # or the coaching filter rewrite returned empty, surface a
         # recoverable error rather than sending a blank response to the user.
         if not final_response or not final_response.strip():
-            logger.warning("[RESPONSE] Empty final_response — surfacing fallback message")
+            logger.warning("[RESPONSE] Empty final_response - surfacing fallback message")
             final_response = (
                 "I had trouble generating a response to that. Try rephrasing, "
                 "or let me know what you're actually trying to figure out."
@@ -558,7 +558,7 @@ class LLMAdapter:
         if not api_key:
             raise ValueError("No Anthropic API key configured. Store one via POST /provider-key.")
 
-        logger.info("[CLOUD] Anthropic %s — non-streaming", self.model)
+        logger.info("[CLOUD] Anthropic %s - non-streaming", self.model)
 
         resp = httpx.post(
             "https://api.anthropic.com/v1/messages",
@@ -591,7 +591,7 @@ class LLMAdapter:
         if not api_key:
             raise ValueError("No Anthropic API key configured. Store one via POST /provider-key.")
 
-        logger.info("[CLOUD] Anthropic %s — streaming", self.model)
+        logger.info("[CLOUD] Anthropic %s - streaming", self.model)
 
         with httpx.stream(
             "POST",
@@ -644,7 +644,7 @@ class LLMAdapter:
         if not api_key:
             raise ValueError("No OpenAI API key configured. Store one via POST /provider-key.")
 
-        logger.info("[CLOUD] OpenAI %s — non-streaming", self.model)
+        logger.info("[CLOUD] OpenAI %s - non-streaming", self.model)
 
         resp = httpx.post(
             "https://api.openai.com/v1/chat/completions",
@@ -678,7 +678,7 @@ class LLMAdapter:
         if not api_key:
             raise ValueError("No OpenAI API key configured. Store one via POST /provider-key.")
 
-        logger.info("[CLOUD] OpenAI %s — streaming", self.model)
+        logger.info("[CLOUD] OpenAI %s - streaming", self.model)
 
         with httpx.stream(
             "POST",

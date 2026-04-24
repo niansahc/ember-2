@@ -134,7 +134,7 @@ class StateExtractor:
         # Skip short messages — unlikely to contain state
         word_count = len(user_message.split())
         if word_count < MIN_WORDS_FOR_EXTRACTION:
-            logger.info("[STATE_EXTRACT] Skipped — user message too short (%d words)", word_count)
+            logger.info("[STATE_EXTRACT] Skipped - user message too short (%d words)", word_count)
             return []
 
         # Build the extraction prompt

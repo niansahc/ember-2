@@ -100,7 +100,7 @@ class OnboardingService:
         # First ever call — no state record yet
         if not records:
             self._write_progress(step=0, completed=[])
-            logger.info("[ONBOARDING] Starting — asking step 0 (%s)", ONBOARDING_STEPS[0].key)
+            logger.info("[ONBOARDING] Starting - asking step 0 (%s)", ONBOARDING_STEPS[0].key)
             return _WELCOME.format(first_question=ONBOARDING_STEPS[0].question)
 
         # Subsequent calls — save answer for current step, then advance
@@ -169,5 +169,5 @@ class OnboardingService:
             formatted = resp["message"]["content"].strip()
             return formatted if len(formatted) >= 10 else answer
         except Exception as exc:
-            logger.warning("[ONBOARDING] LLM format call failed: %s — storing raw answer", exc)
+            logger.warning("[ONBOARDING] LLM format call failed: %s - storing raw answer", exc)
             return answer

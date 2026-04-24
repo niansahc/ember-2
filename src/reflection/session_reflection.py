@@ -66,7 +66,7 @@ def generate_session_reflection(
         The reflection text, or None if generation failed or was skipped.
     """
     if not buffer_turns or len(buffer_turns) < MIN_TURNS_FOR_REFLECTION:
-        logger.info("[SESSION_REFLECT] Skipped — %d turns (minimum %d)", len(buffer_turns), MIN_TURNS_FOR_REFLECTION)
+        logger.info("[SESSION_REFLECT] Skipped - %d turns (minimum %d)", len(buffer_turns), MIN_TURNS_FOR_REFLECTION)
         return None
 
     model = model or get_ember_model()

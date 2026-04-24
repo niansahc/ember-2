@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.17.0](https://github.com/niansahc/ember-2/compare/v0.16.0...v0.17.0) (2026-04-24)
+
+
+### Features
+
+* add explicit anti-sycophancy and register rules to instruction section ([fcfb4d2](https://github.com/niansahc/ember-2/commit/fcfb4d256ee1266abd219507428977e3c3994766))
+* **api:** add POST /v1/service/shutdown for UI shut-down button ([4fd4a8d](https://github.com/niansahc/ember-2/commit/4fd4a8d74631527652915ddc7418e285341e643d))
+* **api:** add POST /v1/service/shutdown for UI shut-down button ([9202fd1](https://github.com/niansahc/ember-2/commit/9202fd1097c0b50b4619cff7be7d09e53ff99530))
+* ask-first intent classifier (three-tier hybrid) ([d55ba86](https://github.com/niansahc/ember-2/commit/d55ba8611229522ca2a19c122477cb6dfcf3955c))
+* **context:** integrate intent classifier into classify_query ([fb9bf09](https://github.com/niansahc/ember-2/commit/fb9bf09cc7f55b0dd0c0793e1a909d454884257f))
+* extend coaching_filter with additional sycophancy and therapeutic register patterns ([958b720](https://github.com/niansahc/ember-2/commit/958b72013e92fa5b973fdab7b271731e58a5f7ea))
+* extend nature entries with anti-sycophancy and anti-softening language ([223b29f](https://github.com/niansahc/ember-2/commit/223b29f28030997c831f295ebea61c34949d1cd3))
+* **ingest:** skip embedding for assistant-role chunks from ChatGPT import ([15f598e](https://github.com/niansahc/ember-2/commit/15f598e057a354432619d3f664130b37e93a59c7))
+* **llm:** intent classifier stage 1 structural rules ([07b9ba8](https://github.com/niansahc/ember-2/commit/07b9ba81f322cfbd35f95280c9cc9833d934d97a))
+* **llm:** intent classifier stage 2 embedding similarity ([d5c6340](https://github.com/niansahc/ember-2/commit/d5c63401525a79d1831cdfc10d145dcac1899384))
+* **llm:** intent classifier stage 3 llm fallback with timeout ([1e4afa2](https://github.com/niansahc/ember-2/commit/1e4afa2484ad363a67166b9c9eb8e0b068908abb))
+* qwen3:8b response quality (A-001 sycophancy, M-001 register) ([0305bf3](https://github.com/niansahc/ember-2/commit/0305bf34beea4ad8fc55cf9492c8fdadfe083b87))
+* replace UAT suite with 22 behavioral acceptance tests ([1538232](https://github.com/niansahc/ember-2/commit/15382320e497e48072f3713f64c6682ca55fab59))
+* replace UAT suite with 22 behavioral acceptance tests ([522b88a](https://github.com/niansahc/ember-2/commit/522b88a1cbd6200b49d2362df361e1113e91bb2f))
+* **state:** gate StateExtractor to live conversation turns only ([7b99eb7](https://github.com/niansahc/ember-2/commit/7b99eb758ed112384cc97396f923215aef66fcb4))
+* **uat:** auto runner skips entries with type: manual ([8a18064](https://github.com/niansahc/ember-2/commit/8a180648f369b27f4a107f60f7da236230ab09db))
+* **uat:** automated runner with Claude-as-judge for 12 of 22 tests ([c322382](https://github.com/niansahc/ember-2/commit/c322382eb54bd5d4603541d8a50b121649b1bf7c))
+* **uat:** automated runner with Claude-as-judge for 12 of 22 tests ([5d65d41](https://github.com/niansahc/ember-2/commit/5d65d411c86528ce6879077280bea6c784fa188e))
+* **uat:** extend type: manual skip to dry_run classifier ([1a995c9](https://github.com/niansahc/ember-2/commit/1a995c97e5ae027447a866c976a3a780a3ec3f3e))
+* **uat:** timestamped per-run report files; add --release flag ([50dee58](https://github.com/niansahc/ember-2/commit/50dee5899c69d7e18a0b00f03729fbf2d8cce9ca))
+* update current state docs for v0.17.0 ([7ef11e7](https://github.com/niansahc/ember-2/commit/7ef11e784b7048830ea6e5f8a68feea96262f796))
+
+
+### Bug Fixes
+
+* **logging:** remove em dashes from logger calls (Windows cp1252) ([b7e27f9](https://github.com/niansahc/ember-2/commit/b7e27f9f845b890da21944470c19b218f9a84c60))
+* **logging:** remove em dashes from logger calls (Windows cp1252) ([0ca80c3](https://github.com/niansahc/ember-2/commit/0ca80c3072a0564f9712328f29f18513aa7e2b20))
+* **state:** ASCII-only skip log message for Windows cp1252 ([d7fb0fd](https://github.com/niansahc/ember-2/commit/d7fb0fd0b8966458b894df0f1d2f3df2fb63fbd6))
+* **tasks:** match reminder phrasing with time qualifiers and polite wrappers ([5ff8e06](https://github.com/niansahc/ember-2/commit/5ff8e06c42c5d922386e85aa1ff2d5ff04728127))
+* **tasks:** match reminder phrasing with time qualifiers and polite wrappers ([03a3a7d](https://github.com/niansahc/ember-2/commit/03a3a7da3c5167ccf6b71d2ec8f5a2b6d857ef89))
+* **uat:** bump runner httpx timeout 120 -&gt; 180 seconds ([276644d](https://github.com/niansahc/ember-2/commit/276644d79c651ff096f1c550d34e8ac858055f79))
+* **uat:** bump runner timeout to 180s + recover orphaned commits ([724e5e0](https://github.com/niansahc/ember-2/commit/724e5e01197f7b79810a3584d46963939a1bf485))
+* **uat:** correct keyring path for Anthropic API key ([7c537b0](https://github.com/niansahc/ember-2/commit/7c537b026d777e2693da96392f8b7e3b65c1144d))
+
 ## v0.14.2 — 2026-04-10
 
 ### Security

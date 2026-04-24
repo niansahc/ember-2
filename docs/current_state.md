@@ -2,7 +2,7 @@
 
 All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support.
 
-v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring. v0.14.0 adds Lodestone layer, deviation engine, and context packet reorder. v0.15.x shipped web search broadening, temporal decay, constitutional review overhaul, knowledge gap suppression, vault citation signals, and multiple bug fixes. v0.16.0 ships autonomous web search as default, vision pipeline fix, vault citation signal hardening, attribution badge fixes, and UAT-cycle stability work. v0.17.0 ships an ask-first intent classifier (three-stage: structural, embedding, LLM fallback), ChatGPT import role separation for state extraction and embedding, and anti-sycophancy / coaching-register rule expansion; the UAT suite was rewritten as 22 behavioral acceptance tests and a CI pytest workflow was added.
+v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring. v0.14.0 adds Lodestone layer, deviation engine, and context packet reorder. v0.15.x shipped web search broadening, temporal decay, constitutional review overhaul, knowledge gap suppression, vault citation signals, and multiple bug fixes. v0.16.0 ships autonomous web search as default, vision pipeline fix, vault citation signal hardening, attribution badge fixes, and UAT-cycle stability work. v0.17.0 ships an ask-first intent classifier (three-stage: structural, embedding, LLM fallback), ChatGPT import role separation for state extraction and embedding, and anti-sycophancy / coaching-register rule expansion; the UAT suite was rewritten as 25 behavioral acceptance tests and a CI pytest workflow was added.
 
 ## Core Systems
 
@@ -112,7 +112,7 @@ v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verif
 - Instruction section: explicit anti-sycophancy and register rules added
 - Nature entries extended with anti-sycophancy and anti-softening language
 - coaching_filter extended with additional sycophancy and therapeutic register patterns
-- UAT suite replaced with 22 behavioral acceptance tests
+- UAT suite replaced with 25 behavioral acceptance tests
 - CI pytest workflow on pull requests (.github/workflows/tests.yml)
 - open_pr.sh developer helper script
 

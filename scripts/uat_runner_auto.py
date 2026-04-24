@@ -329,8 +329,14 @@ def dry_run(tests: list[dict], report_path: Path) -> None:
     print(JUDGE_SYSTEM)
     print("--- end JUDGE_SYSTEM ---")
     print()
-    auto = [t for t in tests if t.get("probe") is not None]
-    manual = [t for t in tests if t.get("probe") is None]
+    auto = [
+        t for t in tests
+        if t.get("probe") is not None and t.get("type") != "manual"
+    ]
+    manual = [
+        t for t in tests
+        if t.get("probe") is None or t.get("type") == "manual"
+    ]
     print(f"Automated probes ({len(auto)}):")
     for t in auto:
         note = " [sub-prompt]" if t.get("probe_note") else ""

@@ -23,6 +23,11 @@ from src.memory.storage import MemoryStorage
 logger = logging.getLogger("ember.lodestone")
 
 MAX_ACTIVE_RECORDS = 15
+# Cap proposed (unconfirmed) record growth. write() bypasses MAX_ACTIVE_RECORDS
+# when confirmed=False, so without this ceiling a never-confirming user could
+# accumulate inferred records every month forever. Path-2 synthesis
+# (src/reflection/lodestone_synthesis.py) checks against this before each run.
+MAX_PROPOSED_RECORDS = 20
 
 storage = MemoryStorage()
 

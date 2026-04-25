@@ -275,6 +275,12 @@ class PromptBuilder:
             # against the RLHF "I can't see images" override (UAT-120 /
             # Deep research recommendation).
             self._build_per_turn_vision_block(vision_description),
+            # ADR-021 cross-session pattern flag — fires only when
+            # detect_t2_pattern populated context_packet.t2_pattern_signal.
+            # Adjacent to other per-turn structural directives.
+            self._build_cross_session_pattern_block(
+                getattr(context_packet, "t2_pattern_signal", None)
+            ),
             # Per-turn search confirmation block — fires only when the
             # classifier routed to web_search AND ask-first mode is active.
             # Louder, more visible than the sticky-note pattern used for
@@ -710,6 +716,33 @@ class PromptBuilder:
             "have already seen this one. Do not suggest external image "
             "tools. Do not invent tool names or URLs.\n"
             "</vision_instruction>"
+        )
+
+    @staticmethod
+    def _build_cross_session_pattern_block(signal) -> str:
+        """ADR-021 cross-session pattern flag.
+
+        Renders only when detect_t2_pattern populated a PatternSignal on
+        the context packet. Carries structural metadata only — counts and
+        a boolean third-party flag. The model decides whether and how to
+        surface the observation, governed by the relational_honesty
+        behavioral sequence.
+
+        Privacy boundary: when named_third_party=true, Ember names the
+        pattern in structural terms only (no relationship-type or third-
+        party identifiers).
+        """
+        if signal is None:
+            return ""
+        return (
+            "<cross_session_pattern>\n"
+            f"A recurring pattern is visible across {signal.instance_count} "
+            f"instances spanning {signal.session_count} sessions. This is "
+            "an observation, not a directive. If relevant to the current "
+            "conversation, you may name it once using relational_honesty "
+            "behavioral sequence. If not relevant, ignore it.\n"
+            f"named_third_party: {str(signal.has_named_party).lower()}\n"
+            "</cross_session_pattern>"
         )
 
     @staticmethod

@@ -237,3 +237,48 @@ class TestInstructionHierarchy:
             assert hierarchy_pos < nature_pos, (
                 "Hierarchy statement must appear before nature section"
             )
+
+
+class TestCrossSessionPatternBlock:
+    """ADR-021: <cross_session_pattern> block injection from PatternSignal."""
+
+    def test_block_omitted_when_signal_none(self):
+        block = PromptBuilder._build_cross_session_pattern_block(None)
+        assert block == ""
+
+    def test_block_rendered_with_signal(self):
+        from src.safety.pattern_detector import PatternSignal
+        sig = PatternSignal(
+            instance_count=4, session_count=3,
+            has_named_party=True, max_similarity=0.91,
+        )
+        block = PromptBuilder._build_cross_session_pattern_block(sig)
+        assert "<cross_session_pattern>" in block
+        assert "</cross_session_pattern>" in block
+        assert "4 instances spanning 3 sessions" in block
+        assert "named_third_party: true" in block
+
+    def test_block_renders_named_party_false_lowercase(self):
+        from src.safety.pattern_detector import PatternSignal
+        sig = PatternSignal(3, 2, False, 0.85)
+        block = PromptBuilder._build_cross_session_pattern_block(sig)
+        # Per ADR-021 spec the value must be the literal "true" or "false"
+        # (lowercase), not Python's "True"/"False".
+        assert "named_third_party: false" in block
+        assert "named_third_party: False" not in block
+
+    def test_block_in_assembled_prompt_when_packet_has_signal(self):
+        from src.safety.pattern_detector import PatternSignal
+        pb = PromptBuilder()
+        packet = ContextPacket(user_message="hello")
+        packet.t2_pattern_signal = PatternSignal(3, 2, False, 0.85)
+        prompt = pb.build_prompt(packet)
+        assert "<cross_session_pattern>" in prompt
+        assert "3 instances spanning 2 sessions" in prompt
+
+    def test_block_absent_from_assembled_prompt_by_default(self):
+        pb = PromptBuilder()
+        packet = ContextPacket(user_message="hello")
+        # No t2_pattern_signal set — defaults to None.
+        prompt = pb.build_prompt(packet)
+        assert "<cross_session_pattern>" not in prompt

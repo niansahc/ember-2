@@ -1155,6 +1155,23 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     if _confirmation_web_items:
         context_packet.web_items = _confirmation_web_items
 
+    # ADR-021: T2 cross-session pattern detection. Operates over already-
+    # retrieved conversation records only — no additional vault reads.
+    # Result populated on ContextPacket for both prompt injection (via
+    # PromptBuilder._build_cross_session_pattern_block) and review
+    # consumption (via SafetyReviewContext.t2_pattern_category, per
+    # ADR-035 / Item 7).
+    try:
+        from src.safety.pattern_detector import detect_t2_pattern
+        context_packet.t2_pattern_signal = detect_t2_pattern(
+            context_packet.memory_items,
+            context_packet.query_embedding,
+        )
+    except Exception as exc:
+        # Non-fatal: detection failure must not break the chat path. Fall
+        # back to no signal (existing single-pass review remains active).
+        logger.warning("[T2_DETECTOR] detection failed (non-fatal): %s", exc)
+
     # Reuse early classification when available; only call again for stateless mode
     from src.context.policies import classify_query
     _policy = _early_policy or classify_query(latest_user_message)

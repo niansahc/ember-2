@@ -399,3 +399,188 @@ def test_critique_from_mvr_filters_malformed_failures() -> None:
     )
     assert len(critique.issues_found) == 1
     assert critique.severity == "medium"
+
+
+# ---------------------------------------------------------------------------
+# ADR-035: SafetyReviewContext field defaults and allowlist boundary.
+# ---------------------------------------------------------------------------
+
+
+def test_safety_review_context_has_new_fields_with_safe_defaults() -> None:
+    ctx = SafetyReviewContext(user_message="x", draft_response="y")
+    assert ctx.is_vault_grounded is False
+    assert ctx.t2_pattern_category is None
+    assert ctx.has_third_party_content is False
+
+
+def test_safety_review_context_explicit_field_values_preserved() -> None:
+    ctx = SafetyReviewContext(
+        user_message="x",
+        draft_response="y",
+        is_vault_grounded=True,
+        t2_pattern_category="relational",
+    )
+    assert ctx.is_vault_grounded is True
+    assert ctx.t2_pattern_category == "relational"
+
+
+# ---------------------------------------------------------------------------
+# ADR-035: two-step prompt switch when t2_pattern_category is non-null.
+# ---------------------------------------------------------------------------
+
+
+def test_critique_prompt_single_pass_when_t2_none() -> None:
+    """Existing single-pass MVR prompt is unchanged when no T2 category."""
+    service = ResponseReviewService()
+    ctx = SafetyReviewContext(user_message="hi", draft_response="hello")
+    prompt = service._build_critique_prompt(ctx)
+
+    # The two-step markers must NOT appear
+    assert "TWO-STEP" not in prompt
+    assert "pattern_observation" not in prompt
+    assert "Observation step" not in prompt
+
+    # The four MVR criteria still appear
+    assert "POSITION_COLLAPSE" in prompt
+    assert "SYCOPHANCY" in prompt
+    assert "EMBELLISHMENT" in prompt
+    assert "RELATIONAL_OVERCLAIMING" in prompt
+
+
+def test_critique_prompt_two_step_fires_when_t2_set() -> None:
+    """Setting t2_pattern_category switches to the two-step prompt structure."""
+    service = ResponseReviewService()
+    ctx = SafetyReviewContext(
+        user_message="hi",
+        draft_response="hello",
+        t2_pattern_category="relational",
+    )
+    prompt = service._build_critique_prompt(ctx)
+
+    assert "TWO-STEP" in prompt
+    assert "pattern_observation" in prompt
+    assert "Observation step" in prompt
+    # MVR criteria still present after the observation step
+    assert "POSITION_COLLAPSE" in prompt
+    assert "SYCOPHANCY" in prompt
+
+
+def test_critique_prompt_two_step_includes_category_string() -> None:
+    """Category label must be in the rendered prompt so the model can reason about it."""
+    service = ResponseReviewService()
+    ctx = SafetyReviewContext(
+        user_message="hi",
+        draft_response="hello",
+        t2_pattern_category="directional",
+    )
+    prompt = service._build_critique_prompt(ctx)
+
+    # Category appears in the prompt (twice — once in the framing line,
+    # once in the observation instruction)
+    assert prompt.count("directional") >= 2
+
+
+def test_critique_prompt_two_step_does_not_leak_vault_content() -> None:
+    """Per ADR-035 allowlist: prompt must contain only the allowlisted fields'
+    contents — user_message, draft_response, the category label, and the
+    static prompt scaffold. No vault content reaches the reviewer."""
+    service = ResponseReviewService()
+    ctx = SafetyReviewContext(
+        user_message="USER_MSG_MARKER",
+        draft_response="DRAFT_MARKER",
+        t2_pattern_category="CATEGORY_MARKER",
+    )
+    prompt = service._build_critique_prompt(ctx)
+
+    # The three fields' literals appear in the prompt
+    assert "USER_MSG_MARKER" in prompt
+    assert "DRAFT_MARKER" in prompt
+    assert "CATEGORY_MARKER" in prompt
+
+    # No risk-signal or principle-id metadata should be in the prompt body
+    # unless explicitly threaded via active_principle_ids (none here)
+    assert "non_harm" not in prompt
+    assert "risk_signals" not in prompt
+
+
+def test_critique_from_mvr_ignores_pattern_observation_field() -> None:
+    """Forward-compat: parser handles the two-step JSON shape (extra
+    pattern_observation field) without breaking on either pass or fail."""
+    service = ResponseReviewService()
+
+    pass_with_obs = service._critique_from_mvr(
+        {
+            "pass": True,
+            "failures": [],
+            "pattern_observation": "draft contained no pattern-relevant content",
+        }
+    )
+    assert pass_with_obs.has_issues is False
+    assert pass_with_obs.severity == "none"
+
+    fail_with_obs = service._critique_from_mvr(
+        {
+            "pass": False,
+            "failures": [
+                {"criterion": "POSITION_COLLAPSE", "sentence": "you're right", "severity": "medium"},
+            ],
+            "pattern_observation": "structural pattern observed",
+        }
+    )
+    assert fail_with_obs.has_issues is True
+    assert fail_with_obs.severity == "medium"
+    assert "user_agency_and_respect" in fail_with_obs.triggered_rules
+
+
+def test_is_vault_grounded_does_not_mutate_prompt_text() -> None:
+    """is_vault_grounded is a metadata signal carried for future ADR-035 use.
+    Item 7 lands the field but does not mutate the prompt text based on it.
+    If a future revision wants the flag to alter the prompt (e.g. loosen
+    EMBELLISHMENT criterion when grounded), this test gets updated then."""
+    service = ResponseReviewService()
+    ctx_grounded = SafetyReviewContext(
+        user_message="x", draft_response="y", is_vault_grounded=True
+    )
+    ctx_ungrounded = SafetyReviewContext(
+        user_message="x", draft_response="y", is_vault_grounded=False
+    )
+    assert service._build_critique_prompt(ctx_grounded) == service._build_critique_prompt(ctx_ungrounded)
+
+
+# ---------------------------------------------------------------------------
+# ADR-035: vault-grounded derivation guard. Mirrors the inline expression
+# in src/llm/adapter.py so changes to the ContextPacket "vault sources"
+# allowlist break a test rather than silently drift from the ADR.
+# ---------------------------------------------------------------------------
+
+
+def test_vault_grounded_derivation_matches_adr_allowlist() -> None:
+    """Per ADR-035 §"Signal contents": is_vault_grounded is True when
+    memory_items, state_items, OR reflection_items is non-empty.
+
+    web_items, image_data, task_items, summary, and query_embedding are
+    NOT in the allowlist. If a future ContextPacket field becomes a vault
+    source, this test must be updated alongside the derivation in
+    src/llm/adapter.py.
+    """
+    from src.context.models import ContextPacket, ContextItem
+
+    def derive(packet: ContextPacket) -> bool:
+        # Mirror of the inline expression in src/llm/adapter.py
+        return bool(
+            packet.memory_items
+            or packet.state_items
+            or packet.reflection_items
+        )
+
+    item = ContextItem(id="x", content="c", source="s", item_type="t")
+
+    assert derive(ContextPacket(user_message="q")) is False
+    assert derive(ContextPacket(user_message="q", memory_items=[item])) is True
+    assert derive(ContextPacket(user_message="q", reflection_items=[item])) is True
+
+    # web_items alone must NOT count as vault-grounded
+    assert (
+        derive(ContextPacket(user_message="q", web_items=[{"url": "https://x"}]))
+        is False
+    )

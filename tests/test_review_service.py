@@ -584,3 +584,67 @@ def test_vault_grounded_derivation_matches_adr_allowlist() -> None:
         derive(ContextPacket(user_message="q", web_items=[{"url": "https://x"}]))
         is False
     )
+
+
+# ---------------------------------------------------------------------------
+# Item-7 ↔ Item-8 wiring: PatternSignal on the packet -> two-step prompt fires
+# ---------------------------------------------------------------------------
+
+
+def test_review_two_step_path_reachable_via_t2_signal_chain() -> None:
+    """End-to-end pin: a PatternSignal on the packet flows through to the
+    review prompt, which switches to two-step structure.
+
+    This test asserts the integration without invoking the LLMAdapter directly
+    (avoids the Ollama dependency). Mirrors the inline read expression in
+    src/llm/adapter.py — same expression, asserted against a constructed
+    SafetyReviewContext.
+    """
+    from src.context.models import ContextPacket
+    from src.safety.pattern_detector import PatternSignal
+
+    # Simulate the Item-8 producer (openai_adapter) populating the field
+    packet = ContextPacket(user_message="hi")
+    packet.t2_pattern_signal = PatternSignal(3, 2, False, 0.85)
+
+    # Mirror of src/llm/adapter.py read expression (both call sites)
+    signal = getattr(packet, "t2_pattern_signal", None)
+    t2_category = signal.category if signal else None
+    assert t2_category == "relational"
+
+    # Build the SafetyReviewContext as the adapter would
+    ctx = SafetyReviewContext(
+        user_message="hi",
+        draft_response="hello",
+        t2_pattern_category=t2_category,
+    )
+
+    # The review prompt switches to two-step
+    service = ResponseReviewService()
+    prompt = service._build_critique_prompt(ctx)
+    assert "TWO-STEP" in prompt
+    assert "pattern_observation" in prompt
+    assert "relational" in prompt
+
+
+def test_review_single_pass_when_packet_has_no_signal() -> None:
+    """Negative pin: no PatternSignal on the packet -> single-pass prompt."""
+    from src.context.models import ContextPacket
+
+    packet = ContextPacket(user_message="hi")
+    # t2_pattern_signal defaults to None
+
+    signal = getattr(packet, "t2_pattern_signal", None)
+    t2_category = signal.category if signal else None
+    assert t2_category is None
+
+    ctx = SafetyReviewContext(
+        user_message="hi",
+        draft_response="hello",
+        t2_pattern_category=t2_category,
+    )
+
+    service = ResponseReviewService()
+    prompt = service._build_critique_prompt(ctx)
+    assert "TWO-STEP" not in prompt
+    assert "pattern_observation" not in prompt

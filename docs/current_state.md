@@ -1,4 +1,4 @@
-# Current State — Ember-2 v0.17.0
+# Current State — Ember-2 v0.17.1
 
 All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support.
 
@@ -120,7 +120,14 @@ v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verif
 
 - BUG-STOP-001 — stop button latency under load
 - Header mobile collision fix
-- Ask-first UI re-enable (backend classifier ready; UI surface pending)
+
+## v0.17.1 Additions
+
+- Constitutional review context signal (ADR-035) — `SafetyReviewContext` gains `is_vault_grounded` bool and `t2_pattern_category` label; two-step review prompt for T2-triggered cases (Item 7)
+- Cross-session pattern detection (ADR-021) — `PatternSignal`, `detect_t2_pattern()`, `contains_named_third_party` flag at write time, `<cross_session_pattern>` prompt injection (Item 8)
+- Lodestone path 2 — three-stage reflection synthesis produces inferred vault records (`acquisition_path: "inferred"`, `confirmed: false`); monthly cadence; confirmed-only injection gate unchanged (Item 9)
+- Vision pipeline fix — `VisionService` now reads `EMBER_VISION_MODEL` env var (was hardcoded to `qwen3-vl:8b`); `image_data` cleared after successful VL preprocessing to prevent raw image bytes reaching the text model
+- Ask-first toggle re-enabled in UI Settings (ADR-034 backend live)
 
 ## Security
 
@@ -175,6 +182,6 @@ v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verif
 
 ## Tests
 
-- ember-2 backend: 1460 pytest tests passing
+- ember-2 backend: 1559 pytest tests passing
 - ember-2-ui: 163 Playwright e2e tests passing (2 conditional skips)
 - ember-2-installer: 73 Playwright e2e tests passing

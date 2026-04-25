@@ -55,6 +55,14 @@ class ContextPacket:
     # authority-rules line instructing the model to acknowledge the gap
     # explicitly rather than synthesize from ingested content.
     relational_query_empty: bool = False
+    # ADR-021 cross-session pattern signal, populated post-retrieval by
+    # detect_t2_pattern. Default None means no pattern detected this turn.
+    # Consumed by PromptBuilder._build_cross_session_pattern_block (the
+    # ADR-021 <cross_session_pattern> flag) and by LLMAdapter when building
+    # SafetyReviewContext.t2_pattern_category (per ADR-035 / Item 7).
+    # Forward-reference annotation avoids circular import — the actual
+    # PatternSignal type lives in src.safety.pattern_detector.
+    t2_pattern_signal: "object | None" = None
 
     def all_items(self) -> list[ContextItem]:
         # Order matches TDD context packet order:

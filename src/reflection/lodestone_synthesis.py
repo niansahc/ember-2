@@ -30,10 +30,25 @@ logger = logging.getLogger("ember.lodestone_synthesis")
 
 # Hyperparameters per ADR-017. Tunable - revisit after real usage data exists.
 SYNTHESIS_WINDOW_DAYS = 30
-MIN_REFLECTIONS_FOR_SYNTHESIS = 4
+# Aligned with the Stage 1 prompt's "appears in 3 or more separate reflections"
+# rule. A vault with exactly 3 on-theme reflections is acceptable evidence.
+MIN_REFLECTIONS_FOR_SYNTHESIS = 3
 MAX_REFLECTIONS_INPUT = 30
 REFLECTION_TRUNCATE_CHARS = 400
 STAGE1_MIN_THEME_WORDS = 5  # density floor: rejects single-token themes ("honesty")
+# Stage 3 must produce at least this many evidence excerpts. Mirrors the
+# Stage 1 "3+ reflections" requirement on the output side - prevents the
+# parser from accepting a single-excerpt draft when the prompt asked for 3+.
+STAGE3_MIN_EVIDENCE_LINES = 3
+# Read 3x the window cap to ensure date-filtering happens before the
+# read-layer hard limit. Without this, a high-volume vault could lose
+# in-window records to the read limit and silently miss recent evidence.
+_REFLECTION_READ_OVERHEAD = 5
+# Cap proposed-record growth. Path 2 doesn't compete for the active-record
+# budget (lodestone_service.write skips the cap when confirmed=False), so
+# a never-confirming user could accumulate proposed records indefinitely.
+# Skip new synthesis until the queue drops below this ceiling.
+MAX_PROPOSED_QUEUE = 20
 
 VALID_CATEGORIES = {"character", "relational", "directional", "ground", "beyond"}
 
@@ -166,10 +181,11 @@ def _stage1_pattern_check(reflection_block: str) -> str | None:
         logger.info("[LODESTONE_SYNTHESIS] stage1 NO_VALUE_FOUND - exiting")
         return None
     if len(response.split()) < STAGE1_MIN_THEME_WORDS:
+        # Vault Privacy Rule: log word count only, not the theme text itself
+        # (theme is derived from vault reflections and is therefore vault content).
         logger.info(
-            "[LODESTONE_SYNTHESIS] stage1 theme too abstract (<%d words): %r - exiting",
+            "[LODESTONE_SYNTHESIS] stage1 theme too abstract (<%d words) - exiting",
             STAGE1_MIN_THEME_WORDS,
-            response[:80],
         )
         return None
     return response
@@ -183,16 +199,22 @@ def _stage2_taxonomy_check(theme: str) -> str | None:
     normalized = response.strip().lower().split()[0] if response.strip() else ""
     if normalized in VALID_CATEGORIES:
         return normalized
+    # Vault Privacy Rule: log response length only, not the response content.
     logger.info(
-        "[LODESTONE_SYNTHESIS] stage2 no category match (response=%r) - exiting",
-        response[:60],
+        "[LODESTONE_SYNTHESIS] stage2 no category match (response_len=%d) - exiting",
+        len(response),
     )
     return None
 
 
 def _parse_stage3_output(text: str) -> tuple[str, list[str]] | None:
-    """Parse VALUE: + EVIDENCE: lines. Returns (value, [evidence_lines]) or None
-    on parse failure / missing markers / empty value / zero evidence."""
+    """Parse VALUE: + EVIDENCE: lines. Returns (value, [evidence_lines]) or
+    None on parse failure: missing markers, empty value, or fewer than
+    STAGE3_MIN_EVIDENCE_LINES evidence excerpts (mirrors Stage 1's "3+
+    reflections" rule on the output side).
+
+    Accepts evidence lines prefixed with "-" or "*" (qwen3:8b sometimes
+    emits markdown bullets despite the prompt asking for hyphens)."""
     lines = text.splitlines()
     value = ""
     evidence: list[str] = []
@@ -207,11 +229,11 @@ def _parse_stage3_output(text: str) -> tuple[str, list[str]] | None:
             in_evidence = False
         elif upper.startswith("EVIDENCE:"):
             in_evidence = True
-        elif in_evidence and stripped.startswith("-"):
-            excerpt = stripped.lstrip("-").strip()
+        elif in_evidence and (stripped.startswith("-") or stripped.startswith("*")):
+            excerpt = stripped.lstrip("-* ").strip()
             if excerpt:
                 evidence.append(excerpt)
-    if not value or not evidence:
+    if not value or len(evidence) < STAGE3_MIN_EVIDENCE_LINES:
         return None
     return value, evidence
 
@@ -235,14 +257,25 @@ def _stage3_record_draft(
 
 def _recent_reflections(memory_service: MemoryService) -> list[dict]:
     """Return reflection records timestamped within the last
-    SYNTHESIS_WINDOW_DAYS, sorted ascending by timestamp."""
-    records = memory_service.read(memory_type="reflection", limit=MAX_REFLECTIONS_INPUT * 2)
+    SYNTHESIS_WINDOW_DAYS, sorted ascending by timestamp.
+
+    Reads MAX_REFLECTIONS_INPUT * _REFLECTION_READ_OVERHEAD records so that
+    the date filter, not the read limit, determines what reaches the LLM.
+    A high-volume vault could otherwise lose in-window records to the
+    read-layer cap.
+
+    Cutoff format strips microseconds so it lexically compares correctly
+    with older records that may not include the %f suffix."""
+    records = memory_service.read(
+        memory_type="reflection",
+        limit=MAX_REFLECTIONS_INPUT * _REFLECTION_READ_OVERHEAD,
+    )
     cutoff = (datetime.now() - timedelta(days=SYNTHESIS_WINDOW_DAYS)).strftime(
-        "%Y-%m-%dT%H-%M-%S-%f"
+        "%Y-%m-%dT%H-%M-%S"
     )
     in_window = [
         rec for rec in records
-        if (rec.get("timestamp") or rec.get("created_at") or "") >= cutoff
+        if (rec.get("timestamp") or rec.get("created_at") or "")[:19] >= cutoff
     ]
     in_window.sort(key=lambda r: r.get("timestamp") or r.get("created_at") or "")
     return in_window
@@ -259,6 +292,22 @@ def synthesize_lodestone_candidates(
     pattern of generate_reflection() and keeps the runner glue trivial.
     """
     svc = memory_service or MemoryService()
+
+    # Don't let the proposed-records queue grow without bound. Path 2 writes
+    # confirmed=False which bypasses lodestone_service's MAX_ACTIVE_RECORDS
+    # cap (that cap only protects active-record budget). A user who never
+    # confirms could accumulate proposed records every month forever; this
+    # ceiling forces a backlog-clearing pause until the queue drops.
+    proposed_count = len(lodestone_service.read_proposed())
+    if proposed_count >= MAX_PROPOSED_QUEUE:
+        logger.info(
+            "[LODESTONE_SYNTHESIS] proposed queue at cap (%d/%d); "
+            "skipping synthesis until user clears backlog",
+            proposed_count,
+            MAX_PROPOSED_QUEUE,
+        )
+        return None
+
     reflections = _recent_reflections(svc)
     if len(reflections) < MIN_REFLECTIONS_FOR_SYNTHESIS:
         logger.info(
@@ -296,9 +345,11 @@ def synthesize_lodestone_candidates(
         supporting_evidence="\n".join(f"- {line}" for line in evidence),
         confirmed=False,
     )
+    # Vault Privacy Rule: log category + length only, not the value text.
     logger.info(
-        "[LODESTONE_SYNTHESIS] proposed inferred record (%s): %s",
+        "[LODESTONE_SYNTHESIS] proposed inferred record (%s, value_len=%d, evidence_count=%d)",
         category,
-        value[:80],
+        len(value),
+        len(evidence),
     )
     return record

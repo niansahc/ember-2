@@ -25,7 +25,7 @@ from src.reflection.lodestone_synthesis import (
 
 
 # ---------------------------------------------------------------------------
-# Helpers — synthetic reflection records + mocked LLM
+# Helpers - synthetic reflection records + mocked LLM
 # ---------------------------------------------------------------------------
 
 
@@ -253,14 +253,14 @@ def test_inferred_record_does_not_appear_in_read_active(temp_vault) -> None:
         side_effect=_stub_chat([
             "the user keeps returning to honest conversation over comfort",
             "character",
-            "VALUE: I value direct honesty\nEVIDENCE:\n- example one\n- example two",
+            "VALUE: I value direct honesty\nEVIDENCE:\n- example one\n- example two\n- example three",
         ]),
     ):
         synthesize_lodestone_candidates(memory_service=svc)
 
     active = lodestone_service.read_active()
     assert all(r["acquisition_path"] != "inferred" for r in active), (
-        "Inferred (proposed) record leaked into read_active() — confirmed-only "
+        "Inferred (proposed) record leaked into read_active() -- confirmed-only "
         "gate is broken. ADR-017 / ADR-035 require proposed records stay "
         "invisible to prompt assembly."
     )
@@ -277,7 +277,7 @@ def test_inferred_record_appears_in_read_proposed(temp_vault) -> None:
         side_effect=_stub_chat([
             "the user keeps returning to honest conversation over comfort",
             "character",
-            "VALUE: I value direct honesty\nEVIDENCE:\n- example one\n- example two",
+            "VALUE: I value direct honesty\nEVIDENCE:\n- example one\n- example two\n- example three",
         ]),
     ):
         synthesize_lodestone_candidates(memory_service=svc)
@@ -299,7 +299,12 @@ def test_lodestone_resolver_only_calls_read_active() -> None:
     """ADR-035 / Item 7: lodestone_resolver must NEVER call read_proposed
     or read_all - only read_active. Pins the confirmed-only injection
     contract so a future resolver refactor can't silently leak proposed
-    records into prompt assembly."""
+    records into prompt assembly.
+
+    Wraps read_active so we can also prove the resolver actually exercised
+    the protected path (otherwise a future refactor that bypasses the
+    service entirely would silently pass this test)."""
+    from src.context import lodestone_resolver as resolver_mod
     from src.memory import lodestone_service
 
     def _explode(*_args, **_kwargs):
@@ -308,19 +313,26 @@ def test_lodestone_resolver_only_calls_read_active() -> None:
             "gate violated. Inferred records would leak into the prompt."
         )
 
+    # Patch read_active where the resolver imports it (it does
+    # `from src.memory.lodestone_service import read_active` at module load).
+    active_spy = MagicMock(wraps=lodestone_service.read_active)
+
     with patch.object(lodestone_service, "read_proposed", side_effect=_explode), \
-         patch.object(lodestone_service, "read_all", side_effect=_explode):
-        # Import inside the patch context so any module-level eager calls
-        # would also be intercepted.
-        from src.context import lodestone_resolver  # noqa: F401
-        # Trigger the resolve path with empty inputs - read_active should
-        # be the only lodestone_service entrypoint touched.
+         patch.object(lodestone_service, "read_all", side_effect=_explode), \
+         patch.object(resolver_mod, "read_active", new=active_spy):
         try:
-            lodestone_resolver.resolve(query_embedding=[0.0] * 8, max_records=2)
+            resolver_mod.resolve(
+                user_message="test message",
+                query_embedding=[0.0] * 8,
+                max_records=2,
+            )
         except Exception:
-            # Any internal failure is fine; we only care that the explode
-            # functions were not called.
             pass
+
+    assert active_spy.call_count >= 1, (
+        "Resolver did not call read_active - the confirmed-only gate is "
+        "no longer the source of lodestone records (or signature changed)."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -333,12 +345,40 @@ def test_parse_stage3_well_formed() -> None:
         "VALUE: I would rather lose ease than skip a hard conversation\n"
         "EVIDENCE:\n"
         "- declined to soften feedback\n"
-        "- chose hard conversation"
+        "- chose hard conversation\n"
+        "- named the tension instead of suggesting a workaround"
     )
     assert out is not None
     value, evidence = out
     assert value.startswith("I would rather lose ease")
-    assert evidence == ["declined to soften feedback", "chose hard conversation"]
+    assert len(evidence) == 3
+    assert evidence[0] == "declined to soften feedback"
+
+
+def test_parse_stage3_below_min_evidence_returns_none() -> None:
+    """Mirrors Stage 1's '3+ reflections' rule on the output side."""
+    out = _parse_stage3_output(
+        "VALUE: I value direct conversation\n"
+        "EVIDENCE:\n"
+        "- single excerpt only"
+    )
+    assert out is None
+
+
+def test_parse_stage3_accepts_markdown_bullet_evidence() -> None:
+    """qwen3:8b sometimes emits markdown bullets despite the prompt asking
+    for hyphens. Parser accepts both - and *."""
+    out = _parse_stage3_output(
+        "VALUE: I value clear language\n"
+        "EVIDENCE:\n"
+        "* avoided jargon in feedback\n"
+        "* asked plain-language follow-ups\n"
+        "* corrected an ambiguous phrasing on review"
+    )
+    assert out is not None
+    value, evidence = out
+    assert value == "I value clear language"
+    assert len(evidence) == 3
 
 
 def test_parse_stage3_missing_value() -> None:

@@ -133,6 +133,8 @@ Y does NOT cut independent releases when backend or UI changes are involved — 
 
 All three repos use release-please for automated release PRs. Conventional commits are required. Release PRs require human approval before merging.
 
+Release-please PRs (title format: "chore(main): release X.Y.Z") must NEVER have auto-merge enabled. These PRs require explicit human approval and manual merge only. The human decides when a release is cut. All other PR types (feat, fix, docs, test, chore non-release) may use auto-merge as normal.
+
 ---
 
 *Note: this checklist lives at `.claude/commands/pre-release.md`. Update it here, not in CLAUDE.md.*

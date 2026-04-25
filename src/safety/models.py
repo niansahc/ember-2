@@ -96,3 +96,28 @@ class RefusalRedirect:
         if self.safer_alternative.strip():
             return f"{self.reason.strip()} {self.safer_alternative.strip()}".strip()
         return self.reason.strip()
+
+
+# Category taxonomy for ADR-021 PatternSignal. MVP scopes to "relational"
+# (the only T2 category covered by the relational_honesty principle).
+T2_CATEGORIES = ("relational",)
+
+
+@dataclass(frozen=True)
+class PatternSignal:
+    """Cross-session pattern detection result, per ADR-021.
+
+    Carries only structural metadata - counts and a category label.
+    Never contains record content, ids, or third-party identifiers.
+
+    Consumed by:
+      - PromptBuilder._build_cross_session_pattern_block (ADR-021 flag)
+      - SafetyReviewContext.t2_pattern_category (ADR-035 review hook,
+        via context_packet.t2_pattern_signal.category)
+    """
+
+    instance_count: int
+    session_count: int
+    has_named_party: bool
+    max_similarity: float
+    category: str = "relational"

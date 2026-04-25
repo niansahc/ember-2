@@ -8,7 +8,7 @@ and detect_t2_pattern over seeded retrieval items.
 from __future__ import annotations
 
 import dataclasses
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -62,12 +62,15 @@ def test_pattern_signal_equality() -> None:
 # ---------------------------------------------------------------------------
 
 
+_RECORD_FMT = "%Y-%m-%dT%H-%M-%S-%f"  # matches src/memory/write_memory.py
+
+
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now().strftime(_RECORD_FMT)
 
 
 def _old_iso(days: int = 60) -> str:
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    return (datetime.now() - timedelta(days=days)).strftime(_RECORD_FMT)
 
 
 def _make_item(
@@ -245,3 +248,27 @@ def test_detect_constant_thresholds_match_adr() -> None:
     assert T2_MIN_SESSIONS == 2
     assert T2_MIN_SIMILARITY == 0.82
     assert T2_RECENCY_DAYS == 30
+
+
+def test_detect_recency_uses_record_timestamp_format() -> None:
+    """Regression: cutoff must compare in the same format as
+    write_memory._next_timestamp() emits ("%Y-%m-%dT%H-%M-%S-%f", no
+    timezone). Mixed formats string-compare wrong: ":" (0x3A) > "-"
+    (0x2D) so an isoformat cutoff would always be lexically greater
+    than every hyphenated record timestamp, making the recency check
+    always fail in production. This test seeds production-format
+    timestamps and asserts the gate passes when records are recent and
+    fails when they're old."""
+    recent = [
+        _make_item(embedding=_VEC_HIGH_SIM, session_id="s1", timestamp=_now_iso()),
+        _make_item(embedding=_VEC_HIGH_SIM, session_id="s2", timestamp=_now_iso()),
+        _make_item(embedding=_VEC_HIGH_SIM, session_id="s3", timestamp=_now_iso()),
+    ]
+    assert detect_t2_pattern(recent, _VEC_HIGH_SIM) is not None
+
+    old = [
+        _make_item(embedding=_VEC_HIGH_SIM, session_id="s1", timestamp=_old_iso(60)),
+        _make_item(embedding=_VEC_HIGH_SIM, session_id="s2", timestamp=_old_iso(60)),
+        _make_item(embedding=_VEC_HIGH_SIM, session_id="s3", timestamp=_old_iso(60)),
+    ]
+    assert detect_t2_pattern(old, _VEC_HIGH_SIM) is None

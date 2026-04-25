@@ -22,8 +22,10 @@ import ollama
 
 logger = logging.getLogger("ember.vision")
 
-# Default vision model for the preprocessor pipeline.
-# Can be overridden via EMBER_VISION_MODEL env var (read by config).
+# Hardcoded fallback vision model. The runtime resolution order in
+# VisionService.__init__ is: explicit constructor arg → EMBER_VISION_MODEL
+# env var (via get_ember_vision_model()) → this fallback. Only reached when
+# both higher-priority sources are unset.
 DEFAULT_VISION_MODEL = "qwen3-vl:8b"
 
 # Vision analysis prompt — task-specific instructions for the vision model.
@@ -52,6 +54,9 @@ class VisionService:
     """
 
     def __init__(self, model: str | None = None) -> None:
+        if model is None:
+            from src.core.config import get_ember_vision_model
+            model = get_ember_vision_model()
         self.model = model or DEFAULT_VISION_MODEL
 
     def analyze(self, image_data: list[str]) -> str:

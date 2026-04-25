@@ -17,3 +17,9 @@ ember-2 is the backend. It versions independently but must be pinned by ember-2-
 ## Planned: Automated Coordination (v0.14.0)
 
 The installer repo will adopt Release Please and GitHub Actions to automate cross-repo builds. Until then, releases are manual per the checklist above.
+
+## release-please Auto-Merge Prohibition
+
+Release-please PRs (title format: `chore(main): release X.Y.Z`) must NEVER have auto-merge enabled. These PRs require explicit human approval and manual merge only. All other PR types may use auto-merge as normal.
+
+Rationale: a release is a deliberate human decision. Allowing release-please PRs to auto-merge bypasses the human gate that decides when a release is cut. v0.17.0 was auto-released without explicit approval — that was the trigger for codifying this rule. Same wording exists in CLAUDE.md and `.claude/commands/pre-release.md` so the rule is reinforced at the policy, ops, and workflow layers.

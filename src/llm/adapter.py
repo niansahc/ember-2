@@ -216,14 +216,12 @@ class LLMAdapter:
             or context_packet.reflection_items
         )
 
-        # ITEM-8 coordination point (ADR-021): replace the literal None below
-        # with the read expression for the T2 pattern category once Item 8
-        # has locked the ContextPacket field name. Until Item 8 lands, this
-        # stays None and the two-step review prompt path is unreachable.
-        # Suggested shape: context_packet.t2_pattern_signal.category if
-        # context_packet.t2_pattern_signal else None — but Item 8's plan is
-        # the source of truth.
-        _t2_category: str | None = None
+        # ADR-021 / ADR-035: read the T2 pattern category from the signal
+        # populated by detect_t2_pattern in the API layer. None when no
+        # pattern was detected this turn — review_service falls through to
+        # the standard single-pass MVR prompt.
+        _signal = getattr(context_packet, "t2_pattern_signal", None)
+        _t2_category: str | None = _signal.category if _signal else None
 
         initial_review_context = SafetyReviewContext(
             user_message=context_packet.user_message,
@@ -388,10 +386,12 @@ class LLMAdapter:
             or context_packet.reflection_items
         )
 
-        # ITEM-8 coordination point (ADR-021): see sync path note. Replace
-        # None with context_packet.t2_pattern_signal.category once Item 8
-        # locks the field name.
-        _t2_category_stream: str | None = None
+        # ADR-021 / ADR-035: T2 pattern category for the streaming path.
+        # Same read pattern as the sync path above.
+        _signal_stream = getattr(context_packet, "t2_pattern_signal", None)
+        _t2_category_stream: str | None = (
+            _signal_stream.category if _signal_stream else None
+        )
 
         # Post-stream safety review
         review_context = SafetyReviewContext(

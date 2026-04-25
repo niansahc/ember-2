@@ -144,6 +144,17 @@ def write_memory(
     normalized = normalize_text(text)
     clean_metadata = flatten_metadata(metadata)
 
+    # ADR-021 prerequisite: tag conversation records with whether they
+    # mention a named third party. Heuristic detection at write time.
+    # setdefault preserves explicit caller overrides (manual annotations,
+    # ingestion-time NER, etc.).
+    if memory_type == "conversation":
+        from src.memory.third_party_detection import contains_named_third_party
+        clean_metadata.setdefault(
+            "contains_named_third_party",
+            contains_named_third_party(text),
+        )
+
     memory = {
         "id": memory_id,
         "timestamp": timestamp,

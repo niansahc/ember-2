@@ -101,6 +101,8 @@ Patch releases follow the same checklist. There are no shortcuts for patches. A 
 - [ ] All tests passing
 - [ ] Retrieval eval passing with no regression (G only)
 - [ ] No flaky tests carried forward
+- [ ] Manual eval battery — run tools/eval_manual.py with qwen3:8b and Haiku separately. Full 19-question battery, all 7 categories. Document results in docs/eval_history.md. This is the Tier 2 gate. Required before every major release.
+- [ ] Automated eval suite — run pytest tests/eval/ -m eval --runs 3. Document results including GOLD-R-001 pass/fail. Minimum 3 runs before any result is treated as signal.
 
 **Coordination gate:**
 - [ ] All three repos confirm docs and tests green

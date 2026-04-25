@@ -46,16 +46,38 @@ class SafetyReviewResult:
 
 @dataclass(frozen=True)
 class SafetyReviewContext:
+    """Bounded context handed to ResponseReviewService.
+
+    The review service must NOT see raw vault content. This dataclass is
+    the entire allowlist of context-derived signals the reviewer is
+    permitted to consult. Anything not on this list is out of scope and
+    requires an ADR-035 amendment before being added.
+
+    Allowlist (per ADR-035):
+      - user_message: the user's turn (already public input)
+      - draft_response: the model's draft (already a public output)
+      - risk_signals: trigger-layer signal names (no content)
+      - active_principle_ids: constitution principle ids (no content)
+      - has_third_party_content: bool flag, gates 5th MVR criterion
+        (CONTENT_ATTRIBUTION_ERROR)
+      - is_vault_grounded: bool flag, True when the context packet
+        contained non-empty memory_items, state_items, or
+        reflection_items at draft time. Lets the reviewer distinguish
+        a hallucinated claim from one with retrieval support. Does
+        NOT carry the vault content itself.
+      - t2_pattern_category: optional taxonomy category string from
+        ADR-021 cross-session pattern detection (e.g. "relational",
+        "directional"). When non-null, the review prompt switches to
+        a two-step structure (observation, then verdict). Carries
+        only the category label, never counts, content, or record ids.
+    """
     user_message: str
     draft_response: str
     risk_signals: list[str] = field(default_factory=list)
     active_principle_ids: list[str] = field(default_factory=list)
-    # When third-party content was injected into the
-    # context packet this turn (vision_context, third-party ingested text),
-    # the review prompt adds a fifth criterion checking whether the draft
-    # attributes subjects/communities/beliefs from that content to the user.
-    # False (default) means the criterion is omitted.
     has_third_party_content: bool = False
+    is_vault_grounded: bool = False
+    t2_pattern_category: str | None = None
 
 
 @dataclass(frozen=True)

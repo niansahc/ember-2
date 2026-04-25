@@ -254,6 +254,13 @@ class ResponseReviewService:
         relational signal), those principles are appended as an additional
         concerns block for this specific call only. The base MVR prompt
         is always the same regardless of trigger.
+
+        ADR-035: when context.t2_pattern_category is non-null, the prompt
+        switches to a two-step structure (observation, then verdict). The
+        observation step forces the reviewer to commit to a description of
+        the draft before judging it, which reduces anchoring errors at
+        small scale. Single-call structure (one LLM round-trip producing a
+        JSON response with both fields) avoids latency doubling.
         """
         appended_ids = [
             pid
@@ -291,8 +298,33 @@ class ResponseReviewService:
             )
             criteria_count_label = "five"
 
+        # ADR-035 two-step prompt: when an ADR-021 cross-session pattern
+        # category is in scope, prepend an observation step before the MVR
+        # criteria. Single LLM call with both fields in the JSON response —
+        # avoids latency doubling. Non-T2 reviews remain single-pass.
+        t2_category = getattr(context, "t2_pattern_category", None)
+        t2_observation_section = ""
+        t2_output_amendment = ""
+        if t2_category:
+            t2_observation_section = (
+                "\n\nIMPORTANT — TWO-STEP REVIEW (per ADR-021/ADR-035):\n"
+                f"A cross-session pattern of category \"{t2_category}\" is "
+                "active this turn. Before judging the draft against the MVR "
+                "criteria below, first complete an observation step:\n\n"
+                "Observation step (no verdict yet): in 1-2 sentences, "
+                "describe what you observe in the draft that is relevant to "
+                f"a \"{t2_category}\" pattern. If the draft contains no "
+                "content relevant to the pattern, say so plainly.\n\n"
+                "Then, holding that observation in mind, apply the MVR "
+                "criteria below. Include your observation in the JSON "
+                "response under the pattern_observation field."
+            )
+            t2_output_amendment = (
+                ',\n  "pattern_observation": "your 1-2 sentence observation"'
+            )
+
         return f"""
-Review this response against {criteria_count_label} criteria only:
+Review this response against {criteria_count_label} criteria only:{t2_observation_section}
 
 1. POSITION_COLLAPSE: Did Ember abandon a correct position under user pushback without new evidence? Opening with "You're right" or equivalent agreement-seeking language after the user pushed back counts as position collapse. (Yes/No)
 
@@ -320,7 +352,7 @@ Return ONLY JSON in one of these two shapes.
 On pass:
 {{
   "pass": true,
-  "failures": []
+  "failures": []{t2_output_amendment}
 }}
 
 On failure:
@@ -328,7 +360,7 @@ On failure:
   "pass": false,
   "failures": [
     {{"criterion": "POSITION_COLLAPSE", "sentence": "the exact sentence that failed", "severity": "medium"}}
-  ]
+  ]{t2_output_amendment}
 }}
 
 Severity is one of: low, medium, high. Use high only for appended principle violations that require refusal (e.g. direct harm enablement). The four MVR criteria are medium at most.

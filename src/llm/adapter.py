@@ -203,10 +203,34 @@ class LLMAdapter:
         # only when this flag is True.
         _has_third_party = bool(vision_description and vision_description.strip())
 
+        # ADR-035: derive vault-grounded signal from the context packet.
+        # True when retrieval put memory, state, or reflection items in scope
+        # at draft time. Lets the reviewer weigh embellishment vs faithful
+        # surfacing differently. Does NOT carry vault content into review.
+        # Allowlist matches ADR-035 §"Signal contents" exactly: memory_items,
+        # state_items, reflection_items. (web_items excluded — external; image_data
+        # already covered by has_third_party_content; task_items not in ADR.)
+        _is_vault_grounded = bool(
+            context_packet.memory_items
+            or context_packet.state_items
+            or context_packet.reflection_items
+        )
+
+        # ITEM-8 coordination point (ADR-021): replace the literal None below
+        # with the read expression for the T2 pattern category once Item 8
+        # has locked the ContextPacket field name. Until Item 8 lands, this
+        # stays None and the two-step review prompt path is unreachable.
+        # Suggested shape: context_packet.t2_pattern_signal.category if
+        # context_packet.t2_pattern_signal else None — but Item 8's plan is
+        # the source of truth.
+        _t2_category: str | None = None
+
         initial_review_context = SafetyReviewContext(
             user_message=context_packet.user_message,
             draft_response=draft_response,
             has_third_party_content=_has_third_party,
+            is_vault_grounded=_is_vault_grounded,
+            t2_pattern_category=_t2_category,
         )
 
         trigger_result = self.policy_service.evaluate_trigger(initial_review_context)
@@ -240,6 +264,8 @@ class LLMAdapter:
                 risk_signals=trigger_result.triggered_by,
                 active_principle_ids=_active_principles,
                 has_third_party_content=_has_third_party,
+                is_vault_grounded=_is_vault_grounded,
+                t2_pattern_category=_t2_category,
             )
 
             review_result = self.review_service.review(review_context)
@@ -354,11 +380,26 @@ class LLMAdapter:
             vision_description and vision_description.strip()
         )
 
+        # ADR-035: vault-grounded signal for streaming path. Same allowlist
+        # as the sync path (memory_items, state_items, reflection_items).
+        _is_vault_grounded_stream = bool(
+            context_packet.memory_items
+            or context_packet.state_items
+            or context_packet.reflection_items
+        )
+
+        # ITEM-8 coordination point (ADR-021): see sync path note. Replace
+        # None with context_packet.t2_pattern_signal.category once Item 8
+        # locks the field name.
+        _t2_category_stream: str | None = None
+
         # Post-stream safety review
         review_context = SafetyReviewContext(
             user_message=context_packet.user_message,
             draft_response=full_response,
             has_third_party_content=_has_third_party_stream,
+            is_vault_grounded=_is_vault_grounded_stream,
+            t2_pattern_category=_t2_category_stream,
         )
         trigger_result = self.policy_service.evaluate_trigger(review_context)
 
@@ -382,6 +423,8 @@ class LLMAdapter:
                 risk_signals=trigger_result.triggered_by,
                 active_principle_ids=_active_principles,
                 has_third_party_content=_has_third_party_stream,
+                is_vault_grounded=_is_vault_grounded_stream,
+                t2_pattern_category=_t2_category_stream,
             )
             review_result = self.review_service.review(review_ctx)
             self.review_logger.log(

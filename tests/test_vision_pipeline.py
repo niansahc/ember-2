@@ -205,3 +205,44 @@ class TestVisionInBuildPrompt:
         prompt = builder.build_prompt(packet, vision_description="")
 
         assert "<vision_context>" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# VisionService model resolution chain (env var honored)
+# ---------------------------------------------------------------------------
+
+
+class TestVisionServiceModelResolution:
+    """The constructor's model resolution order is:
+    1. explicit `model` arg
+    2. EMBER_VISION_MODEL env var (via get_ember_vision_model())
+    3. DEFAULT_VISION_MODEL hardcoded fallback
+    """
+
+    def test_explicit_model_arg_wins_over_env(self):
+        with patch.dict("os.environ", {"EMBER_VISION_MODEL": "from-env:1b"}):
+            service = VisionService(model="explicit-arg:1b")
+        assert service.model == "explicit-arg:1b"
+
+    def test_env_var_used_when_no_explicit_arg(self):
+        with patch.dict("os.environ", {"EMBER_VISION_MODEL": "from-env:11b"}):
+            service = VisionService()
+        assert service.model == "from-env:11b"
+
+    def test_default_used_when_neither_set(self):
+        from src.llm.vision_service import DEFAULT_VISION_MODEL
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+            saved = os.environ.pop("EMBER_VISION_MODEL", None)
+            try:
+                service = VisionService()
+                assert service.model == DEFAULT_VISION_MODEL
+            finally:
+                if saved is not None:
+                    os.environ["EMBER_VISION_MODEL"] = saved
+
+    def test_empty_env_var_falls_through_to_default(self):
+        from src.llm.vision_service import DEFAULT_VISION_MODEL
+        with patch.dict("os.environ", {"EMBER_VISION_MODEL": ""}):
+            service = VisionService()
+        assert service.model == DEFAULT_VISION_MODEL

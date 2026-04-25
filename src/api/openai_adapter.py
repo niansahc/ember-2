@@ -1208,6 +1208,18 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
     used_vision = bool(_vision_description)
 
+    # ADR-032: when VL preprocessing succeeded, the image is already
+    # represented in the prompt as text via <vision_context>. Continuing
+    # to pass raw image bytes to the text model (qwen3:8b) is wasted at
+    # best and the trigger for the trained "I can't view images" RLHF
+    # refusal at worst. Clear image_data here so only the VL preprocessor
+    # ever sees the raw bytes; downstream LLM calls stay text-only.
+    # When preprocessing FAILED (used_vision=False), keep image_data on
+    # the packet so the legacy vision path can still attempt direct
+    # routing if a vision-capable text model is configured.
+    if used_vision:
+        context_packet.image_data = []
+
     # Web search autonomous mode: when web_search_autonomous=True, execute
     # searches directly on thin-vault factual queries instead of telling the
     # model to "offer to search". This respects the preference the user sets.

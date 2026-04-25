@@ -114,3 +114,7 @@ The relational orientation concept from the prior ADR-017 draft — Ember learni
 - Schwartz (1992, validated 82+ countries) — Basic Human Values; four higher-order dimensions as minimal taxonomy
 - Verplanken & Sui (Frontiers in Psychology, 2019) — habit-to-identity formation; reason field requirement for compounding
 - IP-Dialog (ACL 2025) — implicit personalization; constrained taxonomy improves inference precision
+
+## Amendment — 2026-04-24
+
+Path 2 acquisition (inferred value inference via three-stage reflection synthesis) is scaffolded but not functional as of v0.17.0. Zero inferred records in vault confirmed. Implementation targeted for v0.17.0 completion. Acquisition path spec unchanged.

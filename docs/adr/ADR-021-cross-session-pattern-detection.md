@@ -118,3 +118,9 @@ The `contains_named_third_party` metadata flag must be set at ingestion/write ti
 - relational_honesty v0.5 (constitution.yaml) — T2 trigger condition
 - ADR-018 (intent-aware type gating) — existing retrieval policy layer
 - flourishing_over_preference (constitution.yaml) — cross-session pattern detection is the strongest use case for this principle but is currently unenforceable (documented in CLAUDE.md Known Issues)
+
+## Amendment — 2026-04-24
+
+1. **30-day recency gate is a tunable hyperparameter, not IWM-derived.** No empirical IWM literature specifies timescales for adult relational pattern formation. The 30-day window operationalizes recency sensitivity vs. false positives from session-specific fluctuation. Treat as a hyperparameter subject to empirical calibration.
+
+2. **Embedding cost.** Retrieved conversation record embeddings should be cached in record metadata at write time to avoid recomputation during T2 detection passes.

@@ -101,6 +101,21 @@ class ContextRetriever:
             if self._should_exclude_content(content, user_message):
                 continue
 
+            # ADR-021: surface the cached embedding into ContextItem.metadata
+            # so the T2 pattern detector can read it without recomputation.
+            # Only present on results from the SQLite store (legacy JSON-index
+            # results may not carry it). Missing -> detector treats as cache
+            # miss and skips the record.
+            _embedding = result.get("embedding")
+            _enriched_metadata = {
+                **metadata,
+                "path": result.get("path"),
+                "memory_type": mem_type,
+                "raw_score": result.get("raw_score", 0.0),
+            }
+            if _embedding:
+                _enriched_metadata["embedding"] = _embedding
+
             items.append(
                 ContextItem(
                     id=metadata.get("chunk_id", result.get("path", "")),
@@ -111,12 +126,7 @@ class ContextRetriever:
                     score=result.get("score", 0.0),
                     timestamp=metadata.get("created_at"),
                     tags=metadata.get("tags", []),
-                    metadata={
-                        **metadata,
-                        "path": result.get("path"),
-                        "memory_type": mem_type,
-                        "raw_score": result.get("raw_score", 0.0),
-                    },
+                    metadata=_enriched_metadata,
                     tier=result.get("tier", "hot"),
                     # Propagate authorship from the
                     # SQLite index. Missing column returns "unknown" via

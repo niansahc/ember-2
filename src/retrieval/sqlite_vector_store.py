@@ -222,6 +222,10 @@ class SqliteVectorStore:
                     "metadata": metadata,
                     "tier": tier,
                     "authorship": authorship,
+                    # ADR-021 amendment 2026-04-24: surface the cached
+                    # embedding so the T2 pattern detector can read it
+                    # from ContextItem.metadata without recomputation.
+                    "embedding": embedding,
                 }
             )
 

@@ -365,6 +365,19 @@ def test_parse_stage3_below_min_evidence_returns_none() -> None:
     assert out is None
 
 
+def test_parse_stage3_caps_evidence_at_max() -> None:
+    """Defense-in-depth: parser stops after STAGE3_MAX_EVIDENCE_LINES even
+    if the LLM (after a future prompt change) emits a runaway list."""
+    from src.reflection.lodestone_synthesis import STAGE3_MAX_EVIDENCE_LINES
+    runaway = "VALUE: I value clarity\nEVIDENCE:\n" + "\n".join(
+        f"- excerpt {i}" for i in range(STAGE3_MAX_EVIDENCE_LINES + 50)
+    )
+    out = _parse_stage3_output(runaway)
+    assert out is not None
+    _, evidence = out
+    assert len(evidence) == STAGE3_MAX_EVIDENCE_LINES
+
+
 def test_parse_stage3_accepts_markdown_bullet_evidence() -> None:
     """qwen3:8b sometimes emits markdown bullets despite the prompt asking
     for hyphens. Parser accepts both - and *."""

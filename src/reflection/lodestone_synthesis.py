@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any
 
 import ollama
 
@@ -40,16 +39,15 @@ STAGE1_MIN_THEME_WORDS = 5  # density floor: rejects single-token themes ("hones
 # Stage 1 "3+ reflections" requirement on the output side - prevents the
 # parser from accepting a single-excerpt draft when the prompt asked for 3+.
 STAGE3_MIN_EVIDENCE_LINES = 3
+# Defense-in-depth upper bound. The Stage 3 prompt asks for 2-4 lines and
+# num_predict caps tokens, so a runaway response is unlikely; this guards
+# against future prompt or num_predict changes accidentally letting the
+# evidence list grow unbounded.
+STAGE3_MAX_EVIDENCE_LINES = 10
 # Read 3x the window cap to ensure date-filtering happens before the
 # read-layer hard limit. Without this, a high-volume vault could lose
 # in-window records to the read limit and silently miss recent evidence.
 _REFLECTION_READ_OVERHEAD = 5
-# Cap proposed-record growth. Path 2 doesn't compete for the active-record
-# budget (lodestone_service.write skips the cap when confirmed=False), so
-# a never-confirming user could accumulate proposed records indefinitely.
-# Skip new synthesis until the queue drops below this ceiling.
-MAX_PROPOSED_QUEUE = 20
-
 VALID_CATEGORIES = {"character", "relational", "directional", "ground", "beyond"}
 
 
@@ -233,6 +231,8 @@ def _parse_stage3_output(text: str) -> tuple[str, list[str]] | None:
             excerpt = stripped.lstrip("-* ").strip()
             if excerpt:
                 evidence.append(excerpt)
+                if len(evidence) >= STAGE3_MAX_EVIDENCE_LINES:
+                    break
     if not value or len(evidence) < STAGE3_MIN_EVIDENCE_LINES:
         return None
     return value, evidence
@@ -299,12 +299,12 @@ def synthesize_lodestone_candidates(
     # confirms could accumulate proposed records every month forever; this
     # ceiling forces a backlog-clearing pause until the queue drops.
     proposed_count = len(lodestone_service.read_proposed())
-    if proposed_count >= MAX_PROPOSED_QUEUE:
+    if proposed_count >= lodestone_service.MAX_PROPOSED_RECORDS:
         logger.info(
             "[LODESTONE_SYNTHESIS] proposed queue at cap (%d/%d); "
             "skipping synthesis until user clears backlog",
             proposed_count,
-            MAX_PROPOSED_QUEUE,
+            lodestone_service.MAX_PROPOSED_RECORDS,
         )
         return None
 

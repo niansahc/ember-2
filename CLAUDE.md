@@ -424,6 +424,8 @@ When writing prompts for Ember's inference-time tasks (reflection, review, synth
 
 Pre-release checklist: run `/pre-release`
 
+Release-please PRs (title format: "chore(main): release X.Y.Z") must NEVER have auto-merge enabled. These PRs require explicit human approval and manual merge only. The human decides when a release is cut. All other PR types (feat, fix, docs, test, chore non-release) may use auto-merge as normal.
+
 ---
 
 ## Key Design Risks to Watch

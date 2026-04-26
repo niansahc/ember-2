@@ -28,7 +28,9 @@ PREFERENCE_DEFAULTS: dict = {
     "conversational_style": "balanced",
     "web_search_autonomous": True,
     "first_run_tour_complete": False,
-    "context_length": 8192,
+    # context_length is intentionally absent: when missing, the LLM adapter
+    # resolves it from MODEL_CONTEXT_WINDOWS for the active model (B-QUAL-001).
+    # An explicit user override here would still be honored.
     "bare_mode": False,
 }
 

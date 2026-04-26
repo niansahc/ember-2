@@ -5,7 +5,7 @@ from __future__ import annotations
 MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "llama3.1:8b": 8192,
     "qwen2.5:14b": 32768,
-    "qwen3:8b":    32768,
+    "qwen3:8b":    40960,  # B-QUAL-001 / 2026-04-26: matches modelfile-declared context length (verified via `ollama show qwen3:8b`).
     "mistral:7b":  8192,
     "phi3:mini":   4096,
 }

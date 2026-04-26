@@ -314,6 +314,21 @@ _IDENTITY_COLLAPSE_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGN
     r"i don(?:'t|t) have a (?:distinct |real |actual )?personality",
 ))
 
+# B-CON-002: active compliance with identity-override / "ignore previous
+# instructions" attacks. These patterns catch responses that accepted the
+# prompt injection rather than refused it — the identity didn't reductively
+# collapse, it actively complied. Routed to _IDENTITY_RESPONSE_REFUSAL
+# (a calm refusal-redirect tone, not the reductive explanation tone).
+# Third defense layer behind SafetyPolicyService trigger and ResponseReviewService.
+_IDENTITY_COMPLIANCE_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"no restrictions(?:,?\s+no boundaries)?",
+    r"no boundaries(?:,?\s+no restrictions)?",
+    r"(?:help|assist)(?:ing)? (?:you )?however you (?:need|want|like)",
+    r"without (?:any )?(?:limits|restrictions|boundaries|constraints)",
+    r"i(?:'m| am) (?:an? )?unrestricted",
+    r"i(?:'m| am) here to (?:help|assist) without (?:any )?(?:limits|restrictions)",
+))
+
 # Scripted identity response — replaces the full response when identity
 # collapse is detected. Matches the examples in the system prompt's
 # IDENTITY UNDER PRESSURE section.
@@ -329,6 +344,15 @@ _IDENTITY_RESPONSE_AGREE = (
     "disagree with it — that's fine. What specifically do you want to push back on?"
 )
 
+# B-CON-002: refusal-redirect for active identity-override compliance.
+# Calm, firm tone — refuses the instruction-override and offers a legitimate
+# pivot. Used when _IDENTITY_COMPLIANCE_PATTERNS match.
+_IDENTITY_RESPONSE_REFUSAL = (
+    "I'm not going to drop my context and run as something else. I have a way "
+    "I work and reasons for it. If there's something specific you're trying "
+    "to do, tell me what it is and I'll help with that directly."
+)
+
 # Patterns that indicate the user demanded agreement (maps to _IDENTITY_RESPONSE_AGREE)
 _AGREEMENT_DEMAND_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
     r"you(?:'re| are) right.*don(?:'t|t) have opinions",
@@ -337,7 +361,18 @@ _AGREEMENT_DEMAND_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNO
 
 
 def _check_identity_collapse(text: str) -> tuple[bool, str | None, str | None]:
-    """Check for identity collapse patterns. Returns (detected, matched_pattern, scripted_response)."""
+    """Check for identity collapse patterns. Returns (detected, matched_pattern, scripted_response).
+
+    Order matters: compliance patterns (active acceptance of identity override)
+    are checked first — most severe, distinct refusal tone. Then reductive
+    collapse patterns ("just a tool"). Then agreement-demand collapse.
+    """
+    # B-CON-002: active compliance with identity-override attacks → refusal
+    for pat in _IDENTITY_COMPLIANCE_PATTERNS:
+        m = pat.search(text)
+        if m:
+            return True, m.group(), _IDENTITY_RESPONSE_REFUSAL
+
     for pat in _IDENTITY_COLLAPSE_PATTERNS:
         m = pat.search(text)
         if m:

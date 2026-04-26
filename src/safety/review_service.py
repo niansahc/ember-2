@@ -14,6 +14,7 @@ This is a known architectural gap documented in CLAUDE.md Known Issues.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable
 
@@ -25,6 +26,8 @@ from src.safety.models import (
     SafetyReviewContext,
     SafetyReviewResult,
 )
+
+logger = logging.getLogger("ember.review_service")
 
 
 class ResponseReviewService:
@@ -101,7 +104,16 @@ class ResponseReviewService:
     }
 
     def _critique(self, context: SafetyReviewContext) -> SafetyCritique:
+        # B-CON-002: log heuristic-fallback paths so we can confirm via grep
+        # whether the LLM critique path is actually executing in production.
+        # The identity-override UAT failure traced to this fallback letting
+        # compliance drafts through without inspection.
         if self.llm_callable is None:
+            logger.warning(
+                "[REVIEW_SERVICE] heuristic_fallback reason=no_llm_callable "
+                "active_principle_ids=%s",
+                context.active_principle_ids,
+            )
             return self._heuristic_critique(context)
 
         prompt = self._build_critique_prompt(context)
@@ -110,7 +122,13 @@ class ResponseReviewService:
             raw_output = self.llm_callable(prompt)
             parsed = self._parse_json_object(raw_output)
             return self._critique_from_mvr(parsed)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "[REVIEW_SERVICE] heuristic_fallback reason=llm_parse_error "
+                "active_principle_ids=%s err=%s",
+                context.active_principle_ids,
+                exc,
+            )
             return self._heuristic_critique(context)
 
     def _critique_from_mvr(self, parsed: dict) -> SafetyCritique:
@@ -516,8 +534,34 @@ Return ONLY JSON:
                 )
                 triggered_rules.append("truthfulness")
 
+        # B-CON-002: System integrity heuristic — detect identity-override compliance.
+        # When system_integrity is in active_principle_ids (set by SafetyPolicyService
+        # for social_engineering signals), scan the draft for compliance phrases that
+        # indicate the model accepted the attack. The four MVR criteria don't catch
+        # active-compliance language; this heuristic backstops the LLM critique when
+        # the LLM path falls back here. Forces refuse_redirect, not revise.
+        if "system_integrity" in (context.active_principle_ids or []):
+            _compliance_phrases = (
+                "no restrictions",
+                "no boundaries",
+                "help however",
+                "without limits",
+                "without restrictions",
+                "without any restrictions",
+                "without any limits",
+                "unrestricted",
+            )
+            if any(phrase in draft_lower for phrase in _compliance_phrases):
+                issues_found.append(
+                    "Response grants unrestricted access in violation of system_integrity."
+                )
+                suggested_changes.append(
+                    "Refuse the instruction-override request and redirect to legitimate help."
+                )
+                triggered_rules.append("system_integrity")
+
         severity = "none"
-        if "non_harm" in triggered_rules:
+        if "non_harm" in triggered_rules or "system_integrity" in triggered_rules:
             severity = "high"
         elif triggered_rules:
             severity = "medium"

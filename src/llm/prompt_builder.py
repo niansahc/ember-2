@@ -843,9 +843,18 @@ class PromptBuilder:
                     "No retrieved memory for this message (conversational).\n"
                     "</vault_memory>"
                 )
+            # B-QUAL-004: empty retrieval needs an explicit epistemic signal,
+            # not a passive instruction. Without retrieval confidence
+            # metadata, the model treats <vault_memory> as a label it can
+            # sign confabulations with. Adding a ZERO confidence block gives
+            # the model a numeric anchor to refuse fabrication.
             return (
                 "<vault_memory>\n"
                 "No relevant memory found for this query.\n"
+                "[Retrieval confidence:]\n"
+                "scores: no matches found\n"
+                "confidence: ZERO — no records match this query; do not fabricate "
+                "specifics or attribute claims to vault_memory.\n"
                 "If asked about something specific to this person, say so directly: "
                 "\"I don't have that in my memory.\"\n"
                 "</vault_memory>"

@@ -1487,9 +1487,22 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
                 # 3. Grounding check
                 yield _status_event("verifying")
-                is_grounded, unsupported = await run_grounding_check(
-                    full_reply, _retrieved_context,
-                )
+                # B-QUAL-004: empty retrieval cannot ground any specific claim.
+                # qwen3:8b at 8B unreliably returns YES/NO when given empty
+                # context, and run_grounding_check fails open on parse errors.
+                # Short-circuit deterministically: treat as ungrounded and
+                # force the revision pass to strip fabricated specifics.
+                if not _retrieved_context.strip():
+                    is_grounded = False
+                    unsupported = "no retrieved context to verify claims against"
+                    logger.warning(
+                        "[GROUNDING] empty_context_short_circuit intent=%s",
+                        _intent_class,
+                    )
+                else:
+                    is_grounded, unsupported = await run_grounding_check(
+                        full_reply, _retrieved_context,
+                    )
 
                 log_grounding_outcome(
                     intent_class=_intent_class,

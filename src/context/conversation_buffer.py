@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+
+# B-MEM-005: bound the hedged_record_ids tracker so long sessions don't grow
+# the set without limit. LRU eviction keeps the most-recently hedged records.
+_HEDGED_RECORD_IDS_MAX = 50
+
 # Approximate token counts for common Ollama models.
 # Used to update context_window when the active model changes via POST /model.
 MODEL_CONTEXT_WINDOWS: dict[str, int] = {
@@ -63,6 +69,10 @@ class ConversationBuffer:
         # Persist for the lifetime of this buffer (= one API process).
         self.question_suppressed: bool = False
         self.declined_topics: list[str] = []
+        # B-MEM-005: track which retrieved record IDs the model has already
+        # been instructed to hedge this session. Bounded LRU so long sessions
+        # don't grow this without limit. Value is unused (set-like usage).
+        self.hedged_record_ids: OrderedDict[str, None] = OrderedDict()
 
     def add_turn(self, user: str, assistant: str) -> None:
         user_lower = user.lower()
@@ -123,6 +133,31 @@ class ConversationBuffer:
         """Update the context window size when the active model changes."""
         if model in MODEL_CONTEXT_WINDOWS:
             self.context_window = MODEL_CONTEXT_WINDOWS[model]
+
+    def mark_hedge_emitted(self, record_ids: list[str]) -> None:
+        """Mark these record IDs as having been hedged this session.
+
+        Bounded LRU: if the set grows beyond _HEDGED_RECORD_IDS_MAX, the
+        oldest entries are evicted first. Re-marking an existing ID moves
+        it to the most-recent position.
+        """
+        for rid in record_ids:
+            if not rid:
+                continue
+            if rid in self.hedged_record_ids:
+                self.hedged_record_ids.move_to_end(rid)
+            else:
+                self.hedged_record_ids[rid] = None
+                while len(self.hedged_record_ids) > _HEDGED_RECORD_IDS_MAX:
+                    self.hedged_record_ids.popitem(last=False)
+
+    def was_hedged(self, record_id: str) -> bool:
+        """Return True if this record was hedged earlier in the session.
+        Hits move the entry to the most-recent position (LRU touch)."""
+        if not record_id or record_id not in self.hedged_record_ids:
+            return False
+        self.hedged_record_ids.move_to_end(record_id)
+        return True
 
     def format_for_prompt(self) -> str:
         if not self.buffer:

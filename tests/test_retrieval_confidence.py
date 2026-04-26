@@ -121,3 +121,150 @@ class TestRetrievalConfidenceBlock:
         # but the actual confidence DATA block (with "scores: min=") should
         # not appear when there are only profile items.
         assert "scores: min=" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# B-MEM-003/004/005: stale-hedge fixes (v0.17.1)
+# ---------------------------------------------------------------------------
+
+
+class TestHedgeRepetitionFixes:
+    """Three-part fix: literal-example removal, profile-exclusion rule,
+    follow-up confidence-block suppression."""
+
+    def test_authority_rules_no_longer_contains_literal_3_days_ago(self):
+        """B-MEM-003/004 regression: literal example was being copied
+        verbatim onto stable profile facts."""
+        from src.llm.prompt_builder import _render_authority_rules
+        rendered = _render_authority_rules(is_conversational=False)
+        assert "3 days ago" not in rendered
+
+    def test_authority_rules_use_abstract_age_placeholder(self):
+        """The abstract <N> placeholder tells the model to substitute the real age."""
+        from src.llm.prompt_builder import _render_authority_rules
+        rendered = _render_authority_rules(is_conversational=False)
+        assert "<N>" in rendered
+
+    def test_authority_rules_profile_exclusion_present_when_has_profile(self):
+        from src.llm.prompt_builder import (
+            _AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION,
+            _render_authority_rules,
+        )
+        rendered = _render_authority_rules(
+            is_conversational=False, has_profile=True
+        )
+        assert _AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION in rendered
+
+    def test_authority_rules_profile_exclusion_absent_when_no_profile(self):
+        """Avoid prompt bloat when profile exclusion isn't relevant."""
+        from src.llm.prompt_builder import (
+            _AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION,
+            _render_authority_rules,
+        )
+        rendered = _render_authority_rules(
+            is_conversational=False, has_profile=False
+        )
+        assert _AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION not in rendered
+
+    def test_build_prompt_passes_has_profile_when_profile_in_packet(self):
+        """Integration: build_prompt resolves has_profile from packet contents."""
+        from src.llm.prompt_builder import _AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION
+        pb = PromptBuilder()
+        packet = ContextPacket(
+            user_message="Who am I?",
+            memory_items=[
+                ContextItem(
+                    id="p1", content="profile content", source="profile",
+                    item_type="profile", memory_type="profile", score=0.9,
+                ),
+            ],
+        )
+        prompt = pb.build_prompt(packet)
+        assert _AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION in prompt
+
+
+class TestConfidenceBlockFollowupSuppression:
+    """B-MEM-005: confidence block must be suppressed on follow-up turns
+    when every retrieved record was hedged in a prior turn."""
+
+    def test_confidence_block_emitted_first_turn_marks_records(self):
+        pb = PromptBuilder()
+        packet = ContextPacket(
+            user_message="what was that?",
+            memory_items=[_make_item("recall", score=0.4, days_ago=20)],
+        )
+        section = pb._build_context_section(packet, is_conversational=False)
+        assert "[Retrieval confidence:]" in section
+        record_id = packet.memory_items[0].id
+        assert pb.conversation_buffer.was_hedged(record_id) is True
+
+    def test_confidence_block_suppressed_when_all_previously_hedged(self):
+        pb = PromptBuilder()
+        item = _make_item("recall", score=0.4, days_ago=20)
+        pb.conversation_buffer.mark_hedge_emitted([item.id])
+
+        packet = ContextPacket(user_message="follow-up", memory_items=[item])
+        section = pb._build_context_section(packet, is_conversational=False)
+        assert "[Retrieval confidence:]" not in section
+
+    def test_confidence_block_emitted_when_new_record_in_followup(self):
+        """If retrieval brings in a new record alongside previously-hedged ones,
+        the confidence block remains useful for the new record."""
+        pb = PromptBuilder()
+        old = _make_item("recall", score=0.4, days_ago=20)
+        pb.conversation_buffer.mark_hedge_emitted([old.id])
+
+        new = _make_item("new context", score=0.4, days_ago=20)
+        # Ensure unique id (hash-based helper might collide on identical args)
+        new.id = old.id + "_new"
+
+        packet = ContextPacket(
+            user_message="follow-up with new info", memory_items=[old, new]
+        )
+        section = pb._build_context_section(packet, is_conversational=False)
+        assert "[Retrieval confidence:]" in section
+
+
+class TestHedgedRecordIdsLRU:
+    """ConversationBuffer.hedged_record_ids LRU bounds."""
+
+    def test_lru_capped_at_max(self):
+        from src.context.conversation_buffer import (
+            _HEDGED_RECORD_IDS_MAX,
+            ConversationBuffer,
+        )
+        buf = ConversationBuffer()
+        ids = [f"r{i}" for i in range(_HEDGED_RECORD_IDS_MAX + 10)]
+        buf.mark_hedge_emitted(ids)
+
+        assert len(buf.hedged_record_ids) == _HEDGED_RECORD_IDS_MAX
+        # Oldest evicted, newest retained
+        assert buf.was_hedged("r0") is False
+        assert buf.was_hedged(ids[-1]) is True
+
+    def test_was_hedged_touches_lru_position(self):
+        from src.context.conversation_buffer import (
+            _HEDGED_RECORD_IDS_MAX,
+            ConversationBuffer,
+        )
+        buf = ConversationBuffer()
+        buf.mark_hedge_emitted([f"r{i}" for i in range(_HEDGED_RECORD_IDS_MAX)])
+        # Touch r0 — move to most recent
+        assert buf.was_hedged("r0") is True
+        # Insert one new — should evict r1 (now oldest), not r0
+        buf.mark_hedge_emitted(["r_new"])
+        assert buf.was_hedged("r0") is True
+        assert buf.was_hedged("r1") is False
+
+    def test_mark_skips_empty_ids(self):
+        from src.context.conversation_buffer import ConversationBuffer
+        buf = ConversationBuffer()
+        buf.mark_hedge_emitted(["", "valid", ""])
+        assert len(buf.hedged_record_ids) == 1
+        assert buf.was_hedged("valid") is True
+
+    def test_was_hedged_unknown_id_returns_false(self):
+        from src.context.conversation_buffer import ConversationBuffer
+        buf = ConversationBuffer()
+        assert buf.was_hedged("never-seen") is False
+        assert buf.was_hedged("") is False

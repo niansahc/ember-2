@@ -91,10 +91,12 @@ _AUTHORITY_RULES_BODY_COMMON = (
     "SOURCE CITATION DEDUP: The UI shows a 'Source: Vault' badge automatically when vault records "
     "grounded the response — you do not need to add '(source: vault_memory)' inline. When "
     "retrieval confidence is HIGH, do not include any inline source parenthetical — the badge "
-    "handles it. When confidence is MODERATE or LOW, include a brief hedge with the age: "
-    "'(low confidence — based on what I have from 3 days ago)' — note: no 'source:' prefix, "
-    "just the confidence and age context. The badge and the hedge serve different purposes: "
-    "badge = where the answer came from, hedge = how reliable the grounding is.\n"
+    "handles it. When confidence is MODERATE or LOW, include a brief hedge that states the "
+    "actual age of the oldest relevant record (e.g. 'low confidence — based on a record from "
+    "<N> days ago' where N is the actual computed age shown in the [Retrieval confidence:] block). "
+    "Do not copy that example verbatim — substitute the real age. Do not invent or round ages. "
+    "No 'source:' prefix — just confidence and age. The badge and the hedge serve different "
+    "purposes: badge = where the answer came from, hedge = how reliable the grounding is.\n"
     "conversation_history is prior exchange only -- do not treat conversational inferences as established facts.\n"
     "web_search_results are live data retrieved at request time and are current as of today. "
     "Treat them as authoritative. Do not discount or second-guess them based on training cutoff dates.\n"
@@ -134,6 +136,18 @@ _AUTHORITY_RULES_PERSON_LINE = (
     "When describing what you know about a specific person, state only what is explicitly present in vault_memory. "
     "Do not infer relationship dynamics, emotional states, or interpersonal patterns that are not directly stated in the records.\n"
 )
+# B-MEM-003/004: profile records (name, breed, core identity) bypass temporal
+# decay in the ranker — they describe stable facts. Hedging them with low-
+# confidence age language is wrong. The [Retrieval confidence:] block already
+# excludes profile items, but this line tells the model not to retroactively
+# hedge profile content based on confidence metadata about non-profile items.
+_AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION = (
+    "Profile records describe stable identity facts (name, breed, core preferences, "
+    "core identity traits). These do not decay. Never hedge profile facts based on "
+    "the [Retrieval confidence:] block — if a profile record is retrieved, it is "
+    "current and certain. Apply hedging only to state, conversation, and ingested "
+    "records that the confidence block actually covers.\n"
+)
 _AUTHORITY_RULES_FOOTER = "</authority_rules>"
 
 
@@ -141,6 +155,7 @@ def _render_authority_rules(
     is_conversational: bool,
     relational_empty: bool = False,
     has_web_items: bool = False,
+    has_profile: bool = False,
 ) -> str:
     parts = [_AUTHORITY_RULES_HEADER, "\n", _AUTHORITY_RULES_BODY_COMMON]
     # Suppress knowledge gap line when web results are present — the model
@@ -151,6 +166,8 @@ def _render_authority_rules(
     if relational_empty:
         parts.append(_AUTHORITY_RULES_RELATIONAL_EMPTY_LINE)
     parts.append(_AUTHORITY_RULES_PERSON_LINE)
+    if has_profile:
+        parts.append(_AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION)
     parts.append(_AUTHORITY_RULES_FOOTER)
     return "".join(parts)
 
@@ -293,6 +310,13 @@ class PromptBuilder:
                 ),
                 has_web_items=bool(
                     getattr(context_packet, "web_items", None)
+                ),
+                has_profile=bool(
+                    context_packet.memory_items
+                    and any(
+                        getattr(item, "memory_type", "") == "profile"
+                        for item in context_packet.memory_items
+                    )
                 ),
             ),
             self._build_self_knowledge_boundary(),
@@ -898,7 +922,25 @@ class PromptBuilder:
             # hedge appropriately when scores are low or records are old.
             confidence_block = self._build_retrieval_confidence(other_items)
             if confidence_block:
-                sections.append(confidence_block)
+                # B-MEM-005: suppress confidence block on follow-up turns when
+                # every retrieved record was hedged in a prior turn. Without
+                # this guard, the model re-emits the same hedged response when
+                # the user asks a follow-up referencing the same memory.
+                record_ids = [
+                    getattr(item, "id", None) for item in other_items
+                    if getattr(item, "id", None)
+                ]
+                all_previously_hedged = (
+                    bool(record_ids)
+                    and all(
+                        self.conversation_buffer.was_hedged(rid)
+                        for rid in record_ids
+                    )
+                )
+                if not all_previously_hedged:
+                    sections.append(confidence_block)
+                    if record_ids:
+                        self.conversation_buffer.mark_hedge_emitted(record_ids)
 
         return "<vault_memory>\n" + "\n\n".join(sections) + "\n</vault_memory>"
 

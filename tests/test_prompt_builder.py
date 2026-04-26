@@ -30,6 +30,31 @@ def _make_memory_item(content: str, item_type: str = "ingested", id: str = "m1")
 
 
 # ---------------------------------------------------------------------------
+# B-MEM-005: anti-URL rule (partial mitigation)
+# ---------------------------------------------------------------------------
+
+
+def test_instruction_section_contains_anti_url_rule() -> None:
+    """B-MEM-005 partial mitigation: the instruction section forbids inventing
+    URLs unless they came from web_search_results."""
+    pb = PromptBuilder()
+    section = pb._build_instruction_section()
+    assert "Do not invent URLs" in section
+    assert "web_search_results" in section
+
+
+def test_instruction_section_preserves_existing_domain_citation_example() -> None:
+    """The new anti-URL rule must NOT break the existing domain-citation
+    example at the web_search_results instruction. Domain citations are
+    legitimate when sourced from web results."""
+    pb = PromptBuilder()
+    section = pb._build_instruction_section()
+    # The existing example: "(source: example.com)" — a domain, not a URL.
+    # Must remain present so the model knows domain citations are allowed.
+    assert "(source: example.com)" in section
+
+
+# ---------------------------------------------------------------------------
 # Profile section label
 # ---------------------------------------------------------------------------
 

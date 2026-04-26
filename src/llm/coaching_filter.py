@@ -57,6 +57,13 @@ _COACHING_CLOSINGS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) 
     r"want me to (?:look|find|check|dig|explore).*(?:for you|into)",
     r"shall i (?:look|search|find|check|dig)",
     r"(?:can|could) i help you (?:with|find|look|search)",
+    # B-QUAL-002: emotional-reflection closing questions. Tech queries with
+    # an emotional preamble were getting therapeutic closings that asked
+    # the user to introspect on their feelings. These patterns close that
+    # gap. Position-agnostic: also added to _THERAPEUTIC_MID_RESPONSE
+    # since these often appear mid-response, not just at the end.
+    r"how (?:are you|do you) (?:feeling|feel)(?: about)?(?: that| this| it)?",
+    r"how does (?:that|this|it) feel",
 ))
 
 # Therapeutic mid-response patterns — not just openers/closers but
@@ -78,6 +85,10 @@ _THERAPEUTIC_MID_RESPONSE: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNOR
     r"(?:i(?:'m| am) )?proud of you",
     r"you(?:'ve| have) come so far",
     r"what you(?:'re| are) (?:feeling|experiencing|going through) is (?:completely |perfectly )?(?:normal|valid|understandable)",
+    # B-QUAL-002: same patterns as in _COACHING_CLOSINGS. Therapeutic
+    # closings can appear mid-response too, not only at the end.
+    r"how (?:are you|do you) (?:feeling|feel)(?: about)?(?: that| this| it)?",
+    r"how does (?:that|this|it) feel",
 ))
 
 # Therapeutic openers — validate/normalize feelings in a clinical way.

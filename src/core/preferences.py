@@ -46,6 +46,22 @@ def read(vault_path: Path | None = None) -> dict:
     Read all preferences. Returns PREFERENCE_DEFAULTS merged with stored
     values — stored values take priority. The response always includes
     every known field so callers don't need to handle missing keys.
+
+    B-WEB-001 / v0.16.0 migration: v0.15.x vaults stored
+    web_search_autonomous=False as the active default. v0.16.0 flipped the
+    default to True but did not migrate stored values, so users with old
+    vaults silently kept the False — first weather query triggered ask-first
+    instead of autonomous search. This function performs a one-shot, atomic
+    in-read migration: if the stored file has web_search_autonomous=False AND
+    no prefs_schema_version sentinel, the value is upgraded to True and a
+    schema version is written before this function returns. Files written by
+    v0.17.1+ carry the sentinel and are immune to re-migration. A user who
+    deliberately sets False after the v0.17.0 ask-first UI ships will have
+    the sentinel present and their choice will be preserved.
+
+    The check + migration + write happen inside the same read() invocation —
+    a two-pass design (read → check → migrate → re-read) opens a window
+    where a deliberate user choice could be clobbered by an interleaved read.
     """
     path = _get_prefs_path(vault_path)
     stored: dict = {}
@@ -54,6 +70,29 @@ def read(vault_path: Path | None = None) -> dict:
             stored = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("[PREFERENCES] Failed to read %s: %s", path, exc)
+
+    # Atomic migration: gated on the schema-version sentinel so this fires
+    # at most once per vault. The check inspects the in-memory stored dict
+    # before any caller sees the value.
+    if (
+        stored.get("web_search_autonomous") is False
+        and "prefs_schema_version" not in stored
+    ):
+        stored["web_search_autonomous"] = True
+        stored["prefs_schema_version"] = 1
+        try:
+            path.write_text(
+                json.dumps(stored, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            logger.info(
+                "[PREFERENCES] Migrated v0.15.x web_search_autonomous=False → True (one-shot, sentinel set)"
+            )
+        except OSError as exc:
+            # Migration is in-memory regardless; next read will retry the write.
+            logger.warning(
+                "[PREFERENCES] Migration write failed for %s: %s", path, exc
+            )
 
     return {**PREFERENCE_DEFAULTS, **stored}
 

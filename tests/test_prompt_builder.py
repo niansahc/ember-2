@@ -5,6 +5,8 @@ Tests for prompt assembly — verifies that the prompt sent to the model
 contains correct labels, instructions, and section structure.
 """
 
+from datetime import datetime, timedelta
+
 import pytest
 
 from src.context.models import ContextItem, ContextPacket
@@ -41,6 +43,55 @@ def test_instruction_section_contains_anti_url_rule() -> None:
     section = pb._build_instruction_section()
     assert "Do not invent URLs" in section
     assert "web_search_results" in section
+
+
+# ---------------------------------------------------------------------------
+# B-MEM-003: date rendering — year for stale records
+# ---------------------------------------------------------------------------
+
+
+def _ts_days_ago(n: int) -> str:
+    """Construct an ISO-like timestamp string n days before now."""
+    return (datetime.now() - timedelta(days=n)).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def test_format_item_date_omits_year_for_recent_record() -> None:
+    """Records within 365 days render without year — keeps prompt compact."""
+    rendered = PromptBuilder._format_item_date(_ts_days_ago(30))
+    # Format: ", Mon DD"
+    assert rendered.startswith(", ")
+    # No four-digit year present
+    parts = rendered.lstrip(", ").split()
+    assert len(parts) == 2  # "Mon DD"
+    assert not any(p.isdigit() and len(p) == 4 for p in parts)
+
+
+def test_format_item_date_includes_year_for_stale_record() -> None:
+    """Records >365 days old render with year so the model anchors the
+    temporal frame correctly."""
+    rendered = PromptBuilder._format_item_date(_ts_days_ago(400))
+    expected_year = (datetime.now() - timedelta(days=400)).year
+    assert str(expected_year) in rendered
+
+
+def test_format_item_date_boundary_at_365_days() -> None:
+    """Boundary pin: 365 days = no year, 366 days = year. Off-by-one
+    regression guard."""
+    just_inside = PromptBuilder._format_item_date(_ts_days_ago(365))
+    just_over = PromptBuilder._format_item_date(_ts_days_ago(366))
+
+    year_inside = (datetime.now() - timedelta(days=365)).year
+    year_over = (datetime.now() - timedelta(days=366)).year
+
+    assert str(year_inside) not in just_inside
+    assert str(year_over) in just_over
+
+
+def test_format_item_date_handles_empty_and_invalid() -> None:
+    """Existing contract — bad input returns empty string, no exception."""
+    assert PromptBuilder._format_item_date(None) == ""
+    assert PromptBuilder._format_item_date("") == ""
+    assert PromptBuilder._format_item_date("garbage") == ""
 
 
 def test_instruction_section_preserves_existing_domain_citation_example() -> None:

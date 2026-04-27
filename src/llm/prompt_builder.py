@@ -1015,6 +1015,10 @@ class PromptBuilder:
     @staticmethod
     @staticmethod
     def _format_item_date(timestamp: str | None) -> str:
+        """B-MEM-003: append year when the record is older than 365 days so the
+        model does not anchor temporal framing on a year-old date as if it were
+        recent ("yesterday", "tomorrow"). Records within 365 days keep the
+        compact "Mon DD" form to minimise prompt noise."""
         if not timestamp:
             return ""
         try:
@@ -1024,9 +1028,12 @@ class PromptBuilder:
             else:
                 date_part = clean[:10]
             dt = datetime.strptime(date_part, "%Y-%m-%d")
-            return f", {dt.strftime('%b %d')}"
         except (ValueError, TypeError):
             return ""
+        gap_days = (datetime.now() - dt).days
+        if gap_days > 365:
+            return f", {dt.strftime('%b %d, %Y')}"
+        return f", {dt.strftime('%b %d')}"
 
     @staticmethod
     def _format_item_age(timestamp: str | None) -> str:

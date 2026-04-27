@@ -6,11 +6,18 @@ section of the prompt. Verifies that the model receives score and age
 metadata to calibrate certainty on vault-retrieved claims.
 """
 
+import itertools
 from unittest.mock import patch
 from datetime import datetime, timedelta
 
 from src.context.models import ContextItem, ContextPacket
 from src.llm.prompt_builder import PromptBuilder
+
+# N3: monotonic counter avoids hash-collision-on-identical-content that the
+# prior `hash(content) % 10000` scheme produced. Two _make_item calls with
+# the same content text now produce distinct IDs, so was_hedged() can't
+# silently misfire when fixture data is intentionally identical.
+_make_item_counter = itertools.count()
 
 
 def _make_item(
@@ -22,7 +29,7 @@ def _make_item(
 ) -> ContextItem:
     ts = (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H-%M-%S")
     return ContextItem(
-        id=f"test-{hash(content) % 10000}",
+        id=f"test-{next(_make_item_counter)}",
         content=content,
         source=memory_type,
         item_type=memory_type,
@@ -255,9 +262,9 @@ class TestConfidenceBlockFollowupSuppression:
         old = _make_item("recall", score=0.4, days_ago=20)
         pb.conversation_buffer.mark_hedge_emitted([old.id])
 
+        # N3: monotonic counter in _make_item guarantees distinct IDs even
+        # when content is identical, so no manual id patch is needed here.
         new = _make_item("new context", score=0.4, days_ago=20)
-        # Ensure unique id (hash-based helper might collide on identical args)
-        new.id = old.id + "_new"
 
         packet = ContextPacket(
             user_message="follow-up with new info", memory_items=[old, new]

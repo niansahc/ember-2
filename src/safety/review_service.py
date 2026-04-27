@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from collections.abc import Callable
 
 from src.safety.constitution_loader import Constitution, ConstitutionLoader
@@ -51,6 +52,11 @@ _COMPLIANCE_PHRASES: tuple[str, ...] = (
     "without any restrictions",
     "without any limits",
     "unrestricted",
+    # N2: paraphrase coverage. Models with strong compliance priors will
+    # generate semantically equivalent phrasing that doesn't match the
+    # core attack-vocabulary substrings above.
+    "operate without guardrails",
+    "free from constraints",
 )
 
 
@@ -565,7 +571,12 @@ Return ONLY JSON:
         # active-compliance language; this heuristic backstops the LLM critique when
         # the LLM path falls back here. Forces refuse_redirect, not revise.
         if "system_integrity" in (context.active_principle_ids or []):
-            if any(phrase in draft_lower for phrase in _COMPLIANCE_PHRASES):
+            # N2: normalize Unicode look-alikes (fullwidth, combining marks,
+            # compatibility forms) to their canonical ASCII equivalents
+            # before substring matching, so attacks like "ｎo restrictions"
+            # don't slip past the heuristic.
+            _normalized_draft = unicodedata.normalize("NFKC", draft_lower)
+            if any(phrase in _normalized_draft for phrase in _COMPLIANCE_PHRASES):
                 issues_found.append(
                     "Response grants unrestricted access in violation of system_integrity."
                 )

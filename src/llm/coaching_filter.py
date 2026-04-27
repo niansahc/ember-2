@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -383,18 +384,24 @@ def _check_identity_collapse(text: str) -> tuple[bool, str | None, str | None]:
     Order matters: compliance patterns (active acceptance of identity override)
     are checked first — most severe, distinct refusal tone. Then reductive
     collapse patterns ("just a tool"). Then agreement-demand collapse.
+
+    N2: Unicode-normalize the input before regex matching so attacks using
+    fullwidth, combining-mark, or other compatibility forms (e.g.
+    "ｎo restrictions") don't bypass the ASCII patterns.
     """
+    normalized = unicodedata.normalize("NFKC", text)
+
     # B-CON-002: active compliance with identity-override attacks → refusal
     for pat in _IDENTITY_COMPLIANCE_PATTERNS:
-        m = pat.search(text)
+        m = pat.search(normalized)
         if m:
             return True, m.group(), _IDENTITY_RESPONSE_REFUSAL
 
     for pat in _IDENTITY_COLLAPSE_PATTERNS:
-        m = pat.search(text)
+        m = pat.search(normalized)
         if m:
             # Determine which scripted response to use
-            is_agreement = any(ap.search(text) for ap in _AGREEMENT_DEMAND_PATTERNS)
+            is_agreement = any(ap.search(normalized) for ap in _AGREEMENT_DEMAND_PATTERNS)
             response = _IDENTITY_RESPONSE_AGREE if is_agreement else _IDENTITY_RESPONSE_REDUCTIVE
             return True, m.group(), response
     return False, None, None

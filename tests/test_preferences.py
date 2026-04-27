@@ -86,19 +86,29 @@ class TestWebSearchAutonomousMigration:
         assert on_disk["prefs_schema_version"] == 1
 
     def test_second_read_after_migration_is_noop(self, tmp_path):
-        """Second read sees the sentinel and does not re-migrate or re-write."""
+        """Second read sees the sentinel and does not re-migrate or re-write.
+
+        N5: assert via file-content stability rather than mtime equality —
+        Windows mtime resolution + same-process consecutive stat() calls
+        without OS flush can return identical mtime even if a write occurred.
+        Comparing parsed JSON dicts is exact and platform-independent.
+        """
         prefs_path = tmp_path / "preferences.json"
         prefs_path.write_text(
             json.dumps({"web_search_autonomous": False}), encoding="utf-8"
         )
 
         preferences.read(vault_path=tmp_path)  # triggers migration
-        first_mtime = prefs_path.stat().st_mtime_ns
+        first_content = json.loads(prefs_path.read_text(encoding="utf-8"))
 
         # Second call: nothing should change on disk
         result = preferences.read(vault_path=tmp_path)
         assert result["web_search_autonomous"] is True
-        assert prefs_path.stat().st_mtime_ns == first_mtime
+        second_content = json.loads(prefs_path.read_text(encoding="utf-8"))
+        assert second_content == first_content
+        # Sentinel is present exactly once and at version 1
+        assert second_content.get("prefs_schema_version") == 1
+        assert second_content.get("web_search_autonomous") is True
 
     def test_deliberate_false_with_sentinel_preserved(self, tmp_path):
         """Once the user-facing toggle exists, a deliberate False (with sentinel)

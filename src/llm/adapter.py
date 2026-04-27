@@ -160,6 +160,7 @@ class LLMAdapter:
         bare_mode: bool = False,
         vision_description: str | None = None,
         ask_first_active: bool = False,
+        intent_class: str | None = None,
     ) -> str:
         system_prompt = self.prompt_builder.build_prompt(
             context_packet,
@@ -170,6 +171,7 @@ class LLMAdapter:
             bare_mode=bare_mode,
             vision_description=vision_description,
             ask_first_active=ask_first_active,
+            intent_class=intent_class,
         )
 
         # Vision pipeline: the VisionService preprocessor (called upstream

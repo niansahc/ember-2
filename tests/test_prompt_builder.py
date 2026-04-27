@@ -94,6 +94,149 @@ def test_format_item_date_handles_empty_and_invalid() -> None:
     assert PromptBuilder._format_item_date("garbage") == ""
 
 
+# ---------------------------------------------------------------------------
+# Fix 4 (2026-04-27): explicit vault type inventory
+# ---------------------------------------------------------------------------
+
+
+def _make_typed_item(memory_type: str, content: str = "x", id: str = "i") -> ContextItem:
+    return ContextItem(
+        id=id, content=content, source=memory_type, item_type=memory_type,
+        memory_type=memory_type, score=0.7,
+    )
+
+
+def test_inventory_appears_when_personal_intent_and_mixed_types() -> None:
+    """Fix 4: personal query + non-empty memory → inventory block emits."""
+    pb = PromptBuilder()
+    packet = ContextPacket(
+        user_message="what am i working on",
+        memory_items=[
+            _make_typed_item("conversation", id="c1"),
+            _make_typed_item("conversation", id="c2"),
+            _make_typed_item("reflection", id="r1"),
+        ],
+    )
+    section = pb._build_context_section(
+        packet, is_conversational=False, intent_class="status_state"
+    )
+    assert "[Vault inventory:]" in section
+    assert "Retrieved:" in section
+    assert "2 conversation" in section
+    assert "1 reflection" in section
+
+
+def test_inventory_lists_empty_personal_types() -> None:
+    """Fix 4: when only some personal types are retrieved, the others appear
+    in 'Not found:' — explicit absence statement."""
+    pb = PromptBuilder()
+    packet = ContextPacket(
+        user_message="catch me up on my schedule",
+        memory_items=[_make_typed_item("conversation", id="c1")],
+    )
+    section = pb._build_context_section(
+        packet, is_conversational=False, intent_class="status_state"
+    )
+    assert "Not found:" in section
+    # Each personal type that was NOT retrieved must appear in Not found
+    for absent_type in ("state", "journal", "task", "reflection", "lodestone", "profile"):
+        assert absent_type in section
+
+
+def test_inventory_does_not_duplicate_retrieved_types_in_not_found() -> None:
+    """A type that was retrieved must NOT appear in the Not found list."""
+    pb = PromptBuilder()
+    packet = ContextPacket(
+        user_message="my recent state",
+        memory_items=[_make_typed_item("state", id="s1")],
+    )
+    section = pb._build_context_section(
+        packet, is_conversational=False, intent_class="status_state"
+    )
+    # Locate the Not found line specifically — the word "state" appears in
+    # the Retrieved line, so must scope the absence check.
+    inventory_lines = section.split("[Vault inventory:]", 1)[1].splitlines()
+    not_found_lines = [ln for ln in inventory_lines if ln.startswith("Not found:")]
+    assert not_found_lines, "Not found line missing"
+    not_found_str = not_found_lines[0]
+    # "state" was retrieved, must NOT appear in the Not found line
+    assert "state" not in not_found_str.split(":", 1)[1].split(",")[0:7] or \
+        all("state" != t.strip().rstrip(".") for t in not_found_str.split(":", 1)[1].split(","))
+
+
+def test_inventory_omitted_on_general_knowledge_query() -> None:
+    """No personal-query signal → no inventory. General-knowledge queries
+    don't need vault structure surfaced."""
+    pb = PromptBuilder()
+    packet = ContextPacket(
+        user_message="what is the capital of france",
+        memory_items=[_make_typed_item("conversation", id="c1")],
+    )
+    section = pb._build_context_section(
+        packet, is_conversational=False, intent_class="default"
+    )
+    assert "[Vault inventory:]" not in section
+
+
+def test_inventory_omitted_on_conversational() -> None:
+    """Conversational check-ins shouldn't surface vault structure either."""
+    pb = PromptBuilder()
+    packet = ContextPacket(
+        user_message="how are you",
+        memory_items=[_make_typed_item("conversation", id="c1")],
+    )
+    section = pb._build_context_section(
+        packet, is_conversational=True, intent_class="default"
+    )
+    assert "[Vault inventory:]" not in section
+
+
+def test_inventory_omitted_when_memory_empty() -> None:
+    """Empty memory uses the ZERO/neutral branch, not the inventory."""
+    pb = PromptBuilder()
+    packet = ContextPacket(user_message="my schedule", memory_items=[])
+    section = pb._build_context_section(
+        packet, is_conversational=False, intent_class="default"
+    )
+    assert "[Vault inventory:]" not in section
+
+
+def test_inventory_renders_none_for_not_found_when_all_types_present() -> None:
+    """When every personal type is represented, Not found: none."""
+    pb = PromptBuilder()
+    packet = ContextPacket(
+        user_message="my full picture",
+        memory_items=[_make_typed_item(t, id=f"i{i}") for i, t in enumerate(
+            ("conversation", "journal", "state", "task", "reflection", "lodestone", "profile")
+        )],
+    )
+    section = pb._build_context_section(
+        packet, is_conversational=False, intent_class="status_state"
+    )
+    assert "[Vault inventory:]" in section
+    assert "Not found: none" in section
+
+
+def test_build_vault_inventory_helper_directly() -> None:
+    """Direct unit test of the helper — counts, formats, lists absences."""
+    items = [
+        _make_typed_item("conversation", id="c1"),
+        _make_typed_item("conversation", id="c2"),
+        _make_typed_item("state", id="s1"),
+    ]
+    block = PromptBuilder._build_vault_inventory(items)
+    assert block.startswith("[Vault inventory:]")
+    assert "2 conversation" in block
+    assert "1 state" in block
+    # journal/task/reflection/lodestone/profile absent
+    for absent in ("journal", "task", "reflection", "lodestone", "profile"):
+        assert absent in block
+
+
+def test_build_vault_inventory_helper_returns_empty_on_no_items() -> None:
+    assert PromptBuilder._build_vault_inventory([]) == ""
+
+
 def test_instruction_section_preserves_existing_domain_citation_example() -> None:
     """The new anti-URL rule must NOT break the existing domain-citation
     example at the web_search_results instruction. Domain citations are

@@ -76,6 +76,18 @@ _PERSONAL_INTENT_CLASSES: frozenset[str] = frozenset({
 })
 _PERSONAL_POSSESSIVE_RE = re.compile(r"\bmy\s+\w+", re.IGNORECASE)
 
+# Fix 4 (2026-04-27): vault types treated as "personal" for the inventory
+# absence statement. Curated subset of VALID_MEMORY_TYPES in
+# src/memory/storage.py — explicitly excludes ingested, archive,
+# system_event, decision, review_log, evaluation, summary, reference,
+# project, deviation (these are derived/external/internal artifacts that
+# the user does not query directly). When updating, cross-reference
+# storage.VALID_MEMORY_TYPES to keep canonical-set alignment.
+_PERSONAL_VAULT_TYPES: tuple[str, ...] = (
+    "conversation", "journal", "state", "task",
+    "reflection", "lodestone", "profile",
+)
+
 
 def _is_personal_query(intent_class: str | None, user_message: str) -> bool:
     """True when the query expects vault-grounded content.
@@ -1010,7 +1022,66 @@ class PromptBuilder:
                         # spurious marks suppressing future confidence blocks.
                         self.conversation_buffer.set_pending_hedge(record_ids)
 
+        # Fix 4 (2026-04-27): explicit type inventory — surfaces what was
+        # retrieved AND what came back empty. Same _is_personal_query gate
+        # as Fix 2. Only emits when memory_items has at least one record;
+        # the empty-retrieval branches above handle the no-records case
+        # with their own absence framing.
+        if context_packet.memory_items and _is_personal_query(
+            intent_class, context_packet.user_message
+        ):
+            inventory_block = self._build_vault_inventory(
+                context_packet.memory_items
+            )
+            if inventory_block:
+                sections.append(inventory_block)
+
         return "<vault_memory>\n" + "\n\n".join(sections) + "\n</vault_memory>"
+
+    @staticmethod
+    def _build_vault_inventory(memory_items: list) -> str:
+        """Fix 4: explicit type inventory after retrieved records.
+
+        Counts retrieved records by memory_type and lists personal-vault
+        types that came back empty. Explicit absence statements suppress
+        confabulation from partial context better than implicit absence
+        across model scales (Deep research synthesis, model-agnostic).
+
+        Format:
+            [Vault inventory:]
+            Retrieved: 3 conversation, 1 reflection.
+            Not found: state, journal, task, lodestone, profile.
+
+        Returns "" when memory_items is empty (caller should not invoke
+        in that case anyway — the empty-retrieval branch handles it).
+        """
+        from collections import Counter
+
+        if not memory_items:
+            return ""
+
+        type_counts: Counter[str] = Counter()
+        for item in memory_items:
+            mtype = getattr(item, "memory_type", None)
+            if mtype:
+                type_counts[mtype] += 1
+
+        if not type_counts:
+            return ""
+
+        retrieved_str = ", ".join(
+            f"{count} {tname}"
+            for tname, count in sorted(type_counts.items())
+        )
+        retrieved_types = set(type_counts.keys())
+        not_found = [t for t in _PERSONAL_VAULT_TYPES if t not in retrieved_types]
+        not_found_str = ", ".join(not_found) if not_found else "none"
+
+        return (
+            "[Vault inventory:]\n"
+            f"Retrieved: {retrieved_str}.\n"
+            f"Not found: {not_found_str}."
+        )
 
     def _build_retrieval_confidence(self, items: list) -> str:
         """Build a retrieval confidence metadata block for the model.

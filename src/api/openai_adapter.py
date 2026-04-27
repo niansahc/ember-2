@@ -1174,9 +1174,17 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # Stash intent class on request for audit log
     request.state.intent_class = _intent_class
 
-    # Build retrieved context string for grounding check
+    # Build retrieved context string for grounding check.
+    # S2: include state_items and reflection_items in addition to memory_items.
+    # If a response was grounded by state or reflection records, joining only
+    # memory_items would leave _retrieved_context empty and trigger the
+    # B-QUAL-004 short-circuit unnecessarily, forcing a revision pass on a
+    # response that did have valid context.
+    _retrieved_items: list = []
+    for _attr in ("memory_items", "state_items", "reflection_items"):
+        _retrieved_items.extend(getattr(context_packet, _attr, None) or [])
     _retrieved_context = "\n".join(
-        item.content for item in context_packet.memory_items
+        item.content for item in _retrieved_items
         if hasattr(item, "content") and item.content
     )
 
@@ -1365,6 +1373,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         from src.safety.grounding_check import (
             should_check_grounding,
             run_grounding_check,
+            should_short_circuit_grounding,
             run_revision_pass,
             log_grounding_outcome,
         )
@@ -1487,12 +1496,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
                 # 3. Grounding check
                 yield _status_event("verifying")
-                # B-QUAL-004: empty retrieval cannot ground any specific claim.
-                # qwen3:8b at 8B unreliably returns YES/NO when given empty
-                # context, and run_grounding_check fails open on parse errors.
-                # Short-circuit deterministically: treat as ungrounded and
-                # force the revision pass to strip fabricated specifics.
-                if not _retrieved_context.strip():
+                # B-QUAL-004: short-circuit on empty context. Helper lives in
+                # grounding_check.py for unit-testable wiring; rationale
+                # documented there.
+                if should_short_circuit_grounding(_retrieved_context):
                     is_grounded = False
                     unsupported = "no retrieved context to verify claims against"
                     logger.warning(
@@ -1553,6 +1560,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                             "Try rephrasing, or let me know what you're "
                             "actually trying to figure out."
                         )
+
+                # B-MEM-005 / S1: response is now finalized — promote pending
+                # hedge marks. Done here (not at prompt-build time) so failed
+                # LLM calls or stripped-out hedges don't leave spurious marks.
+                llm_adapter.prompt_builder.conversation_buffer.commit_pending_hedge()
 
                 # 3.7. Post-gen validators (source / vision / ask-first /
                 # empty-guard). Grounded streaming path — this runs before
@@ -1686,6 +1698,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 # to memory so retrieval doesn't resurface coaching patterns.
                 from src.llm.coaching_filter import filter_coaching_frame
                 full_reply = filter_coaching_frame(full_reply, _intent_class, _is_conversational)
+                # B-MEM-005 / S1: commit pending hedge marks now that the
+                # response is finalized. In the fast path the client has
+                # already seen the raw stream, but the hedge accounting still
+                # tracks the memory copy correctly for follow-up suppression.
+                llm_adapter.prompt_builder.conversation_buffer.commit_pending_hedge()
                 # Post-gen validators. In the fast path the client has
                 # already seen the raw stream; this cleans the memory
                 # copy so fabricated sources, vision refusals, and empty
@@ -1748,6 +1765,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     if not _is_refusal_ns:
         from src.llm.coaching_filter import filter_coaching_frame as _filter_cf
         reply = _filter_cf(reply, _intent_class, _is_conversational)
+
+    # B-MEM-005 / S1: response is finalized — commit pending hedge marks now.
+    llm_adapter.prompt_builder.conversation_buffer.commit_pending_hedge()
 
     # Post-gen validators (source / vision / ask-first / empty-guard).
     # Non-streaming path: runs before final JSONResponse return.

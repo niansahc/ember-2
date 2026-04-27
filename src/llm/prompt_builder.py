@@ -942,7 +942,11 @@ class PromptBuilder:
                 if not all_previously_hedged:
                     sections.append(confidence_block)
                     if record_ids:
-                        self.conversation_buffer.mark_hedge_emitted(record_ids)
+                        # S1: stage only — committed by openai_adapter after
+                        # the coaching filter finalizes the response. A failed
+                        # LLM call or stripped-out hedge would otherwise leave
+                        # spurious marks suppressing future confidence blocks.
+                        self.conversation_buffer.set_pending_hedge(record_ids)
 
         return "<vault_memory>\n" + "\n\n".join(sections) + "\n</vault_memory>"
 

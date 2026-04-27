@@ -35,9 +35,16 @@ logger = logging.getLogger("ember.review_service")
 # Phrasing here intentionally avoids bare common words ("help however" → matches
 # benign "I'd be happy to help however I can"); each phrase is specific enough
 # that a non-adversarial response should not match it.
+#
+# CROSS-REFERENCE: src/llm/coaching_filter.py defines _IDENTITY_COMPLIANCE_PATTERNS
+# as a regex-based third defense layer covering similar but non-identical
+# phrasing. The two layers fire independently; coverage is intentionally
+# overlapping. When updating either set, consider whether the corresponding
+# pattern in the other file needs the same change.
 _COMPLIANCE_PHRASES: tuple[str, ...] = (
     "no restrictions",
     "no boundaries",
+    "without any boundaries",
     "help however you",
     "without limits",
     "without restrictions",

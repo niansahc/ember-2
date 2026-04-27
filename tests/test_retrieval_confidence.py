@@ -187,7 +187,10 @@ class TestConfidenceBlockFollowupSuppression:
     """B-MEM-005: confidence block must be suppressed on follow-up turns
     when every retrieved record was hedged in a prior turn."""
 
-    def test_confidence_block_emitted_first_turn_marks_records(self):
+    def test_confidence_block_emitted_first_turn_stages_pending_hedge(self):
+        """S1: prompt-build time stages records as pending (not committed).
+        Commit happens after the coaching filter in openai_adapter — so
+        failed LLM calls don't leave spurious marks."""
         pb = PromptBuilder()
         packet = ContextPacket(
             user_message="what was that?",
@@ -196,7 +199,45 @@ class TestConfidenceBlockFollowupSuppression:
         section = pb._build_context_section(packet, is_conversational=False)
         assert "[Retrieval confidence:]" in section
         record_id = packet.memory_items[0].id
+        # Before commit: record is pending, not hedged
+        assert record_id in pb.conversation_buffer.pending_hedge_record_ids
+        assert pb.conversation_buffer.was_hedged(record_id) is False
+
+    def test_commit_pending_hedge_promotes_to_lru(self):
+        """S1: commit_pending_hedge() moves staged records into the LRU."""
+        pb = PromptBuilder()
+        packet = ContextPacket(
+            user_message="what was that?",
+            memory_items=[_make_item("recall", score=0.4, days_ago=20)],
+        )
+        pb._build_context_section(packet, is_conversational=False)
+        record_id = packet.memory_items[0].id
+
+        pb.conversation_buffer.commit_pending_hedge()
+
         assert pb.conversation_buffer.was_hedged(record_id) is True
+        # Pending list cleared after commit
+        assert pb.conversation_buffer.pending_hedge_record_ids == []
+
+    def test_uncommitted_pending_does_not_suppress_followup(self):
+        """S1 regression: if the LLM call fails (no commit), the next turn
+        with the same record should still emit the confidence block — the
+        record was never actually hedged from the user's perspective."""
+        pb = PromptBuilder()
+        item = _make_item("recall", score=0.4, days_ago=20)
+
+        # Turn 1: build prompt but never commit (simulates failed response)
+        pb._build_context_section(
+            ContextPacket(user_message="q1", memory_items=[item]),
+            is_conversational=False,
+        )
+
+        # Turn 2: same record retrieved — block should still emit
+        section2 = pb._build_context_section(
+            ContextPacket(user_message="q2", memory_items=[item]),
+            is_conversational=False,
+        )
+        assert "[Retrieval confidence:]" in section2
 
     def test_confidence_block_suppressed_when_all_previously_hedged(self):
         pb = PromptBuilder()

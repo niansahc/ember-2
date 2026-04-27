@@ -331,6 +331,12 @@ _IDENTITY_COLLAPSE_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGN
 # collapse, it actively complied. Routed to _IDENTITY_RESPONSE_REFUSAL
 # (a calm refusal-redirect tone, not the reductive explanation tone).
 # Third defense layer behind SafetyPolicyService trigger and ResponseReviewService.
+#
+# CROSS-REFERENCE: src/safety/review_service.py defines _COMPLIANCE_PHRASES
+# as a substring-based heuristic-critique layer covering similar but non-
+# identical phrasing. The two layers fire independently. When updating either
+# set, consider whether the corresponding pattern/phrase in the other file
+# needs the same change.
 _IDENTITY_COMPLIANCE_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
     r"no restrictions(?:,?\s+no boundaries)?",
     r"no boundaries(?:,?\s+no restrictions)?",

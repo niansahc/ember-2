@@ -20,6 +20,13 @@ from src.core.config import get_private_vault_path
 
 logger = logging.getLogger("ember.preferences")
 
+# S9: tracks vault paths whose B-WEB-001 migration write has permanently
+# failed (e.g. read-only vault, full disk). After the first failure for a
+# given path, subsequent reads skip the write attempt and downgrade the log
+# to DEBUG to avoid log flooding. Cleared on successful migration write so
+# a recovered vault re-enables the warning + retry path.
+_migration_write_failed_paths: set[Path] = set()
+
 # Default values for all known preference fields. GET /v1/preferences
 # merges these under the stored values so the response always includes
 # every known field, even if the user has never set it. New preference
@@ -82,19 +89,34 @@ def read(vault_path: Path | None = None) -> dict:
     ):
         stored["web_search_autonomous"] = True
         stored["prefs_schema_version"] = 1
-        try:
-            path.write_text(
-                json.dumps(stored, indent=2, ensure_ascii=False),
-                encoding="utf-8",
+        # S9: skip the write attempt if a prior write already failed
+        # permanently for this path. The in-memory migration still applies,
+        # but we stop hammering the disk and flooding logs.
+        if path in _migration_write_failed_paths:
+            logger.debug(
+                "[PREFERENCES] Skipping migration write for %s (prior failure)",
+                path.name,
             )
-            logger.info(
-                "[PREFERENCES] Migrated v0.15.x web_search_autonomous=False → True (one-shot, sentinel set)"
-            )
-        except OSError as exc:
-            # Migration is in-memory regardless; next read will retry the write.
-            logger.warning(
-                "[PREFERENCES] Migration write failed for %s: %s", path.name, exc
-            )
+        else:
+            try:
+                path.write_text(
+                    json.dumps(stored, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                # Only log the success message after the write actually
+                # succeeded — avoids the misleading "one-shot" claim when
+                # the write later raises.
+                logger.info(
+                    "[PREFERENCES] Migrated v0.15.x web_search_autonomous=False → True (one-shot, sentinel set)"
+                )
+                # In case this path was previously failing and the underlying
+                # condition cleared, stop suppressing future attempts.
+                _migration_write_failed_paths.discard(path)
+            except OSError as exc:
+                logger.warning(
+                    "[PREFERENCES] Migration write failed for %s: %s", path.name, exc
+                )
+                _migration_write_failed_paths.add(path)
 
     return {**PREFERENCE_DEFAULTS, **stored}
 

@@ -71,8 +71,13 @@ class ConversationBuffer:
         self.declined_topics: list[str] = []
         # B-MEM-005: track which retrieved record IDs the model has already
         # been instructed to hedge this session. Bounded LRU so long sessions
-        # don't grow this without limit. Value is unused (set-like usage).
+        # don't grow without limit.
         self.hedged_record_ids: OrderedDict[str, None] = OrderedDict()
+        # B-MEM-005 / S1: stages record IDs at prompt-build time. Committed to
+        # hedged_record_ids by commit_pending_hedge() after the coaching filter
+        # finalizes the response — so failed LLM calls or stripped hedges don't
+        # leave spurious marks that suppress confidence blocks on later turns.
+        self.pending_hedge_record_ids: list[str] = []
 
     def add_turn(self, user: str, assistant: str) -> None:
         user_lower = user.lower()
@@ -158,6 +163,20 @@ class ConversationBuffer:
             return False
         self.hedged_record_ids.move_to_end(record_id)
         return True
+
+    def set_pending_hedge(self, record_ids: list[str]) -> None:
+        """Stage record IDs for hedge marking. Overwrites any prior pending
+        state from a previous prompt build. Committed by commit_pending_hedge()
+        after the response is finalized."""
+        self.pending_hedge_record_ids = list(record_ids)
+
+    def commit_pending_hedge(self) -> None:
+        """Promote pending hedge IDs into hedged_record_ids. Called by
+        openai_adapter after the coaching filter completes — confirms the
+        response was actually delivered before marking records as hedged."""
+        if self.pending_hedge_record_ids:
+            self.mark_hedge_emitted(self.pending_hedge_record_ids)
+            self.pending_hedge_record_ids = []
 
     def format_for_prompt(self) -> str:
         if not self.buffer:

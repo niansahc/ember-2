@@ -66,3 +66,41 @@ def test_zero_block_explicitly_forbids_vault_attribution() -> None:
     body = section.lower()
     assert "do not fabricate" in body
     assert "vault_memory" in body
+
+
+# ---------------------------------------------------------------------------
+# S8: should_short_circuit_grounding helper — verifies the wiring decision
+# without requiring a live Ollama instance. The helper is called from
+# openai_adapter.py to decide whether to skip the grounding LLM call entirely.
+# ---------------------------------------------------------------------------
+
+
+def test_short_circuit_helper_fires_on_empty_string() -> None:
+    from src.safety.grounding_check import should_short_circuit_grounding
+    assert should_short_circuit_grounding("") is True
+
+
+def test_short_circuit_helper_fires_on_whitespace_only() -> None:
+    from src.safety.grounding_check import should_short_circuit_grounding
+    assert should_short_circuit_grounding("   ") is True
+    assert should_short_circuit_grounding("\n\t  \n") is True
+
+
+def test_short_circuit_helper_does_not_fire_on_real_content() -> None:
+    from src.safety.grounding_check import should_short_circuit_grounding
+    assert should_short_circuit_grounding("a vault record") is False
+    assert should_short_circuit_grounding("  padded content  ") is False
+
+
+def test_openai_adapter_imports_and_uses_short_circuit_helper() -> None:
+    """Wiring guard: ensures the helper is actually wired into the streaming
+    path. If a future refactor inlines or removes the call, this catches it
+    before it ships."""
+    import inspect
+    from src.api import openai_adapter
+
+    src = inspect.getsource(openai_adapter)
+    assert "should_short_circuit_grounding" in src, (
+        "S8 wiring regression: openai_adapter.py no longer references "
+        "should_short_circuit_grounding — empty-context short-circuit may be lost."
+    )

@@ -191,6 +191,11 @@ class ContextRetriever:
         "describe yourself",
         "tell me about ember",
         "who is ember",
+        # Pets — possessive phrases only so generic animal queries
+        # ("best dog breeds") do not falsely trigger profile retrieval.
+        "my dog",
+        "my cat",
+        "my pet",
     )
 
     def _is_identity_query(self, query: str) -> bool:

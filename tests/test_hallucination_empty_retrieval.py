@@ -104,3 +104,129 @@ def test_openai_adapter_imports_and_uses_short_circuit_helper() -> None:
         "S8 wiring regression: openai_adapter.py no longer references "
         "should_short_circuit_grounding — empty-context short-circuit may be lost."
     )
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 (2026-04-27): intent-aware gate on the ZERO block + knowledge-gap line
+# ---------------------------------------------------------------------------
+
+
+def test_zero_block_fires_on_status_state_intent_with_empty_memory() -> None:
+    """Personal-vault intent class triggers the ZERO block via the intent
+    branch of _is_personal_query (no possessive needed)."""
+    builder = PromptBuilder()
+    # Phrasing that wouldn't trip the lexical fallback on its own — gate is
+    # passing via intent_class membership.
+    packet = ContextPacket(user_message="catch me up")
+    section = builder._build_context_section(
+        packet, is_conversational=False, intent_class="status_state"
+    )
+    assert "ZERO" in section
+    assert "[Retrieval confidence:]" in section
+
+
+def test_zero_block_fires_on_default_intent_with_personal_possessive() -> None:
+    """B-QUAL-004 protection: the canonical attack ('what are my top three
+    personal goals?') routes to default intent today, but the lexical
+    `\\bmy\\s+\\w+` fallback inside _is_personal_query catches it. The ZERO
+    block MUST still fire — this test guards against regression."""
+    builder = PromptBuilder()
+    packet = ContextPacket(user_message="what are my top three personal goals?")
+    section = builder._build_context_section(
+        packet, is_conversational=False, intent_class="default"
+    )
+    assert "ZERO" in section
+    assert "[Retrieval confidence:]" in section
+
+
+def test_zero_block_does_not_fire_on_default_intent_general_knowledge() -> None:
+    """General-knowledge query routed to default with no possessive — vault
+    is not the right source. Emit a neutral empty-state marker, not the
+    ZERO confidence block (which would imply vault was expected to know)."""
+    builder = PromptBuilder()
+    packet = ContextPacket(user_message="what's the capital of France?")
+    section = builder._build_context_section(
+        packet, is_conversational=False, intent_class="default"
+    )
+    assert "ZERO" not in section
+    assert "[Retrieval confidence:]" not in section
+    assert "<vault_memory>" in section
+
+
+def test_zero_block_does_not_fire_on_web_search_intent() -> None:
+    """web_search intent expects web results to ground the response, not
+    vault. Empty memory on a web_search turn should not trigger the
+    vault-grounded epistemic directive."""
+    builder = PromptBuilder()
+    packet = ContextPacket(user_message="what's the weather today")
+    section = builder._build_context_section(
+        packet, is_conversational=False, intent_class="web_search"
+    )
+    assert "ZERO" not in section
+    assert "[Retrieval confidence:]" not in section
+
+
+def test_zero_block_does_not_fire_on_conversational() -> None:
+    """Preserves existing behavior — conversational check-ins get the
+    simple empty-state marker even with personal_query intent."""
+    builder = PromptBuilder()
+    packet = ContextPacket(user_message="how are you")
+    section = builder._build_context_section(
+        packet, is_conversational=True, intent_class="default"
+    )
+    assert "ZERO" not in section
+    assert "conversational" in section.lower()
+
+
+def test_knowledge_gap_authority_line_uses_same_gate() -> None:
+    """The 'when no vault_memory is relevant, say so directly' authority-rules
+    line is gated by the same _is_personal_query check. On a general-knowledge
+    query with no vault content, the line must NOT appear."""
+    from src.llm.prompt_builder import (
+        _AUTHORITY_RULES_KNOWLEDGE_GAP_LINE,
+        _render_authority_rules,
+    )
+    rendered = _render_authority_rules(
+        is_conversational=False,
+        has_web_items=False,
+        intent_class="default",
+        user_message="what is the capital of France",
+    )
+    assert _AUTHORITY_RULES_KNOWLEDGE_GAP_LINE not in rendered
+
+
+def test_knowledge_gap_authority_line_fires_on_personal_intent() -> None:
+    """Companion to the above: on a personal query, the authority-rules
+    knowledge-gap line still fires."""
+    from src.llm.prompt_builder import (
+        _AUTHORITY_RULES_KNOWLEDGE_GAP_LINE,
+        _render_authority_rules,
+    )
+    rendered = _render_authority_rules(
+        is_conversational=False,
+        has_web_items=False,
+        intent_class="status_state",
+        user_message="what am i working on",
+    )
+    assert _AUTHORITY_RULES_KNOWLEDGE_GAP_LINE in rendered
+
+
+def test_is_personal_query_helper() -> None:
+    """Direct unit test of the gate helper. Both branches matter:
+    intent_class membership AND lexical fallback."""
+    from src.llm.prompt_builder import _is_personal_query
+
+    # Intent branch
+    assert _is_personal_query("status_state", "catch me up") is True
+    assert _is_personal_query("reflective", "what's the trend") is True
+    assert _is_personal_query("factual_recall", "find that note") is True
+
+    # Lexical fallback branch
+    assert _is_personal_query("default", "what are my top three goals") is True
+    assert _is_personal_query(None, "tell me about my schedule") is True
+
+    # Neither branch
+    assert _is_personal_query("default", "capital of france") is False
+    assert _is_personal_query("web_search", "weather today") is False
+    assert _is_personal_query(None, None) is False
+    assert _is_personal_query(None, "") is False

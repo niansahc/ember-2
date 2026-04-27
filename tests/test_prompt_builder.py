@@ -193,11 +193,16 @@ class TestContextSectionStructure:
         assert "[Retrieved memory:]" not in prompt
 
     def test_empty_memory_shows_absence_signal(self):
+        """General query with empty memory now emits a neutral empty-state
+        marker — Fix 2 (2026-04-27) gates the ZERO confidence block on
+        personal-vault queries only. The personal-query branch (which still
+        emits the ZERO block + 'I don't have that in my memory') is covered
+        in tests/test_hallucination_empty_retrieval.py."""
         pb = PromptBuilder()
         packet = ContextPacket(user_message="hello", memory_items=[])
         prompt = pb._build_context_section(packet)
-        assert "No relevant memory found for this query" in prompt
-        assert "I don't have that in my memory" in prompt
+        assert "<vault_memory>" in prompt
+        assert "No retrieved memory" in prompt
 
 
 class TestDateSection:

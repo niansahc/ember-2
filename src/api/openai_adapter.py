@@ -1531,6 +1531,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     bare_mode=_bare_mode,
                     vision_description=_vision_description,
                     ask_first_active=_ask_first_active,
+                    intent_class=_intent_class,
                 )
 
                 # 3. Grounding check
@@ -1705,6 +1706,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     bare_mode=_bare_mode,
                     vision_description=_vision_description,
                     ask_first_active=_ask_first_active,
+                    intent_class=_intent_class,
                 ):
                     filtered = think_filter.filter(chunk)
                     if filtered:
@@ -1793,6 +1795,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         bare_mode=_bare_mode,
         vision_description=_vision_description,
         ask_first_active=_ask_first_active,
+        intent_class=_intent_class,
     )
 
     # Coaching-frame filter — post-generation, pre-return.

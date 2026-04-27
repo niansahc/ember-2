@@ -330,6 +330,7 @@ class LLMAdapter:
         bare_mode: bool = False,
         vision_description: str | None = None,
         ask_first_active: bool = False,
+        intent_class: str | None = None,
     ):
         """
         Stream a response token by token. Yields string chunks.
@@ -351,6 +352,7 @@ class LLMAdapter:
             bare_mode=bare_mode,
             vision_description=vision_description,
             ask_first_active=ask_first_active,
+            intent_class=intent_class,
         )
 
         # Assistant prefill for web-search-grounded turns (streaming path).

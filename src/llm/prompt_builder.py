@@ -15,6 +15,7 @@ XML-tagged sections for qwen3:8b structure tracking.
 """
 
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -51,6 +52,45 @@ CONVERSATIONAL_MARKERS: tuple[str, ...] = (
     "good morning", "good evening", "good night", "hey", "hi there",
     "hello", "thanks", "thank you", "what's up", "how's it going",
 )
+
+
+# B-QUAL-004 + Fix 2 (2026-04-27): personal-vault gate for the empty-retrieval
+# ZERO confidence block and the knowledge-gap authority rule line. These
+# directives only make sense on queries that expect grounded content from
+# the user's vault — emitting them on general-knowledge or conversational
+# queries produces orphaned "I don't have that in my memory" lines.
+#
+# Two-layer gate:
+#   1. intent_class is in the personal-vault set (deterministic classifier
+#      already routes there), OR
+#   2. lexical fallback — the query contains a "my X" possessive marker.
+# The lexical fallback is the B-QUAL-004 protection: queries like "what are
+# my top three personal goals?" route to `default` intent_class today, but
+# the possessive guard catches them.
+_PERSONAL_INTENT_CLASSES: frozenset[str] = frozenset({
+    "status_state",
+    "reflective",
+    "recent_activity",
+    "recent",
+    "factual_recall",
+})
+_PERSONAL_POSSESSIVE_RE = re.compile(r"\bmy\s+\w+", re.IGNORECASE)
+
+
+def _is_personal_query(intent_class: str | None, user_message: str) -> bool:
+    """True when the query expects vault-grounded content.
+
+    Used to gate the empty-retrieval ZERO confidence block and the
+    knowledge-gap authority rule line. Inclusive-OR: intent_class match
+    OR lexical possessive match. Lexical fallback preserves B-QUAL-004
+    protection for queries that classify as `default` but reference
+    personal possessives ("my goals", "my schedule").
+    """
+    if intent_class in _PERSONAL_INTENT_CLASSES:
+        return True
+    if not user_message:
+        return False
+    return bool(_PERSONAL_POSSESSIVE_RE.search(user_message))
 
 
 def is_conversational_query(user_message: str) -> bool:
@@ -156,12 +196,19 @@ def _render_authority_rules(
     relational_empty: bool = False,
     has_web_items: bool = False,
     has_profile: bool = False,
+    intent_class: str | None = None,
+    user_message: str = "",
 ) -> str:
     parts = [_AUTHORITY_RULES_HEADER, "\n", _AUTHORITY_RULES_BODY_COMMON]
-    # Suppress knowledge gap line when web results are present — the model
-    # has search results to answer from, so "say I don't have that in my
-    # memory" is wrong and produces an orphaned phrase at response end.
-    if not is_conversational and not has_web_items:
+    # Knowledge-gap line: only emit on queries that actually expect vault
+    # content. Suppressed on conversational check-ins, web-search-grounded
+    # turns, and general-knowledge queries that wouldn't be vault-grounded
+    # anyway (Fix 2, 2026-04-27 — uses _is_personal_query gate).
+    if (
+        not is_conversational
+        and not has_web_items
+        and _is_personal_query(intent_class, user_message)
+    ):
         parts.append(_AUTHORITY_RULES_KNOWLEDGE_GAP_LINE)
     if relational_empty:
         parts.append(_AUTHORITY_RULES_RELATIONAL_EMPTY_LINE)
@@ -242,6 +289,7 @@ class PromptBuilder:
         vision_description: str | None = None,
         bare_mode: bool = False,
         ask_first_active: bool = False,
+        intent_class: str | None = None,
     ) -> str:
         # Conversational check — used to conditionally omit "I don't have
         # that in my memory" framing from both AUTHORITY_RULES and the
@@ -280,6 +328,7 @@ class PromptBuilder:
             self._build_context_section(                                    # vault_memory in recency position
                 context_packet,
                 is_conversational=is_conversational,
+                intent_class=intent_class,
             ),
             "" if bare_mode else self._build_lodestone_living_section(
                 context_packet, suppress_relational=suppress_relational_lodestone
@@ -826,6 +875,7 @@ class PromptBuilder:
         self,
         context_packet: ContextPacket,
         is_conversational: bool = False,
+        intent_class: str | None = None,
     ) -> str:
         # BUG-009: filter retrieved memory items that match declined topics.
         # The declined_topics list is populated by the conversation buffer
@@ -869,11 +919,23 @@ class PromptBuilder:
                     "No retrieved memory for this message (conversational).\n"
                     "</vault_memory>"
                 )
-            # B-QUAL-004: empty retrieval needs an explicit epistemic signal,
-            # not a passive instruction. Without retrieval confidence
-            # metadata, the model treats <vault_memory> as a label it can
-            # sign confabulations with. Adding a ZERO confidence block gives
-            # the model a numeric anchor to refuse fabrication.
+            # Fix 2 (2026-04-27): the ZERO confidence block only fires on
+            # queries that actually expect vault-grounded content. General-
+            # knowledge queries ("what's the capital of France"), web-search
+            # intents, and other non-personal classes get a neutral empty-
+            # state marker. B-QUAL-004 protection comes from the lexical
+            # `\bmy\s+` fallback inside _is_personal_query.
+            if not _is_personal_query(intent_class, context_packet.user_message):
+                return (
+                    "<vault_memory>\n"
+                    "No retrieved memory for this query.\n"
+                    "</vault_memory>"
+                )
+            # B-QUAL-004: empty retrieval on a personal vault query needs an
+            # explicit epistemic signal, not a passive instruction. Without
+            # retrieval confidence metadata, the model treats <vault_memory>
+            # as a label it can sign confabulations with. The ZERO block
+            # gives the model a numeric anchor to refuse fabrication.
             return (
                 "<vault_memory>\n"
                 "No relevant memory found for this query.\n"

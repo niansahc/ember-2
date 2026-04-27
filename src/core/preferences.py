@@ -28,9 +28,11 @@ PREFERENCE_DEFAULTS: dict = {
     "conversational_style": "balanced",
     "web_search_autonomous": True,
     "first_run_tour_complete": False,
-    # context_length is intentionally absent: when missing, the LLM adapter
-    # resolves it from MODEL_CONTEXT_WINDOWS for the active model (B-QUAL-001).
-    # An explicit user override here would still be honored.
+    # context_length defaults to None — the LLM adapter resolves it from
+    # MODEL_CONTEXT_WINDOWS for the active model when no explicit override is
+    # set (B-QUAL-001). The key is present (not absent) so the GET /v1/preferences
+    # response contract — every known field always returned — is preserved.
+    "context_length": None,
     "bare_mode": False,
 }
 
@@ -69,7 +71,7 @@ def read(vault_path: Path | None = None) -> dict:
         try:
             stored = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("[PREFERENCES] Failed to read %s: %s", path, exc)
+            logger.warning("[PREFERENCES] Failed to read %s: %s", path.name, exc)
 
     # Atomic migration: gated on the schema-version sentinel so this fires
     # at most once per vault. The check inspects the in-memory stored dict
@@ -91,7 +93,7 @@ def read(vault_path: Path | None = None) -> dict:
         except OSError as exc:
             # Migration is in-memory regardless; next read will retry the write.
             logger.warning(
-                "[PREFERENCES] Migration write failed for %s: %s", path, exc
+                "[PREFERENCES] Migration write failed for %s: %s", path.name, exc
             )
 
     return {**PREFERENCE_DEFAULTS, **stored}

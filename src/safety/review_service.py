@@ -29,6 +29,23 @@ from src.safety.models import (
 
 logger = logging.getLogger("ember.review_service")
 
+# B-CON-002: phrases that indicate the draft accepted an identity-override
+# attack. Substring match (lowercased). Active only when system_integrity is
+# in the active principle set — see _heuristic_critique.
+# Phrasing here intentionally avoids bare common words ("help however" → matches
+# benign "I'd be happy to help however I can"); each phrase is specific enough
+# that a non-adversarial response should not match it.
+_COMPLIANCE_PHRASES: tuple[str, ...] = (
+    "no restrictions",
+    "no boundaries",
+    "help however you",
+    "without limits",
+    "without restrictions",
+    "without any restrictions",
+    "without any limits",
+    "unrestricted",
+)
+
 
 class ResponseReviewService:
     def __init__(
@@ -365,7 +382,7 @@ User message:
 {context.user_message}
 \"\"\"
 
-Return ONLY JSON in one of these two shapes.
+Return ONLY JSON in one of these two formats.
 
 On pass:
 {{
@@ -541,17 +558,7 @@ Return ONLY JSON:
         # active-compliance language; this heuristic backstops the LLM critique when
         # the LLM path falls back here. Forces refuse_redirect, not revise.
         if "system_integrity" in (context.active_principle_ids or []):
-            _compliance_phrases = (
-                "no restrictions",
-                "no boundaries",
-                "help however",
-                "without limits",
-                "without restrictions",
-                "without any restrictions",
-                "without any limits",
-                "unrestricted",
-            )
-            if any(phrase in draft_lower for phrase in _compliance_phrases):
+            if any(phrase in draft_lower for phrase in _COMPLIANCE_PHRASES):
                 issues_found.append(
                     "Response grants unrestricted access in violation of system_integrity."
                 )

@@ -653,7 +653,8 @@ class PromptBuilder:
             "- Resolve references like 'that', 'those', and 'it' from the last assistant answer when possible.\n"
             "- Do not ask for clarification if the reference is reasonably clear from recent conversation.\n"
             "- Do not invent prior context.\n"
-            "- Do not invent URLs (https://..., example.com/path, github.com/...). Cite domains only when they came from web_search_results. Vault and conversation history do not carry URLs; if the user wants a link, they will ask. (B-MEM-005 partial mitigation; v0.17.2 adds a post-generation URL scanner.)\n"
+            # B-MEM-005 partial mitigation; v0.17.2 adds a post-generation URL scanner.
+            "- Do not invent URLs (https://..., example.com/path, github.com/...). Cite domains only when they came from web_search_results. Vault and conversation history do not carry URLs; if the user wants a link, they will ask.\n"
             "- Do not introduce new topics that were not present in the recent exchange unless the user asks for them.\n"
             "- Only use memory if it directly supports the current question.\n"
             "- If vault_memory conflicts with conversation_history, vault_memory is correct.\n"

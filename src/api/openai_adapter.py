@@ -1241,6 +1241,16 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # path in LLMAdapter remains as a fallback for direct vision model routing.
     _vision_description: str | None = None
     if image_data:
+        # Structured log at the trigger point — pairs with vision_entry /
+        # vision_success / vision_failure events emitted from analyze().
+        # Lets logs/vision/ tell the full story even when the analyze() call
+        # itself short-circuits or raises.
+        from src.llm.vision_service import _log_vision
+        _log_vision(
+            "vision_triggered",
+            session_id=session_id,
+            image_count=len(image_data),
+        )
         try:
             _vision_description = vision_service.analyze(image_data)
             if _vision_description:

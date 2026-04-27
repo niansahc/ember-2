@@ -54,6 +54,36 @@ _SAFE_DEFAULT: str = VAULT_ANSWERABLE
 # Stage 1: Structural rules with compound first-person guard
 # ---------------------------------------------------------------------------
 
+# Bare conversational acknowledgments that must never trigger web search.
+# Matched against the ENTIRE normalized message — substring matching would
+# false-positive on phrases like "thanks for the news" (which legitimately
+# might warrant a search). The Stage 3 LLM previously misclassified these
+# as needs_internet because their bare form provides no vault context for
+# the model to anchor on; this short-circuit keeps them out of the cascade.
+_DEFINITE_VAULT_ANSWERABLE_PHRASES: frozenset[str] = frozenset({
+    "thank you",
+    "thanks",
+    "thank u",
+    "okay",
+    "ok",
+    "k",
+    "got it",
+    "you're welcome",
+    "youre welcome",
+    "you're right",
+    "youre right",
+    "i appreciate it",
+    "appreciate it",
+    "no worries",
+    "fair enough",
+    "noted",
+    "sounds good",
+    "makes sense",
+    "understood",
+    "cool",
+    "nice",
+})
+
 DEFINITE_INTERNET_SIGNALS: tuple[re.Pattern, ...] = tuple(
     re.compile(p, re.IGNORECASE)
     for p in (
@@ -84,6 +114,21 @@ def _stage1_classify(query: str) -> str | None:
     """
     if not query:
         return None
+
+    # Bare conversational acknowledgments short-circuit straight to
+    # vault_answerable. Match the entire normalized message so phrases that
+    # merely contain an ack-word as a prefix ("thanks for the news") still
+    # flow through to the rest of the cascade.
+    normalized = (
+        query.lower()
+        .replace("‘", "'")
+        .replace("’", "'")
+        .strip()
+        .rstrip(".!?,")
+        .strip()
+    )
+    if normalized in _DEFINITE_VAULT_ANSWERABLE_PHRASES:
+        return VAULT_ANSWERABLE
 
     has_first_person = bool(FIRST_PERSON_MARKERS.search(query))
     has_external_anchor = bool(EXTERNAL_WORLD_ANCHORS.search(query))

@@ -101,6 +101,29 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 
+# Content Security Policy. Applied to every response so the served UI is
+# locked down regardless of route. Constraints chosen for the actual UI
+# surface: self-hosted assets only, blob/data: image previews for vision
+# uploads, inline styles for the framework, no embedding.
+_CSP_POLICY = "; ".join((
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+))
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Attach Content Security Policy to every response."""
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = _CSP_POLICY
+    return response
+
+
 @app.middleware("http")
 async def api_key_auth(request: Request, call_next):
     # Only require auth on API routes — UI static files are public

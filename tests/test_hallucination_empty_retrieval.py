@@ -211,6 +211,36 @@ def test_knowledge_gap_authority_line_fires_on_personal_intent() -> None:
     assert _AUTHORITY_RULES_KNOWLEDGE_GAP_LINE in rendered
 
 
+def test_build_prompt_propagates_intent_class_to_authority_rules() -> None:
+    """Wiring guard: build_prompt must actually pass intent_class and
+    user_message through to _render_authority_rules. The unit-level
+    `test_knowledge_gap_authority_line_uses_same_gate` calls _render_authority_rules
+    directly; this test exercises the full call site so a missing
+    keyword-arg in the build_prompt invocation gets caught."""
+    from src.context.models import ContextPacket
+    from src.llm.prompt_builder import (
+        _AUTHORITY_RULES_KNOWLEDGE_GAP_LINE,
+        PromptBuilder,
+    )
+
+    pb = PromptBuilder()
+
+    # General-knowledge query, default intent → knowledge-gap line should
+    # be SUPPRESSED through the build_prompt → _render_authority_rules path.
+    prompt_general = pb.build_prompt(
+        ContextPacket(user_message="what is the capital of france"),
+        intent_class="default",
+    )
+    assert _AUTHORITY_RULES_KNOWLEDGE_GAP_LINE not in prompt_general
+
+    # Personal query → knowledge-gap line should fire.
+    prompt_personal = pb.build_prompt(
+        ContextPacket(user_message="what are my goals"),
+        intent_class="default",  # default intent + lexical fallback wins
+    )
+    assert _AUTHORITY_RULES_KNOWLEDGE_GAP_LINE in prompt_personal
+
+
 def test_is_personal_query_helper() -> None:
     """Direct unit test of the gate helper. Both branches matter:
     intent_class membership AND lexical fallback."""

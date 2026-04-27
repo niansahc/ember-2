@@ -379,6 +379,8 @@ class PromptBuilder:
                         for item in context_packet.memory_items
                     )
                 ),
+                intent_class=intent_class,
+                user_message=context_packet.user_message,
             ),
             self._build_self_knowledge_boundary(),
             self._build_instruction_section(),

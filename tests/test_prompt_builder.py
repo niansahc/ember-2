@@ -153,15 +153,15 @@ def test_inventory_does_not_duplicate_retrieved_types_in_not_found() -> None:
     section = pb._build_context_section(
         packet, is_conversational=False, intent_class="status_state"
     )
-    # Locate the Not found line specifically — the word "state" appears in
-    # the Retrieved line, so must scope the absence check.
-    inventory_lines = section.split("[Vault inventory:]", 1)[1].splitlines()
-    not_found_lines = [ln for ln in inventory_lines if ln.startswith("Not found:")]
-    assert not_found_lines, "Not found line missing"
-    not_found_str = not_found_lines[0]
-    # "state" was retrieved, must NOT appear in the Not found line
-    assert "state" not in not_found_str.split(":", 1)[1].split(",")[0:7] or \
-        all("state" != t.strip().rstrip(".") for t in not_found_str.split(":", 1)[1].split(","))
+    # Extract the Not found line and parse out the bare type names.
+    inventory = section.split("[Vault inventory:]", 1)[1]
+    not_found_line = next(
+        ln for ln in inventory.splitlines() if ln.startswith("Not found:")
+    )
+    not_found_types = {
+        t.strip().rstrip(".") for t in not_found_line[len("Not found:"):].split(",")
+    }
+    assert "state" not in not_found_types
 
 
 def test_inventory_omitted_on_general_knowledge_query() -> None:

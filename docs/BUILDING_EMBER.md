@@ -1,5 +1,7 @@
 # Building Ember: How I Made a Personal AI System Without Writing the Code Myself
 
+> Note: This is a fixed-in-time essay written at v0.13.0. Content is not updated.
+
 I work in technology. I've done full-stack development, and for the past few years I've been on the business analysis and QA side of the house. I understand systems. I can read code. I'm just not writing it every day anymore.
 
 That context matters for what follows.

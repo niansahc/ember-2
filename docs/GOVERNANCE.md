@@ -8,15 +8,15 @@ CIMemories (Mireshghallah et al., ICLR 2026; arxiv:2511.14937) benchmarks whethe
 
 Implication for Ember: Ember does not delegate retrieval scoping to the model. Context selection is implemented as explicit code in ContextRetriever and ContextPolicy. The model receives an assembled context packet; it does not search or select from the vault directly. This is a meaningful architectural distinction — cloud-based personal AI assistants with model-managed memory retrieval are structurally vulnerable to the violation pattern CIMemories documents.
 
-Future consideration: as Ember adds sensitive data integrations (health, email, finance in v0.14.0+), the retrieval policy should be reviewed against contextual integrity principles for each new integration. This is a code review question, not a model behavior question.
+Future consideration: if/when Ember adds sensitive data integrations (health, email, finance — currently deferred pending core quality milestone), the retrieval policy should be reviewed against contextual integrity principles for each new integration. This is a code review question, not a model behavior question.
 
 Reference: Mireshghallah, N. et al. "CIMemories: A Compositional Benchmark for Contextual Integrity of Persistent Memory in LLMs." ICLR 2026. https://arxiv.org/abs/2511.14937
 
 ---
 
-## Vault Encryption Architecture (v0.14.0)
+## Vault Encryption Architecture — Deferred (reference architecture if revisited)
 
-Planned five-layer envelope encryption design. Reference implementation: Cryptomator (open source, well-audited).
+Application-level vault encryption is deferred indefinitely. The shipped path is OS disk encryption detection via `GET /v1/system/disk-encryption` (BitLocker/FileVault/LUKS, shipped v0.15.0). The five-layer envelope design below is preserved as reference material if the decision to defer is ever revisited. Reference implementation: Cryptomator (open source, well-audited).
 
 Layer 1 -- Master key: 256-bit CSPRNG random value. Never derived from passphrase. Generated once at vault creation. Never stored unwrapped on disk.
 

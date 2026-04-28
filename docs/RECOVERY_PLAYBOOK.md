@@ -242,9 +242,9 @@ If Ember confirms creating tasks but they don't appear in the sidebar:
 
 ---
 
-## Clean Install Testing (v0.12.0 known gap)
+## Clean Install Testing (known gap)
 
-A clean install test (fresh machine, no prior Ember installation) was not completed before v0.12.0 due to hardware constraints — both developers are on gaming machines with limited disk space for full clean install testing. Scheduled before v0.13.0 release when test hardware is available.
+Clean install testing on fresh hardware (no prior Ember installation) is an open gap carried forward across versions. Constraint: developer hardware does not support a full wipe-and-reinstall cycle. Tracked in `docs/KNOWN_ISSUES.md`. The path forward is dedicated test hardware; no version is currently assigned.
 
 ---
 

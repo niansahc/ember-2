@@ -1,6 +1,6 @@
 # Current State — Ember-2 v0.17.1
 
-All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available via Anthropic Claude with full UI support.
+All items from the original TDD §25 build order are complete through step 7. The system is feature-complete for single-user local deployment on Windows, Mac, and Linux. Cloud reasoning is available as an opt-in alternative via Anthropic Claude or OpenAI providers.
 
 v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verification, and XML context restructuring. v0.14.0 adds Lodestone layer, deviation engine, and context packet reorder. v0.15.x shipped web search broadening, temporal decay, constitutional review overhaul, knowledge gap suppression, vault citation signals, and multiple bug fixes. v0.16.0 ships autonomous web search as default, vision pipeline fix, vault citation signal hardening, attribution badge fixes, and UAT-cycle stability work. v0.17.0 ships an ask-first intent classifier (three-stage: structural, embedding, LLM fallback), ChatGPT import role separation for state extraction and embedding, and anti-sycophancy / coaching-register rule expansion; the UAT suite was rewritten as 25 behavioral acceptance tests and a CI pytest workflow was added.
 
@@ -116,10 +116,9 @@ v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verif
 - CI pytest workflow on pull requests (.github/workflows/tests.yml)
 - open_pr.sh developer helper script
 
-### In progress for v0.17.0 (not yet shipped)
+### Open across v0.17.x
 
-- BUG-STOP-001 — stop button latency under load
-- Header mobile collision fix
+- BUG-STOP-001 — stop button latency under load (still open)
 
 ## v0.17.1 Additions
 
@@ -182,6 +181,6 @@ v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verif
 
 ## Tests
 
-- ember-2 backend: 1559 pytest tests passing
+- ember-2 backend: 1733 pytest tests collected (20 deselected)
 - ember-2-ui: 163 Playwright e2e tests passing (2 conditional skips)
 - ember-2-installer: 73 Playwright e2e tests passing

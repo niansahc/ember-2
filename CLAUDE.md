@@ -230,14 +230,25 @@ See [docs/current_state.md](docs/current_state.md).
 - UI: style pack system (OG/Hearth/Cool Hacker/Clean), self-hosted fonts, appearance tab, 180-variant greeting
 - Autonomous search locked ON in UI; ask-first marked "coming in a future update"
 
-**v0.17.0 — Make Ember Actually Usable Daily:**
-- UAT restructuring — behavioral acceptance focus, 20-25 tests against BRequirements/TDD
-- Response quality work targeted at qwen3:8b ceilings (A-001 sycophancy, M-001 therapeutic register)
-- BUG-STOP-001 — stop button ~20s latency, POST /cancel-stream or aggressive disconnect polling
-- Yes/No ask-first buttons (G+M coordination)
-- Ask-first interaction mode — LLM-based intent classification (replaces brittle keyword approach)
-- GPT import retrieval quality fix
-- CLAUDE.md cleanup — move roadmap and known issues to separate docs (done in v0.16.0), trim further
+**v0.17.0 — Smarter search routing, anti-sycophancy, ChatGPT import fixes** ✓ (shipped 2026-04-25)
+- ~~UAT restructuring~~ ✓ — 25 behavioral acceptance tests; CI pytest workflow on PRs
+- ~~Response quality for qwen3:8b ceilings~~ ✓ — anti-sycophancy rules in instruction section + nature layer; coaching_filter expansion (residual ceilings A-001/M-001 documented in KNOWN_ISSUES)
+- ~~Ask-first interaction mode (LLM-based intent classification)~~ ✓ — three-stage pipeline (ADR-034)
+- ~~ChatGPT import role separation~~ ✓ — ADR-033, StateExtractor gated to live conversation turns only
+- ~~Shutdown endpoint~~ ✓ — `POST /v1/service/shutdown`
+- BUG-STOP-001 — stop button latency: still open
+
+**v0.17.1 — Retrieval quality, vision, and routing fixes** (in progress)
+- Constitutional review context signal (ADR-035) — `SafetyReviewContext` extension for vault-grounded and T2-pattern review prompts
+- Cross-session pattern detection (ADR-021) — `PatternSignal`, `contains_named_third_party` flag
+- Lodestone path 2 — three-stage reflection synthesis, inferred records, monthly cadence
+- Vision pipeline configurability — `VisionService` reads `EMBER_VISION_MODEL`; image bytes cleared after VL preprocessing
+- Fast-streaming review signal (ADR-036)
+- Conversational acks short-circuit at intent classifier Stage 1
+- Coaching filter span-based deletion fix
+- Retrieval proper-noun boost
+- ChatGPT import timestamp normalization (Unix epoch → ISO 8601)
+- Vision pipeline structured logging
 
 **Deferred until actively using Ember:**
 - Health ingestion (Fitbit/Apple/Garmin)
@@ -296,7 +307,7 @@ When adding new dependencies (npm or pip):
 pytest tests/
 ```
 
-1460 tests covering: constitution loader, policy service (including relational_hedging and preference_compliance triggers), review service, vault read/write, state layer, state extractor, state staleness, timer service, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management, task layer, commitment detection, session reflection, PIN/passphrase service, soft-delete filtering, temporal awareness, nature loader, identity rules loader, type gating, memory tiering, SQLite migration, grounding check, JSON import, SSE events, model filter, monthly reflection, index.html cache, manual eval (multi-annotation), lodestone loader, lodestone service, lodestone resolver, lodestone API, deviation detector, deviation API, web search pipeline, vision pipeline, badge signal integrity.
+1733 tests collected (20 deselected) covering: constitution loader, policy service (including relational_hedging and preference_compliance triggers), review service, vault read/write, state layer, state extractor, state staleness (and live-turn gating per ADR-033), timer service, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management, task layer, commitment detection, session reflection, PIN/passphrase service, soft-delete filtering, temporal awareness, nature loader, identity rules loader, type gating, memory tiering, SQLite migration, grounding check, JSON import, SSE events, model filter, monthly reflection, index.html cache, manual eval (multi-annotation), lodestone loader, lodestone service, lodestone resolver, lodestone API, lodestone synthesis (path 2 inferred records), deviation detector, deviation API, web search pipeline, vision pipeline, vision service logging, badge signal integrity, ChatGPT role separation and normalization, intent classifier (ADR-034), pattern detector (ADR-021), third-party flag, CSP headers, vault storage, vault swap, vault toggle.
 Tests do not mock the filesystem vault (real path via `PRIVATE_VAULT_PATH`). Integration tests hit real storage.
 
 When adding features: unit test normalizers, filters, ranking functions, and state resolution. Integration test full pipeline paths.

@@ -391,7 +391,7 @@ class TestIdentityInstructionRule:
         pb = PromptBuilder()
         instructions = pb._build_instruction_section()
         assert "answer as Ember" in instructions
-        assert "vault_memory describes the person you are talking to, not yourself" in instructions
+        assert "memory describes the person you are talking to, not yourself" in instructions
 
     def test_instruction_contains_identity_rule_in_behavior_rules(self):
         pb = PromptBuilder()
@@ -446,7 +446,7 @@ class TestContextSectionStructure:
         pb = PromptBuilder()
         packet = ContextPacket(user_message="hello", memory_items=[])
         prompt = pb._build_context_section(packet)
-        assert "<vault_memory>" in prompt
+        assert "<memory>" in prompt
         assert "No retrieved memory" in prompt
 
 

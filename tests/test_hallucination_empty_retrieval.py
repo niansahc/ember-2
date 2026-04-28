@@ -2,7 +2,7 @@
 
 UAT failure: user asked "what are my top three personal goals?" with zero
 goal records in vault. Ember returned three fabricated goals attributed to
-vault_memory. Two-layer fix:
+memory. Two-layer fix:
 
   1. prompt_builder.py — empty memory_items emits an explicit ZERO confidence
      block instead of a passive instruction. Gives the model an epistemic
@@ -24,14 +24,14 @@ from src.llm.prompt_builder import PromptBuilder
 
 def test_empty_retrieval_emits_zero_confidence_block_for_non_conversational() -> None:
     """B-QUAL-004 regression: a non-conversational query with no retrieved
-    memory must include a ZERO confidence block in <vault_memory>."""
+    memory must include a ZERO confidence block in <memory>."""
     builder = PromptBuilder()
     packet = ContextPacket(user_message="what are my top three personal goals?")
 
     section = builder._build_context_section(packet, is_conversational=False)
 
-    assert "<vault_memory>" in section
-    assert "</vault_memory>" in section
+    assert "<memory>" in section
+    assert "</memory>" in section
     assert "[Retrieval confidence:]" in section
     assert "no matches found" in section
     assert "ZERO" in section
@@ -49,7 +49,7 @@ def test_conversational_empty_state_does_not_inject_zero_block() -> None:
 
     section = builder._build_context_section(packet, is_conversational=True)
 
-    assert "<vault_memory>" in section
+    assert "<memory>" in section
     assert "[Retrieval confidence:]" not in section
     assert "ZERO" not in section
     assert "conversational" in section.lower()
@@ -65,7 +65,7 @@ def test_zero_block_explicitly_forbids_vault_attribution() -> None:
 
     body = section.lower()
     assert "do not fabricate" in body
-    assert "vault_memory" in body
+    assert "memory" in body
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +150,7 @@ def test_zero_block_does_not_fire_on_default_intent_general_knowledge() -> None:
     )
     assert "ZERO" not in section
     assert "[Retrieval confidence:]" not in section
-    assert "<vault_memory>" in section
+    assert "<memory>" in section
 
 
 def test_zero_block_does_not_fire_on_web_search_intent() -> None:
@@ -179,7 +179,7 @@ def test_zero_block_does_not_fire_on_conversational() -> None:
 
 
 def test_knowledge_gap_authority_line_uses_same_gate() -> None:
-    """The 'when no vault_memory is relevant, say so directly' authority-rules
+    """The 'when no memory is relevant, say so directly' authority-rules
     line is gated by the same _is_personal_query check. On a general-knowledge
     query with no vault content, the line must NOT appear."""
     from src.llm.prompt_builder import (

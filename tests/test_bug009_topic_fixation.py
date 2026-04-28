@@ -119,7 +119,7 @@ class TestStateResolution:
 
 
 class TestRetrievalSuppression:
-    """Declined topics should be filtered from vault_memory in the prompt."""
+    """Declined topics should be filtered from memory in the prompt."""
 
     def test_declined_topic_filtered_from_context(self):
         from src.llm.prompt_builder import PromptBuilder

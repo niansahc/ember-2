@@ -229,5 +229,5 @@ def test_empty_memory_renders_absence_signal():
     )
 
     prompt = builder.build_prompt(packet)
-    assert "<vault_memory>" in prompt
+    assert "<memory>" in prompt
     assert "No retrieved memory" in prompt

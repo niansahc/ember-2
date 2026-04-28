@@ -4,7 +4,7 @@ tests/test_knowledge_gap_suppression.py
 Tests that the knowledge gap injection is suppressed for conversational
 and emotional queries that don't need vault content. Covers both the
 openai_adapter gap injection path and the prompt_builder system prompt
-/ vault_memory framing paths — all three were emitting "I don't have
+/ memory framing paths — all three were emitting "I don't have
 that in my memory" instructions prior to the full fix.
 """
 
@@ -83,7 +83,7 @@ class TestCurlyApostropheNormalization:
 
 class TestSystemPromptSuppression:
     """Even when the openai_adapter gap injection is skipped, the system
-    prompt (AUTHORITY_RULES) and the vault_memory empty-state section
+    prompt (AUTHORITY_RULES) and the memory empty-state section
     both used to emit 'say "I don't have that in my memory"' instructions
     unconditionally. Q11/Q12 regression: "How are you?" still fired
     because these instructions reached the model regardless. All three
@@ -103,14 +103,14 @@ class TestSystemPromptSuppression:
         # Informational query with empty vault — the instruction should still be present.
         assert "I don't have that in my memory" in prompt
 
-    def test_vault_memory_empty_state_neutral_for_conversational(self):
+    def test_memory_empty_state_neutral_for_conversational(self):
         pb = PromptBuilder()
         packet = ContextPacket(user_message="How are you?", memory_items=[])
         section = pb._build_context_section(packet, is_conversational=True)
         assert "I don't have that in my memory" not in section
         assert "conversational" in section.lower() or "no retrieved memory" in section.lower()
 
-    def test_vault_memory_empty_state_uses_gap_framing_for_informational(self):
+    def test_memory_empty_state_uses_gap_framing_for_informational(self):
         pb = PromptBuilder()
         packet = ContextPacket(user_message="What are my projects?", memory_items=[])
         section = pb._build_context_section(packet, is_conversational=False)

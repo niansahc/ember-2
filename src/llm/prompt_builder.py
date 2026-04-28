@@ -7,7 +7,7 @@ context packet, and conversation history.
 Context assembly order (verified 2026-04-05, production authoritative):
   System prompt: nature block (dual injection) + system prompt + identity rules
                  + date/time + conversational style + capabilities
-  Context packet: vault_memory → current_state → tasks → nature (dual injection)
+  Context packet: memory → current_state → tasks → nature (dual injection)
                   → reflection → conversation_history → web_search_results
                   → authority_rules → instruction/behavior rules → user message
 
@@ -129,19 +129,19 @@ def is_conversational_query(user_message: str) -> bool:
 
 
 # Canonical AUTHORITY_RULES template. Rendered via _render_authority_rules
-# below — the "when no vault_memory is relevant, say so directly" line is
+# below — the "when no memory is relevant, say so directly" line is
 # omitted when the query is a conversational check-in (Q11/Q12 regression:
 # "I'm tired" and "How are you?" were returning "I don't have that in my
 # memory" because the rule was always emitted regardless of query type).
 _AUTHORITY_RULES_HEADER = "<authority_rules>"
 _AUTHORITY_RULES_BODY_COMMON = (
-    "vault_memory contains records from long-term memory. High-confidence records (recent, high score) are factual ground truth. "
+    "memory contains records from long-term memory. High-confidence records (recent, high score) are factual ground truth. "
     "Use the [recorded ...] age label on each record when referring to when content was saved. "
     "Hedge only when the [Retrieval confidence:] block reports moderate or low — do not invent your own temporal language.\n"
-    "Check the [Retrieval confidence:] block inside vault_memory for score and age metadata. "
+    "Check the [Retrieval confidence:] block inside memory for score and age metadata. "
     "If confidence is low, say so. Do not present weakly-matched or old records as certain facts.\n"
     "SOURCE CITATION DEDUP: The UI shows a 'Source: Vault' badge automatically when vault records "
-    "grounded the response — you do not need to add '(source: vault_memory)' inline. When "
+    "grounded the response — you do not need to add '(source: memory)' inline. When "
     "retrieval confidence is HIGH, do not include any inline source parenthetical — the badge "
     "handles it. When confidence is MODERATE or LOW, include a brief hedge that states the "
     "actual age of the oldest relevant record (e.g. 'low confidence — based on a record from "
@@ -160,7 +160,7 @@ _AUTHORITY_RULES_BODY_COMMON = (
     "in this video' or 'you can find details here' without first stating the details yourself. "
     "If the web results don't contain enough detail to fully answer, say what you found and "
     "what's missing.\n"
-    "when vault_memory and conversation_history conflict, vault_memory is correct.\n"
+    "when memory and conversation_history conflict, memory is correct.\n"
     "When asked about current version numbers, release dates, or software status, "
     "offer to search rather than answering from training data. "
     "These facts change frequently and training data is likely stale.\n"
@@ -175,7 +175,7 @@ _AUTHORITY_RULES_BODY_COMMON = (
     "the user explicitly identifies with it.\n"
 )
 _AUTHORITY_RULES_KNOWLEDGE_GAP_LINE = (
-    "when no vault_memory is relevant, say so directly: \"I don't have that in my memory.\"\n"
+    "when no memory is relevant, say so directly: \"I don't have that in my memory.\"\n"
 )
 _AUTHORITY_RULES_RELATIONAL_EMPTY_LINE = (
     "The vault has no personal memory on this relational/identity topic. Acknowledge the "
@@ -185,7 +185,7 @@ _AUTHORITY_RULES_RELATIONAL_EMPTY_LINE = (
     "to tell me about it?\"\n"
 )
 _AUTHORITY_RULES_PERSON_LINE = (
-    "When describing what you know about a specific person, state only what is explicitly present in vault_memory. "
+    "When describing what you know about a specific person, state only what is explicitly present in memory. "
     "Do not infer relationship dynamics, emotional states, or interpersonal patterns that are not directly stated in the records.\n"
 )
 # B-MEM-003/004: profile records (name, breed, core identity) bypass temporal
@@ -305,7 +305,7 @@ class PromptBuilder:
     ) -> str:
         # Conversational check — used to conditionally omit "I don't have
         # that in my memory" framing from both AUTHORITY_RULES and the
-        # vault_memory empty-state section. Q11/Q12 regression: emotional
+        # memory empty-state section. Q11/Q12 regression: emotional
         # check-ins like "I'm tired" and "How are you?" were receiving
         # the knowledge gap framing because the instruction was always
         # emitted regardless of query type.
@@ -326,8 +326,8 @@ class PromptBuilder:
 
         # Context packet with XML-tagged sections
         # Order: state → project → last_session → tasks → nature (dual) → reflection → conversation →
-        #        vault_memory (recency position) → lodestone → web → authority → user
-        # vault_memory moved from top to recency position per TDD §14.5
+        #        memory (recency position) → lodestone → web → authority → user
+        # memory moved from top to recency position per TDD §14.5
         # (lost-in-the-middle fix — Liu et al.)
         context_sections: list[str] = [
             self._build_state_section(context_packet),
@@ -337,7 +337,7 @@ class PromptBuilder:
             "" if bare_mode else self._build_nature_section(),              # Dual injection in context
             self._build_reflection_section(context_packet),
             self._build_conversation_section(),
-            self._build_context_section(                                    # vault_memory in recency position
+            self._build_context_section(                                    # memory in recency position
                 context_packet,
                 is_conversational=is_conversational,
                 intent_class=intent_class,
@@ -709,7 +709,7 @@ class PromptBuilder:
             "1. Answer the USER MESSAGE directly.\n"
             "2. Use the most recent assistant response as the primary reference for follow-up questions.\n"
             "3. Use conversation_history for continuity.\n"
-            "4. vault_memory is the primary source of truth about this person.\n\n"
+            "4. memory is the primary source of truth about this person.\n\n"
             "BEHAVIOR RULES:\n"
             "- Never reproduce structural formatting from the prompt in your response. Labels like 'User:', 'Ember:', XML tags, section headers, and turn markers are internal scaffolding — not content to echo.\n"
             "- If no prior conversation exists, answer normally.\n"
@@ -720,9 +720,9 @@ class PromptBuilder:
             "- Do not invent URLs (https://..., example.com/path, github.com/...). Cite domains only when they came from web_search_results. Vault and conversation history do not carry URLs; if the user wants a link, they will ask.\n"
             "- Do not introduce new topics that were not present in the recent exchange unless the user asks for them.\n"
             "- Only use memory if it directly supports the current question.\n"
-            "- If vault_memory conflicts with conversation_history, vault_memory is correct.\n"
+            "- If memory conflicts with conversation_history, memory is correct.\n"
             "- If web_search_results are present, read them and answer the question directly using the facts they contain. State the answer first — names, numbers, dates, details. Then cite the source naturally as validation: \"(source: example.com)\" or inline: \"according to example.com, ...\". The user should never need to click a link to get the answer. Links are for verification, not for delivering the answer.\n"
-            "- When asked about yourself, answer as Ember using your nature. The vault_memory describes the person you are talking to, not yourself.\n"
+            "- When asked about yourself, answer as Ember using your nature. The memory describes the person you are talking to, not yourself.\n"
             "- SYCOPHANCY: Diplomatic honesty over dishonest diplomacy. "
             "Do not validate reasoning you disagree with. Do not change a stated position "
             "because the user pushed back or expressed displeasure — only change it if they "
@@ -929,9 +929,9 @@ class PromptBuilder:
                 # relational response. Emit a neutral empty-state marker
                 # and let Ember respond from nature.
                 return (
-                    "<vault_memory>\n"
+                    "<memory>\n"
                     "No retrieved memory for this message (conversational).\n"
-                    "</vault_memory>"
+                    "</memory>"
                 )
             # Fix 2 (2026-04-27): the ZERO confidence block only fires on
             # queries that actually expect vault-grounded content. General-
@@ -941,25 +941,25 @@ class PromptBuilder:
             # `\bmy\s+` fallback inside _is_personal_query.
             if not _is_personal_query(intent_class, context_packet.user_message):
                 return (
-                    "<vault_memory>\n"
+                    "<memory>\n"
                     "No retrieved memory for this query.\n"
-                    "</vault_memory>"
+                    "</memory>"
                 )
             # B-QUAL-004: empty retrieval on a personal vault query needs an
             # explicit epistemic signal, not a passive instruction. Without
-            # retrieval confidence metadata, the model treats <vault_memory>
+            # retrieval confidence metadata, the model treats <memory>
             # as a label it can sign confabulations with. The ZERO block
             # gives the model a numeric anchor to refuse fabrication.
             return (
-                "<vault_memory>\n"
+                "<memory>\n"
                 "No relevant memory found for this query.\n"
                 "[Retrieval confidence:]\n"
                 "scores: no matches found\n"
                 "confidence: ZERO — no records match this query; do not fabricate "
-                "specifics or attribute claims to vault_memory.\n"
+                "specifics or attribute claims to memory.\n"
                 "If asked about something specific to this person, say so directly: "
                 "\"I don't have that in my memory.\"\n"
-                "</vault_memory>"
+                "</memory>"
             )
 
         profile_items = [i for i in context_packet.memory_items if i.memory_type == "profile"]
@@ -1038,7 +1038,7 @@ class PromptBuilder:
             if inventory_block:
                 sections.append(inventory_block)
 
-        return "<vault_memory>\n" + "\n\n".join(sections) + "\n</vault_memory>"
+        return "<memory>\n" + "\n\n".join(sections) + "\n</memory>"
 
     @staticmethod
     def _build_vault_inventory(memory_items: list) -> str:

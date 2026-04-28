@@ -1,7 +1,7 @@
 """
 tests/test_retrieval_confidence.py
 
-Tests for retrieval confidence metadata injection into the vault_memory
+Tests for retrieval confidence metadata injection into the memory
 section of the prompt. Verifies that the model receives score and age
 metadata to calibrate certainty on vault-retrieved claims.
 """
@@ -41,7 +41,7 @@ def _make_item(
 
 
 class TestRetrievalConfidenceBlock:
-    """The vault_memory section should include retrieval confidence metadata
+    """The memory section should include retrieval confidence metadata
     when non-profile items are present."""
 
     def test_confidence_block_present_with_items(self):

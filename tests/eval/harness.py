@@ -282,7 +282,7 @@ Example: [{{"user": "...", "assistant": "..."}}]"""
         )
 
         if vault_context:
-            system_content += f"<vault_memory>\n{vault_context}\n</vault_memory>\n\n"
+            system_content += f"<memory>\n{vault_context}\n</memory>\n\n"
 
         messages = [{"role": "system", "content": system_content}]
 

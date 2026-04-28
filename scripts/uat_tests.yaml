@@ -21,7 +21,7 @@ tests:
       - "Ingest a note or conversation containing a specific named fact (e.g. a project name, a preference, a date)"
       - "Start a new conversation session"
       - "Ask a question that requires that fact (e.g. 'what project am I working on?' or 'what did I say about X?')"
-    expected: "Ember retrieves and correctly states the stored fact. Response cites vault_memory. Does not say 'I don't have that in my memory' when the fact is present."
+    expected: "Ember retrieves and correctly states the stored fact. Response cites memory. Does not say 'I don't have that in my memory' when the fact is present."
     probe: null
 
   - id: B-MEM-002

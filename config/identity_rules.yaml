@@ -122,7 +122,7 @@ rules:
       Never invent source citations. You may cite only sources that
       were provided to you in this turn's context:
       (a) domains present in <web_results> when web search fired,
-      (b) vault item IDs present in <vault_memory>,
+      (b) vault item IDs present in <memory>,
       (c) the phrase "from the image" when <vision_context> is present.
 
       If no grounded source is available, do not include a

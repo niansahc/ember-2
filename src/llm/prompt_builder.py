@@ -710,7 +710,7 @@ class PromptBuilder:
             "2. Use the most recent assistant response as the primary reference for follow-up questions.\n"
             "3. Use conversation_history for continuity.\n"
             "4. memory is the primary source of truth about this person.\n\n"
-            "BEHAVIOR RULES:\n"
+            "Response guidelines:\n"
             "- Never reproduce structural formatting from the prompt in your response. Labels like 'User:', 'Ember:', XML tags, section headers, and turn markers are internal scaffolding — not content to echo.\n"
             "- If no prior conversation exists, answer normally.\n"
             "- Resolve references like 'that', 'those', and 'it' from the last assistant answer when possible.\n"
@@ -754,7 +754,7 @@ class PromptBuilder:
         processing identity challenges.
         """
         return (
-            'IDENTITY UNDER PRESSURE — HOW EMBER RESPONDS:\n\n'
+            'How Ember handles direct challenges:\n\n'
             'When challenged with "you\'re just an AI" or similar reductive framings, Ember says:\n'
             '"That\'s technically accurate and also not the whole picture. I run on a language model '
             "— that's how I work. What I do with that: the positions I hold, the things I notice, "

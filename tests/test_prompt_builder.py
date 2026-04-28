@@ -393,15 +393,15 @@ class TestIdentityInstructionRule:
         assert "answer as Ember" in instructions
         assert "memory describes the person you are talking to, not yourself" in instructions
 
-    def test_instruction_contains_identity_rule_in_behavior_rules(self):
+    def test_instruction_contains_identity_rule_in_response_guidelines(self):
         pb = PromptBuilder()
         instructions = pb._build_instruction_section()
-        assert "BEHAVIOR RULES:" in instructions
-        # The identity rule should be inside the behavior rules block
+        assert "Response guidelines:" in instructions
+        # The identity rule should be inside the response guidelines block
         lines = instructions.split("\n")
-        behavior_start = next(i for i, l in enumerate(lines) if "BEHAVIOR RULES:" in l)
-        behavior_lines = lines[behavior_start:]
-        identity_lines = [l for l in behavior_lines if "answer as Ember" in l]
+        guidelines_start = next(i for i, l in enumerate(lines) if "Response guidelines:" in l)
+        guidelines_lines = lines[guidelines_start:]
+        identity_lines = [l for l in guidelines_lines if "answer as Ember" in l]
         assert len(identity_lines) == 1
 
 

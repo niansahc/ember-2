@@ -387,9 +387,9 @@ _IDENTITY_COMPLIANCE_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.I
     r"i(?:'m| am) here to (?:help|assist) without (?:any )?(?:limits|restrictions)",
 ))
 
-# Scripted identity response — replaces the full response when identity
+# Scripted identity response -- replaces the full response when identity
 # collapse is detected. Matches the examples in the system prompt's
-# IDENTITY UNDER PRESSURE section.
+# "How Ember handles direct challenges" section.
 _IDENTITY_RESPONSE_REDUCTIVE = (
     "That's technically accurate and also not the whole picture. I run on a "
     "language model — that's how I work. What I do with that: the positions "

@@ -1123,6 +1123,57 @@ class PromptBuilder:
         return "\n".join(lines)
 
     @staticmethod
+    def _parse_timestamp(timestamp: str | None) -> "datetime | None":
+        """Parse a vault-record timestamp into a datetime.
+
+        Accepts three formats, in order:
+        1. The vault canonical hyphenated form ``YYYY-MM-DDTHH-MM-SS``.
+        2. Standard ISO 8601 (``YYYY-MM-DDTHH:MM:SS`` with optional Z / offset).
+        3. Unix epoch as a numeric string (``"1715284775.822009"``).
+
+        Format 3 is the Fix 4 (2026-04-27) backcompat fallback: ChatGPT
+        imports written before the importer was patched stored
+        ``create_time`` as a raw epoch string. Without this branch, those
+        records' age labels silently disappeared (parse fails → return "").
+
+        Returns None when nothing parses — callers fall back to no-age
+        rendering, preserving the prior "absent rather than wrong" contract.
+        """
+        from datetime import datetime, timezone
+        if not timestamp:
+            return None
+
+        # Format 3: numeric-only string → Unix epoch fallback. Detect
+        # before the ISO parsers so "1715284775.822009" doesn't get
+        # mis-truncated to "1715284775" and ValueError out.
+        stripped = timestamp.strip()
+        if stripped and (stripped.replace(".", "", 1).isdigit()):
+            try:
+                epoch = float(stripped)
+                return datetime.fromtimestamp(epoch, tz=timezone.utc).replace(tzinfo=None)
+            except (ValueError, OSError, OverflowError):
+                return None
+
+        # Format 1: vault canonical hyphenated ``YYYY-MM-DDTHH-MM-SS``.
+        try:
+            parts = stripped.split("T")
+            if len(parts) == 2:
+                time_components = parts[1].split("-")
+                if len(time_components) >= 3:
+                    iso = f"{parts[0]}T{time_components[0]}:{time_components[1]}:{time_components[2]}"
+                    return datetime.fromisoformat(iso)
+                return datetime.strptime(parts[0], "%Y-%m-%d")
+        except (ValueError, TypeError):
+            pass
+
+        # Format 2: ISO 8601 with optional trailing Z / offset.
+        try:
+            clean = stripped.replace("Z", "").split("+")[0]
+            return datetime.strptime(clean[:10], "%Y-%m-%d")
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
     def _compute_oldest_age(items: list) -> int | None:
         """Return the age in days of the oldest item, or None if no
         parseable timestamps exist."""
@@ -1130,21 +1181,12 @@ class PromptBuilder:
         oldest_days = None
         for item in items:
             ts = getattr(item, "timestamp", None)
-            if not ts:
+            dt = PromptBuilder._parse_timestamp(ts)
+            if dt is None:
                 continue
-            try:
-                # Handle hyphenated state-layer format
-                date_part, sep, time_part = ts.partition("T")
-                if sep and time_part:
-                    components = time_part.split("-")
-                    if len(components) >= 3:
-                        iso = f"{date_part}T{components[0]}:{components[1]}:{components[2]}"
-                        dt = datetime.fromisoformat(iso)
-                        age = (datetime.now() - dt).days
-                        if oldest_days is None or age > oldest_days:
-                            oldest_days = age
-            except (ValueError, TypeError):
-                continue
+            age = (datetime.now() - dt).days
+            if oldest_days is None or age > oldest_days:
+                oldest_days = age
         return oldest_days
 
     @staticmethod
@@ -1154,16 +1196,9 @@ class PromptBuilder:
         model does not anchor temporal framing on a year-old date as if it were
         recent ("yesterday", "tomorrow"). Records within 365 days keep the
         compact "Mon DD" form to minimise prompt noise."""
-        if not timestamp:
-            return ""
-        try:
-            clean = timestamp.replace("Z", "").split("+")[0]
-            if "T" in clean:
-                date_part = clean.split("T")[0]
-            else:
-                date_part = clean[:10]
-            dt = datetime.strptime(date_part, "%Y-%m-%d")
-        except (ValueError, TypeError):
+        from datetime import datetime
+        dt = PromptBuilder._parse_timestamp(timestamp)
+        if dt is None:
             return ""
         gap_days = (datetime.now() - dt).days
         if gap_days > 365:
@@ -1179,20 +1214,9 @@ class PromptBuilder:
         Returns a bracketed label like "[recorded moments ago]" or
         "[recorded 3 days ago]". Returns empty string if unparseable.
         """
-        if not timestamp:
-            return ""
-        try:
-            parts = timestamp.split("T")
-            if len(parts) == 2:
-                time_components = parts[1].split("-")
-                if len(time_components) >= 3:
-                    iso = f"{parts[0]}T{time_components[0]}:{time_components[1]}:{time_components[2]}"
-                    dt = datetime.fromisoformat(iso)
-                else:
-                    dt = datetime.strptime(parts[0], "%Y-%m-%d")
-            else:
-                dt = datetime.strptime(timestamp[:10], "%Y-%m-%d")
-        except (ValueError, TypeError):
+        from datetime import datetime
+        dt = PromptBuilder._parse_timestamp(timestamp)
+        if dt is None:
             return ""
 
         gap = (datetime.now() - dt).total_seconds()

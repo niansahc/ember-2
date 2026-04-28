@@ -95,6 +95,108 @@ def test_format_item_date_handles_empty_and_invalid() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Fix 4 (2026-04-27): timestamp parser handles epoch strings as fallback for
+# pre-fix ChatGPT imports
+# ---------------------------------------------------------------------------
+
+
+def test_parse_timestamp_accepts_vault_canonical_hyphenated() -> None:
+    """The native vault format YYYY-MM-DDTHH-MM-SS parses correctly."""
+    dt = PromptBuilder._parse_timestamp("2024-05-09T14-30-00")
+    assert dt is not None
+    assert dt.year == 2024
+    assert dt.month == 5
+    assert dt.day == 9
+
+
+def test_parse_timestamp_accepts_iso_with_z():
+    dt = PromptBuilder._parse_timestamp("2024-05-09T14:30:00Z")
+    assert dt is not None
+    assert dt.year == 2024
+
+
+def test_parse_timestamp_accepts_unix_epoch_string() -> None:
+    """Pre-fix ChatGPT imports stored create_time as raw epoch float
+    string — the renderer was returning empty (silently). Now they parse."""
+    # Epoch 1715284775 = 2024-05-09 21:19:35 UTC
+    dt = PromptBuilder._parse_timestamp("1715284775")
+    assert dt is not None
+    assert dt.year == 2024
+    assert dt.month == 5
+
+
+def test_parse_timestamp_accepts_unix_epoch_with_decimals() -> None:
+    """The exact format ChatGPT exports use: float-with-microseconds."""
+    dt = PromptBuilder._parse_timestamp("1715284775.822009")
+    assert dt is not None
+    assert dt.year == 2024
+
+
+def test_parse_timestamp_returns_none_on_garbage() -> None:
+    assert PromptBuilder._parse_timestamp(None) is None
+    assert PromptBuilder._parse_timestamp("") is None
+    assert PromptBuilder._parse_timestamp("not a timestamp") is None
+
+
+def test_format_item_age_works_on_epoch_string() -> None:
+    """Regression for Fix 4: a ChatGPT-export record whose created_at is
+    a raw epoch string (~18 months ago) must produce a meaningful age
+    label, not the empty string the old parser returned."""
+    from datetime import datetime, timezone, timedelta
+    eighteen_months_ago = (datetime.now(timezone.utc) - timedelta(days=540)).timestamp()
+    rendered = PromptBuilder._format_item_age(str(eighteen_months_ago))
+    assert rendered != ""
+    assert "[recorded" in rendered
+    # 540 days = ~77 weeks
+    assert "weeks ago" in rendered or "year" in rendered.lower()
+
+
+def test_format_item_date_works_on_epoch_string() -> None:
+    """Companion to the above: _format_item_date also handles epoch input."""
+    from datetime import datetime, timezone, timedelta
+    eighteen_months_ago = (datetime.now(timezone.utc) - timedelta(days=540)).timestamp()
+    rendered = PromptBuilder._format_item_date(str(eighteen_months_ago))
+    # Stale records (>365 days) include the year per Fix 1
+    assert ", " in rendered
+    expected_year = (datetime.now() - timedelta(days=540)).year
+    assert str(expected_year) in rendered
+
+
+# ---------------------------------------------------------------------------
+# Fix 4 — ChatGPT importer normalizes epoch to ISO at write time
+# ---------------------------------------------------------------------------
+
+
+def test_chatgpt_importer_converts_epoch_to_iso() -> None:
+    """ChatGPT export's create_time is a Unix epoch float; the importer
+    must convert it to the vault's hyphenated ISO form before writing."""
+    from src.ingest.importers.chatgpt import _normalize_chatgpt_timestamp
+
+    # 1715284775.822009 → 2024-05-09T21:19:35 UTC
+    result = _normalize_chatgpt_timestamp(1715284775.822009)
+    assert result is not None
+    assert result.startswith("2024-05-09")
+    # Hyphenated time component (vault canonical), not colons
+    assert "T" in result
+    parts = result.split("T")
+    assert len(parts) == 2
+    assert "-" in parts[1]  # hyphenated time
+
+
+def test_chatgpt_importer_returns_none_for_missing_create_time() -> None:
+    from src.ingest.importers.chatgpt import _normalize_chatgpt_timestamp
+    assert _normalize_chatgpt_timestamp(None) is None
+
+
+def test_chatgpt_importer_handles_already_string_input() -> None:
+    """Defensive: if create_time is already a non-numeric string for some
+    reason, pass it through rather than raise."""
+    from src.ingest.importers.chatgpt import _normalize_chatgpt_timestamp
+    result = _normalize_chatgpt_timestamp("not-a-float")
+    assert result == "not-a-float"
+
+
+# ---------------------------------------------------------------------------
 # Fix 4 (2026-04-27): explicit vault type inventory
 # ---------------------------------------------------------------------------
 

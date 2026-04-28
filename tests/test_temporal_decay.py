@@ -151,6 +151,54 @@ class TestTemporalDecayWeight:
         # 10 days old conversation => <=14d tier => 0.45
         assert self.ranker._temporal_decay_weight(item) == 0.45
 
+
+class TestRecencyBoostHyphenatedTimestamp:
+    """Regression: _recency_boost previously did not parse the hyphenated
+    state-layer timestamp format (YYYY-MM-DDTHH-MM-SS) and silently
+    returned 0.0 for any record stamped that way. Fresh state records
+    therefore lost their +0.18 recency boost and could be outranked by
+    older records carrying ISO timestamps. Fix delegates to
+    _parse_age_days which handles all three formats uniformly."""
+
+    def setup_method(self):
+        self.ranker = ContextRanker()
+
+    @pytest.mark.parametrize(
+        "days_old,expected_boost",
+        [
+            (1, 0.18),     # ≤7 days
+            (7, 0.18),
+            (15, 0.12),    # ≤30 days
+            (60, 0.06),    # ≤90 days
+            (200, 0.02),   # ≤365 days
+            (500, -0.03),  # >365 days
+        ],
+    )
+    def test_recency_boost_handles_hyphenated_state_timestamp(
+        self, days_old, expected_boost
+    ):
+        dt = datetime.now(timezone.utc) - timedelta(days=days_old)
+        hyph_ts = dt.strftime("%Y-%m-%dT%H-%M-%S")
+        assert self.ranker._recency_boost(hyph_ts) == expected_boost
+
+    def test_recency_boost_iso_format_still_works(self):
+        """ISO 8601 path must still work — the fix added hyphenated support
+        without breaking the existing format."""
+        dt = datetime.now(timezone.utc) - timedelta(days=3)
+        iso_ts = dt.isoformat()
+        assert self.ranker._recency_boost(iso_ts) == 0.18
+
+    def test_recency_boost_unix_epoch_still_works(self):
+        """Unix epoch path must still work."""
+        dt = datetime.now(timezone.utc) - timedelta(days=3)
+        epoch_ts = str(dt.timestamp())
+        assert self.ranker._recency_boost(epoch_ts) == 0.18
+
+    def test_recency_boost_unparseable_returns_zero(self):
+        assert self.ranker._recency_boost("not-a-timestamp") == 0.0
+        assert self.ranker._recency_boost(None) == 0.0
+        assert self.ranker._recency_boost("") == 0.0
+
     # ---- Integration: rank() applies decay ----
 
     def test_rank_applies_decay_to_memory_items(self):

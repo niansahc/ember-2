@@ -8,6 +8,7 @@ profile retrieval routing, and the semantic search calls across
 multiple index stores (memory.db, ingested.db, conversation, reflection).
 """
 
+import logging
 import re
 import warnings
 
@@ -16,9 +17,11 @@ from src.memory.search_conversation import search_conversation_memories
 from src.memory.service import MemoryService
 from src.retrieval.semantic_search import semantic_search as _semantic_search
 from src.state.models import StateItem
-from src.state.state_resolver import StateResolver
+from src.state.state_resolver import StateResolver, _state_debug_enabled
 from src.tasks.models import TaskItem
 from src.tasks.task_resolver import TaskResolver
+
+logger = logging.getLogger("ember.context_retriever")
 
 
 class ContextRetriever:
@@ -297,6 +300,22 @@ class ContextRetriever:
         """
         state_items = self.get_state_items()
         task_items = self.get_task_items()
+
+        if _state_debug_enabled():
+            top = [
+                {
+                    "category": getattr(it, "category", None),
+                    "timestamp": getattr(it, "timestamp", None),
+                }
+                for it in state_items[:3]
+            ]
+            logger.info(
+                "[CONTEXT_RETRIEVER] state_items_count=%d top=%s "
+                "user_message_prefix=%r",
+                len(state_items),
+                top,
+                user_message[:80],
+            )
 
         # Compute the query embedding once and reuse across all semantic
         # search paths. Before this optimization, each of get_profile_items,

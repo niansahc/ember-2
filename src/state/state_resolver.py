@@ -237,7 +237,7 @@ class StateResolver:
         items.extend(self._resolve_active_timers())
 
         if _state_debug_enabled():
-            logger.info(
+            logger.warning(
                 "[STATE_RESOLVER] resolve: candidates=%d single_records=%d "
                 "multi_records=%d staleness_days=%d returned_items=%d "
                 "returned_ids=%s",

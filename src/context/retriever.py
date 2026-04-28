@@ -309,7 +309,7 @@ class ContextRetriever:
                 }
                 for it in state_items[:3]
             ]
-            logger.info(
+            logger.warning(
                 "[CONTEXT_RETRIEVER] state_items_count=%d top=%s "
                 "user_message_prefix=%r",
                 len(state_items),

@@ -10,6 +10,11 @@ cache/
 # UAT runner output (history of automated runs)
 uat_results/
 
+# ADR-037 classifier-label extraction output (privacy: queries may
+# contain personal content; gitignored until human-reviewed and
+# paraphrased into classifier_examples.py)
+extract_classifier_labels_output/
+
 # Environment files
 .env
 .env.local

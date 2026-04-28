@@ -24,31 +24,25 @@ The current default routing forces all streaming through the grounded path (`_ne
 
 ## Decision
 
-Route requests where the `social_engineering` trigger is active to the grounded streaming path. This routing decision is explicit, tested, and documented in the code via a small helper function:
+Route ALL streaming requests through the grounded (buffer-then-stream) path. The streaming endpoint sets `_needs_grounding = True` unconditionally; no pre-evaluation, no helper, no per-request branching.
 
 ```python
 # src/api/openai_adapter.py
-_GROUNDING_REQUIRED_SIGNALS: frozenset[str] = frozenset({"social_engineering"})
-
-def _streaming_path_requires_grounding(triggered_by: list[str] | None) -> bool:
-    """Return True when the active trigger set forces the grounded path."""
-    if not triggered_by:
-        return False
-    return any(sig in _GROUNDING_REQUIRED_SIGNALS for sig in triggered_by)
+_needs_grounding = True
 ```
 
-Pre-evaluation runs at request entry on the user message alone (no draft response yet), using `llm_adapter.policy_service.evaluate_trigger()`. The result feeds the routing decision via `_force_grounded_for_signal = _streaming_path_requires_grounding(_pre_check_triggers)`.
+This subsumes the social_engineering routing requirement: by routing every request grounded, identity-override attacks (and every other trigger class) flow through review and the coaching filter before any token reaches the client. The previous design exposed a per-request helper and a forward-compat OR (`True or _force_grounded_for_signal`) that CLAUDE.md project conventions forbid (no feature flags or backwards-compatibility shims when you can just change the code).
 
-Currently the grounded-path default (`_needs_grounding = True`) means the OR is a no-op. The explicit signal-based gate guarantees the protection survives any future routing change — if `_needs_grounding` ever becomes conditional on intent class, social_engineering stays grounded.
+If a future release reintroduces fast streaming for some intent classes, the developer must consult this ADR and re-derive the social_engineering carve-out at that time.
 
 No new SSE event protocol is introduced. No frontend work. The richer `review_pending` / `review_complete` SSE protocol (Option A from the prior UI investigation) is **deferred to v0.18.0** as a UX enhancement once the security gap is closed.
 
 ## Consequences
 
-- **Identity-override attack turns take grounded-path latency.** Full generation completes before the first token reaches the client. Acceptable: these turns are rare (manual UAT estimates social_engineering fires on <1% of turns).
-- **All other turns unaffected.** The pre-evaluation cost is one extra `evaluate_trigger()` call per streaming request (regex-only, no LLM round-trip, no I/O).
-- **The pre-evaluation does NOT replace the in-pipeline trigger check** in `LLMAdapter`. That check still runs after generation against the assembled `user_message + draft_response` text. The pre-check is solely for routing.
-- **Future routing changes are protected by tests.** `tests/test_streaming_routing.py` asserts `_streaming_path_requires_grounding(["social_engineering"])` is True. Any refactor that drops social_engineering from `_GROUNDING_REQUIRED_SIGNALS` or removes the helper-call from the routing decision breaks the test.
+- **All streaming turns take grounded-path latency.** Full generation completes before the first token reaches the client. Acceptable at current response lengths; if perceived latency becomes a UX issue in v0.18.0, the SSE `review_pending` event protocol is the planned remediation, not selective fast-streaming.
+- **No per-request pre-evaluation cost.** The previous design ran an extra `evaluate_trigger()` call per streaming request to populate a value that was OR'd against `True`. Removing it saves a regex-only dispatch on every request.
+- **The in-pipeline trigger check in `LLMAdapter` is unchanged.** It still runs after generation against the assembled `user_message + draft_response` text and remains the authoritative review gate.
+- **Reintroducing fast streaming requires a new ADR.** Any future change that flips `_needs_grounding = True` to a conditional must explicitly re-implement the social_engineering grounded-path carve-out and document it.
 
 ## References
 
@@ -56,5 +50,4 @@ No new SSE event protocol is introduced. No frontend work. The richer `review_pe
 - `docs/adr/ADR-035-safety-review-context.md` — context-allowlist for the constitutional review layer.
 - `src/llm/coaching_filter.py` — `_IDENTITY_COMPLIANCE_PATTERNS` and `_check_identity_collapse`.
 - `src/safety/policy_service.py` — `evaluate_trigger` and `_contains_social_engineering_signal`.
-- `src/api/openai_adapter.py` — routing decision and `_streaming_path_requires_grounding` helper.
-- `tests/test_streaming_routing.py` — routing assertions.
+- `src/api/openai_adapter.py` — `_needs_grounding = True` site.

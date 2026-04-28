@@ -121,3 +121,161 @@ def test_emotional_patterns_do_not_fire_on_non_emotional_intent() -> None:
     text = "Step one: do X. How does that feel?"
     matches = _detect_patterns(text, is_emotional=False)
     assert matches == []
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 (2026-04-27): span-based deletion preserves prior content
+# ---------------------------------------------------------------------------
+
+
+def test_span_deletion_preserves_prior_sentence_when_closing_is_appended() -> None:
+    """The common case: coaching closing is its own appended sentence.
+    Prior sentences must remain intact."""
+    from src.llm.coaching_filter import _apply_deletions
+
+    text = (
+        "Sensitivity is important when talking about loss, especially when "
+        "navigating grief. Let me know if you want to talk about it."
+    )
+    matches = [{
+        "pattern": "coaching_closing",
+        "match": "let me know if you want",
+        "position": "tail",
+        "deletable": True,
+    }]
+    result = _apply_deletions(text, matches)
+    # Prior content must remain — both clauses joined by "especially when"
+    # should survive the deletion.
+    assert "Sensitivity is important when talking about loss" in result
+    assert "especially when navigating grief" in result
+    # The closing must be removed.
+    assert "let me know" not in result.lower()
+
+
+def test_span_deletion_preserves_prior_clause_when_closing_is_trailing() -> None:
+    """Regression for the UAT mid-sentence truncation: when a coaching
+    closing is appended as a trailing clause (after a comma or em-dash),
+    the prior clause must NOT be dropped along with it."""
+    from src.llm.coaching_filter import _apply_deletions
+
+    text = (
+        "Sensitivity is important when talking about loss, "
+        "let me know if you want to talk."
+    )
+    matches = [{
+        "pattern": "coaching_closing",
+        "match": "let me know if you want",
+        "position": "tail",
+        "deletable": True,
+    }]
+    result = _apply_deletions(text, matches)
+    # Prior clause survives, including "important when talking about loss"
+    assert "Sensitivity is important when talking about loss" in result
+    # The trailing comma is dropped along with the coaching closing
+    assert not result.endswith(",")
+    assert "let me know" not in result.lower()
+
+
+def test_span_deletion_drops_em_dash_connector() -> None:
+    from src.llm.coaching_filter import _apply_deletions
+
+    text = "I think the cat is fine — let me know if you want help."
+    matches = [{
+        "pattern": "coaching_closing",
+        "match": "let me know",
+        "position": "tail",
+        "deletable": True,
+    }]
+    result = _apply_deletions(text, matches)
+    assert result == "I think the cat is fine"
+
+
+def test_span_deletion_no_match_returns_text_unchanged() -> None:
+    """Defensive: if the match string isn't actually in the text (stale
+    match dict), the result is the original text (rstripped)."""
+    from src.llm.coaching_filter import _apply_deletions
+
+    text = "A perfectly fine response."
+    matches = [{
+        "pattern": "coaching_closing",
+        "match": "ghost phrase that is not in text",
+        "position": "tail",
+        "deletable": True,
+    }]
+    result = _apply_deletions(text, matches)
+    assert result == text
+
+
+def test_span_deletion_skips_non_deletable_matches() -> None:
+    """Non-deletable patterns (rewrites) are not handled by _apply_deletions;
+    they pass through unchanged for Stage 2."""
+    from src.llm.coaching_filter import _apply_deletions
+
+    text = "Some content. Another thought."
+    matches = [{
+        "pattern": "therapeutic_opener",
+        "match": "Some content",
+        "position": "head",
+        "deletable": False,
+    }]
+    result = _apply_deletions(text, matches)
+    assert result == text
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 Part B: explicit num_predict on primary Ollama calls
+# ---------------------------------------------------------------------------
+
+
+def test_chat_ollama_passes_num_predict_to_options() -> None:
+    """Primary _chat_ollama must pass num_predict=2048 explicitly so Ollama
+    runtime defaults can't silently cap output."""
+    from unittest.mock import patch
+    from src.llm.adapter import LLMAdapter
+
+    adapter = LLMAdapter.__new__(LLMAdapter)
+    adapter.model = "qwen3:8b"
+
+    captured: dict = {}
+
+    def _capture_chat(*, model, messages, options, stream=False):
+        captured["options"] = options
+        if stream:
+            return iter([{"message": {"content": "ok"}}])
+        return {"message": {"content": "ok"}}
+
+    with patch("src.llm.adapter.ollama.chat", side_effect=_capture_chat), \
+         patch("src.core.preferences.get", return_value=None):
+        adapter._chat_ollama(
+            system_prompt="sys", user_message="msg",
+            image_data=None, model="qwen3:8b", temperature=0.5,
+        )
+
+    assert "num_predict" in captured["options"]
+    assert captured["options"]["num_predict"] >= 2048
+
+
+def test_chat_ollama_stream_passes_num_predict_to_options() -> None:
+    """Same contract for the streaming path."""
+    from unittest.mock import patch
+    from src.llm.adapter import LLMAdapter
+
+    adapter = LLMAdapter.__new__(LLMAdapter)
+    adapter.model = "qwen3:8b"
+
+    captured: dict = {}
+
+    def _capture_chat(*, model, messages, options, stream=False):
+        captured["options"] = options
+        return iter([{"message": {"content": "ok"}}])
+
+    with patch("src.llm.adapter.ollama.chat", side_effect=_capture_chat), \
+         patch("src.core.preferences.get", return_value=None):
+        # Drain the generator to actually invoke the call
+        list(adapter._chat_ollama_stream(
+            system_prompt="sys", user_message="msg",
+            image_data=None, model="qwen3:8b", temperature=0.5,
+        ))
+
+    assert "num_predict" in captured["options"]
+    assert captured["options"]["num_predict"] >= 2048

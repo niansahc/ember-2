@@ -198,25 +198,65 @@ def _detect_patterns(text: str, is_emotional: bool) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _apply_deletions(text: str, matches: list[dict]) -> str:
-    """Remove deletable patterns from the response text."""
+    """Remove deletable coaching patterns by span (not by sentence).
+
+    Previous behavior split on sentence terminators and dropped the entire
+    sentence containing the match. That was correct only when the coaching
+    closing stood alone as its own sentence; when it sat as a trailing
+    clause inside a longer sentence ("...so let me know if you want to
+    talk"), the split-and-drop removed the prior content too — producing
+    mid-sentence truncations like "Sensitivity is important when talking
+    about loss, especially" with the rest of the sentence gone.
+
+    New behavior: find the match span and trim from the start of the span
+    backward through any preceding whitespace and a single connector
+    (comma, semicolon, em-dash) to the prior word/sentence boundary,
+    then drop the span and everything after it. Preserves the prior
+    sentence intact in the common "appended closing" case AND avoids
+    the truncation when the closing was a trailing clause.
+    """
     result = text
+    original_len = len(text)
     for m in matches:
         if not m["deletable"]:
             continue
 
-        if m["position"] == "tail":
-            # Remove the coaching closing from the end — find the sentence
-            # containing the match and strip it.
-            pat = re.compile(re.escape(m["match"]), re.IGNORECASE)
-            # Find the last sentence containing the match
-            sentences = re.split(r'(?<=[.!?])\s+', result)
-            cleaned = []
-            for s in sentences:
-                if not pat.search(s):
-                    cleaned.append(s)
-            result = " ".join(cleaned)
+        if m["position"] != "tail":
+            continue
 
-    return result.strip()
+        pat = re.compile(re.escape(m["match"]), re.IGNORECASE)
+        match_obj = pat.search(result)
+        if not match_obj:
+            continue
+
+        cut = match_obj.start()
+        # Walk back over whitespace immediately before the match.
+        while cut > 0 and result[cut - 1].isspace():
+            cut -= 1
+        # If a single connector punctuation precedes (comma / semicolon /
+        # em-dash variants), drop it too — leaving "...prior," or
+        # "...prior —" looks ugly. Stop at sentence terminators (.!?) so
+        # the prior sentence stays terminated.
+        if cut > 0 and result[cut - 1] in ",;—–-":
+            cut -= 1
+            while cut > 0 and result[cut - 1].isspace():
+                cut -= 1
+
+        result = result[:cut].rstrip()
+
+    # Diagnostic: log when deletion strips >10% of the response so future
+    # mid-sentence-truncation reports can be diagnosed without a repro.
+    if matches and original_len > 0 and len(result) < original_len * 0.9:
+        deletable_matches = [m["match"] for m in matches if m["deletable"]]
+        logger.info(
+            "[COACHING_FILTER] deletion shortened response: "
+            "original_len=%d result_len=%d patterns=%s",
+            original_len,
+            len(result),
+            deletable_matches,
+        )
+
+    return result
 
 
 # ---------------------------------------------------------------------------

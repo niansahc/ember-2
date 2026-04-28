@@ -583,7 +583,15 @@ class LLMAdapter:
         response = ollama.chat(
             model=model,
             messages=messages,
-            options={"temperature": temperature, "num_ctx": self._get_num_ctx(model)},
+            options={
+                "temperature": temperature,
+                "num_ctx": self._get_num_ctx(model),
+                # Explicit output cap so Ollama runtime defaults can't
+                # silently truncate mid-sentence on conversational
+                # responses (Fix 2, 2026-04-27). 2048 is well above
+                # realistic conversational response lengths.
+                "num_predict": 2048,
+            },
         )
         generated = response["message"]["content"]
         if assistant_prefix:
@@ -613,7 +621,15 @@ class LLMAdapter:
         stream = ollama.chat(
             model=model,
             messages=messages,
-            options={"temperature": temperature, "num_ctx": self._get_num_ctx(model)},
+            options={
+                "temperature": temperature,
+                "num_ctx": self._get_num_ctx(model),
+                # Explicit output cap so Ollama runtime defaults can't
+                # silently truncate mid-sentence on streaming responses
+                # (Fix 2, 2026-04-27). 2048 is well above realistic
+                # conversational response lengths.
+                "num_predict": 2048,
+            },
             stream=True,
         )
         for chunk in stream:

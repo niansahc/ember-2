@@ -1280,7 +1280,17 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # enabled. For ask-first mode, fire when vault is weak on temporal
     # queries. Deep Research (2026-04-16): over-searching is annoying,
     # under-searching is harmful. Err toward searching on temporal queries.
-    if not context_packet.web_items and not _is_conversational:
+    # Autonomous web search backstop. The classifier's _intent_class is the
+    # authoritative "should this search?" signal -- the inner check below
+    # gates on it. Do NOT add a conversational-marker outer gate here: the
+    # eval_manual --auto X-Test-Session path skips the primary search inside
+    # build_context (line 1118 empty-packet branch), making this backstop the
+    # only remaining trigger. A substring keyword heuristic (CONVERSATIONAL_MARKERS)
+    # used to gate this block, which suppressed web search on queries like
+    # "Hi there, happy Friday. What's the latest news about AI?" -- the
+    # classifier returned web_search intent but the conversational-prefix
+    # match overrode it.
+    if not context_packet.web_items:
         _should_search = False
 
         if _intent_class == "web_search" and _web_autonomous:

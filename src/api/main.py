@@ -101,6 +101,29 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 
+# Content Security Policy. Applied to every response so the served UI is
+# locked down regardless of route. Constraints chosen for the actual UI
+# surface: self-hosted assets only, blob/data: image previews for vision
+# uploads, inline styles for the framework, no embedding.
+_CSP_POLICY = "; ".join((
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+))
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Attach Content Security Policy to every response."""
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = _CSP_POLICY
+    return response
+
+
 @app.middleware("http")
 async def api_key_auth(request: Request, call_next):
     # Only require auth on API routes — UI static files are public
@@ -220,17 +243,20 @@ def clean_context_packet(packet_dict: dict) -> dict:
 
 _UI_DIR = Path(__file__).resolve().parents[2] / "ui"
 
-# Cache the index.html content with injected API key. Invalidated
-# automatically when ui/index.html is modified (mtime check).
+# Cache the index.html content. Invalidated automatically when
+# ui/index.html is modified (mtime check) so UI rebuilds take effect
+# without an API restart.
 _cached_index_html: str | None = None
 _cached_index_mtime: float = 0.0
 
 
 def _get_index_html() -> str:
-    """Read index.html and inject the API key for the UI.
+    """Read index.html with mtime-based caching.
 
-    Caches the result and invalidates when the file's mtime changes,
-    so UI rebuilds take effect without an API restart.
+    The API key is no longer injected as an inline script — the UI bundle
+    now reads VITE_EMBER_API_KEY at compile time (see ember-2-ui's
+    build-with-key.js). Inline-script injection has been removed so the
+    page complies with `script-src 'self'` (no `unsafe-inline`).
     """
     global _cached_index_html, _cached_index_mtime
 
@@ -240,13 +266,7 @@ def _get_index_html() -> str:
     if _cached_index_html is not None and current_mtime == _cached_index_mtime:
         return _cached_index_html
 
-    html = index_path.read_text(encoding="utf-8")
-    api_key = get_ember_api_key()
-    if api_key:
-        inject = f'<script>window.__EMBER_API_KEY__="{api_key}";</script>\n  '
-        html = html.replace("</head>", inject + "</head>")
-
-    _cached_index_html = html
+    _cached_index_html = index_path.read_text(encoding="utf-8")
     _cached_index_mtime = current_mtime
     return _cached_index_html
 

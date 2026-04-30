@@ -28,7 +28,7 @@ EMBER_MODEL_ID = "ember-2"
 SUPPORTED_MODELS = [EMBER_MODEL_ID]
 
 
-# MEMORY_PREVIEW_LENGTH removed — full conversation text is now stored
+# MEMORY_PREVIEW_LENGTH removed -- full conversation text is now stored
 
 model=EMBER_MODEL_ID
 # This exists as the acceptable API format for Web
@@ -1174,9 +1174,17 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # Stash intent class on request for audit log
     request.state.intent_class = _intent_class
 
-    # Build retrieved context string for grounding check
+    # Build retrieved context string for grounding check.
+    # S2: include state_items and reflection_items in addition to memory_items.
+    # If a response was grounded by state or reflection records, joining only
+    # memory_items would leave _retrieved_context empty and trigger the
+    # B-QUAL-004 short-circuit unnecessarily, forcing a revision pass on a
+    # response that did have valid context.
+    _retrieved_items: list = []
+    for _attr in ("memory_items", "state_items", "reflection_items"):
+        _retrieved_items.extend(getattr(context_packet, _attr, None) or [])
     _retrieved_context = "\n".join(
-        item.content for item in context_packet.memory_items
+        item.content for item in _retrieved_items
         if hasattr(item, "content") and item.content
     )
 
@@ -1210,6 +1218,16 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # path in LLMAdapter remains as a fallback for direct vision model routing.
     _vision_description: str | None = None
     if image_data:
+        # Structured log at the trigger point — pairs with vision_entry /
+        # vision_success / vision_failure events emitted from analyze().
+        # Lets logs/vision/ tell the full story even when the analyze() call
+        # itself short-circuits or raises.
+        from src.llm.vision_service import _log_vision
+        _log_vision(
+            "vision_triggered",
+            session_id=session_id,
+            image_count=len(image_data),
+        )
         try:
             _vision_description = vision_service.analyze(image_data)
             if _vision_description:
@@ -1262,7 +1280,17 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # enabled. For ask-first mode, fire when vault is weak on temporal
     # queries. Deep Research (2026-04-16): over-searching is annoying,
     # under-searching is harmful. Err toward searching on temporal queries.
-    if not context_packet.web_items and not _is_conversational:
+    # Autonomous web search backstop. The classifier's _intent_class is the
+    # authoritative "should this search?" signal -- the inner check below
+    # gates on it. Do NOT add a conversational-marker outer gate here: the
+    # eval_manual --auto X-Test-Session path skips the primary search inside
+    # build_context (line 1118 empty-packet branch), making this backstop the
+    # only remaining trigger. A substring keyword heuristic (CONVERSATIONAL_MARKERS)
+    # used to gate this block, which suppressed web search on queries like
+    # "Hi there, happy Friday. What's the latest news about AI?" -- the
+    # classifier returned web_search intent but the conversational-prefix
+    # match overrode it.
+    if not context_packet.web_items:
         _should_search = False
 
         if _intent_class == "web_search" and _web_autonomous:
@@ -1365,17 +1393,18 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         from src.safety.grounding_check import (
             should_check_grounding,
             run_grounding_check,
+            should_short_circuit_grounding,
             run_revision_pass,
             log_grounding_outcome,
         )
 
-        # Force all responses through the grounded (buffer-then-stream) path
+        # All streaming routes through the grounded (buffer-then-stream) path
         # so post-gen validators always run BEFORE the user sees the first
         # token. The fast streaming path streams raw chunks then cleans the
-        # memory copy — but fabricated sources, vision refusals, and ask-first
-        # substitutions need to reach the user as the validated version, not
-        # the raw model output. Latency tradeoff: full generation before first
-        # token. Acceptable at current response lengths.
+        # memory copy -- but fabricated sources, vision refusals, ask-first
+        # substitutions, and social_engineering compliance responses must
+        # reach the user as the validated version, not the raw model output.
+        # ADR-036 documents the social_engineering policy.
         _needs_grounding = True
 
         def _post_stream_cleanup(full_reply: str) -> None:
@@ -1483,13 +1512,25 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     bare_mode=_bare_mode,
                     vision_description=_vision_description,
                     ask_first_active=_ask_first_active,
+                    intent_class=_intent_class,
                 )
 
                 # 3. Grounding check
                 yield _status_event("verifying")
-                is_grounded, unsupported = await run_grounding_check(
-                    full_reply, _retrieved_context,
-                )
+                # B-QUAL-004: short-circuit on empty context. Helper lives in
+                # grounding_check.py for unit-testable wiring; rationale
+                # documented there.
+                if should_short_circuit_grounding(_retrieved_context):
+                    is_grounded = False
+                    unsupported = "no retrieved context to verify claims against"
+                    logger.warning(
+                        "[GROUNDING] empty_context_short_circuit intent=%s",
+                        _intent_class,
+                    )
+                else:
+                    is_grounded, unsupported = await run_grounding_check(
+                        full_reply, _retrieved_context,
+                    )
 
                 log_grounding_outcome(
                     intent_class=_intent_class,
@@ -1540,6 +1581,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                             "Try rephrasing, or let me know what you're "
                             "actually trying to figure out."
                         )
+
+                # B-MEM-005 / S1: response is now finalized — promote pending
+                # hedge marks. Done here (not at prompt-build time) so failed
+                # LLM calls or stripped-out hedges don't leave spurious marks.
+                llm_adapter.prompt_builder.conversation_buffer.commit_pending_hedge()
 
                 # 3.7. Post-gen validators (source / vision / ask-first /
                 # empty-guard). Grounded streaming path — this runs before
@@ -1641,6 +1687,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     bare_mode=_bare_mode,
                     vision_description=_vision_description,
                     ask_first_active=_ask_first_active,
+                    intent_class=_intent_class,
                 ):
                     filtered = think_filter.filter(chunk)
                     if filtered:
@@ -1673,6 +1720,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 # to memory so retrieval doesn't resurface coaching patterns.
                 from src.llm.coaching_filter import filter_coaching_frame
                 full_reply = filter_coaching_frame(full_reply, _intent_class, _is_conversational)
+                # B-MEM-005 / S1: commit pending hedge marks now that the
+                # response is finalized. In the fast path the client has
+                # already seen the raw stream, but the hedge accounting still
+                # tracks the memory copy correctly for follow-up suppression.
+                llm_adapter.prompt_builder.conversation_buffer.commit_pending_hedge()
                 # Post-gen validators. In the fast path the client has
                 # already seen the raw stream; this cleans the memory
                 # copy so fabricated sources, vision refusals, and empty
@@ -1724,6 +1776,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         bare_mode=_bare_mode,
         vision_description=_vision_description,
         ask_first_active=_ask_first_active,
+        intent_class=_intent_class,
     )
 
     # Coaching-frame filter — post-generation, pre-return.
@@ -1735,6 +1788,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     if not _is_refusal_ns:
         from src.llm.coaching_filter import filter_coaching_frame as _filter_cf
         reply = _filter_cf(reply, _intent_class, _is_conversational)
+
+    # B-MEM-005 / S1: response is finalized — commit pending hedge marks now.
+    llm_adapter.prompt_builder.conversation_buffer.commit_pending_hedge()
 
     # Post-gen validators (source / vision / ask-first / empty-guard).
     # Non-streaming path: runs before final JSONResponse return.

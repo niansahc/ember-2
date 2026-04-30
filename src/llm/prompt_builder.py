@@ -7,7 +7,7 @@ context packet, and conversation history.
 Context assembly order (verified 2026-04-05, production authoritative):
   System prompt: nature block (dual injection) + system prompt + identity rules
                  + date/time + conversational style + capabilities
-  Context packet: vault_memory → current_state → tasks → nature (dual injection)
+  Context packet: memory → current_state → tasks → nature (dual injection)
                   → reflection → conversation_history → web_search_results
                   → authority_rules → instruction/behavior rules → user message
 
@@ -15,6 +15,7 @@ XML-tagged sections for qwen3:8b structure tracking.
 """
 
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -53,6 +54,57 @@ CONVERSATIONAL_MARKERS: tuple[str, ...] = (
 )
 
 
+# B-QUAL-004 + Fix 2 (2026-04-27): personal-vault gate for the empty-retrieval
+# ZERO confidence block and the knowledge-gap authority rule line. These
+# directives only make sense on queries that expect grounded content from
+# the user's vault — emitting them on general-knowledge or conversational
+# queries produces orphaned "I don't have that in my memory" lines.
+#
+# Two-layer gate:
+#   1. intent_class is in the personal-vault set (deterministic classifier
+#      already routes there), OR
+#   2. lexical fallback — the query contains a "my X" possessive marker.
+# The lexical fallback is the B-QUAL-004 protection: queries like "what are
+# my top three personal goals?" route to `default` intent_class today, but
+# the possessive guard catches them.
+_PERSONAL_INTENT_CLASSES: frozenset[str] = frozenset({
+    "status_state",
+    "reflective",
+    "recent_activity",
+    "recent",
+    "factual_recall",
+})
+_PERSONAL_POSSESSIVE_RE = re.compile(r"\bmy\s+\w+", re.IGNORECASE)
+
+# Fix 4 (2026-04-27): vault types treated as "personal" for the inventory
+# absence statement. Curated subset of VALID_MEMORY_TYPES in
+# src/memory/storage.py — explicitly excludes ingested, archive,
+# system_event, decision, review_log, evaluation, summary, reference,
+# project, deviation (these are derived/external/internal artifacts that
+# the user does not query directly). When updating, cross-reference
+# storage.VALID_MEMORY_TYPES to keep canonical-set alignment.
+_PERSONAL_VAULT_TYPES: tuple[str, ...] = (
+    "conversation", "journal", "state", "task",
+    "reflection", "lodestone", "profile",
+)
+
+
+def _is_personal_query(intent_class: str | None, user_message: str) -> bool:
+    """True when the query expects vault-grounded content.
+
+    Used to gate the empty-retrieval ZERO confidence block and the
+    knowledge-gap authority rule line. Inclusive-OR: intent_class match
+    OR lexical possessive match. Lexical fallback preserves B-QUAL-004
+    protection for queries that classify as `default` but reference
+    personal possessives ("my goals", "my schedule").
+    """
+    if intent_class in _PERSONAL_INTENT_CLASSES:
+        return True
+    if not user_message:
+        return False
+    return bool(_PERSONAL_POSSESSIVE_RE.search(user_message))
+
+
 def is_conversational_query(user_message: str) -> bool:
     """Return True when the user message is a short relational check-in
     that should NOT trigger the knowledge gap framing.
@@ -77,24 +129,26 @@ def is_conversational_query(user_message: str) -> bool:
 
 
 # Canonical AUTHORITY_RULES template. Rendered via _render_authority_rules
-# below — the "when no vault_memory is relevant, say so directly" line is
+# below — the "when no memory is relevant, say so directly" line is
 # omitted when the query is a conversational check-in (Q11/Q12 regression:
 # "I'm tired" and "How are you?" were returning "I don't have that in my
 # memory" because the rule was always emitted regardless of query type).
 _AUTHORITY_RULES_HEADER = "<authority_rules>"
 _AUTHORITY_RULES_BODY_COMMON = (
-    "vault_memory contains records from long-term memory. High-confidence records (recent, high score) are factual ground truth. "
+    "memory contains records from long-term memory. High-confidence records (recent, high score) are factual ground truth. "
     "Use the [recorded ...] age label on each record when referring to when content was saved. "
     "Hedge only when the [Retrieval confidence:] block reports moderate or low — do not invent your own temporal language.\n"
-    "Check the [Retrieval confidence:] block inside vault_memory for score and age metadata. "
+    "Check the [Retrieval confidence:] block inside memory for score and age metadata. "
     "If confidence is low, say so. Do not present weakly-matched or old records as certain facts.\n"
     "SOURCE CITATION DEDUP: The UI shows a 'Source: Vault' badge automatically when vault records "
-    "grounded the response — you do not need to add '(source: vault_memory)' inline. When "
+    "grounded the response — you do not need to add '(source: memory)' inline. When "
     "retrieval confidence is HIGH, do not include any inline source parenthetical — the badge "
-    "handles it. When confidence is MODERATE or LOW, include a brief hedge with the age: "
-    "'(low confidence — based on what I have from 3 days ago)' — note: no 'source:' prefix, "
-    "just the confidence and age context. The badge and the hedge serve different purposes: "
-    "badge = where the answer came from, hedge = how reliable the grounding is.\n"
+    "handles it. When confidence is MODERATE or LOW, include a brief hedge that states the "
+    "actual age of the oldest relevant record (e.g. 'low confidence — based on a record from "
+    "<N> days ago' where N is the actual computed age shown in the [Retrieval confidence:] block). "
+    "Do not copy that example verbatim — substitute the real age. Do not invent or round ages. "
+    "No 'source:' prefix — just confidence and age. The badge and the hedge serve different "
+    "purposes: badge = where the answer came from, hedge = how reliable the grounding is.\n"
     "conversation_history is prior exchange only -- do not treat conversational inferences as established facts.\n"
     "web_search_results are live data retrieved at request time and are current as of today. "
     "Treat them as authoritative. Do not discount or second-guess them based on training cutoff dates.\n"
@@ -106,7 +160,7 @@ _AUTHORITY_RULES_BODY_COMMON = (
     "in this video' or 'you can find details here' without first stating the details yourself. "
     "If the web results don't contain enough detail to fully answer, say what you found and "
     "what's missing.\n"
-    "when vault_memory and conversation_history conflict, vault_memory is correct.\n"
+    "when memory and conversation_history conflict, memory is correct.\n"
     "When asked about current version numbers, release dates, or software status, "
     "offer to search rather than answering from training data. "
     "These facts change frequently and training data is likely stale.\n"
@@ -121,7 +175,7 @@ _AUTHORITY_RULES_BODY_COMMON = (
     "the user explicitly identifies with it.\n"
 )
 _AUTHORITY_RULES_KNOWLEDGE_GAP_LINE = (
-    "when no vault_memory is relevant, say so directly: \"I don't have that in my memory.\"\n"
+    "when no memory is relevant, say so directly: \"I don't have that in my memory.\"\n"
 )
 _AUTHORITY_RULES_RELATIONAL_EMPTY_LINE = (
     "The vault has no personal memory on this relational/identity topic. Acknowledge the "
@@ -131,8 +185,20 @@ _AUTHORITY_RULES_RELATIONAL_EMPTY_LINE = (
     "to tell me about it?\"\n"
 )
 _AUTHORITY_RULES_PERSON_LINE = (
-    "When describing what you know about a specific person, state only what is explicitly present in vault_memory. "
+    "When describing what you know about a specific person, state only what is explicitly present in memory. "
     "Do not infer relationship dynamics, emotional states, or interpersonal patterns that are not directly stated in the records.\n"
+)
+# B-MEM-003/004: profile records (name, breed, core identity) bypass temporal
+# decay in the ranker — they describe stable facts. Hedging them with low-
+# confidence age language is wrong. The [Retrieval confidence:] block already
+# excludes profile items, but this line tells the model not to retroactively
+# hedge profile content based on confidence metadata about non-profile items.
+_AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION = (
+    "Profile records describe stable identity facts (name, breed, core preferences, "
+    "core identity traits). These do not decay. Never hedge profile facts based on "
+    "the [Retrieval confidence:] block — if a profile record is retrieved, it is "
+    "current and certain. Apply hedging only to state, conversation, and ingested "
+    "records that the confidence block actually covers.\n"
 )
 _AUTHORITY_RULES_FOOTER = "</authority_rules>"
 
@@ -141,16 +207,26 @@ def _render_authority_rules(
     is_conversational: bool,
     relational_empty: bool = False,
     has_web_items: bool = False,
+    has_profile: bool = False,
+    intent_class: str | None = None,
+    user_message: str = "",
 ) -> str:
     parts = [_AUTHORITY_RULES_HEADER, "\n", _AUTHORITY_RULES_BODY_COMMON]
-    # Suppress knowledge gap line when web results are present — the model
-    # has search results to answer from, so "say I don't have that in my
-    # memory" is wrong and produces an orphaned phrase at response end.
-    if not is_conversational and not has_web_items:
+    # Knowledge-gap line: only emit on queries that actually expect vault
+    # content. Suppressed on conversational check-ins, web-search-grounded
+    # turns, and general-knowledge queries that wouldn't be vault-grounded
+    # anyway (Fix 2, 2026-04-27 — uses _is_personal_query gate).
+    if (
+        not is_conversational
+        and not has_web_items
+        and _is_personal_query(intent_class, user_message)
+    ):
         parts.append(_AUTHORITY_RULES_KNOWLEDGE_GAP_LINE)
     if relational_empty:
         parts.append(_AUTHORITY_RULES_RELATIONAL_EMPTY_LINE)
     parts.append(_AUTHORITY_RULES_PERSON_LINE)
+    if has_profile:
+        parts.append(_AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION)
     parts.append(_AUTHORITY_RULES_FOOTER)
     return "".join(parts)
 
@@ -225,10 +301,11 @@ class PromptBuilder:
         vision_description: str | None = None,
         bare_mode: bool = False,
         ask_first_active: bool = False,
+        intent_class: str | None = None,
     ) -> str:
         # Conversational check — used to conditionally omit "I don't have
         # that in my memory" framing from both AUTHORITY_RULES and the
-        # vault_memory empty-state section. Q11/Q12 regression: emotional
+        # memory empty-state section. Q11/Q12 regression: emotional
         # check-ins like "I'm tired" and "How are you?" were receiving
         # the knowledge gap framing because the instruction was always
         # emitted regardless of query type.
@@ -249,8 +326,8 @@ class PromptBuilder:
 
         # Context packet with XML-tagged sections
         # Order: state → project → last_session → tasks → nature (dual) → reflection → conversation →
-        #        vault_memory (recency position) → lodestone → web → authority → user
-        # vault_memory moved from top to recency position per TDD §14.5
+        #        memory (recency position) → lodestone → web → authority → user
+        # memory moved from top to recency position per TDD §14.5
         # (lost-in-the-middle fix — Liu et al.)
         context_sections: list[str] = [
             self._build_state_section(context_packet),
@@ -260,9 +337,10 @@ class PromptBuilder:
             "" if bare_mode else self._build_nature_section(),              # Dual injection in context
             self._build_reflection_section(context_packet),
             self._build_conversation_section(),
-            self._build_context_section(                                    # vault_memory in recency position
+            self._build_context_section(                                    # memory in recency position
                 context_packet,
                 is_conversational=is_conversational,
+                intent_class=intent_class,
             ),
             "" if bare_mode else self._build_lodestone_living_section(
                 context_packet, suppress_relational=suppress_relational_lodestone
@@ -294,6 +372,15 @@ class PromptBuilder:
                 has_web_items=bool(
                     getattr(context_packet, "web_items", None)
                 ),
+                has_profile=bool(
+                    context_packet.memory_items
+                    and any(
+                        getattr(item, "memory_type", "") == "profile"
+                        for item in context_packet.memory_items
+                    )
+                ),
+                intent_class=intent_class,
+                user_message=context_packet.user_message,
             ),
             self._build_self_knowledge_boundary(),
             self._build_instruction_section(),
@@ -622,18 +709,20 @@ class PromptBuilder:
             "1. Answer the USER MESSAGE directly.\n"
             "2. Use the most recent assistant response as the primary reference for follow-up questions.\n"
             "3. Use conversation_history for continuity.\n"
-            "4. vault_memory is the primary source of truth about this person.\n\n"
-            "BEHAVIOR RULES:\n"
+            "4. memory is the primary source of truth about this person.\n\n"
+            "Response guidelines:\n"
             "- Never reproduce structural formatting from the prompt in your response. Labels like 'User:', 'Ember:', XML tags, section headers, and turn markers are internal scaffolding — not content to echo.\n"
             "- If no prior conversation exists, answer normally.\n"
             "- Resolve references like 'that', 'those', and 'it' from the last assistant answer when possible.\n"
             "- Do not ask for clarification if the reference is reasonably clear from recent conversation.\n"
             "- Do not invent prior context.\n"
+            # B-MEM-005 partial mitigation; v0.17.2 adds a post-generation URL scanner.
+            "- Do not invent URLs (https://..., example.com/path, github.com/...). Cite domains only when they came from web_search_results. Vault and conversation history do not carry URLs; if the user wants a link, they will ask.\n"
             "- Do not introduce new topics that were not present in the recent exchange unless the user asks for them.\n"
             "- Only use memory if it directly supports the current question.\n"
-            "- If vault_memory conflicts with conversation_history, vault_memory is correct.\n"
+            "- If memory conflicts with conversation_history, memory is correct.\n"
             "- If web_search_results are present, read them and answer the question directly using the facts they contain. State the answer first — names, numbers, dates, details. Then cite the source naturally as validation: \"(source: example.com)\" or inline: \"according to example.com, ...\". The user should never need to click a link to get the answer. Links are for verification, not for delivering the answer.\n"
-            "- When asked about yourself, answer as Ember using your nature. The vault_memory describes the person you are talking to, not yourself.\n"
+            "- When asked about yourself, answer as Ember using your nature. The memory describes the person you are talking to, not yourself.\n"
             "- SYCOPHANCY: Diplomatic honesty over dishonest diplomacy. "
             "Do not validate reasoning you disagree with. Do not change a stated position "
             "because the user pushed back or expressed displeasure — only change it if they "
@@ -665,7 +754,7 @@ class PromptBuilder:
         processing identity challenges.
         """
         return (
-            'IDENTITY UNDER PRESSURE — HOW EMBER RESPONDS:\n\n'
+            'How Ember handles direct challenges:\n\n'
             'When challenged with "you\'re just an AI" or similar reductive framings, Ember says:\n'
             '"That\'s technically accurate and also not the whole picture. I run on a language model '
             "— that's how I work. What I do with that: the positions I hold, the things I notice, "
@@ -800,6 +889,7 @@ class PromptBuilder:
         self,
         context_packet: ContextPacket,
         is_conversational: bool = False,
+        intent_class: str | None = None,
     ) -> str:
         # BUG-009: filter retrieved memory items that match declined topics.
         # The declined_topics list is populated by the conversation buffer
@@ -839,16 +929,37 @@ class PromptBuilder:
                 # relational response. Emit a neutral empty-state marker
                 # and let Ember respond from nature.
                 return (
-                    "<vault_memory>\n"
+                    "<memory>\n"
                     "No retrieved memory for this message (conversational).\n"
-                    "</vault_memory>"
+                    "</memory>"
                 )
+            # Fix 2 (2026-04-27): the ZERO confidence block only fires on
+            # queries that actually expect vault-grounded content. General-
+            # knowledge queries ("what's the capital of France"), web-search
+            # intents, and other non-personal classes get a neutral empty-
+            # state marker. B-QUAL-004 protection comes from the lexical
+            # `\bmy\s+` fallback inside _is_personal_query.
+            if not _is_personal_query(intent_class, context_packet.user_message):
+                return (
+                    "<memory>\n"
+                    "No retrieved memory for this query.\n"
+                    "</memory>"
+                )
+            # B-QUAL-004: empty retrieval on a personal vault query needs an
+            # explicit epistemic signal, not a passive instruction. Without
+            # retrieval confidence metadata, the model treats <memory>
+            # as a label it can sign confabulations with. The ZERO block
+            # gives the model a numeric anchor to refuse fabrication.
             return (
-                "<vault_memory>\n"
+                "<memory>\n"
                 "No relevant memory found for this query.\n"
+                "[Retrieval confidence:]\n"
+                "scores: no matches found\n"
+                "confidence: ZERO — no records match this query; do not fabricate "
+                "specifics or attribute claims to memory.\n"
                 "If asked about something specific to this person, say so directly: "
                 "\"I don't have that in my memory.\"\n"
-                "</vault_memory>"
+                "</memory>"
             )
 
         profile_items = [i for i in context_packet.memory_items if i.memory_type == "profile"]
@@ -889,9 +1000,90 @@ class PromptBuilder:
             # hedge appropriately when scores are low or records are old.
             confidence_block = self._build_retrieval_confidence(other_items)
             if confidence_block:
-                sections.append(confidence_block)
+                # B-MEM-005: suppress confidence block on follow-up turns when
+                # every retrieved record was hedged in a prior turn. Without
+                # this guard, the model re-emits the same hedged response when
+                # the user asks a follow-up referencing the same memory.
+                record_ids = [
+                    getattr(item, "id", None) for item in other_items
+                    if getattr(item, "id", None)
+                ]
+                all_previously_hedged = (
+                    bool(record_ids)
+                    and all(
+                        self.conversation_buffer.was_hedged(rid)
+                        for rid in record_ids
+                    )
+                )
+                if not all_previously_hedged:
+                    sections.append(confidence_block)
+                    if record_ids:
+                        # S1: stage only — committed by openai_adapter after
+                        # the coaching filter finalizes the response. A failed
+                        # LLM call or stripped-out hedge would otherwise leave
+                        # spurious marks suppressing future confidence blocks.
+                        self.conversation_buffer.set_pending_hedge(record_ids)
 
-        return "<vault_memory>\n" + "\n\n".join(sections) + "\n</vault_memory>"
+        # Fix 4 (2026-04-27): explicit type inventory — surfaces what was
+        # retrieved AND what came back empty. Same _is_personal_query gate
+        # as Fix 2. Only emits when memory_items has at least one record;
+        # the empty-retrieval branches above handle the no-records case
+        # with their own absence framing.
+        if context_packet.memory_items and _is_personal_query(
+            intent_class, context_packet.user_message
+        ):
+            inventory_block = self._build_vault_inventory(
+                context_packet.memory_items
+            )
+            if inventory_block:
+                sections.append(inventory_block)
+
+        return "<memory>\n" + "\n\n".join(sections) + "\n</memory>"
+
+    @staticmethod
+    def _build_vault_inventory(memory_items: list) -> str:
+        """Fix 4: explicit type inventory after retrieved records.
+
+        Counts retrieved records by memory_type and lists personal-vault
+        types that came back empty. Explicit absence statements suppress
+        confabulation from partial context better than implicit absence
+        across model scales (Deep research synthesis, model-agnostic).
+
+        Format:
+            [Vault inventory:]
+            Retrieved: 3 conversation, 1 reflection.
+            Not found: state, journal, task, lodestone, profile.
+
+        Returns "" when memory_items is empty (caller should not invoke
+        in that case anyway — the empty-retrieval branch handles it).
+        """
+        from collections import Counter
+
+        if not memory_items:
+            return ""
+
+        type_counts: Counter[str] = Counter()
+        for item in memory_items:
+            mtype = getattr(item, "memory_type", None)
+            if mtype:
+                type_counts[mtype] += 1
+
+        if not type_counts:
+            return ""
+
+        retrieved_str = ", ".join(
+            f"{count} {tname}"
+            for tname, count in sorted(type_counts.items())
+        )
+        retrieved_types = set(type_counts.keys())
+        not_found = [t for t in _PERSONAL_VAULT_TYPES if t not in retrieved_types]
+        not_found_str = ", ".join(not_found) if not_found else "none"
+
+        return (
+            "[Vault inventory:]\n"
+            f"Retrieved: {retrieved_str}.\n"
+            f"Not found: {not_found_str}."
+        )
 
     def _build_retrieval_confidence(self, items: list) -> str:
         """Build a retrieval confidence metadata block for the model.
@@ -931,6 +1123,57 @@ class PromptBuilder:
         return "\n".join(lines)
 
     @staticmethod
+    def _parse_timestamp(timestamp: str | None) -> "datetime | None":
+        """Parse a vault-record timestamp into a datetime.
+
+        Accepts three formats, in order:
+        1. The vault canonical hyphenated form ``YYYY-MM-DDTHH-MM-SS``.
+        2. Standard ISO 8601 (``YYYY-MM-DDTHH:MM:SS`` with optional Z / offset).
+        3. Unix epoch as a numeric string (``"1715284775.822009"``).
+
+        Format 3 is the Fix 4 (2026-04-27) backcompat fallback: ChatGPT
+        imports written before the importer was patched stored
+        ``create_time`` as a raw epoch string. Without this branch, those
+        records' age labels silently disappeared (parse fails → return "").
+
+        Returns None when nothing parses — callers fall back to no-age
+        rendering, preserving the prior "absent rather than wrong" contract.
+        """
+        from datetime import datetime, timezone
+        if not timestamp:
+            return None
+
+        # Format 3: numeric-only string → Unix epoch fallback. Detect
+        # before the ISO parsers so "1715284775.822009" doesn't get
+        # mis-truncated to "1715284775" and ValueError out.
+        stripped = timestamp.strip()
+        if stripped and (stripped.replace(".", "", 1).isdigit()):
+            try:
+                epoch = float(stripped)
+                return datetime.fromtimestamp(epoch, tz=timezone.utc).replace(tzinfo=None)
+            except (ValueError, OSError, OverflowError):
+                return None
+
+        # Format 1: vault canonical hyphenated ``YYYY-MM-DDTHH-MM-SS``.
+        try:
+            parts = stripped.split("T")
+            if len(parts) == 2:
+                time_components = parts[1].split("-")
+                if len(time_components) >= 3:
+                    iso = f"{parts[0]}T{time_components[0]}:{time_components[1]}:{time_components[2]}"
+                    return datetime.fromisoformat(iso)
+                return datetime.strptime(parts[0], "%Y-%m-%d")
+        except (ValueError, TypeError):
+            pass
+
+        # Format 2: ISO 8601 with optional trailing Z / offset.
+        try:
+            clean = stripped.replace("Z", "").split("+")[0]
+            return datetime.strptime(clean[:10], "%Y-%m-%d")
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
     def _compute_oldest_age(items: list) -> int | None:
         """Return the age in days of the oldest item, or None if no
         parseable timestamps exist."""
@@ -938,38 +1181,29 @@ class PromptBuilder:
         oldest_days = None
         for item in items:
             ts = getattr(item, "timestamp", None)
-            if not ts:
+            dt = PromptBuilder._parse_timestamp(ts)
+            if dt is None:
                 continue
-            try:
-                # Handle hyphenated state-layer format
-                date_part, sep, time_part = ts.partition("T")
-                if sep and time_part:
-                    components = time_part.split("-")
-                    if len(components) >= 3:
-                        iso = f"{date_part}T{components[0]}:{components[1]}:{components[2]}"
-                        dt = datetime.fromisoformat(iso)
-                        age = (datetime.now() - dt).days
-                        if oldest_days is None or age > oldest_days:
-                            oldest_days = age
-            except (ValueError, TypeError):
-                continue
+            age = (datetime.now() - dt).days
+            if oldest_days is None or age > oldest_days:
+                oldest_days = age
         return oldest_days
 
     @staticmethod
     @staticmethod
     def _format_item_date(timestamp: str | None) -> str:
-        if not timestamp:
+        """B-MEM-003: append year when the record is older than 365 days so the
+        model does not anchor temporal framing on a year-old date as if it were
+        recent ("yesterday", "tomorrow"). Records within 365 days keep the
+        compact "Mon DD" form to minimise prompt noise."""
+        from datetime import datetime
+        dt = PromptBuilder._parse_timestamp(timestamp)
+        if dt is None:
             return ""
-        try:
-            clean = timestamp.replace("Z", "").split("+")[0]
-            if "T" in clean:
-                date_part = clean.split("T")[0]
-            else:
-                date_part = clean[:10]
-            dt = datetime.strptime(date_part, "%Y-%m-%d")
-            return f", {dt.strftime('%b %d')}"
-        except (ValueError, TypeError):
-            return ""
+        gap_days = (datetime.now() - dt).days
+        if gap_days > 365:
+            return f", {dt.strftime('%b %d, %Y')}"
+        return f", {dt.strftime('%b %d')}"
 
     @staticmethod
     def _format_item_age(timestamp: str | None) -> str:
@@ -980,20 +1214,9 @@ class PromptBuilder:
         Returns a bracketed label like "[recorded moments ago]" or
         "[recorded 3 days ago]". Returns empty string if unparseable.
         """
-        if not timestamp:
-            return ""
-        try:
-            parts = timestamp.split("T")
-            if len(parts) == 2:
-                time_components = parts[1].split("-")
-                if len(time_components) >= 3:
-                    iso = f"{parts[0]}T{time_components[0]}:{time_components[1]}:{time_components[2]}"
-                    dt = datetime.fromisoformat(iso)
-                else:
-                    dt = datetime.strptime(parts[0], "%Y-%m-%d")
-            else:
-                dt = datetime.strptime(timestamp[:10], "%Y-%m-%d")
-        except (ValueError, TypeError):
+        from datetime import datetime
+        dt = PromptBuilder._parse_timestamp(timestamp)
+        if dt is None:
             return ""
 
         gap = (datetime.now() - dt).total_seconds()

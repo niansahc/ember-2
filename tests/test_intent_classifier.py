@@ -68,6 +68,77 @@ class TestStage1DefiniteInternetSignals:
         assert _stage1_classify(query) == "needs_internet"
 
 
+class TestStage1ConversationalAcks:
+    """Bare conversational acknowledgments short-circuit to vault_answerable.
+
+    Background: single-phrase acks like 'thank you' / 'okay' were reaching the
+    Stage 3 LLM with no vault context and getting misclassified as
+    needs_internet. Stage 1 short-circuits the entire normalized message —
+    NOT substring matching — so phrases that merely contain an ack-word as a
+    prefix still flow through the cascade.
+    """
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "thank you",
+            "thanks",
+            "okay",
+            "ok",
+            "got it",
+            "you're welcome",
+            "you're right",
+            "i appreciate it",
+            "no worries",
+            "fair enough",
+            "noted",
+            "sounds good",
+            "makes sense",
+            "understood",
+        ],
+    )
+    def test_conversational_acks_route_to_vault_answerable(self, query):
+        assert _stage1_classify(query) == "vault_answerable"
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "Thank you.",
+            "Thanks!",
+            "Okay?",
+            "Got it!!",
+            "thank you, ",
+        ],
+    )
+    def test_acks_normalized_for_punctuation_and_case(self, query):
+        """Trailing punctuation and case must not defeat the short-circuit."""
+        assert _stage1_classify(query) == "vault_answerable"
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "thanks for the news",
+            "okay but what's the weather",
+            "got it. what about today's headlines",
+            "thank you for explaining bitcoin price",
+        ],
+    )
+    def test_acks_embedded_in_real_queries_do_not_short_circuit(self, query):
+        """Substring matching would false-positive on these — the short-circuit
+        must require the entire normalized message to be in the ack set.
+        These queries should fall through Stage 1 (return None to escalate)
+        OR match a definite-internet signal in the same message."""
+        result = _stage1_classify(query)
+        # Either escalates (None) or matches the internet signal in the
+        # remainder of the message — but must NOT short-circuit to vault on
+        # the ack alone.
+        if result == "vault_answerable":
+            pytest.fail(
+                f"{query!r} was incorrectly short-circuited to vault_answerable "
+                f"despite containing additional content beyond an ack."
+            )
+
+
 class TestStage1CompoundGuardAnchorOverrides:
     """Signal + first-person + external anchor => internet still wins.
 

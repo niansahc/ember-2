@@ -16,7 +16,7 @@ The Govern function establishes policies, accountability, and transparency acros
 
 **Explicit governance artifacts:**
 - `config/constitution.yaml` — external, inspectable, user-modifiable behavioral governance. Not buried in prompts or model weights.
-- `docs/adr/` — 14 Architecture Decision Records documenting every significant design decision, rationale, and alternatives considered.
+- `docs/adr/` — 36 Architecture Decision Records documenting every significant design decision, rationale, and alternatives considered.
 - `ETHOS.md` — founding principles covering data ownership, privacy, user control, and what Ember refuses to do.
 - AGPL-3.0 license — ensures the system remains open and community-owned.
 - CC BY-NC 4.0 for assets — prevents commercial exploitation of Ember's identity.
@@ -90,12 +90,12 @@ The Measure function evaluates AI risk and performance through quantitative and 
 ### What Ember Has
 
 **Testing:**
-- 1559 pytest tests covering backend services, retrieval, state, safety, and API endpoints.
-- 39 Playwright e2e tests covering UI flows.
+- 1733 pytest tests collected (20 deselected) covering backend services, retrieval, state, safety, and API endpoints.
+- 163 Playwright e2e tests covering UI flows (2 conditional skips).
 - 73 Playwright e2e tests covering installer flows.
 
 **Retrieval evaluation:**
-- `tools/eval_retrieval.py` — 14-query benchmark harness measuring retrieval quality across intent classes. Results logged to `logs/`.
+- `tools/eval_retrieval.py` — 15-query benchmark harness measuring retrieval quality across intent classes. Results logged to `logs/`.
 - `docs/eval_history.md` — historical eval results across model versions with root cause analysis.
 
 **Commitment detection evaluation:**

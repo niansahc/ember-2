@@ -16,7 +16,11 @@ run on the text description rather than being bypassed.
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 import ollama
 
@@ -44,6 +48,30 @@ VISION_PROMPT = (
 # Maximum tokens for vision model output. Keeps preprocessing fast.
 VISION_MAX_TOKENS = 300
 
+# JSON-lines structured log directory. Mirrors the pattern used by the
+# audit log and safety_reviews/coaching_filter logs — repo-local, one file
+# per UTC day. Diagnoses vision pipeline activity that the HTTP audit log
+# can't reach (failures inside analyze(), empty-input early returns, etc.).
+_LOG_DIR = Path(__file__).resolve().parents[2] / "logs" / "vision"
+
+
+def _log_vision(event: str, **fields: Any) -> None:
+    """Append a JSON line to logs/vision/YYYY-MM-DD.log. Never raises —
+    vision must continue to function even if the log volume is full or
+    the directory is read-only."""
+    try:
+        _LOG_DIR.mkdir(parents=True, exist_ok=True)
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+            **fields,
+        }
+        log_file = _LOG_DIR / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.log"
+        with log_file.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        logger.warning("[VISION_LOG] Write failed (non-fatal): %s", exc)
+
 
 class VisionService:
     """Preprocessor that converts images to text descriptions via a vision model.
@@ -70,9 +98,21 @@ class VisionService:
             or no images are provided.
         """
         if not image_data:
+            _log_vision("vision_empty_input")
             return ""
 
+        _log_vision(
+            "vision_entry",
+            model=self.model,
+            image_count=len(image_data),
+        )
+
         try:
+            _log_vision(
+                "vision_ollama_call",
+                model=self.model,
+                num_predict=VISION_MAX_TOKENS,
+            )
             response = ollama.chat(
                 model=self.model,
                 messages=[
@@ -94,7 +134,23 @@ class VisionService:
                     len(description),
                     len(image_data),
                 )
+                _log_vision(
+                    "vision_success",
+                    description_chars=len(description),
+                    description_preview=description[:80],
+                )
+            else:
+                _log_vision(
+                    "vision_success",
+                    description_chars=0,
+                    description_preview="",
+                )
             return description.strip()
         except Exception as exc:
             logger.warning("[VISION] Preprocessor failed (non-fatal): %s", exc)
+            _log_vision(
+                "vision_failure",
+                exception_type=type(exc).__name__,
+                exception_message=str(exc),
+            )
             return ""

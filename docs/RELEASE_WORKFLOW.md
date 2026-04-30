@@ -14,9 +14,9 @@ ember-2 is the backend. It versions independently but must be pinned by ember-2-
 6. Publish a GitHub Release at that tag -- the installer workflow needs a published release to reference
 7. Note which ember-2-ui version this backend is compatible with -- document in release notes
 
-## Planned: Automated Coordination (v0.14.0)
+## Automated coordination (shipped — Release Please active across all three repos)
 
-The installer repo will adopt Release Please and GitHub Actions to automate cross-repo builds. Until then, releases are manual per the checklist above.
+Release Please runs on `ember-2`, `ember-2-ui`, and `ember-2-installer`. Conventional Commits drive changelog generation and version bumps. Release-please opens a release PR on each repo; a human merges the PR to cut the release. The cross-repo build coordination still requires the manual checklist above (version pinning, ember-2-ui tag selection, installer bundling) — Release Please handles per-repo release mechanics, not cross-repo orchestration.
 
 ## release-please Auto-Merge Prohibition
 

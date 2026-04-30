@@ -120,9 +120,9 @@ Ember is designed to ingest and read data from external sources. All integration
 ### Integration Categories
 
 **Communication**
-- Email — read-only IMAP access. Two modes: ingestion (pull into vault as reference memory) and live context (surface relevant threads into conversation without permanent storage). Planned v0.14.0.
-- Calendar (Google, Outlook, iCal) — read-only. Events and scheduling context. Planned v0.14.0.
-- Slack / Discord — read-only conversation history ingestion. Planned v0.15.0.
+- Email — read-only IMAP access. Two modes: ingestion (pull into vault as reference memory) and live context (surface relevant threads into conversation without permanent storage). Deferred pending core quality milestone.
+- Calendar (Google, Outlook, iCal) — read-only. Events and scheduling context. Deferred pending core quality milestone.
+- Slack / Discord — read-only conversation history ingestion. Deferred pending core quality milestone.
 
 **Development**
 - GitHub — read-only. Commits, PRs, issues, and activity feed. Deferred pending core quality milestone.

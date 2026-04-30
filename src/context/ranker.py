@@ -485,24 +485,16 @@ class ContextRanker:
         -0.07) still scores below a 30-day-old user experience (+0.12
         recency + 0.12 role + 0.14 experience = +0.38). This is intentional:
         recency should never override source quality.
+
+        Delegates timestamp parsing to _parse_age_days so the three formats
+        (Unix epoch, ISO 8601, hyphenated vault ``YYYY-MM-DDTHH-MM-SS``) are
+        handled uniformly. The previous inline parser missed the hyphenated
+        state-layer format — fresh state records silently scored 0.0 instead
+        of +0.18, so older records could outrank them.
         """
-        if not timestamp:
+        age_days = self._parse_age_days(timestamp)
+        if age_days is None:
             return 0.0
-
-        try:
-            ts = float(timestamp)
-            item_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-        except (TypeError, ValueError):
-            try:
-                normalized = timestamp.replace("Z", "+00:00")
-                item_dt = datetime.fromisoformat(normalized)
-                if item_dt.tzinfo is None:
-                    item_dt = item_dt.replace(tzinfo=timezone.utc)
-            except ValueError:
-                return 0.0
-
-        now = datetime.now(timezone.utc)
-        age_days = max((now - item_dt).days, 0)
 
         if age_days <= 7:
             return 0.18

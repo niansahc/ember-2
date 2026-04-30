@@ -1,8 +1,8 @@
 # Ember-2 Technical Design Document (TDD)
 
-Version: 1.5
+Version: 1.6
 Status: Updated working design baseline
-Current release: v0.16.0
+Current release: v0.17.1 (in progress)
 Primary environment: Local-first desktop deployment
 Repository: `ember-2`
 
@@ -1747,15 +1747,29 @@ Deferred from v0.16.0:
 - API auto-start on boot — deferred
 - GPT import retrieval quality — deferred to v0.17.0
 
-**v0.17.0 — Make Ember Actually Usable Daily**
-- UAT restructuring — behavioral acceptance focus, 20-25 tests against BRequirements/TDD; remove installer/UI component tests
-- Response quality work targeted at qwen3:8b ceilings (A-001 sycophancy, M-001 therapeutic register)
-- BUG-STOP-001 — stop button ~20s latency (POST /cancel-stream or aggressive disconnect polling)
-- Yes/No ask-first buttons (G+M coordination)
-- Ask-first interaction mode with LLM-based intent classification (replaces brittle keyword approach)
-- GPT import retrieval quality fix
+**v0.17.0 — Smarter search routing, anti-sycophancy, ChatGPT import fixes** (shipped 2026-04-25)
+- ~~UAT restructuring~~ ✓ — 25 behavioral acceptance tests; removed installer/UI component tests; CI pytest workflow on PRs
+- ~~Response quality work for qwen3:8b ceilings~~ ✓ — A-001 sycophancy and M-001 therapeutic register addressed via instruction section anti-sycophancy rules, nature layer extension, and coaching_filter expansion (residual ceilings documented in KNOWN_ISSUES)
+- ~~Ask-first interaction mode with LLM-based intent classification~~ ✓ — three-stage pipeline (ADR-034): structural rules, embedding similarity, local-model LLM fallback with 800ms hard timeout
+- ~~ChatGPT import role separation~~ ✓ — assistant-role chunks no longer embedded; StateExtractor gated to live conversation turns only (ADR-033)
+- ~~Shutdown endpoint for UI shutdown button~~ ✓ — `POST /v1/service/shutdown`
+- BUG-STOP-001 — stop button latency: still open (carried forward as v0.17.x open issue)
+- Yes/No ask-first buttons (G+M coordination): UI side complete, backend toggle wired
 
-**Post-v0.17.0**
+**v0.17.1 — Retrieval quality, vision, and routing fixes** (in progress)
+- Constitutional review context signal (ADR-035) — `SafetyReviewContext` carries `is_vault_grounded` and `t2_pattern_category`; two-step review prompt for T2-triggered cases
+- Cross-session pattern detection (ADR-021) — `PatternSignal`, `detect_t2_pattern()`, `contains_named_third_party` flag at write time, `<cross_session_pattern>` prompt injection
+- Lodestone path 2 — three-stage reflection synthesis produces inferred vault records (`acquisition_path: "inferred"`, `confirmed: false`); monthly cadence; confirmed-only injection gate unchanged
+- Vision pipeline configurability — `VisionService` reads `EMBER_VISION_MODEL` env var; `image_data` cleared after VL preprocessing to prevent raw image bytes reaching the text model
+- Fast-streaming review signal (ADR-036) — routing decision and pre-review window mitigation
+- Conversational acks short-circuit at intent classifier Stage 1 (resolves v0.17.0 false-positive on "thanks" / "okay")
+- Coaching filter span-based deletion fix (no mid-sentence truncation when coaching closing is the last segment)
+- Retrieval proper-noun boost in `lexical_relevance_bonus` (+0.20 per named entity match, capped at +0.40)
+- ChatGPT import: `create_time` Unix epoch → ISO 8601 at ingestion; renderer epoch fallback for existing records
+- Vision pipeline structured logging to `logs/vision/YYYY-MM-DD.log`
+- UAT runner `--ids` flag for targeted re-run
+
+**Post-v0.17.1**
 - Multi-user vault isolation
 - Windows/Mac/Linux full parity
 - Health ingestion (Fitbit/Apple/Garmin) — after daily use established
@@ -1866,6 +1880,30 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 ## 50.1 Active Watch Items
 
 *Research, not build. Graduation requires a build item or explicit decision to discard.*
+
+- **MemMachine retrieval-stage optimization hierarchy** (MemVerge, arXiv:2604.04853, March 2026) — Empirical validation that retrieval-stage changes outperform ingestion changes. Ordering: depth tuning > context formatting > search prompt design > query bias correction > sentence chunking. Grounds the retrieval depth ablation queued for v0.15.0.
+  → informs: v0.15.0 (retrieval depth tuning ablation)
+  → graduation trigger: retrieval depth ablation scheduled and spec'd
+
+- **FileGram procedural memory paradigm** (Synvo-ai, arXiv:2604.04901, April 2026) — First benchmark treating agent personalization as procedural behavioral memory (workflow traces, file-system patterns) rather than semantic retrieval over text. Relevant if Ember extends beyond conversation records to behavioral memory types.
+  → informs: post-v0.18.0 (behavioral memory types — no version assigned)
+  → graduation trigger: Ember expands memory types beyond conversation, journal, profile, reflection
+
+- **SWAY counterfactual CoT sycophancy mitigation** (Bhalla & Gligorić, JHU, arXiv:2604.02423, April 2026) — Explicit anti-sycophancy instruction yields moderate reductions and can backfire; counterfactual CoT mitigation drives sycophancy to near-zero without suppressing genuine responsiveness. Potential upgrade to position_holding and relational_hedging intervention pattern. Conflicts with current coaching filter approach — evaluate before v0.18.0 sycophancy work.
+  → informs: v0.17.2 (sycophancy intervention evaluation)
+  → graduation trigger: counterfactual CoT tested against current coaching filter on 19-question battery
+
+- **Neurodivergent-aware AI co-regulation framework** (Piskala, arXiv:2507.06864, 2025) — Privacy-first on-device framework for ADHD professionals using attention-state inference, adaptive nudges, and accountability presence (body doubling). Design principles match Ember's primary deployment context.
+  → informs: post-v0.18.0 (proactive/body-doubling mode — no version assigned)
+  → graduation trigger: proactive mode spec begins
+
+- **Specification Trap** (Spizzirri, arXiv:2512.03048, updated Feb 2026) — Philosophical argument that static value specification hits a structural ceiling. Ember's Lodestone (plural, accumulating, user-curated) and flourishing_over_preference (wellbeing over preference) are architectural implementations of open specification.
+  → informs: architectural validation only
+  → graduation trigger: n/a — reference only
+
+- **LightRAG graph-based RAG for vault entity linking** (HKUDS, EMNLP 2025, active March 2026 updates) — Dual-level retrieval (entity + relationship) outperforms flat vector RAG. Requires 32B+ parameters for indexing — qwen3:8b is below threshold. Viable only with GPU upgrade (RTX 4060 Ti 16GB) enabling larger model for ingest. Query-time can use smaller model.
+  → informs: post-GPU-upgrade (local model grounding — no version assigned until hardware confirmed)
+  → graduation trigger: GPU upgrade confirmed AND Qwen2.5:14b Q4 runs at acceptable latency
 
 - **OpenJarvis Learning primitive** (Stanford, github.com/open-jarvis/OpenJarvis, March 2026) — local-first framework for on-device personal AI agents. Five primitives: Intelligence, Engine, Agents, Tools & Memory, Learning. Learning primitive uses local interaction traces to synthesize training data and refine agent behavior. MCP support, semantic indexing for local retrieval. Reference architecture for self-evaluation loops.
   → informs: post-v0.17.0 (self-evaluation and decision-memory loops — deferred until actively using Ember)
@@ -2694,7 +2732,7 @@ Manual setup via SETUP.md works on all platforms (Python, Docker, Ollama are cro
 
 # 40. Backup and Recovery
 
-**Status:** Planned (v0.11.0)
+**Status:** Shipped — see `docs/BACKUP_AND_EXPORT.md` and `docs/RECOVERY_PLAYBOOK.md` for the operational guides; the design notes below remain as the architectural rationale.
 
 ## Vault Backup
 

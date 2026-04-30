@@ -61,6 +61,98 @@ class TestPreferencesStore:
         assert preferences.get("style", vault_path=tmp_path) == "thoughtful"
 
 
+class TestWebSearchAutonomousMigration:
+    """B-WEB-001: v0.15.x → v0.16.0 sentinel-gated one-shot migration.
+
+    Old vaults with web_search_autonomous=False AND no prefs_schema_version
+    sentinel get upgraded to True on first read. A deliberate False set
+    after the v0.17.0 ask-first UI ships (which carries the sentinel) is
+    preserved.
+    """
+
+    def test_upgrade_v0_15_false_to_v0_16_true_one_shot(self, tmp_path):
+        """Stale False with no sentinel: upgrade to True and write sentinel."""
+        prefs_path = tmp_path / "preferences.json"
+        prefs_path.write_text(
+            json.dumps({"web_search_autonomous": False}), encoding="utf-8"
+        )
+
+        result = preferences.read(vault_path=tmp_path)
+        assert result["web_search_autonomous"] is True
+
+        # File on disk should now contain the sentinel
+        on_disk = json.loads(prefs_path.read_text(encoding="utf-8"))
+        assert on_disk["web_search_autonomous"] is True
+        assert on_disk["prefs_schema_version"] == 1
+
+    def test_second_read_after_migration_is_noop(self, tmp_path):
+        """Second read sees the sentinel and does not re-migrate or re-write.
+
+        N5: assert via file-content stability rather than mtime equality —
+        Windows mtime resolution + same-process consecutive stat() calls
+        without OS flush can return identical mtime even if a write occurred.
+        Comparing parsed JSON dicts is exact and platform-independent.
+        """
+        prefs_path = tmp_path / "preferences.json"
+        prefs_path.write_text(
+            json.dumps({"web_search_autonomous": False}), encoding="utf-8"
+        )
+
+        preferences.read(vault_path=tmp_path)  # triggers migration
+        first_content = json.loads(prefs_path.read_text(encoding="utf-8"))
+
+        # Second call: nothing should change on disk
+        result = preferences.read(vault_path=tmp_path)
+        assert result["web_search_autonomous"] is True
+        second_content = json.loads(prefs_path.read_text(encoding="utf-8"))
+        assert second_content == first_content
+        # Sentinel is present exactly once and at version 1
+        assert second_content.get("prefs_schema_version") == 1
+        assert second_content.get("web_search_autonomous") is True
+
+    def test_deliberate_false_with_sentinel_preserved(self, tmp_path):
+        """Once the user-facing toggle exists, a deliberate False (with sentinel)
+        must NOT be flipped back to True."""
+        prefs_path = tmp_path / "preferences.json"
+        prefs_path.write_text(
+            json.dumps({
+                "web_search_autonomous": False,
+                "prefs_schema_version": 1,
+            }),
+            encoding="utf-8",
+        )
+
+        result = preferences.read(vault_path=tmp_path)
+        assert result["web_search_autonomous"] is False
+
+        # And no rewrite happened — file unchanged
+        on_disk = json.loads(prefs_path.read_text(encoding="utf-8"))
+        assert on_disk["web_search_autonomous"] is False
+        assert on_disk["prefs_schema_version"] == 1
+
+    def test_true_with_no_sentinel_does_not_trigger_migration(self, tmp_path):
+        """If the stored value is already True, no migration needed even
+        without the sentinel — gate is False-specific."""
+        prefs_path = tmp_path / "preferences.json"
+        prefs_path.write_text(
+            json.dumps({"web_search_autonomous": True}), encoding="utf-8"
+        )
+
+        result = preferences.read(vault_path=tmp_path)
+        assert result["web_search_autonomous"] is True
+
+        # File unchanged — no sentinel added (we don't migrate True files)
+        on_disk = json.loads(prefs_path.read_text(encoding="utf-8"))
+        assert "prefs_schema_version" not in on_disk
+
+    def test_empty_vault_does_not_trigger_migration(self, tmp_path):
+        """No file → no migration — defaults already give True."""
+        result = preferences.read(vault_path=tmp_path)
+        assert result["web_search_autonomous"] is True
+        # File should not have been created by the read
+        assert not (tmp_path / "preferences.json").exists()
+
+
 class TestStylePromptInjection:
     """Unit tests for conversational style in PromptBuilder."""
 

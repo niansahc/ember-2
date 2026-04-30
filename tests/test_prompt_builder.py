@@ -5,6 +5,8 @@ Tests for prompt assembly — verifies that the prompt sent to the model
 contains correct labels, instructions, and section structure.
 """
 
+from datetime import datetime, timedelta
+
 import pytest
 
 from src.context.models import ContextItem, ContextPacket
@@ -27,6 +29,325 @@ def _make_memory_item(content: str, item_type: str = "ingested", id: str = "m1")
         id=id, content=content, source=item_type, item_type=item_type,
         memory_type=item_type, score=0.8,
     )
+
+
+# ---------------------------------------------------------------------------
+# B-MEM-005: anti-URL rule (partial mitigation)
+# ---------------------------------------------------------------------------
+
+
+def test_instruction_section_contains_anti_url_rule() -> None:
+    """B-MEM-005 partial mitigation: the instruction section forbids inventing
+    URLs unless they came from web_search_results."""
+    pb = PromptBuilder()
+    section = pb._build_instruction_section()
+    assert "Do not invent URLs" in section
+    assert "web_search_results" in section
+
+
+# ---------------------------------------------------------------------------
+# B-MEM-003: date rendering — year for stale records
+# ---------------------------------------------------------------------------
+
+
+def _ts_days_ago(n: int) -> str:
+    """Construct an ISO-like timestamp string n days before now."""
+    return (datetime.now() - timedelta(days=n)).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def test_format_item_date_omits_year_for_recent_record() -> None:
+    """Records within 365 days render without year — keeps prompt compact."""
+    rendered = PromptBuilder._format_item_date(_ts_days_ago(30))
+    # Format: ", Mon DD"
+    assert rendered.startswith(", ")
+    # No four-digit year present
+    parts = rendered.lstrip(", ").split()
+    assert len(parts) == 2  # "Mon DD"
+    assert not any(p.isdigit() and len(p) == 4 for p in parts)
+
+
+def test_format_item_date_includes_year_for_stale_record() -> None:
+    """Records >365 days old render with year so the model anchors the
+    temporal frame correctly."""
+    rendered = PromptBuilder._format_item_date(_ts_days_ago(400))
+    expected_year = (datetime.now() - timedelta(days=400)).year
+    assert str(expected_year) in rendered
+
+
+def test_format_item_date_boundary_at_365_days() -> None:
+    """Boundary pin: 365 days = no year, 366 days = year. Off-by-one
+    regression guard."""
+    just_inside = PromptBuilder._format_item_date(_ts_days_ago(365))
+    just_over = PromptBuilder._format_item_date(_ts_days_ago(366))
+
+    year_inside = (datetime.now() - timedelta(days=365)).year
+    year_over = (datetime.now() - timedelta(days=366)).year
+
+    assert str(year_inside) not in just_inside
+    assert str(year_over) in just_over
+
+
+def test_format_item_date_handles_empty_and_invalid() -> None:
+    """Existing contract — bad input returns empty string, no exception."""
+    assert PromptBuilder._format_item_date(None) == ""
+    assert PromptBuilder._format_item_date("") == ""
+    assert PromptBuilder._format_item_date("garbage") == ""
+
+
+# ---------------------------------------------------------------------------
+# Fix 4 (2026-04-27): timestamp parser handles epoch strings as fallback for
+# pre-fix ChatGPT imports
+# ---------------------------------------------------------------------------
+
+
+def test_parse_timestamp_accepts_vault_canonical_hyphenated() -> None:
+    """The native vault format YYYY-MM-DDTHH-MM-SS parses correctly."""
+    dt = PromptBuilder._parse_timestamp("2024-05-09T14-30-00")
+    assert dt is not None
+    assert dt.year == 2024
+    assert dt.month == 5
+    assert dt.day == 9
+
+
+def test_parse_timestamp_accepts_iso_with_z():
+    dt = PromptBuilder._parse_timestamp("2024-05-09T14:30:00Z")
+    assert dt is not None
+    assert dt.year == 2024
+
+
+def test_parse_timestamp_accepts_unix_epoch_string() -> None:
+    """Pre-fix ChatGPT imports stored create_time as raw epoch float
+    string — the renderer was returning empty (silently). Now they parse."""
+    # Epoch 1715284775 = 2024-05-09 21:19:35 UTC
+    dt = PromptBuilder._parse_timestamp("1715284775")
+    assert dt is not None
+    assert dt.year == 2024
+    assert dt.month == 5
+
+
+def test_parse_timestamp_accepts_unix_epoch_with_decimals() -> None:
+    """The exact format ChatGPT exports use: float-with-microseconds."""
+    dt = PromptBuilder._parse_timestamp("1715284775.822009")
+    assert dt is not None
+    assert dt.year == 2024
+
+
+def test_parse_timestamp_returns_none_on_garbage() -> None:
+    assert PromptBuilder._parse_timestamp(None) is None
+    assert PromptBuilder._parse_timestamp("") is None
+    assert PromptBuilder._parse_timestamp("not a timestamp") is None
+
+
+def test_format_item_age_works_on_epoch_string() -> None:
+    """Regression for Fix 4: a ChatGPT-export record whose created_at is
+    a raw epoch string (~18 months ago) must produce a meaningful age
+    label, not the empty string the old parser returned."""
+    from datetime import datetime, timezone, timedelta
+    eighteen_months_ago = (datetime.now(timezone.utc) - timedelta(days=540)).timestamp()
+    rendered = PromptBuilder._format_item_age(str(eighteen_months_ago))
+    assert rendered != ""
+    assert "[recorded" in rendered
+    # 540 days = ~77 weeks
+    assert "weeks ago" in rendered or "year" in rendered.lower()
+
+
+def test_format_item_date_works_on_epoch_string() -> None:
+    """Companion to the above: _format_item_date also handles epoch input."""
+    from datetime import datetime, timezone, timedelta
+    eighteen_months_ago = (datetime.now(timezone.utc) - timedelta(days=540)).timestamp()
+    rendered = PromptBuilder._format_item_date(str(eighteen_months_ago))
+    # Stale records (>365 days) include the year per Fix 1
+    assert ", " in rendered
+    expected_year = (datetime.now() - timedelta(days=540)).year
+    assert str(expected_year) in rendered
+
+
+# ---------------------------------------------------------------------------
+# Fix 4 — ChatGPT importer normalizes epoch to ISO at write time
+# ---------------------------------------------------------------------------
+
+
+def test_chatgpt_importer_converts_epoch_to_iso() -> None:
+    """ChatGPT export's create_time is a Unix epoch float; the importer
+    must convert it to the vault's hyphenated ISO form before writing."""
+    from src.ingest.importers.chatgpt import _normalize_chatgpt_timestamp
+
+    # 1715284775.822009 → 2024-05-09T21:19:35 UTC
+    result = _normalize_chatgpt_timestamp(1715284775.822009)
+    assert result is not None
+    assert result.startswith("2024-05-09")
+    # Hyphenated time component (vault canonical), not colons
+    assert "T" in result
+    parts = result.split("T")
+    assert len(parts) == 2
+    assert "-" in parts[1]  # hyphenated time
+
+
+def test_chatgpt_importer_returns_none_for_missing_create_time() -> None:
+    from src.ingest.importers.chatgpt import _normalize_chatgpt_timestamp
+    assert _normalize_chatgpt_timestamp(None) is None
+
+
+def test_chatgpt_importer_handles_already_string_input() -> None:
+    """Defensive: if create_time is already a non-numeric string for some
+    reason, pass it through rather than raise."""
+    from src.ingest.importers.chatgpt import _normalize_chatgpt_timestamp
+    result = _normalize_chatgpt_timestamp("not-a-float")
+    assert result == "not-a-float"
+
+
+# ---------------------------------------------------------------------------
+# Fix 4 (2026-04-27): explicit vault type inventory
+# ---------------------------------------------------------------------------
+
+
+def _make_typed_item(memory_type: str, content: str = "x", id: str = "i") -> ContextItem:
+    return ContextItem(
+        id=id, content=content, source=memory_type, item_type=memory_type,
+        memory_type=memory_type, score=0.7,
+    )
+
+
+def test_inventory_appears_when_personal_intent_and_mixed_types() -> None:
+    """Fix 4: personal query + non-empty memory → inventory block emits."""
+    pb = PromptBuilder()
+    packet = ContextPacket(
+        user_message="what am i working on",
+        memory_items=[
+            _make_typed_item("conversation", id="c1"),
+            _make_typed_item("conversation", id="c2"),
+            _make_typed_item("reflection", id="r1"),
+        ],
+    )
+    section = pb._build_context_section(
+        packet, is_conversational=False, intent_class="status_state"
+    )
+    assert "[Vault inventory:]" in section
+    assert "Retrieved:" in section
+    assert "2 conversation" in section
+    assert "1 reflection" in section
+
+
+def test_inventory_lists_empty_personal_types() -> None:
+    """Fix 4: when only some personal types are retrieved, the others appear
+    in 'Not found:' — explicit absence statement."""
+    pb = PromptBuilder()
+    packet = ContextPacket(
+        user_message="catch me up on my schedule",
+        memory_items=[_make_typed_item("conversation", id="c1")],
+    )
+    section = pb._build_context_section(
+        packet, is_conversational=False, intent_class="status_state"
+    )
+    assert "Not found:" in section
+    # Each personal type that was NOT retrieved must appear in Not found
+    for absent_type in ("state", "journal", "task", "reflection", "lodestone", "profile"):
+        assert absent_type in section
+
+
+def test_inventory_does_not_duplicate_retrieved_types_in_not_found() -> None:
+    """A type that was retrieved must NOT appear in the Not found list."""
+    pb = PromptBuilder()
+    packet = ContextPacket(
+        user_message="my recent state",
+        memory_items=[_make_typed_item("state", id="s1")],
+    )
+    section = pb._build_context_section(
+        packet, is_conversational=False, intent_class="status_state"
+    )
+    # Extract the Not found line and parse out the bare type names.
+    inventory = section.split("[Vault inventory:]", 1)[1]
+    not_found_line = next(
+        ln for ln in inventory.splitlines() if ln.startswith("Not found:")
+    )
+    not_found_types = {
+        t.strip().rstrip(".") for t in not_found_line[len("Not found:"):].split(",")
+    }
+    assert "state" not in not_found_types
+
+
+def test_inventory_omitted_on_general_knowledge_query() -> None:
+    """No personal-query signal → no inventory. General-knowledge queries
+    don't need vault structure surfaced."""
+    pb = PromptBuilder()
+    packet = ContextPacket(
+        user_message="what is the capital of france",
+        memory_items=[_make_typed_item("conversation", id="c1")],
+    )
+    section = pb._build_context_section(
+        packet, is_conversational=False, intent_class="default"
+    )
+    assert "[Vault inventory:]" not in section
+
+
+def test_inventory_omitted_on_conversational() -> None:
+    """Conversational check-ins shouldn't surface vault structure either."""
+    pb = PromptBuilder()
+    packet = ContextPacket(
+        user_message="how are you",
+        memory_items=[_make_typed_item("conversation", id="c1")],
+    )
+    section = pb._build_context_section(
+        packet, is_conversational=True, intent_class="default"
+    )
+    assert "[Vault inventory:]" not in section
+
+
+def test_inventory_omitted_when_memory_empty() -> None:
+    """Empty memory uses the ZERO/neutral branch, not the inventory."""
+    pb = PromptBuilder()
+    packet = ContextPacket(user_message="my schedule", memory_items=[])
+    section = pb._build_context_section(
+        packet, is_conversational=False, intent_class="default"
+    )
+    assert "[Vault inventory:]" not in section
+
+
+def test_inventory_renders_none_for_not_found_when_all_types_present() -> None:
+    """When every personal type is represented, Not found: none."""
+    pb = PromptBuilder()
+    packet = ContextPacket(
+        user_message="my full picture",
+        memory_items=[_make_typed_item(t, id=f"i{i}") for i, t in enumerate(
+            ("conversation", "journal", "state", "task", "reflection", "lodestone", "profile")
+        )],
+    )
+    section = pb._build_context_section(
+        packet, is_conversational=False, intent_class="status_state"
+    )
+    assert "[Vault inventory:]" in section
+    assert "Not found: none" in section
+
+
+def test_build_vault_inventory_helper_directly() -> None:
+    """Direct unit test of the helper — counts, formats, lists absences."""
+    items = [
+        _make_typed_item("conversation", id="c1"),
+        _make_typed_item("conversation", id="c2"),
+        _make_typed_item("state", id="s1"),
+    ]
+    block = PromptBuilder._build_vault_inventory(items)
+    assert block.startswith("[Vault inventory:]")
+    assert "2 conversation" in block
+    assert "1 state" in block
+    # journal/task/reflection/lodestone/profile absent
+    for absent in ("journal", "task", "reflection", "lodestone", "profile"):
+        assert absent in block
+
+
+def test_build_vault_inventory_helper_returns_empty_on_no_items() -> None:
+    assert PromptBuilder._build_vault_inventory([]) == ""
+
+
+def test_instruction_section_preserves_existing_domain_citation_example() -> None:
+    """The new anti-URL rule must NOT break the existing domain-citation
+    example at the web_search_results instruction. Domain citations are
+    legitimate when sourced from web results."""
+    pb = PromptBuilder()
+    section = pb._build_instruction_section()
+    # The existing example: "(source: example.com)" — a domain, not a URL.
+    # Must remain present so the model knows domain citations are allowed.
+    assert "(source: example.com)" in section
 
 
 # ---------------------------------------------------------------------------
@@ -70,17 +391,17 @@ class TestIdentityInstructionRule:
         pb = PromptBuilder()
         instructions = pb._build_instruction_section()
         assert "answer as Ember" in instructions
-        assert "vault_memory describes the person you are talking to, not yourself" in instructions
+        assert "memory describes the person you are talking to, not yourself" in instructions
 
-    def test_instruction_contains_identity_rule_in_behavior_rules(self):
+    def test_instruction_contains_identity_rule_in_response_guidelines(self):
         pb = PromptBuilder()
         instructions = pb._build_instruction_section()
-        assert "BEHAVIOR RULES:" in instructions
-        # The identity rule should be inside the behavior rules block
+        assert "Response guidelines:" in instructions
+        # The identity rule should be inside the response guidelines block
         lines = instructions.split("\n")
-        behavior_start = next(i for i, l in enumerate(lines) if "BEHAVIOR RULES:" in l)
-        behavior_lines = lines[behavior_start:]
-        identity_lines = [l for l in behavior_lines if "answer as Ember" in l]
+        guidelines_start = next(i for i, l in enumerate(lines) if "Response guidelines:" in l)
+        guidelines_lines = lines[guidelines_start:]
+        identity_lines = [l for l in guidelines_lines if "answer as Ember" in l]
         assert len(identity_lines) == 1
 
 
@@ -117,11 +438,16 @@ class TestContextSectionStructure:
         assert "[Retrieved memory:]" not in prompt
 
     def test_empty_memory_shows_absence_signal(self):
+        """General query with empty memory now emits a neutral empty-state
+        marker — Fix 2 (2026-04-27) gates the ZERO confidence block on
+        personal-vault queries only. The personal-query branch (which still
+        emits the ZERO block + 'I don't have that in my memory') is covered
+        in tests/test_hallucination_empty_retrieval.py."""
         pb = PromptBuilder()
         packet = ContextPacket(user_message="hello", memory_items=[])
         prompt = pb._build_context_section(packet)
-        assert "No relevant memory found for this query" in prompt
-        assert "I don't have that in my memory" in prompt
+        assert "<memory>" in prompt
+        assert "No retrieved memory" in prompt
 
 
 class TestDateSection:

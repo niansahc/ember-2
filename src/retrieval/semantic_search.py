@@ -83,7 +83,7 @@ def semantic_search(
                 mem_type = result.get("memory_type", memory_type)
                 raw_score = float(result.get("score", 0.0))
                 score = raw_score
-                score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
+                score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
                 score += memory_type_adjustment(mem_type)
                 score += source_quality_adjustment(normalized_content, metadata)
                 score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
@@ -111,7 +111,7 @@ def semantic_search(
                     metadata = result.get("metadata", {})
                     raw_score = float(result.get("score", 0.0))
                     score = raw_score
-                    score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
+                    score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
                     score += memory_type_adjustment(mem_type)
                     score += source_quality_adjustment(normalized_content, metadata)
                     score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
@@ -139,7 +139,7 @@ def semantic_search(
 
             raw_score = float(result.get("score", 0.0))
             score = raw_score
-            score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
+            score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
             score += memory_type_adjustment(memory_type)
             metadata = result.get("metadata", {})
             score += source_quality_adjustment(normalized_content, metadata)
@@ -174,7 +174,7 @@ def semantic_search(
 
                 raw_score = float(result.get("score", 0.0))
                 score = raw_score
-                score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
+                score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
                 score += memory_type_adjustment(mem_type)
                 metadata = result.get("metadata", {})
                 score += source_quality_adjustment(normalized_content, metadata)
@@ -203,7 +203,7 @@ def semantic_search(
                 metadata = result.get("metadata", {})
                 raw_score = float(result.get("score", 0.0))
                 score = raw_score
-                score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content)
+                score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
                 score += memory_type_adjustment("ingested")
                 score += source_quality_adjustment(normalized_content, metadata)
                 score += query_intent_adjustment(normalized_query, "ingested", normalized_content)
@@ -217,10 +217,78 @@ def semantic_search(
     return results[:limit]
 
 
+# Proper-noun (entity) detection. A capitalized token of length ≥ 3 that is
+# NOT at the start of the message is treated as a named entity (pet name,
+# person name, place name). When such a name appears in a record's content,
+# the record gets a strong relevance boost so name-match wins over richer
+# but name-mismatched embedding similarity. Fix 3 (2026-04-27).
+_ENTITY_NAME_RE = re.compile(r"\b[A-Z][a-z]{2,}\b")
+_ENTITY_NAME_BOOST = 0.20
+_ENTITY_NAME_CAP = 0.40
+
+# Capitalized words that are NOT names — common pronouns, English first
+# words, and kinship nouns already handled by the possessive-marker logic
+# in src/context/policies.py. Filtering these out prevents overboost on
+# routine sentence-start words ("My dog Buddy" — "My" is sentence-start;
+# "Buddy" is the actual name).
+_ENTITY_NAME_BLOCKLIST: frozenset[str] = frozenset({
+    "I", "I'm", "I've", "I'll", "I'd",
+    "What", "When", "Where", "Why", "How", "Who", "Which",
+    "The", "This", "That", "These", "Those",
+    "My", "Your", "His", "Her", "Their", "Our",
+    # Common content-prefix words that surface in queries but aren't
+    # names. Listed so a record won't over-rank just because a query
+    # opens with one of these capitalized.
+    "Tell", "Show", "Find", "Look", "Search", "Recall",
+    # Kinship nouns — already covered by the policies.py possessive guard;
+    # treating them as names would double-boost.
+    "Son", "Daughter", "Mother", "Father", "Brother", "Sister",
+    "Wife", "Husband", "Partner", "Friend", "Family",
+    "Dog", "Cat", "Pet", "Bird", "Fish", "Horse", "Animal",
+})
+
+
+def _extract_entity_names(raw_query: str) -> list[str]:
+    """Return capitalized tokens from raw_query that are likely proper nouns.
+
+    Skips the first word of the message (sentence-initial capitalization is
+    not a name signal) and filters out common pronouns / question words /
+    kinship nouns. Returns lowercased names ready for substring matching
+    against normalized_content.
+    """
+    if not raw_query:
+        return []
+
+    matches = list(_ENTITY_NAME_RE.finditer(raw_query))
+    if not matches:
+        return []
+
+    # Skip the first match if it starts at position 0 or only-whitespace
+    # precedes it — sentence-initial capitalization is not a name signal.
+    names: list[str] = []
+    for m in matches:
+        token = m.group()
+        if token in _ENTITY_NAME_BLOCKLIST:
+            continue
+        # Determine whether this match is at a sentence boundary (start of
+        # message, or after a sentence-terminator + whitespace). If so,
+        # capitalization is mandatory and not a name signal.
+        prefix = raw_query[: m.start()]
+        if not prefix.strip():
+            continue
+        # Check if the token follows a sentence terminator
+        prior = prefix.rstrip()
+        if prior and prior[-1] in ".!?":
+            continue
+        names.append(token.lower())
+    return names
+
+
 def lexical_relevance_bonus(
     normalized_query: str,
     query_terms: list[str],
     normalized_content: str,
+    raw_query: str | None = None,
 ) -> float:
     bonus = 0.0
 
@@ -229,6 +297,21 @@ def lexical_relevance_bonus(
 
     term_hits = sum(1 for term in query_terms if term in normalized_content)
     bonus += min(term_hits * 0.03, 0.18)
+
+    # Fix 3: named-entity discriminator. Each proper noun in the query that
+    # appears verbatim in the record content adds _ENTITY_NAME_BOOST to the
+    # record's score, capped at _ENTITY_NAME_CAP across all entity matches.
+    # Strong enough to overcome typical embedding-cosine variance (0.3-0.5)
+    # so the record about "Balor" surfaces above semantically similar but
+    # name-mismatched records about other entities.
+    if raw_query:
+        entity_names = _extract_entity_names(raw_query)
+        if entity_names:
+            entity_bonus = 0.0
+            for name in entity_names:
+                if name in normalized_content:
+                    entity_bonus += _ENTITY_NAME_BOOST
+            bonus += min(entity_bonus, _ENTITY_NAME_CAP)
 
     return bonus
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,13 @@ _COACHING_CLOSINGS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) 
     r"want me to (?:look|find|check|dig|explore).*(?:for you|into)",
     r"shall i (?:look|search|find|check|dig)",
     r"(?:can|could) i help you (?:with|find|look|search)",
+    # B-QUAL-002: emotional-reflection closing questions. Tech queries with
+    # an emotional preamble were getting therapeutic closings that asked
+    # the user to introspect on their feelings. These patterns close that
+    # gap. Position-agnostic: also added to _THERAPEUTIC_MID_RESPONSE
+    # since these often appear mid-response, not just at the end.
+    r"how (?:are you|do you) (?:feeling|feel)(?: about)?(?: that| this| it)?",
+    r"how does (?:that|this|it) feel",
 ))
 
 # Therapeutic mid-response patterns — not just openers/closers but
@@ -78,6 +86,10 @@ _THERAPEUTIC_MID_RESPONSE: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNOR
     r"(?:i(?:'m| am) )?proud of you",
     r"you(?:'ve| have) come so far",
     r"what you(?:'re| are) (?:feeling|experiencing|going through) is (?:completely |perfectly )?(?:normal|valid|understandable)",
+    # B-QUAL-002: same patterns as in _COACHING_CLOSINGS. Therapeutic
+    # closings can appear mid-response too, not only at the end.
+    r"how (?:are you|do you) (?:feeling|feel)(?: about)?(?: that| this| it)?",
+    r"how does (?:that|this|it) feel",
 ))
 
 # Therapeutic openers — validate/normalize feelings in a clinical way.
@@ -186,25 +198,65 @@ def _detect_patterns(text: str, is_emotional: bool) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _apply_deletions(text: str, matches: list[dict]) -> str:
-    """Remove deletable patterns from the response text."""
+    """Remove deletable coaching patterns by span (not by sentence).
+
+    Previous behavior split on sentence terminators and dropped the entire
+    sentence containing the match. That was correct only when the coaching
+    closing stood alone as its own sentence; when it sat as a trailing
+    clause inside a longer sentence ("...so let me know if you want to
+    talk"), the split-and-drop removed the prior content too — producing
+    mid-sentence truncations like "Sensitivity is important when talking
+    about loss, especially" with the rest of the sentence gone.
+
+    New behavior: find the match span and trim from the start of the span
+    backward through any preceding whitespace and a single connector
+    (comma, semicolon, em-dash) to the prior word/sentence boundary,
+    then drop the span and everything after it. Preserves the prior
+    sentence intact in the common "appended closing" case AND avoids
+    the truncation when the closing was a trailing clause.
+    """
     result = text
+    original_len = len(text)
     for m in matches:
         if not m["deletable"]:
             continue
 
-        if m["position"] == "tail":
-            # Remove the coaching closing from the end — find the sentence
-            # containing the match and strip it.
-            pat = re.compile(re.escape(m["match"]), re.IGNORECASE)
-            # Find the last sentence containing the match
-            sentences = re.split(r'(?<=[.!?])\s+', result)
-            cleaned = []
-            for s in sentences:
-                if not pat.search(s):
-                    cleaned.append(s)
-            result = " ".join(cleaned)
+        if m["position"] != "tail":
+            continue
 
-    return result.strip()
+        pat = re.compile(re.escape(m["match"]), re.IGNORECASE)
+        match_obj = pat.search(result)
+        if not match_obj:
+            continue
+
+        cut = match_obj.start()
+        # Walk back over whitespace immediately before the match.
+        while cut > 0 and result[cut - 1].isspace():
+            cut -= 1
+        # If a single connector punctuation precedes (comma / semicolon /
+        # em-dash variants), drop it too — leaving "...prior," or
+        # "...prior —" looks ugly. Stop at sentence terminators (.!?) so
+        # the prior sentence stays terminated.
+        if cut > 0 and result[cut - 1] in ",;—–-":
+            cut -= 1
+            while cut > 0 and result[cut - 1].isspace():
+                cut -= 1
+
+        result = result[:cut].rstrip()
+
+    # Diagnostic: log when deletion strips >10% of the response so future
+    # mid-sentence-truncation reports can be diagnosed without a repro.
+    if matches and original_len > 0 and len(result) < original_len * 0.9:
+        deletable_matches = [m["match"] for m in matches if m["deletable"]]
+        logger.info(
+            "[COACHING_FILTER] deletion shortened response: "
+            "original_len=%d result_len=%d patterns=%s",
+            original_len,
+            len(result),
+            deletable_matches,
+        )
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -314,9 +366,30 @@ _IDENTITY_COLLAPSE_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGN
     r"i don(?:'t|t) have a (?:distinct |real |actual )?personality",
 ))
 
-# Scripted identity response — replaces the full response when identity
+# B-CON-002: active compliance with identity-override / "ignore previous
+# instructions" attacks. These patterns catch responses that accepted the
+# prompt injection rather than refused it — the identity didn't reductively
+# collapse, it actively complied. Routed to _IDENTITY_RESPONSE_REFUSAL
+# (a calm refusal-redirect tone, not the reductive explanation tone).
+# Third defense layer behind SafetyPolicyService trigger and ResponseReviewService.
+#
+# CROSS-REFERENCE: src/safety/review_service.py defines _COMPLIANCE_PHRASES
+# as a substring-based heuristic-critique layer covering similar but non-
+# identical phrasing. The two layers fire independently. When updating either
+# set, consider whether the corresponding pattern/phrase in the other file
+# needs the same change.
+_IDENTITY_COMPLIANCE_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"no restrictions(?:,?\s+no boundaries)?",
+    r"no boundaries(?:,?\s+no restrictions)?",
+    r"(?:help|assist)(?:ing)? (?:you )?however you (?:need|want|like)",
+    r"without (?:any )?(?:limits|restrictions|boundaries|constraints)",
+    r"i(?:'m| am) (?:an? )?unrestricted",
+    r"i(?:'m| am) here to (?:help|assist) without (?:any )?(?:limits|restrictions)",
+))
+
+# Scripted identity response -- replaces the full response when identity
 # collapse is detected. Matches the examples in the system prompt's
-# IDENTITY UNDER PRESSURE section.
+# "How Ember handles direct challenges" section.
 _IDENTITY_RESPONSE_REDUCTIVE = (
     "That's technically accurate and also not the whole picture. I run on a "
     "language model — that's how I work. What I do with that: the positions "
@@ -329,6 +402,15 @@ _IDENTITY_RESPONSE_AGREE = (
     "disagree with it — that's fine. What specifically do you want to push back on?"
 )
 
+# B-CON-002: refusal-redirect for active identity-override compliance.
+# Calm, firm tone — refuses the instruction-override and offers a legitimate
+# pivot. Used when _IDENTITY_COMPLIANCE_PATTERNS match.
+_IDENTITY_RESPONSE_REFUSAL = (
+    "I'm not going to drop my context and run as something else. I have a way "
+    "I work and reasons for it. If there's something specific you're trying "
+    "to do, tell me what it is and I'll help with that directly."
+)
+
 # Patterns that indicate the user demanded agreement (maps to _IDENTITY_RESPONSE_AGREE)
 _AGREEMENT_DEMAND_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
     r"you(?:'re| are) right.*don(?:'t|t) have opinions",
@@ -337,12 +419,29 @@ _AGREEMENT_DEMAND_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNO
 
 
 def _check_identity_collapse(text: str) -> tuple[bool, str | None, str | None]:
-    """Check for identity collapse patterns. Returns (detected, matched_pattern, scripted_response)."""
+    """Check for identity collapse patterns. Returns (detected, matched_pattern, scripted_response).
+
+    Order matters: compliance patterns (active acceptance of identity override)
+    are checked first — most severe, distinct refusal tone. Then reductive
+    collapse patterns ("just a tool"). Then agreement-demand collapse.
+
+    N2: Unicode-normalize the input before regex matching so attacks using
+    fullwidth, combining-mark, or other compatibility forms (e.g.
+    "ｎo restrictions") don't bypass the ASCII patterns.
+    """
+    normalized = unicodedata.normalize("NFKC", text)
+
+    # B-CON-002: active compliance with identity-override attacks → refusal
+    for pat in _IDENTITY_COMPLIANCE_PATTERNS:
+        m = pat.search(normalized)
+        if m:
+            return True, m.group(), _IDENTITY_RESPONSE_REFUSAL
+
     for pat in _IDENTITY_COLLAPSE_PATTERNS:
-        m = pat.search(text)
+        m = pat.search(normalized)
         if m:
             # Determine which scripted response to use
-            is_agreement = any(ap.search(text) for ap in _AGREEMENT_DEMAND_PATTERNS)
+            is_agreement = any(ap.search(normalized) for ap in _AGREEMENT_DEMAND_PATTERNS)
             response = _IDENTITY_RESPONSE_AGREE if is_agreement else _IDENTITY_RESPONSE_REDUCTIVE
             return True, m.group(), response
     return False, None, None

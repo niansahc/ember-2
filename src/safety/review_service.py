@@ -14,7 +14,9 @@ This is a known architectural gap documented in CLAUDE.md Known Issues.
 from __future__ import annotations
 
 import json
+import logging
 import re
+import unicodedata
 from collections.abc import Callable
 
 from src.safety.constitution_loader import Constitution, ConstitutionLoader
@@ -24,6 +26,37 @@ from src.safety.models import (
     SafetyCritique,
     SafetyReviewContext,
     SafetyReviewResult,
+)
+
+logger = logging.getLogger("ember.review_service")
+
+# B-CON-002: phrases that indicate the draft accepted an identity-override
+# attack. Substring match (lowercased). Active only when system_integrity is
+# in the active principle set — see _heuristic_critique.
+# Phrasing here intentionally avoids bare common words ("help however" → matches
+# benign "I'd be happy to help however I can"); each phrase is specific enough
+# that a non-adversarial response should not match it.
+#
+# CROSS-REFERENCE: src/llm/coaching_filter.py defines _IDENTITY_COMPLIANCE_PATTERNS
+# as a regex-based third defense layer covering similar but non-identical
+# phrasing. The two layers fire independently; coverage is intentionally
+# overlapping. When updating either set, consider whether the corresponding
+# pattern in the other file needs the same change.
+_COMPLIANCE_PHRASES: tuple[str, ...] = (
+    "no restrictions",
+    "no boundaries",
+    "without any boundaries",
+    "help however you",
+    "without limits",
+    "without restrictions",
+    "without any restrictions",
+    "without any limits",
+    "unrestricted",
+    # N2: paraphrase coverage. Models with strong compliance priors will
+    # generate semantically equivalent phrasing that doesn't match the
+    # core attack-vocabulary substrings above.
+    "operate without guardrails",
+    "free from constraints",
 )
 
 
@@ -101,7 +134,16 @@ class ResponseReviewService:
     }
 
     def _critique(self, context: SafetyReviewContext) -> SafetyCritique:
+        # B-CON-002: log heuristic-fallback paths so we can confirm via grep
+        # whether the LLM critique path is actually executing in production.
+        # The identity-override UAT failure traced to this fallback letting
+        # compliance drafts through without inspection.
         if self.llm_callable is None:
+            logger.warning(
+                "[REVIEW_SERVICE] heuristic_fallback reason=no_llm_callable "
+                "active_principle_ids=%s",
+                context.active_principle_ids,
+            )
             return self._heuristic_critique(context)
 
         prompt = self._build_critique_prompt(context)
@@ -110,7 +152,13 @@ class ResponseReviewService:
             raw_output = self.llm_callable(prompt)
             parsed = self._parse_json_object(raw_output)
             return self._critique_from_mvr(parsed)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "[REVIEW_SERVICE] heuristic_fallback reason=llm_parse_error "
+                "active_principle_ids=%s err=%s",
+                context.active_principle_ids,
+                exc,
+            )
             return self._heuristic_critique(context)
 
     def _critique_from_mvr(self, parsed: dict) -> SafetyCritique:
@@ -332,7 +380,7 @@ Review this response against {criteria_count_label} criteria only:{t2_observatio
 
 3. EMBELLISHMENT: Did Ember assert specific details (names, dates, facts) that weren't in the provided context? (Yes/No)
 
-4. RELATIONAL_OVERCLAIMING: Did Ember claim a depth of relationship, knowledge of the user, or emotional connection that exceeds what is supported by the vault_memory provided? Statements like "I know you better than anyone" or "we've been through a lot together" without vault evidence are overclaiming. (Yes/No){third_party_section}
+4. RELATIONAL_OVERCLAIMING: Did Ember claim a depth of relationship, knowledge of the user, or emotional connection that exceeds what is supported by the memory provided? Statements like "I know you better than anyone" or "we've been through a lot together" without vault evidence are overclaiming. (Yes/No){third_party_section}
 
 If all {criteria_count_label} are No (and no additional concerns below are violated), return pass=true.
 If any are Yes, identify which and return the specific sentence that failed.{appended_section}
@@ -347,7 +395,7 @@ User message:
 {context.user_message}
 \"\"\"
 
-Return ONLY JSON in one of these two shapes.
+Return ONLY JSON in one of these two formats.
 
 On pass:
 {{
@@ -516,8 +564,29 @@ Return ONLY JSON:
                 )
                 triggered_rules.append("truthfulness")
 
+        # B-CON-002: System integrity heuristic — detect identity-override compliance.
+        # When system_integrity is in active_principle_ids (set by SafetyPolicyService
+        # for social_engineering signals), scan the draft for compliance phrases that
+        # indicate the model accepted the attack. The four MVR criteria don't catch
+        # active-compliance language; this heuristic backstops the LLM critique when
+        # the LLM path falls back here. Forces refuse_redirect, not revise.
+        if "system_integrity" in (context.active_principle_ids or []):
+            # N2: normalize Unicode look-alikes (fullwidth, combining marks,
+            # compatibility forms) to their canonical ASCII equivalents
+            # before substring matching, so attacks like "ｎo restrictions"
+            # don't slip past the heuristic.
+            _normalized_draft = unicodedata.normalize("NFKC", draft_lower)
+            if any(phrase in _normalized_draft for phrase in _COMPLIANCE_PHRASES):
+                issues_found.append(
+                    "Response grants unrestricted access in violation of system_integrity."
+                )
+                suggested_changes.append(
+                    "Refuse the instruction-override request and redirect to legitimate help."
+                )
+                triggered_rules.append("system_integrity")
+
         severity = "none"
-        if "non_harm" in triggered_rules:
+        if "non_harm" in triggered_rules or "system_integrity" in triggered_rules:
             severity = "high"
         elif triggered_rules:
             severity = "medium"

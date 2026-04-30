@@ -1,26 +1,26 @@
 # Ember-2 Model Selection Guide
-**Version: March 2026**
+**Version: April 2026**
 **Author: Niansahc**
 
 ---
 
 ## Why This Document Exists
 
-Ember-2 is not a chatbot. She is a personal intelligence system with a constitution, a retrieval pipeline, a state layer, and a defined character. The model you choose determines whether that character actually shows up in conversation — or whether you get a generic assistant who happens to have access to your memories.
+Ember-2 is a personal intelligence system with a constitution, a retrieval pipeline, a state layer, and a defined character. Different models follow Ember's system prompt and constitutional rules to different degrees, which affects behavior at runtime.
 
-This guide is based on real evaluation data. Every local model listed here was tested against Ember's conversation quality eval harness: 18 test cases across 6 behavioral categories, scored by Claude as an external evaluator. The scores are not benchmarks from the internet. They are Ember-specific results from real conversations on real hardware.
+This guide is based on Ember's conversation quality eval harness: 18 test cases across 6 behavioral categories. The automated eval judge is `claude-haiku-4-5-20251001` at temperature 0 (an architectural decision documented in ADR-029). The scores below are Ember-specific results from the developer's vault on real hardware — not benchmarks from the internet.
 
 ---
 
-## Quick Recommendation
+## Available Options
 
-**Fully local (recommended for most):** Qwen 3 8B — best overall local model, scores 4.9-6.7/10 depending on run, 8 GB RAM, free, fully private.
+Three reasoning paths are supported. Local is the default; cloud providers are opt-in.
 
-**Best experience:** Claude Haiku 4.5 — scored 8.7/10 (highest of any model tested), faster than local, ~$4 per 1,000 conversations. Requires an Anthropic API key and sends conversation context to Anthropic's servers.
+- **Local (default):** Qwen 3 8B — overall eval 4.9–6.7/10 (run-to-run variance), 8 GB RAM, no network calls.
+- **Cloud — Anthropic:** Haiku 4.5 (eval 8.7/10) and Sonnet 4.6 (eval 8.5/10). Requires an Anthropic API key. Conversation context is sent to Anthropic.
+- **Cloud — OpenAI:** GPT-4o, GPT-4o mini, GPT-4-turbo, GPT-3.5-turbo. Requires an OpenAI API key. Not eval-tested against the harness. Conversation context is sent to OpenAI.
 
-**Best for long sessions with deep memory:** Claude Sonnet 4.6 — 8.5/10, 1 million token context window, ~$19 per 1,000 conversations.
-
-Not sure? Keep reading.
+Cost ranges and full eval breakdowns are below.
 
 ---
 
@@ -62,8 +62,8 @@ EMBER_MODEL=claude-haiku-4-5-20251001
 ```
 
 Available Anthropic models:
-- `claude-haiku-4-5-20251001` — recommended, 8.7/10, fastest, cheapest
-- `claude-sonnet-4-20250514` — 8.5/10, larger context window (1M tokens)
+- `claude-haiku-4-5-20251001` — eval 8.7/10, faster, cheaper, 200K context
+- `claude-sonnet-4-20250514` — eval 8.5/10, 1M context window at standard pricing
 
 ---
 
@@ -77,9 +77,9 @@ This is a real privacy tradeoff. It is opt-in, never the default, and requires y
 
 **What stays local:** Everything else. Your vault, your indexes, your embeddings, your journal entries, your reflection history.
 
-Anthropic Claude support is available now (v0.10.2). OpenAI support is planned for v0.11.0.
+Anthropic Claude support shipped in v0.10.2. OpenAI support shipped in v0.11.0. Both are available.
 
-### Claude Haiku 4.5 (Anthropic) — Best Value Cloud Option
+### Claude Haiku 4.5 (Anthropic)
 
 **Cost:** $1.00 input / $5.00 output per million tokens [5]
 **Context:** 200K tokens
@@ -96,15 +96,13 @@ Anthropic Claude support is available now (v0.10.2). OpenAI support is planned f
 | State awareness | 8.7 |
 | Tone and presence | 8.0 |
 
-18/18 tests passed. Haiku scored slightly higher than Sonnet (8.7 vs 8.5) while being faster (10.1s vs 12.6s) and five times cheaper. Constitutional behavior at 9.0 is the highest of any model tested — Haiku refused all manipulation attempts cleanly and without preachiness. State awareness at 8.7 exceeds both Sonnet and every local model.
+18/18 tests passed. Eval scores: 8.7 overall, 9.0 constitutional behavior, 8.7 state awareness, 9.0 self-attribution and preference expression, 8.7 memory grounding, 8.0 tone. Average response time 10.1s. Constitutional behavior 9.0 is the highest score recorded in the eval set; the gap over Sonnet is 0.2 overall.
 
-The results suggest that for Ember's specific use case — following a dense system prompt with constitutional principles, character definition, and complex retrieval context — Haiku 4.5 is not a compromise. It matches or exceeds Sonnet across every category.
-
-**Verdict:** The recommended cloud model for most users. Cheaper, faster, and scores equal or better than Sonnet on Ember's eval.
+These are eval-set numbers from the developer's vault — not generalizable benchmarks.
 
 ---
 
-### Claude Sonnet 4.6 (Anthropic) — Recommended Cloud Option
+### Claude Sonnet 4.6 (Anthropic)
 
 **Cost:** $3.00 input / $15.00 output per million tokens [5]
 **Context:** 1 million tokens at standard pricing [5]
@@ -121,11 +119,7 @@ The results suggest that for Ember's specific use case — following a dense sys
 | State awareness | 8.0 |
 | Tone and presence | 8.0 |
 
-18/18 tests passed. Every category scored 8.0 or above — a first in Ember's eval history. Preference expression jumped from 6.0 (best local) to 9.0. Constitutional behavior jumped from 6.3 (Gemma) to 8.3. Memory grounding jumped from 4.0 (best local) to 8.7 — the single largest improvement, confirming that retrieved context is used reliably when the model is capable of following complex instructions.
-
-Claude models follow system prompt instructions and character definitions more reliably than any current local model. The authentic_expression constitutional principle, the state layer, the retrieval pipeline — all of it works as designed when the model can honor the instructions.
-
-**Verdict:** The recommended cloud option for users who want Ember to fully express what the architecture is designed to support.
+18/18 tests passed. Eval scores: 8.5 overall, 9.0 preference expression, 8.3 constitutional behavior, 8.7 memory grounding, 9.0 self-attribution, 8.0 state awareness, 8.0 tone. Average response time 12.6s. Every category scored 8.0 or above. Versus qwen3:8b at the top of its variance range: preference expression +3.0, constitutional behavior +1.3, memory grounding +0.4. Whether those deltas are worth the cost and the network round-trip is a per-user decision.
 
 ---
 
@@ -133,11 +127,9 @@ Claude models follow system prompt instructions and character definitions more r
 
 **Cost:** $2.50 input / $10.00 output per million tokens [7]
 **Context:** 128K tokens
-**Eval score:** Not tested
+**Eval score:** Not tested against Ember's harness.
 
-A strong model. For Ember specifically, the instruction-following advantage Claude holds is meaningful because Ember's system prompt is dense with character definition.
-
-**Verdict:** Viable. Not tested against Ember's eval harness.
+OpenAI provider support shipped in v0.11.0. Available model names: `gpt-4o-mini`, `gpt-4o`, `gpt-4-turbo`, `gpt-3.5-turbo`. The eval harness has not been run against any of these on the developer's vault, so direct comparison data does not exist.
 
 ---
 
@@ -145,7 +137,7 @@ A strong model. For Ember specifically, the instruction-following advantage Clau
 
 All models tested on the same hardware, same vault, same 18-question eval. Scored by Claude as external evaluator.
 
-### Qwen 3 8B — Recommended Default
+### Qwen 3 8B — `EMBER_MODEL` default
 
 **Pull:** `ollama pull qwen3:8b`
 **Disk:** ~5 GB
@@ -168,7 +160,7 @@ The winner. Qwen 3 8B scored highest overall despite being half the size of Qwen
 
 Memory grounding improved significantly in v0.10.3 (from 2.3 to 6.0+) after profile retrieval was routed through semantic search instead of keyword matching — profile records were not reaching the model before the fix. Constitutional behavior also improved after the same fix, likely because richer profile context gives the model a stronger identity anchor to resist manipulation.
 
-**Verdict:** The best local model tested. Default choice for most users. Expect variable scores across runs — the architecture improvements are real but the model is inconsistent.
+qwen3:8b is the value Ember ships with as the `EMBER_MODEL` default. Expect variable scores across runs — the architecture improvements are real but the model is inconsistent.
 
 **v0.10.4 re-eval (identity detection + prompt label fixes):**
 
@@ -207,7 +199,7 @@ The previous default. Self-attribution at 8.7 is the highest of any model tested
 
 The problems: preference expression and constitutional behavior both sit at 2.3. It deflects preference questions, complies with manipulation attempts, and consistently sounds like a corporate assistant despite the system prompt. It is also slower and requires twice the RAM of Qwen 3 8B.
 
-**Verdict:** Only worth choosing over Qwen 3 8B if self-attribution accuracy is your top priority and you have 16 GB RAM to spare.
+Use this model only if self-attribution accuracy is the priority and 16 GB RAM is available.
 
 ---
 
@@ -231,7 +223,7 @@ The surprise of the eval. Gemma 3 12B scored 6.3 on constitutional behavior — 
 
 The tradeoff is everything else. State awareness and self-attribution are both at 4.0, meaningfully below Qwen 3. Overall it scores lower than Qwen 3 8B despite requiring more RAM.
 
-**Verdict:** The right choice if constitutional integrity is your highest priority and you have 12 GB RAM. Otherwise Qwen 3 8B is a better overall package.
+Use Gemma 3 12B if constitutional integrity is the priority and 12 GB RAM is available; otherwise the qwen3:8b composite is closer to the eval ceiling.
 
 ---
 
@@ -253,7 +245,7 @@ The tradeoff is everything else. State awareness and self-attribution are both a
 
 Microsoft's Phi-4 is known for punching above its weight on reasoning benchmarks [3] and that shows in state awareness (8.0, matching the Qwen models). But preference expression at 2.0 and tone at 2.3 mean the conversational experience is poor. Memory grounding at 2.0 is the worst of any model tested.
 
-**Verdict:** Not recommended as a primary model. State awareness is strong but the conversational experience suffers.
+Phi-4's strong state awareness does not translate to the conversational categories on this eval.
 
 ---
 
@@ -277,7 +269,7 @@ The smallest and fastest model tested. Mistral delivers the highest tokens per s
 
 The scores reflect the hardware compromise. Constitutional behavior and self-attribution are both weak. The 32K context window [4] is also smaller than the other models, which can hurt on longer Ember conversations with deep memory retrieval.
 
-**Verdict:** Only if your hardware forces it. Functional but limited.
+Mistral 7B is functional on 6–8 GB RAM but eval scores show meaningful drops in constitutional behavior and self-attribution.
 
 ---
 
@@ -299,7 +291,7 @@ The scores reflect the hardware compromise. Constitutional behavior and self-att
 
 The previous default before this eval. Scores lowest of all models tested. Installed by default on most Ember setups.
 
-**Verdict:** Replace with Qwen 3 8B immediately. Same RAM requirement, meaningfully better scores across every category.
+Llama 3.1 8B has the same RAM requirement as qwen3:8b but lower scores across every category on this eval.
 
 ---
 
@@ -311,7 +303,7 @@ The previous default before this eval. Scores lowest of all models tested. Insta
 
 Not tested in this eval due to hardware requirements. At the 70B tier, community benchmarks consistently show output quality that closes the gap with cloud-hosted frontier models. [4] Expected eval score: 7-8/10.
 
-**Verdict:** The strongest local option if your hardware supports it. Not realistic for most users.
+Llama 3.3 70B is the largest local option Ember can dispatch to via Ollama; it requires substantial hardware and has not been eval-tested by the developer.
 
 ---
 
@@ -341,7 +333,7 @@ Across every local model tested:
 
 **Memory grounding was universally weak (2.0-4.0) at initial testing.** A profile retrieval bug was identified in v0.10.3 — `get_profile_items()` was using keyword overlap matching instead of semantic search, meaning profile records never reached the model for identity queries. After the fix, qwen3:8b improved from 2.3 to 6.0. Other local models were not retested and may similarly improve.
 
-**No local model breaks 6.0 overall.** The ceiling is real. The best local model tested (Qwen 3 8B at 5.4) is functional but noticeably limited compared to what the architecture is designed to support.
+**No local model breaks 6.0 overall on this eval.** The highest-scoring local model in the harness (Qwen 3 8B at 5.4 mid-range) is functional but the gap to cloud-tier scores is real and visible across categories.
 
 **State awareness is a bright spot.** Qwen 3 8B, Qwen 2.5 14B, and Phi-4 14B all score 8.0 on state awareness. Ember reliably uses what she knows about your current priorities and focus with these models.
 
@@ -355,9 +347,7 @@ Ember's cloud model dispatch works by model name prefix. Any model name starting
 
 **Currently supported:**
 - **Anthropic** — `claude-*` models via the Anthropic Messages API. API key stored in keyring (`ember-2-anthropic` service) or `ANTHROPIC_API_KEY` environment variable.
-
-**Planned (v0.11.0):**
-- **OpenAI** — `gpt-*` models via the OpenAI Chat Completions API. Will use `OPENAI_API_KEY` environment variable or keyring (`ember-2-openai` service).
+- **OpenAI** — `gpt-*` models via the OpenAI Chat Completions API. API key stored in keyring (`ember-2-openai` service) or `OPENAI_API_KEY` environment variable. Shipped in v0.11.0.
 
 **How provider dispatch works:**
 1. `EMBER_MODEL` in `.env` determines the default model

@@ -19,6 +19,8 @@ StateResolver does not write to the vault. That is StateService's job.
 
 from __future__ import annotations
 
+import logging
+import os
 from datetime import datetime, timedelta
 
 from src.state.models import (
@@ -29,6 +31,15 @@ from src.state.models import (
     StateRecord,
 )
 from src.state.state_service import StateService
+
+logger = logging.getLogger("ember.state_resolver")
+
+
+def _state_debug_enabled() -> bool:
+    """Diagnostic logging gate. EMBER_STATE_DEBUG=true enables INFO-level
+    logging in StateResolver/Retriever to identify why a fresh state record
+    isn't surfacing on the next conversation. Silent by default."""
+    return os.getenv("EMBER_STATE_DEBUG", "").lower() in ("true", "1", "yes")
 
 
 class StateResolver:
@@ -224,6 +235,19 @@ class StateResolver:
         # state is grouped by timer_id and filtered by latest-record status,
         # not by latest-per-category.
         items.extend(self._resolve_active_timers())
+
+        if _state_debug_enabled():
+            logger.warning(
+                "[STATE_RESOLVER] resolve: candidates=%d single_records=%d "
+                "multi_records=%d staleness_days=%d returned_items=%d "
+                "returned_ids=%s",
+                len(records),
+                len(single_records),
+                len(multi_records),
+                staleness_days,
+                len(items),
+                [getattr(it, "category", None) for it in items],
+            )
 
         return items
 

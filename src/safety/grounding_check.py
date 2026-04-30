@@ -55,6 +55,19 @@ def should_check_grounding(intent_class: str) -> bool:
     return intent_class in GROUNDING_CHECK_INTENTS
 
 
+def should_short_circuit_grounding(retrieved_context: str) -> bool:
+    """Return True when the grounding LLM call should be skipped.
+
+    B-QUAL-004: with empty retrieved context, qwen3:8b at 8B unreliably
+    returns YES/NO and `run_grounding_check` fails open on parse errors.
+    Calling it is both expensive and a no-op for the actual failure mode
+    (fabricated specifics with no records to ground against). Treating
+    empty context as ungrounded deterministically routes the response
+    through the revision pass, which is the correct behavior.
+    """
+    return not retrieved_context.strip()
+
+
 async def run_grounding_check(
     response: str,
     retrieved_context: str,

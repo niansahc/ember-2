@@ -25,6 +25,10 @@ RELATIONAL_KINSHIP_NOUNS: tuple[str, ...] = (
     "brother", "sister", "sibling", "siblings",
     "family", "friend", "friends", "colleague", "coworker", "boss",
     "roommate", "neighbor",
+    # Pets / animals — kinship-adjacent for many users. The compiled
+    # _KINSHIP_PATTERN requires the possessive `\bmy\s+` prefix, so a generic
+    # query like "best dog breeds" does not match; only "my dog" forms do.
+    "dog", "cat", "pet", "bird", "fish", "rabbit", "hamster", "horse", "animal",
 )
 
 RELATIONAL_IDENTITY_DOMAINS: tuple[str, ...] = (
@@ -165,6 +169,14 @@ def classify_query(user_message: str) -> ContextPolicy:
         "what am i focused on",
         "catch me up",
         "remind me what",
+        # Routines / habits / schedule — operational state, not "recent
+        # activity". Checked before recent_markers below so these route to
+        # status_state with state_boost rather than to recent.
+        "my routine",
+        "my routines",
+        "my morning",
+        "my schedule",
+        "my habits",
     )
 
     reflective_markers = (

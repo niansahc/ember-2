@@ -210,6 +210,11 @@ def test_default_policy_allows_all_types():
 
 
 def test_empty_memory_renders_absence_signal():
+    """General-query empty-memory branch — Fix 2 (2026-04-27) gates the
+    ZERO block + 'I don't have that in my memory' framing on personal
+    vault queries only. A bare "test" message gets the neutral empty-state
+    marker. Personal-query coverage (the ZERO block path) lives in
+    tests/test_hallucination_empty_retrieval.py."""
     from src.llm.prompt_builder import PromptBuilder
 
     builder = PromptBuilder()
@@ -224,5 +229,5 @@ def test_empty_memory_renders_absence_signal():
     )
 
     prompt = builder.build_prompt(packet)
-    assert "No relevant memory found for this query" in prompt
-    assert "I don't have that in my memory" in prompt
+    assert "<memory>" in prompt
+    assert "No retrieved memory" in prompt

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+
+# B-MEM-005: bound the hedged_record_ids tracker so long sessions don't grow
+# the set without limit. LRU eviction keeps the most-recently hedged records.
+_HEDGED_RECORD_IDS_MAX = 50
+
 # Approximate token counts for common Ollama models.
 # Used to update context_window when the active model changes via POST /model.
 MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "llama3.1:8b": 8192,
     "qwen2.5:14b": 32768,
-    "qwen3:8b":    32768,
+    "qwen3:8b":    40960,  # B-QUAL-001 / 2026-04-26: matches modelfile-declared context length (verified via `ollama show qwen3:8b`).
     "mistral:7b":  8192,
     "phi3:mini":   4096,
 }
@@ -63,6 +69,15 @@ class ConversationBuffer:
         # Persist for the lifetime of this buffer (= one API process).
         self.question_suppressed: bool = False
         self.declined_topics: list[str] = []
+        # B-MEM-005: track which retrieved record IDs the model has already
+        # been instructed to hedge this session. Bounded LRU so long sessions
+        # don't grow without limit.
+        self.hedged_record_ids: OrderedDict[str, None] = OrderedDict()
+        # B-MEM-005 / S1: stages record IDs at prompt-build time. Committed to
+        # hedged_record_ids by commit_pending_hedge() after the coaching filter
+        # finalizes the response — so failed LLM calls or stripped hedges don't
+        # leave spurious marks that suppress confidence blocks on later turns.
+        self.pending_hedge_record_ids: list[str] = []
 
     def add_turn(self, user: str, assistant: str) -> None:
         user_lower = user.lower()
@@ -123,6 +138,45 @@ class ConversationBuffer:
         """Update the context window size when the active model changes."""
         if model in MODEL_CONTEXT_WINDOWS:
             self.context_window = MODEL_CONTEXT_WINDOWS[model]
+
+    def mark_hedge_emitted(self, record_ids: list[str]) -> None:
+        """Mark these record IDs as having been hedged this session.
+
+        Bounded LRU: if the set grows beyond _HEDGED_RECORD_IDS_MAX, the
+        oldest entries are evicted first. Re-marking an existing ID moves
+        it to the most-recent position.
+        """
+        for rid in record_ids:
+            if not rid:
+                continue
+            if rid in self.hedged_record_ids:
+                self.hedged_record_ids.move_to_end(rid)
+            else:
+                self.hedged_record_ids[rid] = None
+                while len(self.hedged_record_ids) > _HEDGED_RECORD_IDS_MAX:
+                    self.hedged_record_ids.popitem(last=False)
+
+    def was_hedged(self, record_id: str) -> bool:
+        """Return True if this record was hedged earlier in the session.
+        Hits move the entry to the most-recent position (LRU touch)."""
+        if not record_id or record_id not in self.hedged_record_ids:
+            return False
+        self.hedged_record_ids.move_to_end(record_id)
+        return True
+
+    def set_pending_hedge(self, record_ids: list[str]) -> None:
+        """Stage record IDs for hedge marking. Overwrites any prior pending
+        state from a previous prompt build. Committed by commit_pending_hedge()
+        after the response is finalized."""
+        self.pending_hedge_record_ids = list(record_ids)
+
+    def commit_pending_hedge(self) -> None:
+        """Promote pending hedge IDs into hedged_record_ids. Called by
+        openai_adapter after the coaching filter completes — confirms the
+        response was actually delivered before marking records as hedged."""
+        if self.pending_hedge_record_ids:
+            self.mark_hedge_emitted(self.pending_hedge_record_ids)
+            self.pending_hedge_record_ids = []
 
     def format_for_prompt(self) -> str:
         if not self.buffer:

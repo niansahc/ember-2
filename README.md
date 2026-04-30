@@ -355,7 +355,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 
 # Current State
 
-## Working (v0.16.0)
+## Working (v0.17.1)
 
 **Core systems:**
 - Append-only JSON vault with typed memory enforcement (19 types validated at write time)
@@ -409,7 +409,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - Web search accuracy eval (30 questions, 5 categories, latency tracking)
 - Model selection guide with real eval data (docs/model_guide.md)
 - Vault health audit (7 checks, GREEN/YELLOW/RED health score)
-- 1460 pytest tests passing
+- 1733 pytest tests collected (20 deselected)
 
 **Running the eval suite:**
 ```bash
@@ -427,8 +427,9 @@ pytest tests/eval/ -m eval --runs 3   # 3-run minimum for signal
 **v0.14.1** — Patch: timer functions, identity stance rules, constitutional review fixes, vault hygiene ✓
 **v0.15.0** — Quality of life improvements: web search broadening and ask-first mode, constitutional review overhaul (MVR, constitution v0.7), temporal decay, knowledge gap suppression, vault citation signals, BUG-008/009/010 fixes, developer tooling ✓
 **v0.16.0** — Stability & UAT cycle: autonomous web search default, vision pipeline fix, vault badge fixes, constitutional review blank response fix, style pack system, self-hosted fonts, appearance tab ✓
-**v0.17.0** — Make Ember actually usable daily: UAT restructuring, response quality (A-001/M-001), stop button fix, ask-first with LLM intent classification, GPT import retrieval quality
-**Post-v0.17.0** — Multi-user vault isolation, full platform parity
+**v0.17.0** — Smarter search routing, anti-sycophancy, ChatGPT import fixes: ask-first intent classifier (ADR-034), StateExtractor gated to live conversation turns (ADR-033), coaching filter expansion, UAT suite rewrite (25 behavioral acceptance tests), CI pytest workflow ✓
+**v0.17.1** — Retrieval quality, vision, and routing fixes: SafetyReviewContext extension (ADR-035), cross-session pattern detection (ADR-021), Lodestone path 2 (inferred records), vision pipeline env var configurability, ask-first UI toggle re-enabled (in progress)
+**Post-v0.17.1** — Multi-user vault isolation, full platform parity
 
 ---
 
@@ -534,7 +535,7 @@ src/
 │   ├ audit_assistant_chunks.py   Audit assistant-generated chunks
 │   └ suppress_assistant_noise.py Flag low-quality ingested records
 │
-├ tests/                  Pytest suite (1460 tests)
+├ tests/                  Pytest suite (1733 tests collected)
 │   └ eval/               LLM-as-judge response quality eval (excluded from standard pytest run)
 ├ prompts/                LLM prompt templates
 ├ logs/                   Audit logs, safety review logs (gitignored)

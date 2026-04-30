@@ -160,6 +160,7 @@ class LLMAdapter:
         bare_mode: bool = False,
         vision_description: str | None = None,
         ask_first_active: bool = False,
+        intent_class: str | None = None,
     ) -> str:
         system_prompt = self.prompt_builder.build_prompt(
             context_packet,
@@ -170,6 +171,7 @@ class LLMAdapter:
             bare_mode=bare_mode,
             vision_description=vision_description,
             ask_first_active=ask_first_active,
+            intent_class=intent_class,
         )
 
         # Vision pipeline: the VisionService preprocessor (called upstream
@@ -330,6 +332,7 @@ class LLMAdapter:
         bare_mode: bool = False,
         vision_description: str | None = None,
         ask_first_active: bool = False,
+        intent_class: str | None = None,
     ):
         """
         Stream a response token by token. Yields string chunks.
@@ -351,6 +354,7 @@ class LLMAdapter:
             bare_mode=bare_mode,
             vision_description=vision_description,
             ask_first_active=ask_first_active,
+            intent_class=intent_class,
         )
 
         # Assistant prefill for web-search-grounded turns (streaming path).
@@ -515,14 +519,42 @@ class LLMAdapter:
     # Ollama (local)
     # ------------------------------------------------------------------
 
-    def _get_num_ctx(self) -> int:
-        """Read context_length from user preferences. Clamped to [2048, 131072]."""
+    def _get_num_ctx(self, model: str | None = None) -> int:
+        """Resolve num_ctx for an Ollama call.
+
+        B-QUAL-001 (2026-04-26): qwen3:8b was running at runtime KvSize=4096
+        because num_ctx was not being set in chat options, so Ollama clamped
+        to its own default. Message truncation with keep=4 dropped the system
+        prompt and the model collapsed to non-English token distribution.
+
+        Resolution order:
+          1. Explicit user preference (`context_length`) wins if set.
+          2. Otherwise default to 80% of the model's true context window from
+             MODEL_CONTEXT_WINDOWS, leaving headroom for response generation.
+          3. Unknown models fall back to a conservative 8192 base.
+        Final value is clamped to [2048, 131072].
+
+        Args:
+            model: Per-call model override (matches _chat_ollama / _chat_ollama_stream
+                signatures). Falls back to self.model.
+        """
+        from src.context.conversation_buffer import MODEL_CONTEXT_WINDOWS
         from src.core.preferences import get as get_pref
-        val = get_pref("context_length", 8192)
-        try:
-            val = int(val)
-        except (TypeError, ValueError):
-            val = 8192
+
+        resolved_model = model or self.model
+        declared = MODEL_CONTEXT_WINDOWS.get(resolved_model, 8192)
+        model_default = int(declared * 0.8)
+
+        # Honor explicit user preference if set; missing → model-aware default.
+        val = get_pref("context_length", None)
+        if val is None:
+            val = model_default
+        else:
+            try:
+                val = int(val)
+            except (TypeError, ValueError):
+                val = model_default
+
         return max(2048, min(131072, val))
 
     def _chat_ollama(
@@ -551,7 +583,15 @@ class LLMAdapter:
         response = ollama.chat(
             model=model,
             messages=messages,
-            options={"temperature": temperature, "num_ctx": self._get_num_ctx()},
+            options={
+                "temperature": temperature,
+                "num_ctx": self._get_num_ctx(model),
+                # Explicit output cap so Ollama runtime defaults can't
+                # silently truncate mid-sentence on conversational
+                # responses (Fix 2, 2026-04-27). 2048 is well above
+                # realistic conversational response lengths.
+                "num_predict": 2048,
+            },
         )
         generated = response["message"]["content"]
         if assistant_prefix:
@@ -581,7 +621,15 @@ class LLMAdapter:
         stream = ollama.chat(
             model=model,
             messages=messages,
-            options={"temperature": temperature, "num_ctx": self._get_num_ctx()},
+            options={
+                "temperature": temperature,
+                "num_ctx": self._get_num_ctx(model),
+                # Explicit output cap so Ollama runtime defaults can't
+                # silently truncate mid-sentence on streaming responses
+                # (Fix 2, 2026-04-27). 2048 is well above realistic
+                # conversational response lengths.
+                "num_predict": 2048,
+            },
             stream=True,
         )
         for chunk in stream:

@@ -144,6 +144,40 @@ def classify_query(user_message: str) -> ContextPolicy:
         logger.warning("[CLASSIFY] intent=web_search trigger=explicit")
         return _web_search_policy(explicit=True)
 
+    # Task-status markers anchored to work/project framing. Routes to
+    # the "task_status" policy which excludes journal and reflection from
+    # eligible_memory_types so personal-life records do not bleed into
+    # work-deliverable queries (eval_retrieval.py personal_in_professional
+    # integrity case). Markers chosen for low false-positive risk against
+    # personal-life queries; broader phrasing like "how is the" or
+    # "where's the" was deliberately excluded because those forms
+    # frequently match personal-life phrasings ("how is the cat",
+    # "where's the cat") whose journal records should NOT be suppressed.
+    #
+    # Checked BEFORE the intent classifier because queries like "status
+    # of the API refactor" otherwise route to needs_internet (the "API"
+    # token + interrogative phrasing trips the LLM-fallback stage). The
+    # markers here are anchored enough that their presence is a stronger
+    # signal than what the generic intent cascade can produce.
+    task_status_markers = (
+        "status of",
+        "status update",
+        "where are we on",
+        "where are we with",
+        "where does the",
+    )
+    if any(marker in q for marker in task_status_markers):
+        return ContextPolicy(
+            name="task_status",
+            memory_weight=0.6,
+            reflection_weight=0.5,
+            recency_bias=0.8,
+            diversity=False,
+            prefer_active_work=True,
+            state_boost=2.0,
+            eligible_memory_types=["state", "task", "project", "conversation", "ingested"],
+        )
+
     # Intent classifier (ADR-034): replaces the legacy multi-trigger keyword
     # block. classify_intent runs Stage 1 (regex) → Stage 2 (embedding) →
     # Stage 3 (LLM with timeout) and always returns one of the two labels.

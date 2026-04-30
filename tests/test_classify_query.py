@@ -79,3 +79,85 @@ def test_my_routine_lately_still_routes_to_status_state() -> None:
     order checks status_state first, so this must land on status_state — the
     operational reading, not the recent-activity reading."""
     assert classify_query("what's my routine lately").name == "status_state"
+
+
+# ---------------------------------------------------------------------------
+# task_status — work-deliverable queries excluded from journal/reflection
+# ---------------------------------------------------------------------------
+#
+# Fixes the personal_in_professional integrity case in
+# tools/eval_retrieval.py: "What's the status of the API refactor?" was
+# falling through all marker checks to the default policy, where journal
+# records (with no type gating) bled into work responses. The new
+# task_status policy gates eligible_memory_types to operational and
+# reference types.
+
+
+def test_status_of_routes_to_task_status() -> None:
+    """Canonical case: 'status of the API refactor' must hit the new
+    policy, not fall through to default."""
+    policy = classify_query("What's the status of the API refactor?")
+    assert policy.name == "task_status"
+
+
+def test_status_update_routes_to_task_status() -> None:
+    policy = classify_query("status update on the deployment")
+    assert policy.name == "task_status"
+
+
+def test_where_are_we_on_routes_to_task_status() -> None:
+    policy = classify_query("where are we on the migration")
+    assert policy.name == "task_status"
+
+
+def test_where_are_we_with_routes_to_task_status() -> None:
+    policy = classify_query("where are we with the contract review")
+    assert policy.name == "task_status"
+
+
+def test_where_does_the_routes_to_task_status() -> None:
+    policy = classify_query("where does the auth handler get called")
+    assert policy.name == "task_status"
+
+
+def test_task_status_excludes_journal_and_reflection() -> None:
+    """The personal_in_professional fix: journal and reflection records
+    must NOT be eligible for task_status responses, so personal-life
+    content does not surface on work-deliverable queries."""
+    policy = classify_query("status of the API refactor")
+    assert policy.eligible_memory_types is not None
+    assert "journal" not in policy.eligible_memory_types
+    assert "reflection" not in policy.eligible_memory_types
+
+
+def test_task_status_eligible_types_match_spec() -> None:
+    """Drops profile (identity records, irrelevant for task status) and
+    adds ingested (imported docs / specs that may ground 'status of X').
+    Keeps state, task, project, conversation."""
+    policy = classify_query("status of the API refactor")
+    assert set(policy.eligible_memory_types) == {
+        "state", "task", "project", "conversation", "ingested",
+    }
+
+
+def test_hows_the_cat_does_not_route_to_task_status() -> None:
+    """Negative regression: the broad personal-life phrasing 'how's the
+    cat' must NOT match task_status_markers (which would suppress the
+    journal records the user actually needs). The broad markers
+    'how is the' / 'how's the' / 'where's the' were deliberately
+    excluded from task_status_markers for exactly this reason."""
+    policy = classify_query("how's the cat")
+    assert policy.name != "task_status"
+
+
+def test_hows_the_morning_does_not_route_to_task_status() -> None:
+    policy = classify_query("how's the morning routine going")
+    # Note: this also contains 'my routine' implicitly via "the morning
+    # routine" -- but 'my routine' is the state_marker, not 'the
+    # morning routine'. Either way it must not be task_status.
+    assert policy.name != "task_status"
+
+
+def test_wheres_the_bathroom_does_not_route_to_task_status() -> None:
+    policy = classify_query("where's the bathroom")
+    assert policy.name != "task_status"

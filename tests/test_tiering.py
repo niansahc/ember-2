@@ -294,3 +294,69 @@ def test_search_results_include_tier(tmp_path: Path):
     assert "tier" in results[0]
     assert results[0]["tier"] == "hot"  # default
     store.close()
+
+
+# ---------------------------------------------------------------------------
+# _next_tiering_run_time: month and year boundary regression
+# ---------------------------------------------------------------------------
+
+
+def test_next_tiering_run_time_rolls_over_month_end():
+    """Regression: April 30 -> May 1 must not raise. The prior
+    implementation used datetime.replace(day=day+1), which failed on
+    the last day of any month with ValueError 'day is out of range'."""
+    from datetime import datetime
+    from src.api.main import _next_tiering_run_time
+
+    now = datetime(2026, 4, 30, 12, 0, 0)
+    result = _next_tiering_run_time(now)
+    assert result == datetime(2026, 5, 1, 0, 5, 0)
+
+
+def test_next_tiering_run_time_rolls_over_31_day_month_end():
+    from datetime import datetime
+    from src.api.main import _next_tiering_run_time
+
+    now = datetime(2026, 5, 31, 23, 59, 59)
+    result = _next_tiering_run_time(now)
+    assert result == datetime(2026, 6, 1, 0, 5, 0)
+
+
+def test_next_tiering_run_time_rolls_over_year_end():
+    from datetime import datetime
+    from src.api.main import _next_tiering_run_time
+
+    now = datetime(2026, 12, 31, 23, 0, 0)
+    result = _next_tiering_run_time(now)
+    assert result == datetime(2027, 1, 1, 0, 5, 0)
+
+
+def test_next_tiering_run_time_same_day_when_before_target():
+    """When called before 00:05 on a given day, the next run is later
+    that same day (no rollover)."""
+    from datetime import datetime
+    from src.api.main import _next_tiering_run_time
+
+    now = datetime(2026, 4, 15, 0, 4, 0)
+    result = _next_tiering_run_time(now)
+    assert result == datetime(2026, 4, 15, 0, 5, 0)
+
+
+def test_next_tiering_run_time_next_day_when_after_target():
+    """When called after 00:05, the next run is 00:05 the following day."""
+    from datetime import datetime
+    from src.api.main import _next_tiering_run_time
+
+    now = datetime(2026, 4, 15, 0, 6, 0)
+    result = _next_tiering_run_time(now)
+    assert result == datetime(2026, 4, 16, 0, 5, 0)
+
+
+def test_next_tiering_run_time_handles_leap_day_boundary():
+    """Leap-year February 29 -> March 1 boundary."""
+    from datetime import datetime
+    from src.api.main import _next_tiering_run_time
+
+    now = datetime(2028, 2, 29, 12, 0, 0)
+    result = _next_tiering_run_time(now)
+    assert result == datetime(2028, 3, 1, 0, 5, 0)

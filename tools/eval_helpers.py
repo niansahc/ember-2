@@ -3,12 +3,20 @@ tools/eval_helpers.py
 
 Shared helpers for eval tools: test vault isolation and post-run cleanup.
 
-- swap_to_test_vault / restore_vault: switch PRIVATE_VAULT_PATH to the
-  test vault at eval start, restore to live vault after. Keeps eval
-  artifacts out of the live vault entirely.
+- swap_to_test_vault / restore_vault: switch the running API process to
+  the test vault for eval isolation. Calls POST /v1/developer/vault/swap
+  on the live API so the swap reaches the API process. Setting only an
+  in-process Python global (the prior implementation) did NOT reach the
+  API, which meant eval tools silently ran against the live vault. Bug
+  fixed 2026-04-30.
 
-- run_cleanup: invoke the same logic as cleanup_test_artifacts.py --confirm
-  to archive eval artifacts from the active vault silently.
+- Privacy posture: swap_to_test_vault fails closed via sys.exit(1) on
+  any swap failure (connection refused, 403 dev-mode disabled, 400
+  unknown label, 5xx). Refusing to proceed prevents leaking live-vault
+  content to eval judges.
+
+- run_cleanup: invoke the same logic as cleanup_test_artifacts.py
+  --confirm to archive eval artifacts from the active vault silently.
 """
 
 from __future__ import annotations
@@ -17,18 +25,46 @@ import os
 import sys
 from pathlib import Path
 
+import httpx
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-def swap_to_test_vault() -> str | None:
-    """Switch to the test vault for eval isolation.
+_DEFAULT_API_BASE = "http://localhost:8000"
+_VAULT_SWAP_PATH = "/v1/developer/vault/swap"
 
-    Reads VAULT_PATH_TEST from .env. If set and the directory exists,
-    sets the runtime vault path override and clears vector indexes.
-    Returns the previous vault path string (for restore), or None if
-    the swap was skipped (test vault not configured or missing).
+
+def _api_base() -> str:
+    """Resolve the eval target API base URL. EMBER_API_BASE overrides
+    the localhost default for non-default ports or remote eval setups."""
+    return os.getenv("EMBER_API_BASE", _DEFAULT_API_BASE).rstrip("/")
+
+
+def _swap_headers() -> dict:
+    """Build headers for the vault swap POST. Includes Authorization
+    when EMBER_API_KEY is configured."""
+    from src.core.config import get_ember_api_key
+
+    headers = {"Content-Type": "application/json"}
+    api_key = get_ember_api_key()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def swap_to_test_vault() -> str | None:
+    """Switch the running API to the test vault for eval isolation.
+
+    Returns "test" on successful swap, None when skipped (test vault not
+    configured locally). On any swap failure, prints a fatal message and
+    exits the process to prevent eval running against the live vault.
+
+    Local pre-flight gate (VAULT_PATH_TEST + dir exists) avoids a noisy
+    API call when the test vault simply isn't configured. The API also
+    enforces dev-mode and known-label gates server-side; failures from
+    those gates are fatal.
     """
     test_path = os.getenv("VAULT_PATH_TEST")
     if not test_path:
@@ -36,39 +72,67 @@ def swap_to_test_vault() -> str | None:
 
     resolved = Path(test_path).resolve()
     if not resolved.is_dir():
-        print(f"WARNING: VAULT_PATH_TEST ({resolved}) does not exist. Running against live vault.")
+        print(f"WARNING: VAULT_PATH_TEST ({resolved}) does not exist. Skipping swap.")
         return None
 
-    from src.core.config import (
-        get_private_vault_path,
-        set_vault_path_override,
-    )
-    from src.retrieval.vector_index import clear_index_cache
+    url = f"{_api_base()}{_VAULT_SWAP_PATH}"
+    try:
+        response = httpx.post(
+            url,
+            json={"vault_label": "test"},
+            headers=_swap_headers(),
+            timeout=30.0,
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        print(f"FATAL: vault swap to test failed: {exc}")
+        print("Refusing to proceed against live vault. Aborting.")
+        sys.exit(1)
 
-    previous = str(get_private_vault_path())
-    set_vault_path_override(str(resolved), "test")
-    clear_index_cache()
-    print(f"Vault swapped to test: {resolved}")
-    return previous
+    print(f"Vault swap (API): {response.json()}")
+    return "test"
 
 
 def restore_vault(previous_path: str | None) -> None:
-    """Restore the vault path after eval. If previous_path is None,
-    just clears the override (reverts to .env default)."""
-    from src.core.config import clear_vault_path_override
-    from src.retrieval.vector_index import clear_index_cache
+    """Restore the API to the default vault after eval.
 
-    clear_vault_path_override()
-    clear_index_cache()
-    if previous_path:
-        print(f"Vault restored to: {previous_path}")
+    The previous_path argument is retained for caller compatibility but
+    is no longer needed: the API endpoint reverts to PRIVATE_VAULT_PATH
+    when called with vault_label="default". A None argument indicates
+    swap_to_test_vault was skipped (no swap occurred), so no restore
+    call is fired.
+
+    Best-effort: prints a WARNING on failure but does not exit. The eval
+    has already finished by the time restore runs; manual restore via
+    POST /v1/developer/vault/swap {"vault_label": "default"} or an API
+    restart is documented in the failure message.
+    """
+    if previous_path is None:
+        return
+
+    url = f"{_api_base()}{_VAULT_SWAP_PATH}"
+    try:
+        response = httpx.post(
+            url,
+            json={"vault_label": "default"},
+            headers=_swap_headers(),
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        print(f"Vault restore (API): {response.json()}")
+    except Exception as exc:
+        print(
+            f"WARNING: vault restore failed: {exc}. "
+            "Manual restore: POST /v1/developer/vault/swap "
+            "{'vault_label': 'default'} or restart the API."
+        )
 
 
 def run_cleanup() -> None:
     """Run artifact cleanup against the currently active vault.
 
     Calls the same scan_vault + archive_records logic as
-    scripts/cleanup_test_artifacts.py --confirm. Silent — only prints
+    scripts/cleanup_test_artifacts.py --confirm. Silent: only prints
     if records were archived.
     """
     try:

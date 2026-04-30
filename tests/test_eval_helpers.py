@@ -2,9 +2,13 @@
 tests/test_eval_helpers.py
 
 Tests for eval helper functions: test vault isolation and cleanup.
+
+The vault swap helpers must call POST /v1/developer/vault/swap on the
+running API process. Setting only an in-process global (the prior
+implementation) does not reach the API and silently leaks the live
+vault into evals. These tests are the contract for that fix.
 """
 
-import os
 import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -19,64 +23,168 @@ if str(REPO_ROOT) not in sys.path:
 from src.core.config import (
     set_vault_path_override,
     clear_vault_path_override,
-    get_vault_label,
 )
+
+
+def _make_response(status_code: int = 200, payload: dict | None = None) -> MagicMock:
+    """Build a MagicMock that mimics httpx.Response for our call sites."""
+    response = MagicMock()
+    response.status_code = status_code
+    response.json.return_value = payload or {"label": "test", "active_vault": "/tmp/test"}
+    if status_code >= 400:
+        response.raise_for_status.side_effect = Exception(f"HTTP {status_code}")
+    else:
+        response.raise_for_status.return_value = None
+    return response
 
 
 class TestSwapToTestVault:
 
-    def setup_method(self):
-        clear_vault_path_override()
+    def test_swap_returns_none_when_not_configured(self, tmp_path, monkeypatch):
+        """No VAULT_PATH_TEST set: skip the API call and return None."""
+        monkeypatch.delenv("VAULT_PATH_TEST", raising=False)
+        with patch("tools.eval_helpers.httpx.post") as mock_post:
+            from tools.eval_helpers import swap_to_test_vault
+            prev = swap_to_test_vault()
+        assert prev is None
+        assert mock_post.call_count == 0
 
-    def teardown_method(self):
-        clear_vault_path_override()
+    def test_swap_returns_none_when_dir_missing(self, tmp_path, monkeypatch):
+        """VAULT_PATH_TEST points at nonexistent dir: skip API, return None."""
+        missing = str(tmp_path / "nonexistent")
+        monkeypatch.setenv("VAULT_PATH_TEST", missing)
+        with patch("tools.eval_helpers.httpx.post") as mock_post:
+            from tools.eval_helpers import swap_to_test_vault
+            prev = swap_to_test_vault()
+        assert prev is None
+        assert mock_post.call_count == 0
 
-    def test_swap_sets_override_when_test_vault_exists(self, tmp_path):
+    def test_swap_calls_api_with_test_label(self, tmp_path, monkeypatch):
+        """Privacy contract: swap_to_test_vault must POST to the API
+        with vault_label=test. Setting an in-process global only is the
+        bug this test guards against."""
         test_vault = tmp_path / "test_vault"
         test_vault.mkdir()
-        with patch.dict(os.environ, {"VAULT_PATH_TEST": str(test_vault)}):
+        monkeypatch.setenv("VAULT_PATH_TEST", str(test_vault))
+
+        with patch("tools.eval_helpers.httpx.post", return_value=_make_response()) as mock_post, \
+             patch("src.core.config.get_ember_api_key", return_value="test-api-key-123"):
             from tools.eval_helpers import swap_to_test_vault
             prev = swap_to_test_vault()
-        assert prev is not None
-        assert get_vault_label() == "test"
-        clear_vault_path_override()
 
-    def test_swap_returns_none_when_not_configured(self):
-        with patch.dict(os.environ, {}, clear=True):
-            env = dict(os.environ)
-            env.pop("VAULT_PATH_TEST", None)
-            with patch.dict(os.environ, env, clear=True):
-                from tools.eval_helpers import swap_to_test_vault
-                prev = swap_to_test_vault()
-        assert prev is None
+        assert prev == "test"
+        assert mock_post.call_count == 1
 
-    def test_swap_returns_none_when_dir_missing(self, tmp_path):
-        missing = str(tmp_path / "nonexistent")
-        with patch.dict(os.environ, {"VAULT_PATH_TEST": missing}):
+        call = mock_post.call_args
+        url = call.args[0] if call.args else call.kwargs.get("url")
+        assert url.endswith("/v1/developer/vault/swap")
+        assert call.kwargs["json"] == {"vault_label": "test"}
+        headers = call.kwargs["headers"]
+        assert headers["Authorization"] == "Bearer test-api-key-123"
+        assert headers["Content-Type"] == "application/json"
+
+    def test_swap_omits_authorization_header_when_no_api_key(self, tmp_path, monkeypatch):
+        """When EMBER_API_KEY is not configured, the Authorization
+        header is omitted (open access)."""
+        test_vault = tmp_path / "test_vault"
+        test_vault.mkdir()
+        monkeypatch.setenv("VAULT_PATH_TEST", str(test_vault))
+
+        with patch("tools.eval_helpers.httpx.post", return_value=_make_response()) as mock_post, \
+             patch("src.core.config.get_ember_api_key", return_value=""):
             from tools.eval_helpers import swap_to_test_vault
-            prev = swap_to_test_vault()
-        assert prev is None
+            swap_to_test_vault()
+
+        call = mock_post.call_args
+        headers = call.kwargs["headers"]
+        assert "Authorization" not in headers
+
+    def test_swap_exits_on_api_failure(self, tmp_path, monkeypatch):
+        """Privacy regression guard: when the swap call fails for any
+        reason (connection refused, 403 dev-mode off, 5xx), the helper
+        must exit the process. Falling through silently is the bug."""
+        test_vault = tmp_path / "test_vault"
+        test_vault.mkdir()
+        monkeypatch.setenv("VAULT_PATH_TEST", str(test_vault))
+
+        def _raise_connection_error(*_args, **_kwargs):
+            raise ConnectionError("connection refused")
+
+        with patch("tools.eval_helpers.httpx.post", side_effect=_raise_connection_error), \
+             patch("src.core.config.get_ember_api_key", return_value=""):
+            from tools.eval_helpers import swap_to_test_vault
+            with pytest.raises(SystemExit) as exc_info:
+                swap_to_test_vault()
+            assert exc_info.value.code == 1
+
+    def test_swap_exits_on_403_dev_mode_disabled(self, tmp_path, monkeypatch):
+        """If EMBER_DEV_MODE is not set on the API, the endpoint returns
+        403. Helper must exit, not fall through."""
+        test_vault = tmp_path / "test_vault"
+        test_vault.mkdir()
+        monkeypatch.setenv("VAULT_PATH_TEST", str(test_vault))
+
+        with patch(
+            "tools.eval_helpers.httpx.post",
+            return_value=_make_response(status_code=403, payload={"detail": "dev mode required"}),
+        ), patch("src.core.config.get_ember_api_key", return_value=""):
+            from tools.eval_helpers import swap_to_test_vault
+            with pytest.raises(SystemExit) as exc_info:
+                swap_to_test_vault()
+            assert exc_info.value.code == 1
+
+    def test_swap_uses_ember_api_base_override(self, tmp_path, monkeypatch):
+        """EMBER_API_BASE env var overrides the localhost:8000 default."""
+        test_vault = tmp_path / "test_vault"
+        test_vault.mkdir()
+        monkeypatch.setenv("VAULT_PATH_TEST", str(test_vault))
+        monkeypatch.setenv("EMBER_API_BASE", "http://localhost:9999")
+
+        with patch("tools.eval_helpers.httpx.post", return_value=_make_response()) as mock_post, \
+             patch("src.core.config.get_ember_api_key", return_value=""):
+            from tools.eval_helpers import swap_to_test_vault
+            swap_to_test_vault()
+
+        call = mock_post.call_args
+        url = call.args[0] if call.args else call.kwargs.get("url")
+        assert url == "http://localhost:9999/v1/developer/vault/swap"
 
 
 class TestRestoreVault:
 
-    def setup_method(self):
-        clear_vault_path_override()
+    def test_restore_calls_api_with_default_label(self, monkeypatch):
+        """Restore must POST vault_label=default to revert the API
+        process to PRIVATE_VAULT_PATH."""
+        with patch("tools.eval_helpers.httpx.post", return_value=_make_response()) as mock_post, \
+             patch("src.core.config.get_ember_api_key", return_value="test-api-key-123"):
+            from tools.eval_helpers import restore_vault
+            restore_vault("test")
 
-    def teardown_method(self):
-        clear_vault_path_override()
+        assert mock_post.call_count == 1
+        call = mock_post.call_args
+        url = call.args[0] if call.args else call.kwargs.get("url")
+        assert url.endswith("/v1/developer/vault/swap")
+        assert call.kwargs["json"] == {"vault_label": "default"}
 
-    def test_restore_clears_override(self):
-        set_vault_path_override("/test/path", "test")
-        from tools.eval_helpers import restore_vault
-        restore_vault("/original/path")
-        assert get_vault_label() == "default"
+    def test_restore_with_none_skips_api_call(self):
+        """When swap was skipped (None returned), restore must also skip
+        and not fire a stray API call."""
+        with patch("tools.eval_helpers.httpx.post") as mock_post:
+            from tools.eval_helpers import restore_vault
+            restore_vault(None)
+        assert mock_post.call_count == 0
 
-    def test_restore_with_none_clears(self):
-        set_vault_path_override("/test/path", "test")
-        from tools.eval_helpers import restore_vault
-        restore_vault(None)
-        assert get_vault_label() == "default"
+    def test_restore_swallows_failure_does_not_exit(self):
+        """Restore is best-effort: a failed restore call must not exit
+        or raise. Eval is already done; manual restore is documented."""
+        def _raise(*_args, **_kwargs):
+            raise Exception("boom")
+
+        with patch("tools.eval_helpers.httpx.post", side_effect=_raise), \
+             patch("src.core.config.get_ember_api_key", return_value=""):
+            from tools.eval_helpers import restore_vault
+            # Must not raise, must not exit
+            restore_vault("test")
 
 
 class TestRunCleanup:
@@ -153,5 +261,13 @@ class TestVaultIsolation:
 
     def test_eval_web_search_swaps_vault(self):
         source = (REPO_ROOT / "tools" / "eval_web_search.py").read_text(encoding="utf-8")
+        assert "swap_to_test_vault" in source
+        assert "restore_vault" in source
+
+    def test_eval_local_models_swaps_vault(self):
+        """eval_local_models was simplified to use the shared helpers
+        rather than inline API calls. This guards against a regression
+        back to inline calls."""
+        source = (REPO_ROOT / "tools" / "eval_local_models.py").read_text(encoding="utf-8")
         assert "swap_to_test_vault" in source
         assert "restore_vault" in source

@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.17.1](https://github.com/niansahc/ember-2/compare/v0.17.0...v0.17.1) (2026-04-30)
+
+
+### Features
+
+* **api:** invoke detect_t2_pattern after context build ([3d37853](https://github.com/niansahc/ember-2/commit/3d3785340df509e18a782f90b5bad7a5713bf7d7))
+* **context:** t2_pattern_signal field + surface cached embedding ([168d4b0](https://github.com/niansahc/ember-2/commit/168d4b0c7c9aaf9a6c90157e36540e36a5560377))
+* **llm:** resolve Item 7 ITEM-8 marker — read t2 category from packet ([609e859](https://github.com/niansahc/ember-2/commit/609e859a77d0c7ec2c2f2d6c1a90997b30b28497))
+* **memory:** contains_named_third_party heuristic + tests ([d9e418f](https://github.com/niansahc/ember-2/commit/d9e418ff9085beb9e18252c8cdea3d99165160ef))
+* **memory:** wire contains_named_third_party into write_memory ([09e81d5](https://github.com/niansahc/ember-2/commit/09e81d5cf4fbb02e3075d72d99ca2eb0f966d607))
+* **prompt:** inject &lt;cross_session_pattern&gt; block when signal present ([b13d65f](https://github.com/niansahc/ember-2/commit/b13d65f004d04af89ff4154f3e8578c2df39ee68))
+* **reflection:** Item 9 — Lodestone path 2 inferred-value synthesis (ADR-017) ([942dba8](https://github.com/niansahc/ember-2/commit/942dba8e05f1a996c48120ca704e381d250085b8))
+* **reflection:** lodestone path 2 synthesis (ADR-017) ([787263a](https://github.com/niansahc/ember-2/commit/787263a2d04f4fa8b05e1ee90cd3407dd6a2638f))
+* **reflection:** wire path-2 synthesis into monthly runner ([80e217f](https://github.com/niansahc/ember-2/commit/80e217fd63d2680cb3098eb5bbaa20807fb2374c))
+* **safety:** add is_vault_grounded + t2_pattern_category to SafetyReviewContext ([f2a990b](https://github.com/niansahc/ember-2/commit/f2a990be293f7eaa31f5e8be3220576abdbe689f))
+* **safety:** Item 7 — ADR-035 constitutional review context signal ([6fde4e3](https://github.com/niansahc/ember-2/commit/6fde4e37b34f8465daa1ce226d9ddeddb09e024d))
+* **safety:** Item 8 — T2 cross-session pattern detection (ADR-021) ([6329624](https://github.com/niansahc/ember-2/commit/6329624a85053c93f0e048d418b071b5665e6a3d))
+* **safety:** PatternSignal + detect_t2_pattern (ADR-021) ([ac90735](https://github.com/niansahc/ember-2/commit/ac90735fed3de7abfcd5d02f47dce946c043aec3))
+* **safety:** thread is_vault_grounded + t2_pattern_category into review ([66cf6d1](https://github.com/niansahc/ember-2/commit/66cf6d161f01684c446549a15fc62483fb041b30))
+* **safety:** two-step review prompt when t2_pattern_category is set ([9ea5774](https://github.com/niansahc/ember-2/commit/9ea577422d676c1229090233aa229e53e355b6f7))
+* **uat:** add --ids flag for targeted re-run with result merging ([55edfea](https://github.com/niansahc/ember-2/commit/55edfead1eb96a79137396ecb4f8bc4ef3428908))
+* **vision:** add file logging to vision pipeline (logs/vision/) ([8122a6a](https://github.com/niansahc/ember-2/commit/8122a6abb6819e87648aee6a1a0e9d890c9a42cf))
+
+
+### Bug Fixes
+
+* **api:** remove inline __EMBER_API_KEY__ injection in _get_index_html ([ca9cd12](https://github.com/niansahc/ember-2/commit/ca9cd12d5d73f20450b620f31a679558e6e4eeff))
+* **api:** respect classifier intent over conversational keyword heuristic in web-search backstop ([9adffba](https://github.com/niansahc/ember-2/commit/9adffba90b3fe3219e7421221a4482e480294fb4))
+* **context:** expand routing rules for pet and routines queries — vault-first ([42c7796](https://github.com/niansahc/ember-2/commit/42c7796360b6aa06396aa32471799023881c793f))
+* **core:** B-WEB-001 sentinel-gated preference migration ([3bb7dce](https://github.com/niansahc/ember-2/commit/3bb7dce370389cc2709738e5dd319425f46df9a1))
+* **ingestion:** date rendering reflects event date not ingestion date ([918a268](https://github.com/niansahc/ember-2/commit/918a2685cb8a04c78d60b67a40fcc06f93710887))
+* **intent:** classify conversational acks as vault_answerable at Stage 1 ([af8b68b](https://github.com/niansahc/ember-2/commit/af8b68bf0d410ecfc0783faf9c4eae6f639fbc16))
+* **llm,core,api:** S1-S9 correctness gaps from agent review ([c4469b5](https://github.com/niansahc/ember-2/commit/c4469b5afeb9a975ee3d3c3e00b89fdd37bfc11a))
+* **llm:** add explicit type inventory to vault context — surfaces absent record types ([aa4f09d](https://github.com/niansahc/ember-2/commit/aa4f09d7162f00c0aeab730a09529ff9439c981c))
+* **llm:** add intent_class param to generate_response (Fix 2 follow-up [#2](https://github.com/niansahc/ember-2/issues/2)) ([4ffa5b1](https://github.com/niansahc/ember-2/commit/4ffa5b1586e375bd40b5f2ff80358955b8f3994d))
+* **llm:** B-MEM-003/004/005 hedge repetition fixes ([79d7868](https://github.com/niansahc/ember-2/commit/79d786846bda072bf12b47efe26d27e56fd21e90))
+* **llm:** B-MEM-005 anti-URL rule (partial mitigation) ([ec0f98b](https://github.com/niansahc/ember-2/commit/ec0f98b9a4f92b9357f554aff989922073013015))
+* **llm:** B-QUAL-001 dynamic num_ctx resolution per model ([77ee14d](https://github.com/niansahc/ember-2/commit/77ee14d2de6d5b742aac1a3569660ca6706191f3))
+* **llm:** B-QUAL-002 therapeutic closing question patterns ([3229dfb](https://github.com/niansahc/ember-2/commit/3229dfb53470dccf46d0af78096a1310896286fb))
+* **llm:** B-QUAL-004 empty retrieval grounding guard ([4d2611c](https://github.com/niansahc/ember-2/commit/4d2611c9cd10ee721f5ef24cb72f83dc9f1cf53e))
+* **llm:** gate ZERO confidence block on intent_class — only fires on personal vault queries ([3060cfd](https://github.com/niansahc/ember-2/commit/3060cfdd5b3348eded49e6c00f6225c2d252dc7b))
+* **llm:** include year in date rendering for records older than 365 days ([e5aa8db](https://github.com/niansahc/ember-2/commit/e5aa8db9291d51a1d5a40d57912a60ad099e34c0))
+* **llm:** mask BEHAVIOR RULES and IDENTITY UNDER PRESSURE prompt section labels ([64c8e74](https://github.com/niansahc/ember-2/commit/64c8e746aa6b677f4d25b2019557fa52ecc99019))
+* **llm:** mask vault_memory internal label from user-visible responses ([5ae469e](https://github.com/niansahc/ember-2/commit/5ae469e8d596fa25fa01d20bc9217d3822de2426))
+* **llm:** prevent mid-sentence response truncation ([5304c57](https://github.com/niansahc/ember-2/commit/5304c575985a91748a1b45636d38a7fc6ebfed64))
+* **llm:** remove dead True-or-X condition in openai_adapter ([6624b68](https://github.com/niansahc/ember-2/commit/6624b68b3bd79db009205c671fd49bafe8d73a9b))
+* **llm:** wire intent_class to _render_authority_rules call site (Fix 2 follow-up) ([963b579](https://github.com/niansahc/ember-2/commit/963b57928c77e4149ade9ecc67b398f48528f569))
+* **reflection:** Item 9 review-agent cleanup ([d350db8](https://github.com/niansahc/ember-2/commit/d350db8b23e2506351a17927b8220ca22608a25b))
+* **retrieval:** named entity in query as primary ranking discriminator ([a89c7d0](https://github.com/niansahc/ember-2/commit/a89c7d0039503793e6f602cb2b29e9257c01abc2))
+* **safety,llm,core:** M1 false-positive + S3-S6 correctness and privacy fixes ([3592633](https://github.com/niansahc/ember-2/commit/35926331f6cae4b87fac8e6619b64db8be7396e9))
+* **safety:** B-CON-002 three-layer identity collapse defense ([3ed9adc](https://github.com/niansahc/ember-2/commit/3ed9adcad05d764f0ed489d217868100610fa4c1))
+* **safety:** Item 8 simplify — timestamp bug, dead state, type hints ([3cab2b1](https://github.com/niansahc/ember-2/commit/3cab2b1c93ffc590037da3186c4cff4eb139aadc))
+* **safety:** Item 8 simplify — timestamp bug, dead state, type hints ([0d6bc92](https://github.com/niansahc/ember-2/commit/0d6bc92a10be6a36fded36679c705bfa367582a5))
+* **security:** add Content Security Policy headers to API responses ([5981c92](https://github.com/niansahc/ember-2/commit/5981c925448c9e7858824e61cfed2451548b5fa1))
+* **security:** route social_engineering triggers to grounded streaming path (ADR-036) ([d6c257a](https://github.com/niansahc/ember-2/commit/d6c257a325c604ff86fa6677a6cb9977e5bf31fb))
+* **state:** fix diagnostic log level info→warning so EMBER_STATE_DEBUG entries surface in uvicorn output ([2fe3a36](https://github.com/niansahc/ember-2/commit/2fe3a367d7eab0a9f39d30eda7e551fb993a1b40))
+* **state:** restore cross-session state record persistence ([2d6264e](https://github.com/niansahc/ember-2/commit/2d6264ea71941156a207807e4f0fc1cf94200ef5))
+* stop letting the keyword heuristic override the classifier. ([9adffba](https://github.com/niansahc/ember-2/commit/9adffba90b3fe3219e7421221a4482e480294fb4))
+* **vision:** clear image_data after successful VL preprocessing ([a1c98c2](https://github.com/niansahc/ember-2/commit/a1c98c2f335ecb98ddbfe02e27a75c1fc6ebb6d9))
+* **vision:** VisionService env-var resolution + clear image_data after preprocessing ([6e447ed](https://github.com/niansahc/ember-2/commit/6e447ed36994c263a07efe967f3184dc6388d86c))
+* **vision:** VisionService honors EMBER_VISION_MODEL env var ([d76ed58](https://github.com/niansahc/ember-2/commit/d76ed58492313b504fe56a04a0fe3814d909b530))
+
 ## [0.17.0](https://github.com/niansahc/ember-2/compare/v0.16.0...v0.17.0) (2026-04-24)
 
 

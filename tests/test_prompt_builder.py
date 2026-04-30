@@ -608,3 +608,118 @@ class TestCrossSessionPatternBlock:
         # No t2_pattern_signal set — defaults to None.
         prompt = pb.build_prompt(packet)
         assert "<cross_session_pattern>" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Context packet section ordering (ADR-006 + prompt_builder docstring)
+# ---------------------------------------------------------------------------
+
+
+class TestContextPacketOrdering:
+    """Pin the relative order of XML/section markers in the assembled
+    prompt. The expected order maps to the user-listed sections in
+    ADR-006 and the docstring at prompt_builder.py:328-330. Sections
+    not listed here (lodestone, vision, cross_session_pattern, memory)
+    may sit between adjacent listed sections; this test asserts the
+    listed-subset's relative ordering only."""
+
+    def _make_full_packet(self):
+        from src.state.models import StateItem
+        from src.tasks.models import TaskItem
+
+        return ContextPacket(
+            user_message="What did we discuss yesterday?",
+            state_items=[
+                StateItem(
+                    category="current_focus",
+                    text="shipping v0.18.0 hardening",
+                    timestamp="2026-04-30T12-00-00",
+                ),
+            ],
+            task_items=[
+                TaskItem(
+                    id="t1",
+                    title="finish ordering test",
+                    status="active",
+                ),
+            ],
+            reflection_items=[
+                ContextItem(
+                    id="r1",
+                    content="Recent reflection: pacing is improving.",
+                    source="reflection",
+                    item_type="reflection",
+                    memory_type="reflection",
+                    score=0.7,
+                ),
+            ],
+            memory_items=[
+                ContextItem(
+                    id="m1",
+                    content="Earlier conversation about deployment.",
+                    source="conversation",
+                    item_type="conversation",
+                    memory_type="conversation",
+                    score=0.6,
+                ),
+            ],
+            web_items=[
+                {
+                    "title": "Example article",
+                    "url": "https://example.com/article",
+                    "snippet": "An example snippet for testing.",
+                },
+            ],
+        )
+
+    def test_section_order_matches_documented_assembly(self):
+        pb = PromptBuilder()
+        packet = self._make_full_packet()
+        prompt = pb.build_prompt(packet, intent_class="recent")
+
+        # Anchors for each user-listed section. "Ember's nature:" is the
+        # nature_loader.to_prompt_text() preamble (src/safety/nature_loader.py:40).
+        # Find the FIRST occurrence of nature -- it's dual-injected (system
+        # section first, context section second). The first injection
+        # comes before <current_state>, satisfying the "1. nature ->
+        # 2. current_state" relation.
+        anchors = {
+            "nature":              "Ember's nature:",
+            "current_state":       "<current_state>",
+            "tasks":               "ACTIVE TASKS:",
+            "reflection":          "REFLECTION CONTEXT:",
+            "conversation":        "<conversation_history>",
+            "web_search":          "<web_search_results>",
+            "authority_rules":     "<authority_rules>",
+            "user_message_footer": "USER MESSAGE:",
+        }
+
+        positions: dict[str, int] = {}
+        for label, marker in anchors.items():
+            idx = prompt.find(marker)
+            assert idx != -1, (
+                f"Missing section anchor {label!r} ({marker!r}) "
+                f"in assembled prompt"
+            )
+            positions[label] = idx
+
+        # Assert pairwise relative order matches the user-listed
+        # contract in the plan: nature -> current_state -> tasks ->
+        # reflection -> conversation -> web_search -> authority_rules
+        # -> user_message footer.
+        order = [
+            "nature",
+            "current_state",
+            "tasks",
+            "reflection",
+            "conversation",
+            "web_search",
+            "authority_rules",
+            "user_message_footer",
+        ]
+        for earlier, later in zip(order, order[1:]):
+            assert positions[earlier] < positions[later], (
+                f"Section order violation: {earlier!r} (pos "
+                f"{positions[earlier]}) must appear before {later!r} "
+                f"(pos {positions[later]}) in the assembled prompt"
+            )

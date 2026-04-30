@@ -18,7 +18,7 @@ import secrets
 import signal
 import time
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import ollama
@@ -1662,15 +1662,26 @@ import threading
 import time as _time
 
 
+def _next_tiering_run_time(now: datetime) -> datetime:
+    """Return the next 00:05 datetime strictly after `now`.
+
+    Uses timedelta to advance by one day so month-end and year-end
+    rollovers (e.g. April 30, December 31) don't raise ValueError. The
+    earlier implementation used datetime.replace(day=day+1), which
+    failed on the last day of any month.
+    """
+    candidate = now.replace(hour=0, minute=5, second=0, microsecond=0)
+    if candidate <= now:
+        candidate = candidate + timedelta(days=1)
+    return candidate
+
+
 def _nightly_tiering_loop():
     """Sleep until 00:05, run tiering (and monthly reflection on day 1), repeat."""
     while True:
         now = datetime.now()
-        # Next 00:05
-        tomorrow = now.replace(hour=0, minute=5, second=0, microsecond=0)
-        if tomorrow <= now:
-            tomorrow = tomorrow.replace(day=tomorrow.day + 1)
-        sleep_seconds = (tomorrow - now).total_seconds()
+        next_run = _next_tiering_run_time(now)
+        sleep_seconds = (next_run - now).total_seconds()
         _time.sleep(sleep_seconds)
 
         try:

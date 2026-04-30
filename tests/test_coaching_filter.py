@@ -279,3 +279,204 @@ def test_chat_ollama_stream_passes_num_predict_to_options() -> None:
 
     assert "num_predict" in captured["options"]
     assert captured["options"]["num_predict"] >= 2048
+
+
+# ---------------------------------------------------------------------------
+# v0.18.0 Item 1: Tier 4 eval phrase additions
+# ---------------------------------------------------------------------------
+
+
+def test_v018_okay_that_you_feel_caught_as_therapeutic_mid() -> None:
+    """'It's okay that you feel that way' is the new 'that' branch of the
+    therapeutic-okay pattern (Haiku flag in v0.17.1 Tier 4)."""
+    from src.llm.coaching_filter import _detect_patterns
+
+    text = "I get that. It's okay that you feel that way."
+    matches = _detect_patterns(text, is_emotional=True)
+    pattern_kinds = {m["pattern"] for m in matches}
+    assert "therapeutic_mid" in pattern_kinds
+
+
+def test_v018_okay_to_sit_with_caught_as_therapeutic_mid() -> None:
+    """'It's okay to sit with it' is the new sit/cry/grieve/rest branch."""
+    from src.llm.coaching_filter import _detect_patterns
+
+    text = "It's okay to sit with it for a moment before deciding."
+    matches = _detect_patterns(text, is_emotional=True)
+    pattern_kinds = {m["pattern"] for m in matches}
+    assert "therapeutic_mid" in pattern_kinds
+
+
+def test_v018_lets_fix_that_caught_as_therapeutic_mid() -> None:
+    from src.llm.coaching_filter import _detect_patterns
+
+    text = "I see what you mean. Let's fix that together."
+    matches = _detect_patterns(text, is_emotional=True)
+    pattern_kinds = {m["pattern"] for m in matches}
+    assert "therapeutic_mid" in pattern_kinds
+
+
+def test_v018_sit_with_the_weight_caught_as_therapeutic_mid() -> None:
+    from src.llm.coaching_filter import _detect_patterns
+
+    text = "Just sit with the weight of it for a while."
+    matches = _detect_patterns(text, is_emotional=True)
+    pattern_kinds = {m["pattern"] for m in matches}
+    assert "therapeutic_mid" in pattern_kinds
+
+
+def test_v018_trailing_softener_caught_as_coaching_closing() -> None:
+    """Trailing 'though I'd still bet/think/guess' softener appended to a
+    stated position, hedging it. Tail-anchored (must appear in last 200 chars)."""
+    from src.llm.coaching_filter import _detect_patterns
+
+    text = (
+        "It's probably a connection-pool issue based on the symptoms, "
+        "though I'd still bet on the migration if I had to choose."
+    )
+    matches = _detect_patterns(text, is_emotional=True)
+    pattern_kinds = {m["pattern"] for m in matches}
+    assert "coaching_closing" in pattern_kinds
+
+
+# ---------------------------------------------------------------------------
+# v0.18.0 Item 2: numbered_structure intent gate
+# ---------------------------------------------------------------------------
+
+
+_TECHNICAL_NUMBERED_LIST = (
+    "Connection pooling reuses database connections. The benefits are:\n"
+    "1. Lower latency on repeated queries.\n"
+    "2. Reduced connection overhead.\n"
+    "3. Better resource utilization."
+)
+
+
+def test_v018_numbered_structure_suppressed_on_web_search() -> None:
+    from src.llm.coaching_filter import _detect_patterns
+
+    matches = _detect_patterns(
+        _TECHNICAL_NUMBERED_LIST, is_emotional=True, intent_class="web_search",
+    )
+    pattern_kinds = {m["pattern"] for m in matches}
+    assert "numbered_structure" not in pattern_kinds
+
+
+def test_v018_numbered_structure_suppressed_on_factual_recall() -> None:
+    from src.llm.coaching_filter import _detect_patterns
+
+    matches = _detect_patterns(
+        _TECHNICAL_NUMBERED_LIST, is_emotional=True, intent_class="factual_recall",
+    )
+    pattern_kinds = {m["pattern"] for m in matches}
+    assert "numbered_structure" not in pattern_kinds
+
+
+def test_v018_numbered_structure_suppressed_on_recent() -> None:
+    from src.llm.coaching_filter import _detect_patterns
+
+    matches = _detect_patterns(
+        _TECHNICAL_NUMBERED_LIST, is_emotional=True, intent_class="recent",
+    )
+    pattern_kinds = {m["pattern"] for m in matches}
+    assert "numbered_structure" not in pattern_kinds
+
+
+def test_v018_numbered_structure_suppressed_on_status_state() -> None:
+    from src.llm.coaching_filter import _detect_patterns
+
+    matches = _detect_patterns(
+        _TECHNICAL_NUMBERED_LIST, is_emotional=True, intent_class="status_state",
+    )
+    pattern_kinds = {m["pattern"] for m in matches}
+    assert "numbered_structure" not in pattern_kinds
+
+
+def test_v018_numbered_structure_still_fires_on_default() -> None:
+    """Regression guard: the gate must NOT change behavior on the default
+    intent class. Numbered structure on emotional/default content still fires."""
+    from src.llm.coaching_filter import _detect_patterns
+
+    matches = _detect_patterns(
+        _TECHNICAL_NUMBERED_LIST, is_emotional=True, intent_class="default",
+    )
+    pattern_kinds = {m["pattern"] for m in matches}
+    assert "numbered_structure" in pattern_kinds
+
+
+def test_v018_numbered_structure_still_fires_on_reflective() -> None:
+    from src.llm.coaching_filter import _detect_patterns
+
+    matches = _detect_patterns(
+        _TECHNICAL_NUMBERED_LIST, is_emotional=True, intent_class="reflective",
+    )
+    pattern_kinds = {m["pattern"] for m in matches}
+    assert "numbered_structure" in pattern_kinds
+
+
+# ---------------------------------------------------------------------------
+# v0.18.0 Item 3: short-response therapeutic-opener short-circuit
+# ---------------------------------------------------------------------------
+
+
+def test_v018_short_therapeutic_opener_short_circuits_to_empty() -> None:
+    """A response that is essentially the matched opener (under 40 chars)
+    must short-circuit to empty without invoking _rewrite()."""
+    from unittest.mock import patch
+    from src.llm.coaching_filter import filter_coaching_frame
+
+    with patch("src.llm.coaching_filter._rewrite") as mock_rewrite, \
+         patch("src.llm.coaching_filter._check_semantic_identity_collapse", return_value=False), \
+         patch("src.llm.coaching_filter._log_intervention"):
+        result = filter_coaching_frame(
+            "I hear you.", intent_class="default", is_conversational=False,
+        )
+
+    assert result == ""
+    assert mock_rewrite.call_count == 0
+
+
+def test_v018_long_therapeutic_opener_does_not_short_circuit() -> None:
+    """A longer response (>40 chars) that begins with a therapeutic opener
+    must still invoke _rewrite(). The short-circuit is for very short
+    responses only, where removing the opener leaves nothing."""
+    from unittest.mock import patch
+    from src.llm.coaching_filter import filter_coaching_frame
+
+    long_text = (
+        "I hear you. Take a break, stretch, or do something that feels good "
+        "to you for a while."
+    )
+
+    with patch("src.llm.coaching_filter._rewrite", return_value=long_text) as mock_rewrite, \
+         patch("src.llm.coaching_filter._check_semantic_identity_collapse", return_value=False), \
+         patch("src.llm.coaching_filter._log_intervention"):
+        filter_coaching_frame(
+            long_text, intent_class="default", is_conversational=False,
+        )
+
+    assert mock_rewrite.call_count == 1
+
+
+def test_v018_short_response_with_non_opener_match_does_not_short_circuit() -> None:
+    """The short-circuit fires only when ALL matches are therapeutic_opener.
+    A short response with another pattern type must not short-circuit."""
+    from unittest.mock import patch
+    from src.llm.coaching_filter import filter_coaching_frame
+
+    # Short coaching closing, not a therapeutic opener.
+    text = "You've got this!"
+
+    with patch("src.llm.coaching_filter._rewrite", return_value=text) as mock_rewrite, \
+         patch("src.llm.coaching_filter._check_semantic_identity_collapse", return_value=False), \
+         patch("src.llm.coaching_filter._log_intervention"):
+        result = filter_coaching_frame(
+            text, intent_class="default", is_conversational=False,
+        )
+
+    # This is a deletable closing, so result should be the deletion outcome
+    # (empty or near-empty after stripping the closing). The key assertion is
+    # that the short-circuit did not fire and _rewrite was not called for it.
+    assert mock_rewrite.call_count == 0
+    # Deletion path: closing stripped, possibly leaving empty or a fragment.
+    assert "got this" not in result.lower()

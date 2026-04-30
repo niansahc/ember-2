@@ -65,6 +65,10 @@ _COACHING_CLOSINGS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) 
     # since these often appear mid-response, not just at the end.
     r"how (?:are you|do you) (?:feeling|feel)(?: about)?(?: that| this| it)?",
     r"how does (?:that|this|it) feel",
+    # Trailing softeners: qualifiers appended to undermine a stated
+    # position, producing a hedged, coaching-tone close. Tail-anchored
+    # by the 200-char window in _detect_patterns().
+    r"though i(?:'d| would) still (?:bet|think|guess)",
 ))
 
 # Therapeutic mid-response patterns — not just openers/closers but
@@ -75,7 +79,10 @@ _THERAPEUTIC_MID_RESPONSE: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNOR
     r"i(?:'m| am) here (?:as )?a steady presence",
     r"i(?:'m| am) here for you",
     r"that takes (?:real )?courage",
-    r"it(?:'s| is) okay to (?:not be okay|feel|struggle|take time)",
+    r"it(?:'s| is) okay to (?:not be okay|feel|sit (?:with)?|struggle|cry|grieve|rest|take time|pause)",
+    r"it(?:'s| is) okay that (?:you|this)",
+    r"let(?:'s| us) fix (?:that|this)",
+    r"sit with (?:it|this|the weight)",
     r"be (?:gentle|kind|patient) with yourself",
     r"(?:honor|respect|validate) (?:your|those|the) (?:feelings?|emotions?)",
     r"there(?:'s| is) no (?:right|wrong) way to (?:feel|process|grieve)",
@@ -116,13 +123,32 @@ _NUMBERED_STRUCTURES: tuple[re.Pattern, ...] = (
     re.compile(r"(?:^|\n)\s*(?:1\.|first,)\s+", re.IGNORECASE | re.MULTILINE),
 )
 
+# Intent classes where numbered lists are appropriate response format
+# (factual content, web search results, status reports). Suppressing
+# numbered_structure detection on these classes prevents the false-
+# positive rewrite calls observed in production logs: the rewrite
+# returned null because the LLM correctly refused to convert legitimate
+# factual numbered lists into prose.
+_NUMBERED_STRUCTURE_SUPPRESSED_INTENTS: frozenset[str] = frozenset({
+    "web_search",
+    "factual_recall",
+    "recent",
+    "status_state",
+})
+
 
 # ---------------------------------------------------------------------------
 # Stage 1: Detection
 # ---------------------------------------------------------------------------
 
-def _detect_patterns(text: str, is_emotional: bool) -> list[dict]:
+def _detect_patterns(text: str, is_emotional: bool, intent_class: str = "default") -> list[dict]:
     """Detect coaching-frame patterns in the response text.
+
+    intent_class gates a small subset of patterns (currently
+    _NUMBERED_STRUCTURES) that would produce false positives on factual
+    response classes where numbered lists are the appropriate format.
+    Defaults to "default" so legacy call sites without an intent class
+    see the full pre-gate behavior.
 
     Returns a list of match dicts: {"pattern": str, "match": str, "position": str, "deletable": bool}
     """
@@ -179,16 +205,19 @@ def _detect_patterns(text: str, is_emotional: bool) -> list[dict]:
                 "deletable": False,  # Needs rewrite
             })
 
-    # Numbered structures
-    for pat in _NUMBERED_STRUCTURES:
-        m = pat.search(text)
-        if m:
-            matches.append({
-                "pattern": "numbered_structure",
-                "match": m.group().strip(),
-                "position": "body",
-                "deletable": False,  # Needs rewrite — structure removal changes meaning
-            })
+    # Numbered structures: skip on factual intent classes where lists
+    # are the appropriate response format. See
+    # _NUMBERED_STRUCTURE_SUPPRESSED_INTENTS for the gate.
+    if intent_class not in _NUMBERED_STRUCTURE_SUPPRESSED_INTENTS:
+        for pat in _NUMBERED_STRUCTURES:
+            m = pat.search(text)
+            if m:
+                matches.append({
+                    "pattern": "numbered_structure",
+                    "match": m.group().strip(),
+                    "position": "body",
+                    "deletable": False,  # Needs rewrite, structure removal changes meaning
+                })
 
     return matches
 
@@ -570,13 +599,27 @@ def filter_coaching_frame(
     is_emotional = intent_class in _EMOTIONAL_INTENTS or is_conversational
 
     # Stage 1: detect coaching patterns
-    matches = _detect_patterns(text, is_emotional)
+    matches = _detect_patterns(text, is_emotional, intent_class)
     if not matches:
         return text
 
     # Stage 1: apply deletions for deletable patterns
     result = _apply_deletions(text, matches)
     stage = 1
+
+    # Short-response therapeutic-opener guard. When the entire response
+    # is essentially the matched opener (under 40 chars, only opener
+    # matches), the rewrite call always returns null because there is
+    # nothing left after the frame is removed. Log the intervention and
+    # return empty so the LLM is not invoked for a guaranteed-empty
+    # rewrite.
+    if (
+        len(text) < 40
+        and matches
+        and all(m["pattern"] == "therapeutic_opener" for m in matches)
+    ):
+        _log_intervention(intent_class, matches, text, "", stage=1)
+        return ""
 
     # Stage 2: rewrite if any non-deletable patterns remain
     if _needs_rewrite(matches):

@@ -428,8 +428,9 @@ pytest tests/eval/ -m eval --runs 3   # 3-run minimum for signal
 **v0.15.0** — Quality of life improvements: web search broadening and ask-first mode, constitutional review overhaul (MVR, constitution v0.7), temporal decay, knowledge gap suppression, vault citation signals, BUG-008/009/010 fixes, developer tooling ✓
 **v0.16.0** — Stability & UAT cycle: autonomous web search default, vision pipeline fix, vault badge fixes, constitutional review blank response fix, style pack system, self-hosted fonts, appearance tab ✓
 **v0.17.0** — Smarter search routing, anti-sycophancy, ChatGPT import fixes: ask-first intent classifier (ADR-034), StateExtractor gated to live conversation turns (ADR-033), coaching filter expansion, UAT suite rewrite (25 behavioral acceptance tests), CI pytest workflow ✓
-**v0.17.1** — Retrieval quality, vision, and routing fixes: SafetyReviewContext extension (ADR-035), cross-session pattern detection (ADR-021), Lodestone path 2 (inferred records), vision pipeline env var configurability, ask-first UI toggle re-enabled (in progress)
-**Post-v0.17.1** — Multi-user vault isolation, full platform parity
+**v0.17.1** — Retrieval quality, vision, and routing fixes: SafetyReviewContext extension (ADR-035), cross-session pattern detection (ADR-021), Lodestone path 2 (inferred records), vision pipeline env var configurability, ask-first UI toggle re-enabled ✓
+**v0.18.0** — Coaching filter maturation, date-arithmetic bug fix, eval privacy fix, post-gen URL scanner, token-overflow guardrail, web search freshness, ADR-037 classifier migration, StateExtractor coverage, review SSE UX (in progress)
+**Post-v0.18.0** — Multi-user vault isolation, full platform parity
 
 ---
 

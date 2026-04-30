@@ -1974,8 +1974,10 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
   → informs: future (vault semantic integrity, no version assigned)
 
 - **PRISM persona granularity finding** (Hu et al., USC, arXiv:2603.18507, March 2026) — Long persona descriptions improve alignment-direction tasks (writing, style, relational) but damage accuracy on factual recall. Minimum personas minimize accuracy cost on knowledge-intensive queries. Audit needed: confirm whether full nature block injects on factual_recall intent and whether this is an accepted tradeoff or a gap.
+
+  v0.18.0 audit (April 2026): nature block injects unconditionally at full depth on all queries including factual_recall, via dual injection in system prompt (first position) and context packet (every turn). No intent-class gate exists in _build_nature_section(). PRISM's accuracy damage finding applies to general knowledge factual recall (MMLU-style); Ember's factual_recall intent is personal vault recall, not general knowledge, which reduces the risk. The personal vault gate and ZERO block already handle accuracy on empty-retrieval cases independently of nature injection. Decision: accept as a known tradeoff. No change to injection logic. Graduation trigger: if factual_recall accuracy degrades in future eval runs, intent-conditional nature injection depth is the first architectural response.
   → informs: v0.18.0 (nature injection audit before nature layer changes)
-  → graduation trigger: audit complete, decision documented
+  → graduation trigger: factual_recall accuracy regression observed in eval — investigate intent-conditional nature injection depth
 
 - **PERSIST CoT variability finding** (arXiv:2508.04826, AAAI 2026) — Chain-of-thought reasoning increases response variability across runs for both small and large models. Perplexity does not capture behavioral instability. Validates ADR-014 multi-run judge architecture and caution around thinking mode in review passes.
   → informs: architectural validation only; watch if thinking mode extended to more review passes

@@ -43,6 +43,7 @@ from tools.eval_conversations import (
     evaluate_with_claude,
     get_ember_api_key,
 )
+from tools.eval_helpers import swap_to_test_vault, restore_vault
 
 
 # ---------------------------------------------------------------------------
@@ -50,15 +51,14 @@ from tools.eval_conversations import (
 # ---------------------------------------------------------------------------
 
 MODELS_TO_TEST = [
-    "qwen2.5:14b",    # Current default — baseline
-    "qwen3:8b",
-    "mistral:7b",
-    "phi4:14b",
+    "qwen3:8b",       # Current production -- baseline for Pareto comparison
+    "qwen3:14b",
     "gemma3:12b",
+    "gemma2:9b",
     "llama3.1:8b",
 ]
 
-ORIGINAL_MODEL = "qwen2.5:14b"
+ORIGINAL_MODEL = "qwen3:8b"
 
 CATEGORIES = [
     "Preference expression",
@@ -239,6 +239,12 @@ def main():
     input("Press Enter to continue or Ctrl+C to cancel...")
     print()
 
+    # Privacy: swap to test vault so model responses are not vault-grounded
+    # against the live vault while shipping content to the Haiku judge.
+    # swap_to_test_vault hits POST /v1/developer/vault/swap on the running
+    # API and fails closed (sys.exit) if the swap can't reach the API.
+    previous_vault = swap_to_test_vault()
+
     # Check which models are installed
     installed = get_installed_models()
     print(f"Installed models: {sorted(installed)}")
@@ -363,6 +369,10 @@ def main():
         encoding="utf-8",
     )
     print(f"JSON written to: {json_file}")
+
+    # Restore live vault via the API endpoint. Best-effort: prints a
+    # warning on failure but does not exit (eval is done at this point).
+    restore_vault(previous_vault)
 
 
 if __name__ == "__main__":

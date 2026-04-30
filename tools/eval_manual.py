@@ -347,7 +347,12 @@ def _run_compare(api_key: str, local_model: str) -> None:
     print(f"\nComparison metadata saved to: {out_file}")
 
 
-def _run_auto_battery(target_model: str, api_key: str) -> None:
+def _run_auto_battery(
+    target_model: str,
+    api_key: str,
+    probe: bool = False,
+    log_sentences: bool = True,
+) -> int:
     """Run all 19 questions without pausing for annotation.
 
     Prints responses to stdout for live review but does NOT save them
@@ -357,6 +362,10 @@ def _run_auto_battery(target_model: str, api_key: str) -> None:
 
     Saves only metadata (model, question, latency, word count) to a
     dated log file for before/after timing comparison.
+
+    When probe=True, runs the answer-vs-packet fabrication detector
+    inline after each question whose text is in PROBE_QUESTIONS.
+    Returns the count of FABRICATED-verdict probe questions (0 = clean).
     """
     date_str = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     log_dir = REPO_ROOT / "logs" / "eval_manual"
@@ -368,6 +377,11 @@ def _run_auto_battery(target_model: str, api_key: str) -> None:
         f"# Auto Battery — {target_model} — {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n",
         "Responses shown on stdout only — not saved to disk (vault privacy).\n\n",
     ]
+
+    probe_results = []
+    if probe:
+        from tools.eval_probe import PROBE_QUESTIONS, run_probe_for_question
+        probe_set = set(PROBE_QUESTIONS)
 
     question_num = 0
     for category_block in BATTERY:
@@ -396,9 +410,41 @@ def _run_auto_battery(target_model: str, api_key: str) -> None:
             lines.append(f"**Q{question_num}:** {question}\n")
             lines.append(f"- latency: {latency:.1f}s, words: {word_count}\n\n")
 
+            # Inline probe pass for the 7 selected questions. Issues
+            # its own pre-flight /debug-context plus a fresh
+            # /v1/chat/completions so the captured packet matches
+            # what the probe-side answer was generated from. Battery
+            # state continues forward regardless of probe outcome.
+            if probe and question in probe_set:
+                print("  Running fabrication probe...")
+                pr = run_probe_for_question(question, api_key=api_key)
+                probe_results.append(pr)
+                verdict_label = pr.verdict
+                if pr.error_stage:
+                    print(
+                        f"  Probe ERROR (stage={pr.error_stage}): "
+                        f"{pr.error_message}"
+                    )
+                else:
+                    print(
+                        f"  Probe verdict: {verdict_label} "
+                        f"(anchored={pr.anchored_sentence_count}, "
+                        f"fabricated={pr.fabricated_sentence_count})"
+                    )
+
     out_file.write_text("".join(lines), encoding="utf-8")
     print(f"\nMetadata saved to: {out_file}")
     print("(Responses shown above — not written to disk)")
+
+    if probe and probe_results:
+        from tools.eval_probe import render_console_summary, write_probe_log
+        probe_log_dir = write_probe_log(probe_results, log_sentences=log_sentences)
+        print()
+        print(render_console_summary(probe_results))
+        print(f"\nProbe log: {probe_log_dir}")
+        flagged = sum(1 for r in probe_results if r.verdict == "FABRICATED")
+        return flagged
+    return 0
 
 
 def main():
@@ -407,6 +453,24 @@ def main():
     parser.add_argument("--model", type=str, default=None, help="Model to test")
     parser.add_argument("--auto", action="store_true", help="Run all 19 questions without annotation — saves raw responses to file")
     parser.add_argument("--compare", action="store_true", help="Run battery twice: active local model then claude-haiku-4-5, side-by-side comparison")
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help=(
+            "Run the answer-vs-packet fabrication detector after each of "
+            "the 7 vault-grounded probe questions. Off by default. Exit "
+            "code 2 if any FABRICATED flag fires. --auto only."
+        ),
+    )
+    parser.add_argument(
+        "--no-log-sentences",
+        action="store_true",
+        help=(
+            "When --probe is active, redact flagged-sentence text in the "
+            "probe log (records sentence length only). Default is to log "
+            "the sentence verbatim."
+        ),
+    )
     args = parser.parse_args()
 
     from tools.eval_helpers import swap_to_test_vault, restore_vault, run_cleanup
@@ -452,11 +516,21 @@ def main():
             print(f"\nAuto Battery — {target_model} — {datetime.now().strftime('%Y-%m-%d')}")
             print("=" * 60)
             print("Running all 19 questions without annotation...\n")
-            _run_auto_battery(target_model, api_key)
+            flagged_count = _run_auto_battery(
+                target_model,
+                api_key,
+                probe=args.probe,
+                log_sentences=not args.no_log_sentences,
+            )
             if original_model and args.model:
                 _switch_model(original_model, api_key)
             run_cleanup()
             print("\nDone.")
+            if flagged_count:
+                # Exit 2 distinguishes success-with-fabrication-flags
+                # from setup error (1) and clean run (0). CI / pre-
+                # release scripts can branch on this.
+                sys.exit(2)
             return
 
         # --- MANUAL MODE: interactive annotation ---

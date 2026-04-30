@@ -90,7 +90,7 @@ The Measure function evaluates AI risk and performance through quantitative and 
 ### What Ember Has
 
 **Testing:**
-- 1733 pytest tests collected (20 deselected) covering backend services, retrieval, state, safety, and API endpoints.
+- 1747 pytest tests collected (20 deselected) covering backend services, retrieval, state, safety, and API endpoints.
 - 163 Playwright e2e tests covering UI flows (2 conditional skips).
 - 73 Playwright e2e tests covering installer flows.
 
@@ -174,4 +174,4 @@ The primary gaps are in formal evaluation (Measure) and systematic monitoring (M
 
 ---
 
-*This document is updated at each major release. Last updated: v0.17.1, April 2026.*
+*This document is updated at each major release. Last updated: v0.18.0 (in progress), April 2026.*

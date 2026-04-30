@@ -1881,16 +1881,24 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 
 *Research, not build. Graduation requires a build item or explicit decision to discard.*
 
-- **MemMachine retrieval-stage optimization hierarchy** (MemVerge, arXiv:2604.04853, March 2026) — Empirical validation that retrieval-stage changes outperform ingestion changes. Ordering: depth tuning > context formatting > search prompt design > query bias correction > sentence chunking. Grounds the retrieval depth ablation queued for v0.15.0.
-  → informs: v0.15.0 (retrieval depth tuning ablation)
-  → graduation trigger: retrieval depth ablation scheduled and spec'd
+- **MemMachine retrieval-stage optimization hierarchy** (MemVerge, arXiv:2604.04853, March 2026) — Empirical validation that retrieval-stage changes outperform ingestion changes. Ordering: depth tuning > context formatting > search prompt design > query bias correction > sentence chunking. Also introduces nucleus + neighbors pattern: expanding top-k matches to include temporally adjacent records to improve recall on fragmented-context queries.
+
+  Pre-implementation review conducted v0.18.0 (April 2026). Two findings closed both proposed changes:
+
+  Depth ablation: Ember's retrieval is not fixed top-k. It is a multi-stage weighted pipeline (vector search, in-flight scoring, ContextRanker, authorship/project boost, temporal decay, diversity selection). MemMachine's depth knob does not map cleanly onto Ember's architecture. Additionally, eval_retrieval.py cannot detect improvements below 6.67% (1 query verdict change); MemMachine's +4.2% is below the measurement floor. No specific observed failure to fix.
+
+  Nucleus + neighbors: No documented failure pattern in Ember's eval history or KNOWN_ISSUES.md where relevant memory was missed due to fragmentation across adjacent records. The documented failure mode is vague queries producing hallucination on plausibly-matched but wrong records, a scoring problem not a fragmentation problem.
+
+  Decision: both changes deferred. Revisit when a specific failure either change would fix is observed in production.
+  → informs: deferred (no version assigned)
+  → graduation trigger: documented retrieval failure attributable to fixed injection depth or fragmented-context recall
 
 - **FileGram procedural memory paradigm** (Synvo-ai, arXiv:2604.04901, April 2026) — First benchmark treating agent personalization as procedural behavioral memory (workflow traces, file-system patterns) rather than semantic retrieval over text. Relevant if Ember extends beyond conversation records to behavioral memory types.
   → informs: post-v0.18.0 (behavioral memory types — no version assigned)
   → graduation trigger: Ember expands memory types beyond conversation, journal, profile, reflection
 
 - **SWAY counterfactual CoT sycophancy mitigation** (Bhalla & Gligorić, JHU, arXiv:2604.02423, April 2026) — Explicit anti-sycophancy instruction yields moderate reductions and can backfire; counterfactual CoT mitigation drives sycophancy to near-zero without suppressing genuine responsiveness. Potential upgrade to position_holding and relational_hedging intervention pattern. Conflicts with current coaching filter approach — evaluate before v0.18.0 sycophancy work.
-  → informs: v0.17.2 (sycophancy intervention evaluation)
+  → informs: v0.18.0 (sycophancy intervention evaluation)
   → graduation trigger: counterfactual CoT tested against current coaching filter on 19-question battery
 
 - **Neurodivergent-aware AI co-regulation framework** (Piskala, arXiv:2507.06864, 2025) — Privacy-first on-device framework for ADHD professionals using attention-state inference, adaptive nudges, and accountability presence (body doubling). Design principles match Ember's primary deployment context.
@@ -1964,6 +1972,40 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 
 - **Vault knowledge linting (Karpathy LLM Wiki pattern, April 2026)** — Karpathy's LLM Wiki pattern (gist: karpathy/442a6bf555914893e9891c11519de94f, 5,000+ stars) describes a periodic LLM-driven "linting" pass over a knowledge base that scans for contradictions, superseded records, and missing connections between related memories. Ember has scripts/audit_memory.py (7 structural health checks) and tools/audit_reflections.py (junk detection), but no pass that looks for semantic contradictions or stale records that conflict with newer ones. The linting concept is distinct from structural health — it's a meaning-level check. Filing for future design work; not scheduled. Research basis: Karpathy (2026), LLM Wiki gist; VentureBeat coverage April 2026.
   → informs: future (vault semantic integrity, no version assigned)
+
+- **PRISM persona granularity finding** (Hu et al., USC, arXiv:2603.18507, March 2026) — Long persona descriptions improve alignment-direction tasks (writing, style, relational) but damage accuracy on factual recall. Minimum personas minimize accuracy cost on knowledge-intensive queries. Audit needed: confirm whether full nature block injects on factual_recall intent and whether this is an accepted tradeoff or a gap.
+
+  v0.18.0 audit (April 2026): nature block injects unconditionally at full depth on all queries including factual_recall, via dual injection in system prompt (first position) and context packet (every turn). No intent-class gate exists in _build_nature_section(). PRISM's accuracy damage finding applies to general knowledge factual recall (MMLU-style); Ember's factual_recall intent is personal vault recall, not general knowledge, which reduces the risk. The personal vault gate and ZERO block already handle accuracy on empty-retrieval cases independently of nature injection. Decision: accept as a known tradeoff. No change to injection logic. Graduation trigger: if factual_recall accuracy degrades in future eval runs, intent-conditional nature injection depth is the first architectural response.
+  → informs: v0.18.0 (nature injection audit before nature layer changes)
+  → graduation trigger: factual_recall accuracy regression observed in eval — investigate intent-conditional nature injection depth
+
+- **PERSIST CoT variability finding** (arXiv:2508.04826, AAAI 2026) — Chain-of-thought reasoning increases response variability across runs for both small and large models. Perplexity does not capture behavioral instability. Validates ADR-014 multi-run judge architecture and caution around thinking mode in review passes.
+  → informs: architectural validation only; watch if thinking mode extended to more review passes
+  → graduation trigger: n/a — reference only
+
+- **Implicit Belief Stability** (arXiv:2603.25187, March 2026) — LLMs exhibit goal drift in multi-turn interactions unless goals are explicitly anchored in context. External behavioral consistency does not guarantee internal goal stability. Validates Ember's nature reminder injection on every turn as the correct memory mechanism.
+  → informs: architectural validation only
+  → graduation trigger: n/a — reference only
+
+- **Stable Personas dual-assessment framework** (arXiv:2601.22812, January 2026) — Single-source eval cannot detect dissociation between internal persona representation and expressed behavior. Recommends joint self-reported and observer-rated assessment. Suggests adding a second assessment pass to the manual battery.
+  → informs: v0.18.0 eval design (second assessment pass in manual battery)
+  → graduation trigger: second pass added to eval_manual_test_battery.md
+
+- **Opal: Private Memory for Personal AI** (UC Berkeley, arXiv:2604.02522, April 2026) — Knowledge graph enrichment recovers 13 percentage points of retrieval accuracy over semantic search alone. Cloud/enclave architecture not applicable to Ember's local-first constraint, but KG finding is hardware-agnostic. Supports LightRAG graduation case post-GPU upgrade.
+  → informs: post-GPU-upgrade (LightRAG graduation condition)
+  → graduation trigger: GPU upgrade confirmed, LightRAG graduation spec begins
+
+- **Algorithmic Self-Portrait: Deconstructing Memory in ChatGPT** (arXiv:2602.01450, February 2026) — 96% of memories created unilaterally by the system. 52% of records contain psychological insights. Memory seepage across context boundaries is the primary privacy risk. Ember's user-controlled append-only vault with audit_memory.py is architecturally well-defended. Lodestone inferred value records are the highest-sensitivity records and the contextual integrity gap remains open.
+  → informs: architectural validation; contextual integrity gap remains open (no version assigned)
+  → graduation trigger: CIMemories benchmark evaluation when system matures
+
+- **Lightweight Query Routing for Adaptive RAG** (Wang et al., arXiv:2604.03455, April 2026) — TF-IDF + SVM achieves competitive RAG routing. No single RAG paradigm consistently dominates. Validates Ember's multi-policy cascade approach over a single retrieval strategy.
+  → informs: architectural validation only
+  → graduation trigger: n/a — reference only
+
+- **Local LLM landscape, April 2026** — 80.7% of LLM workloads handleable by models under 20B parameters. Llama 3.3 8B significantly outperforms Llama 3.1 8B on instruction following. AWQ quantization outperforms GGUF on NVIDIA hardware (95% vs 90% quality, higher speed). Model eval shortlist updated: replace Llama 3.1 8B with Llama 3.3 8B as second candidate after Gemma 3 9B. AWQ becomes the target quantization format post-GPU upgrade.
+  → informs: next model eval run (Llama 3.3 8B); post-GPU-upgrade (AWQ quantization)
+  → graduation trigger: model eval run with Llama 3.3 8B completed
 
 ---
 

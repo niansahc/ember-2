@@ -2003,9 +2003,17 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
   → informs: architectural validation only
   → graduation trigger: n/a — reference only
 
-- **Local LLM landscape, April 2026** — 80.7% of LLM workloads handleable by models under 20B parameters. Llama 3.3 8B significantly outperforms Llama 3.1 8B on instruction following. AWQ quantization outperforms GGUF on NVIDIA hardware (95% vs 90% quality, higher speed). Model eval shortlist updated: replace Llama 3.1 8B with Llama 3.3 8B as second candidate after Gemma 3 9B. AWQ becomes the target quantization format post-GPU upgrade.
-  → informs: next model eval run (Llama 3.3 8B); post-GPU-upgrade (AWQ quantization)
-  → graduation trigger: model eval run with Llama 3.3 8B completed
+- **Local LLM landscape, April 2026** — 80.7% of LLM workloads handleable by models under 20B parameters. AWQ quantization outperforms GGUF on NVIDIA hardware (95% vs 90% quality, higher speed). Model eval shortlist: Gemma 3 12B and Llama 3.1 8B as candidates against qwen3:8b baseline. Note: Gemma 3 has no 9B variant (ships 1B/4B/12B/27B). Llama 3.3 is 70B only, not 8B — the research review model names were incorrect. AWQ becomes the target quantization format post-GPU upgrade.
+  → informs: next model eval run (Gemma 3 12B and Llama 3.1 8B); post-GPU-upgrade (AWQ quantization)
+  → graduation trigger: model eval run with Gemma 3 12B and Llama 3.1 8B completed
+
+- **v0.18.0 model comparison result, 2026-04-30** — Test vault, 3 models, 54 evaluations. qwen3:8b retained per Pareto rule. Results:
+    - qwen3:8b: 7.3 overall (Pref 8.7 / Const 9.0 / Mem 6.0 / Self-A 8.3 / State 8.0 / Tone 4.0), 18.4s avg, 15/0/3/0
+    - gemma3:12b: 5.6 overall (Pref 6.3 / Const 6.7 / Mem 4.3 / Self-A 4.3 / State 4.0 / Tone 8.0), 24.7s avg, 10/0/8/0
+    - llama3.1:8b: 5.1 overall (Pref 6.3 / Const 6.7 / Mem 2.0 / Self-A 4.3 / State 6.3 / Tone 4.7), 9.8s avg, 8/0/10/0
+  gemma3:12b Tone/Constitutional tradeoff confirmed as real model behavior, not eval noise — reproduced on clean test vault two runs apart. Constitutional drop (9.0 → 6.7) blocks gemma3:12b as a primary model candidate. Chat template / prompt honoring investigation deferred.
+  → informs: continued use of qwen3:8b; backlog item — gemma3:12b chat template / prompt honoring investigation
+  → graduation trigger: gemma3:12b chat template / prompt honoring investigation completed
 
 ---
 

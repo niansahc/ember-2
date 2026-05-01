@@ -40,23 +40,28 @@ def _make_response(status_code: int = 200, payload: dict | None = None) -> Magic
 
 class TestSwapToTestVault:
 
-    def test_swap_returns_none_when_not_configured(self, tmp_path, monkeypatch):
-        """No VAULT_PATH_TEST set: skip the API call and return None."""
+    def test_swap_exits_when_not_configured(self, tmp_path, monkeypatch):
+        """No VAULT_PATH_TEST set: must fail closed with SystemExit, not
+        silently fall through. The original 2026-04-30 leak was a silent
+        return None when env var was absent in the eval subprocess."""
         monkeypatch.delenv("VAULT_PATH_TEST", raising=False)
         with patch("tools.eval_helpers.httpx.post") as mock_post:
             from tools.eval_helpers import swap_to_test_vault
-            prev = swap_to_test_vault()
-        assert prev is None
+            with pytest.raises(SystemExit) as exc_info:
+                swap_to_test_vault()
+            assert exc_info.value.code == 1
         assert mock_post.call_count == 0
 
-    def test_swap_returns_none_when_dir_missing(self, tmp_path, monkeypatch):
-        """VAULT_PATH_TEST points at nonexistent dir: skip API, return None."""
+    def test_swap_exits_when_dir_missing(self, tmp_path, monkeypatch):
+        """VAULT_PATH_TEST points at nonexistent dir: must fail closed
+        with SystemExit. Same privacy reasoning as the unset-env case."""
         missing = str(tmp_path / "nonexistent")
         monkeypatch.setenv("VAULT_PATH_TEST", missing)
         with patch("tools.eval_helpers.httpx.post") as mock_post:
             from tools.eval_helpers import swap_to_test_vault
-            prev = swap_to_test_vault()
-        assert prev is None
+            with pytest.raises(SystemExit) as exc_info:
+                swap_to_test_vault()
+            assert exc_info.value.code == 1
         assert mock_post.call_count == 0
 
     def test_swap_calls_api_with_test_label(self, tmp_path, monkeypatch):

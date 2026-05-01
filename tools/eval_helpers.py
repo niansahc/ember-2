@@ -11,9 +11,13 @@ Shared helpers for eval tools: test vault isolation and post-run cleanup.
   fixed 2026-04-30.
 
 - Privacy posture: swap_to_test_vault fails closed via sys.exit(1) on
-  any swap failure (connection refused, 403 dev-mode disabled, 400
-  unknown label, 5xx). Refusing to proceed prevents leaking live-vault
-  content to eval judges.
+  any path that would let the eval proceed against the live vault.
+  This includes: missing VAULT_PATH_TEST env var, missing test-vault
+  directory, and any swap-call failure (connection refused, 403
+  dev-mode disabled, 400 unknown label, 5xx). Silent-return-None was
+  the original 2026-04-30 leak: callers cannot distinguish "swap
+  skipped" from "swap succeeded," so any None path is treated as a
+  privacy regression and made fatal.
 
 - run_cleanup: invoke the same logic as cleanup_test_artifacts.py
   --confirm to archive eval artifacts from the active vault silently.
@@ -54,26 +58,38 @@ def _swap_headers() -> dict:
     return headers
 
 
-def swap_to_test_vault() -> str | None:
+def swap_to_test_vault() -> str:
     """Switch the running API to the test vault for eval isolation.
 
-    Returns "test" on successful swap, None when skipped (test vault not
-    configured locally). On any swap failure, prints a fatal message and
-    exits the process to prevent eval running against the live vault.
+    Returns "test" on successful swap. On any failure path - missing
+    VAULT_PATH_TEST env var, missing test-vault directory, or a failed
+    swap call - prints a fatal message and exits the process. This
+    prevents the caller from proceeding against the live vault.
 
-    Local pre-flight gate (VAULT_PATH_TEST + dir exists) avoids a noisy
-    API call when the test vault simply isn't configured. The API also
-    enforces dev-mode and known-label gates server-side; failures from
-    those gates are fatal.
+    Missing env / missing dir are configuration errors, not "graceful
+    skip" conditions. The PR #37 design intent is that no eval ever
+    runs against the live vault by accident; any None return from this
+    helper would re-open that hole.
     """
     test_path = os.getenv("VAULT_PATH_TEST")
     if not test_path:
-        return None
+        print(
+            "FATAL: VAULT_PATH_TEST is not set. Eval tools require an "
+            "explicit test vault to fail closed against the live vault. "
+            "Set VAULT_PATH_TEST in .env and export it into the shell "
+            "before invoking eval (load_dotenv runs inside the API, not "
+            "in eval-tool subprocesses)."
+        )
+        sys.exit(1)
 
     resolved = Path(test_path).resolve()
     if not resolved.is_dir():
-        print(f"WARNING: VAULT_PATH_TEST ({resolved}) does not exist. Skipping swap.")
-        return None
+        print(
+            f"FATAL: VAULT_PATH_TEST ({resolved}) does not exist or is "
+            "not a directory. Refusing to proceed against the live vault. "
+            "Create the test vault directory or correct VAULT_PATH_TEST."
+        )
+        sys.exit(1)
 
     url = f"{_api_base()}{_VAULT_SWAP_PATH}"
     try:

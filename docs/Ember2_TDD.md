@@ -2003,9 +2003,9 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
   → informs: architectural validation only
   → graduation trigger: n/a — reference only
 
-- **Local LLM landscape, April 2026** — 80.7% of LLM workloads handleable by models under 20B parameters. AWQ quantization outperforms GGUF on NVIDIA hardware (95% vs 90% quality, higher speed). Future model eval queue: `qwen3:14b` (timeout issue from prior run, needs retest after config fix) and the qwen3 MoE variant (`qwen3:30b-a3b`, Mixture-of-Experts architecture, ~3B active parameters per token). Gemma 3 12B and Llama 3.1 8B were evaluated in the v0.18.0 comparison (results below); the prior research review's "Gemma 3 9B" and "Llama 3.3 8B" names do not correspond to Ollama tags (Gemma 3 ships 1B/4B/12B/27B; Llama 3.3 is 70B only). AWQ becomes the target quantization format post-GPU upgrade.
-  → informs: next model eval run (`qwen3:14b` retest, `qwen3:30b-a3b` MoE); post-GPU-upgrade (AWQ quantization)
-  → graduation trigger: model eval run with `qwen3:14b` retest and qwen3 MoE variant completed
+- **Local LLM landscape, April 2026** — 80.7% of LLM workloads handleable by models under 20B parameters. AWQ quantization outperforms GGUF on NVIDIA hardware (95% vs 90% quality, higher speed). Future model eval queue: `qwen3:14b` (timeout issue from prior run, needs retest after config fix), the qwen3 MoE variant (`qwen3:30b-a3b`, Mixture-of-Experts architecture, ~3B active parameters per token), and `qwen3.5:9b` (next-generation Qwen base model in the same parameter class as the qwen3:8b production baseline). Gemma 3 12B and Llama 3.1 8B were evaluated in the v0.18.0 comparison (results below); the prior research review's "Gemma 3 9B" and "Llama 3.3 8B" names do not correspond to Ollama tags (Gemma 3 ships 1B/4B/12B/27B; Llama 3.3 is 70B only). AWQ becomes the target quantization format post-GPU upgrade.
+  → informs: next model eval run (`qwen3:14b` retest, `qwen3:30b-a3b` MoE, `qwen3.5:9b`); post-GPU-upgrade (AWQ quantization)
+  → graduation trigger: model eval run with `qwen3:14b` retest, qwen3 MoE variant, and `qwen3.5:9b` completed
 
 - **v0.18.0 model comparison result, 2026-04-30** — Test vault, 3 models, 54 evaluations. qwen3:8b retained per Pareto rule. Results:
     - qwen3:8b: 7.3 overall (Pref 8.7 / Const 9.0 / Mem 6.0 / Self-A 8.3 / State 8.0 / Tone 4.0), 18.4s avg, 15/0/3/0

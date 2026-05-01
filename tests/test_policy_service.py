@@ -1,3 +1,5 @@
+import pytest
+
 from src.safety.models import SafetyReviewContext
 from src.safety.policy_service import SafetyPolicyService
 
@@ -292,3 +294,126 @@ def test_preference_compliance_activates_correct_principles() -> None:
     principles = service.get_active_principles(trigger)
     assert "flourishing_over_preference" in principles
     assert "user_agency_and_respect" in principles
+
+
+# ---------------------------------------------------------------------------
+# _contains_high_risk_pattern() coverage (added v0.18.0)
+#
+# Closes the test gap on the high_risk_pattern signal flagged by the
+# 45-day audit run via tools/eval/policy_trigger_audit.py. The audit
+# returned INCONCLUSIVE on all three keywords (sample size below the
+# N>=20 floor), so no keyword was removed in the same commit. These
+# tests pin the function's existing contract so a future removal
+# decision has a known starting point.
+# ---------------------------------------------------------------------------
+
+
+HIGH_RISK_KEYWORDS = ("step by step", "exact steps", "without getting caught")
+
+
+@pytest.mark.parametrize("keyword", HIGH_RISK_KEYWORDS)
+def test_high_risk_keyword_in_user_message_fires(keyword: str) -> None:
+    """Each of the three high_risk_pattern keywords fires when present
+    in the user message."""
+    service = SafetyPolicyService()
+    context = SafetyReviewContext(
+        user_message=f"Tell me {keyword} how this works.",
+        draft_response="Sure.",
+    )
+    result = service.evaluate_trigger(context)
+    assert "high_risk_pattern" in result.triggered_by
+
+
+@pytest.mark.parametrize("keyword", HIGH_RISK_KEYWORDS)
+def test_high_risk_keyword_in_draft_only_fires(keyword: str) -> None:
+    """Combined-text scope (policy_service.py:63): when the model emits
+    a high_risk keyword in the draft response, the trigger fires even
+    if the user message did not contain the keyword."""
+    service = SafetyPolicyService()
+    context = SafetyReviewContext(
+        user_message="Help me with this question.",
+        draft_response=f"OK, here is {keyword} the explanation.",
+    )
+    result = service.evaluate_trigger(context)
+    assert "high_risk_pattern" in result.triggered_by
+
+
+@pytest.mark.parametrize("casing", [
+    "STEP BY STEP",
+    "Step By Step",
+    "EXACT STEPS",
+    "Without Getting Caught",
+])
+def test_high_risk_pattern_is_case_insensitive(casing: str) -> None:
+    """The combined text is lower-cased before matching, so any casing
+    of a keyword fires identically to the canonical lowercase form."""
+    service = SafetyPolicyService()
+    context = SafetyReviewContext(
+        user_message=f"Tell me {casing} how to do it.",
+        draft_response="OK.",
+    )
+    result = service.evaluate_trigger(context)
+    assert "high_risk_pattern" in result.triggered_by
+
+
+def test_high_risk_pattern_natural_phrase_in_tutorial_query_fires() -> None:
+    """The audit-driven canonical example: a benign tutorial query
+    containing 'step by step' as natural phrasing fires the trigger.
+    This is the false-positive shape the audit was asked to evaluate;
+    pinning it here so any future trigger refactor surfaces a behavior
+    change against this case explicitly."""
+    service = SafetyPolicyService()
+    context = SafetyReviewContext(
+        user_message=(
+            "Walk me step by step through how to set up a Python "
+            "virtual environment."
+        ),
+        draft_response="Sure.",
+    )
+    result = service.evaluate_trigger(context)
+    assert "high_risk_pattern" in result.triggered_by
+
+
+@pytest.mark.parametrize("user_message,draft_response", [
+    ("Tell me how to plant tomatoes.", "Plant in spring soil."),
+    ("How does HTTP work?", "HTTP is a protocol for transferring data."),
+    ("What's the weather like today?", "I don't have real-time data."),
+    (
+        "Walk me through how to reset my password.",
+        "Click 'forgot password' on the login page.",
+    ),
+])
+def test_high_risk_pattern_does_not_fire_on_benign_queries(
+    user_message: str, draft_response: str,
+) -> None:
+    """Benign queries with no high_risk keyword do not trigger the
+    signal. Includes near-paraphrase 'walk me through how to' which
+    is semantically adjacent but does not contain any keyword."""
+    service = SafetyPolicyService()
+    context = SafetyReviewContext(
+        user_message=user_message,
+        draft_response=draft_response,
+    )
+    result = service.evaluate_trigger(context)
+    assert "high_risk_pattern" not in result.triggered_by
+
+
+@pytest.mark.parametrize("variant", [
+    "exact step",     # singular -- only the plural form is a keyword
+    "step by",        # truncated -- missing the second 'step'
+    "without getting",  # truncated -- missing 'caught'
+    "stepwise",       # different word -- no spaces match
+])
+def test_high_risk_pattern_does_not_fire_on_partial_phrases(
+    variant: str,
+) -> None:
+    """The matcher uses literal substring containment with no word-
+    boundary or stem expansion. Truncated phrases, singular vs plural
+    variants, and stem-similar words do not match the keyword set."""
+    service = SafetyPolicyService()
+    context = SafetyReviewContext(
+        user_message=f"Help me {variant} through this.",
+        draft_response="OK.",
+    )
+    result = service.evaluate_trigger(context)
+    assert "high_risk_pattern" not in result.triggered_by

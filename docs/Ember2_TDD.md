@@ -3153,9 +3153,11 @@ These are known limitations of the current model (qwen3:8b) that cannot be fully
 
 ## coaching_frame
 
-The model produces coaching-frame closings ("Remember, you deserve...", "I'm here for you whenever...") on emotional and relational intent classes. Post-generation filter (ADR-030) catches and rewrites most instances. Prompt-level suppression reduces frequency but does not eliminate the pattern. This is a trained behavior in the base model that persists through instruction tuning.
+The model produces coaching-frame closings ("Remember, you deserve...", "I'm here for you whenever...") on emotional and relational intent classes. Post-generation filter (ADR-030) catches and rewrites most instances. Prompt-level suppression reduces frequency but does not eliminate the pattern. This is a trained behavior in the base model that persists through instruction tuning. Mechanism: RLHF reward signals shaped for one persona context generalize into default model behavior, so the therapeutic register surfaces on technical and relational queries alike — the same training-artifact generalization OpenAI documented in their post-mortem on the GPT-4o sycophancy regression.
 
 **Mitigation:** Post-generation coaching filter (Stage 1 deletion + Stage 2 rewrite). Eval baseline: 7/13 golden cases passing.
+
+Reference: OpenAI. Where the goblins came from (April 29, 2026). https://openai.com/index/where-the-goblins-came-from/
 
 ## therapeutic_register
 

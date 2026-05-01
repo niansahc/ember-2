@@ -17,7 +17,7 @@ from src.memory.service import MemoryService
 from src.memory.write_memory import write_memory
 from src.memory.session import create_session, session_exists, get_session, list_sessions
 from src.context.service import ContextService
-from src.llm.adapter import LLMAdapter
+from src.llm.adapter import LLMAdapter, StatusSignal
 from src.onboarding.service import OnboardingService
 from src.state.state_extractor import StateExtractor
 from src.state.state_service import StateService
@@ -1501,8 +1501,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 # 1. Yield typing indicator
                 yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'content': ''}, 'finish_reason': None}]})}\n\n"
 
-                # 2. Generate full response (non-streaming)
-                full_reply = llm_adapter.generate_response(
+                # 2. Generate full response (non-streaming) - iterate
+                # generate_response_iter so review_pending / review_complete
+                # status events fire on the wire around the constitutional
+                # review call (ADR-036 Option A; UI commit ed858c9). When
+                # the trigger doesn't fire, no StatusSignals are yielded
+                # and only the final string arrives.
+                full_reply = ""
+                for _item in llm_adapter.generate_response_iter(
                     context_packet,
                     style=conversational_style,
                     project_name=project_name,
@@ -1513,7 +1519,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     vision_description=_vision_description,
                     ask_first_active=_ask_first_active,
                     intent_class=_intent_class,
-                )
+                ):
+                    if isinstance(_item, StatusSignal):
+                        yield _status_event(_item.name)
+                    else:
+                        full_reply = _item
 
                 # 3. Grounding check
                 yield _status_event("verifying")

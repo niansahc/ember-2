@@ -4,6 +4,8 @@ import logging
 import os
 import re
 import threading
+from dataclasses import dataclass
+from typing import Iterator
 
 import httpx
 import ollama
@@ -130,6 +132,17 @@ def strip_think_blocks(text: str) -> str:
     return stripped.strip()
 
 
+@dataclass(frozen=True)
+class StatusSignal:
+    """Status sentinel yielded by generate_response_iter() at the
+    constitutional review boundaries. Translated into SSE delta.status
+    events by the streaming caller in src/api/openai_adapter.py.
+    Non-streaming callers drop these and consume only the final
+    response string. ADR-036 Option A.
+    """
+    name: str  # "review_pending" or "review_complete"
+
+
 class LLMAdapter:
     def __init__(
         self,
@@ -162,6 +175,49 @@ class LLMAdapter:
         ask_first_active: bool = False,
         intent_class: str | None = None,
     ) -> str:
+        """Drain generate_response_iter() and return the final response
+        string. Status signals are dropped here -- non-streaming callers
+        don't surface review state. The streaming SSE generator iterates
+        generate_response_iter() directly so it can translate each
+        StatusSignal into a delta.status SSE event on the wire."""
+        final = ""
+        for item in self.generate_response_iter(
+            context_packet,
+            style=style,
+            project_name=project_name,
+            last_session_label=last_session_label,
+            suppress_relational_lodestone=suppress_relational_lodestone,
+            temperature=temperature,
+            bare_mode=bare_mode,
+            vision_description=vision_description,
+            ask_first_active=ask_first_active,
+            intent_class=intent_class,
+        ):
+            if isinstance(item, str):
+                final = item
+        return final
+
+    def generate_response_iter(
+        self,
+        context_packet: ContextPacket,
+        style: str = "balanced",
+        project_name: str | None = None,
+        last_session_label: str | None = None,
+        suppress_relational_lodestone: bool = False,
+        temperature: float | None = None,
+        bare_mode: bool = False,
+        vision_description: str | None = None,
+        ask_first_active: bool = False,
+        intent_class: str | None = None,
+    ) -> Iterator[StatusSignal | str]:
+        """Generator form of generate_response. Yields StatusSignal
+        sentinels around the constitutional review call (only when
+        trigger_result.triggered), then yields the final response string
+        last. The async SSE generator in src/api/openai_adapter.py
+        iterates this method and translates each StatusSignal to a
+        delta.status SSE event so the UI breathing-dot indicator
+        activates during the genuine review window (ADR-036 Option A;
+        UI commit ed858c9)."""
         system_prompt = self.prompt_builder.build_prompt(
             context_packet,
             style=style,
@@ -268,7 +324,14 @@ class LLMAdapter:
                 t2_pattern_category=_t2_category,
             )
 
+            # ADR-036 Option A: yield review_pending immediately before
+            # the LLM-assisted review call, review_complete immediately
+            # after. Gated to triggered=True so the breathing-dot is a
+            # truthful signal, not a false positive on every grounded
+            # request.
+            yield StatusSignal("review_pending")
             review_result = self.review_service.review(review_context)
+            yield StatusSignal("review_complete")
 
             log_path = self.review_logger.log(
                 context_packet=context_packet,
@@ -319,7 +382,7 @@ class LLMAdapter:
         # and turns are sequential, so the risk is negligible.
         threading.Thread(target=self._maybe_compress_buffer, daemon=True).start()
 
-        return final_response
+        yield final_response
 
     def generate_response_stream(
         self,

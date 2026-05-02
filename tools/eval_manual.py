@@ -149,7 +149,11 @@ def _send_message(message: str, api_key: str) -> str:
                 "Content-Type": "application/json",
                 "X-Test-Session": "true",
             },
-            timeout=120.0,
+            # 180s ceiling so slower local models (qwen3:14b at ~80s avg,
+            # observed peak 118.3s on 2026-04-19) complete long-generation
+            # responses without truncation. Production users on /v1/chat/
+            # completions are uncapped; this only governs the eval harness.
+            timeout=180.0,
         )
         data = resp.json()
         return data["choices"][0]["message"]["content"]

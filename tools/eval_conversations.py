@@ -201,7 +201,11 @@ def send_to_ember(message: str) -> dict:
                 "stream": False,
             },
             headers=headers,
-            timeout=120.0,
+            # 180s ceiling so slower local models (qwen3:14b at ~80s avg,
+            # observed peak 118.3s on 2026-04-19) complete long-generation
+            # responses without truncation. Production users on /v1/chat/
+            # completions are uncapped; this only governs the eval harness.
+            timeout=180.0,
         )
         latency = time.perf_counter() - t0
 

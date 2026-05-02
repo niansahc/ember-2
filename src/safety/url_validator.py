@@ -49,9 +49,12 @@ from urllib.parse import urlparse
 _BARE_URL_PATTERN = re.compile(r"https?://[^\s<>\"'`]+", re.IGNORECASE)
 
 # Markdown link [label](url). Label may be empty. URL goes to the first
-# whitespace or closing paren.
+# whitespace or closing paren. Closing paren is optional so a malformed
+# link like '[label](url' (model omitted ')') still collapses cleanly to
+# bare label rather than leaving orphan '[' and '(' brackets after the
+# bare-URL pass strips the URL alone.
 _MARKDOWN_LINK_PATTERN = re.compile(
-    r"\[([^\]]*)\]\((https?://[^\s)]+)\)",
+    r"\[([^\]]*)\]\((https?://[^\s)]+)\)?",
     re.IGNORECASE,
 )
 
@@ -140,14 +143,23 @@ def build_url_allowlist(
 
 
 def is_url_allowed(url: str, allowlist: set[tuple[str, str]]) -> bool:
-    """Path-prefix match against the canonical allowlist.
+    """Bidirectional path-prefix match against the canonical allowlist.
 
-    Match rule:
-      - host must equal an allowlist host (after lowercase + www. strip)
-      - path must equal allowlist path, or start with allowlist_path + "/",
-        OR allowlist path is empty (any path on host)
-      - implicit-allow hosts (localhost, private/loopback IPv4 ranges,
-        IPv6 ::1 and fe80::/10) always pass
+    Match rule (host equality required first, then any of):
+      - allowlist path is empty (any path on host)
+      - emitted path equals allowlist path
+      - emitted path is a child of allowlist path (emitted starts with
+        allowlist_path + "/") -- e.g. allowlist /sdk permits /sdk/blob/main
+      - allowlist path is a child of emitted path (allowlist starts with
+        emitted_path + "/") -- e.g. allowlist /sdk/blob/main permits the
+        repo root /sdk. This handles the case where SearXNG returned a
+        deeper page URL but the model emitted the parent.
+      - emitted path is empty (bare host root) and any URL on that host
+        is in the allowlist -- the host root is in scope when any deeper
+        URL on it is verified.
+
+    Implicit-allow hosts (localhost, private/loopback IPv4 ranges,
+    IPv6 ::1 and fe80::/10) always pass.
     """
     if not url:
         return False
@@ -162,11 +174,15 @@ def is_url_allowed(url: str, allowlist: set[tuple[str, str]]) -> bool:
     for allow_host, allow_path in allowlist:
         if url_host != allow_host:
             continue
-        if allow_path == "" or allow_path == "/":
+        if allow_path == "":
+            return True
+        if url_path == "":
             return True
         if url_path == allow_path:
             return True
         if url_path.startswith(allow_path + "/"):
+            return True
+        if allow_path.startswith(url_path + "/"):
             return True
     return False
 
@@ -266,7 +282,9 @@ def _canonicalize_url(url: str) -> tuple[str, str] | None:
     if host.startswith("www."):
         host = host[4:]
     path = parsed.path or ""
-    if len(path) > 1 and path.endswith("/"):
+    if path == "/":
+        path = ""
+    elif len(path) > 1 and path.endswith("/"):
         path = path.rstrip("/")
     return host, path
 

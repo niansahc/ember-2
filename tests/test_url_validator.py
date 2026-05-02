@@ -308,6 +308,80 @@ def test_26_user_message_none_uses_other_sources():
 
 
 # ----------------------------------------------------------------------
+# Regression: malformed markdown + bidirectional prefix (UAT smoke fixes)
+# ----------------------------------------------------------------------
+
+
+def test_28_malformed_markdown_missing_close_paren_disallowed():
+    """Bug observed in v0.17.2 UAT smoke: model emits [label](URL without
+    the closing ). Without tolerance, the markdown regex fails, the bare-URL
+    regex strips the URL alone, and the user sees orphan brackets:
+    '[label]([unverified link]'. Validator should collapse to bare label.
+    """
+    reply = "Try [name](https://fake.example/x for details."
+    cleaned, stripped, kept = validate_and_strip_urls(reply, _allowlist())
+    assert cleaned == "Try name for details."
+    assert stripped == [{"url": "https://fake.example/x", "form": "markdown"}]
+    assert kept == []
+
+
+def test_28b_malformed_markdown_missing_close_paren_allowed():
+    """Allowed URL inside malformed markdown stays as the model wrote it
+    (no validator-introduced damage). The text remains malformed but no
+    URL is stripped."""
+    allowlist = _allowlist("https://example.test/ok")
+    reply = "Try [name](https://example.test/ok for details."
+    cleaned, stripped, kept = validate_and_strip_urls(reply, allowlist)
+    assert "https://example.test/ok" in cleaned
+    assert stripped == []
+    assert "https://example.test/ok" in kept
+
+
+def test_29_bidirectional_prefix_emitted_shorter_than_allowlist():
+    """Bug observed in v0.17.2 UAT smoke: SearXNG returned a deeper page
+    URL (e.g. .../repo/blob/main/README.md), the model emitted the repo
+    root (.../repo), and the validator stripped the legitimate URL because
+    the path-prefix match only worked one direction.
+    """
+    allowlist = _allowlist("https://github.example/org/repo/blob/main/README.md")
+    reply = "See https://github.example/org/repo for details."
+    cleaned, stripped, kept = validate_and_strip_urls(reply, allowlist)
+    assert cleaned == reply
+    assert stripped == []
+    assert "https://github.example/org/repo" in kept
+
+
+def test_30_bidirectional_keeps_sibling_collision_boundary():
+    """Bidirectional matching must still respect the / boundary: emitted
+    /sdk-malicious is not a parent of allowlist /sdk."""
+    allowlist = _allowlist("https://github.example/org/sdk")
+    reply = "Try https://github.example/org/sdk-malicious for the bad one."
+    cleaned, stripped, kept = validate_and_strip_urls(reply, allowlist)
+    assert "[unverified link]" in cleaned
+    assert "sdk-malicious" not in cleaned
+
+
+def test_31_bidirectional_respects_host():
+    """Bidirectional must still require host equality: a shallower URL on
+    a different host stays disallowed."""
+    allowlist = _allowlist("https://example.test/x/y/z")
+    reply = "Try https://other.test/x for the wrong host."
+    cleaned, stripped, kept = validate_and_strip_urls(reply, allowlist)
+    assert "[unverified link]" in cleaned
+    assert "other.test" not in cleaned
+
+
+def test_32_bare_host_allowed_when_any_host_url_in_allowlist():
+    """Special case of bidirectional: emitted bare host root is allowed
+    when any URL on that host is in the allowlist."""
+    allowlist = _allowlist("https://example.test/some/deep/path")
+    reply = "See https://example.test for the homepage."
+    cleaned, stripped, kept = validate_and_strip_urls(reply, allowlist)
+    assert cleaned == reply
+    assert stripped == []
+
+
+# ----------------------------------------------------------------------
 # Direct unit tests on helpers (extra coverage)
 # ----------------------------------------------------------------------
 

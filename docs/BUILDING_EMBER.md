@@ -58,7 +58,7 @@ The Architect reviews every PR, reads every plan, and approves every architectur
 
 ### Manager
 
-The coordination instance for the release. Handles research, project management, coordination, design suggestions, and prompt drafting. Does not write code. Does not make architectural or design decisions — those belong to the Architect. Does not use CC-specific formatting or slash commands. Produces single recommendations with rationale, not menus of options. The Architect reviews and approves everything before it goes to a CC instance.
+The coordination instance for the release. Handles research, project management, coordination, design suggestions, and prompt drafting. Does not write code. Does not use CC-specific formatting or slash commands. Produces single recommendations with rationale, not menus of options. The Architect reviews and approves everything before it goes to a CC instance.
 
 Each release runs one or two manager sessions. Manager state does not persist across sessions. Continuity comes from a handoff written at session end and loaded at the next session's start. The handoff is the source of truth for where the release stands.
 

@@ -1615,6 +1615,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     confirmation_search_failed=_confirmation_search_failed,
                     explicit_search_request=_explicit_search,
                     ask_first_active=_ask_first_active,
+                    user_message=latest_user_message,
+                    memory_items=getattr(context_packet, "memory_items", None),
+                    state_items=getattr(context_packet, "state_items", None),
                 )
                 full_reply = _postgen.reply
                 # When the post-gen pipeline substituted the response
@@ -1753,6 +1756,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     confirmation_search_failed=_confirmation_search_failed,
                     explicit_search_request=_explicit_search,
                     ask_first_active=_ask_first_active,
+                    user_message=latest_user_message,
+                    memory_items=getattr(context_packet, "memory_items", None),
+                    state_items=getattr(context_packet, "state_items", None),
                 )
                 full_reply = _postgen.reply
                 _post_stream_cleanup(full_reply)
@@ -1817,6 +1823,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         vision_description=_vision_description,
         confirmation_search_failed=_confirmation_search_failed,
         ask_first_active=_ask_first_active,
+        user_message=latest_user_message,
+        memory_items=getattr(context_packet, "memory_items", None),
+        state_items=getattr(context_packet, "state_items", None),
     )
     reply = _postgen_ns.reply
     if _postgen_ns.ask_first_substituted or _postgen_ns.web_refusal_substituted:

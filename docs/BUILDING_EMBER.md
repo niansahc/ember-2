@@ -2,7 +2,7 @@
 
 Last updated: v0.18.0, May 2026
 
-I work in technology. I've done full-stack development, and for the past few years I've been on the business analysis and QA side of the house. I understand systems. I can read code. I'm just not writing it every day anymore.
+I work in technology. I've done full-stack development, and for the past four years I've been on the business analysis and QA side of the house. I understand systems. I can read code. I'm just not writing it every day anymore.
 
 That context matters for what follows.
 
@@ -40,7 +40,7 @@ I don't write the code.
 
 I can read it, reason about architecture, and catch when something is wrong. But sitting down and writing Python or React from scratch isn't something I can do at the pace this project requires. What I can do is think clearly about systems, ask precise questions, make decisions about tradeoffs, and know when the answer I'm getting is wrong.
 
-So I built a three-way collaboration. There's me. There's Claude, which handles architecture, design decisions, research, and planning. And there's Claude Code, which handles implementation. I direct. Claude designs. Claude Code builds.
+So I built a three-way collaboration. There's me. There's Claude, which handles research, project management, coordination, and design suggestions grounded in research. And there's Claude Code, which handles implementation. I decide. Claude proposes. Claude Code builds.
 
 I read every piece of code that goes in. I approve it or send it back. I'm not vibe coding. I understand what's being built and why. I just can't write it myself right now. That's not a compromise. That's the project.
 
@@ -48,17 +48,17 @@ I read every piece of code that goes in. I approve it or send it back. I'm not v
 
 ## The Cast
 
-### Chas, architect and project owner
+### Architect and Project Owner
 
-Designs, directs, and approves everything. For this project, the architect is Chas (they/them). All architectural decisions, all release approvals, all scope calls are theirs. No code ships, no PR merges, no release cuts without explicit approval. Manager drafts and recommends. Chas decides. CC instances build. Chas reviews. The project exists because they built it.
+Designs, directs, and approves everything. All architectural decisions, all release approvals, all scope calls are theirs. No code ships, no PR merges, no release cuts without explicit approval. Manager drafts and recommends. The Architect decides. CC instances build. The Architect reviews. The project exists because they built it.
 
 Ember-2 is a personal project on personal time and personal hardware.
 
-Chas reviews every PR, reads every plan, and approves every architectural call. Full-stack experience and QA background inform the testing discipline and decision gates. The design choices in Ember-2 (local-first, privacy as structural foundation, typed memory, failure modes treated as architectural problems) come from Chas's academic work on persistent personal AI systems and direct experience as an Ember-1 user. Neurodivergent-compatible design is a primary context. The system is built for how Chas thinks and works.
+The Architect reviews every PR, reads every plan, and approves every architectural call. Full-stack experience and QA background inform the testing discipline and decision gates. The design choices in Ember-2 (local-first, privacy as structural foundation, typed memory, failure modes treated as architectural problems) come from the Architect's academic work on persistent personal AI systems and direct experience as an Ember-1 user. Neurodivergent-compatible design is a primary context. The system is built for how the Architect thinks and works.
 
 ### Manager
 
-The coordination instance for the release. Handles architecture, planning, research, decisions, prompt drafting. Does not write code. Does not use CC-specific formatting or slash commands. Produces single recommendations with rationale, not menus of options. Chas reviews and approves everything before it goes to a CC instance.
+The coordination instance for the release. Handles research, project management, coordination, design suggestions, and prompt drafting. Does not write code. Does not use CC-specific formatting or slash commands. Produces single recommendations with rationale, not menus of options. The Architect reviews and approves everything before it goes to a CC instance.
 
 Each release runs one or two manager sessions. Manager state does not persist across sessions. Continuity comes from a handoff written at session end and loaded at the next session's start. The handoff is the source of truth for where the release stands.
 
@@ -70,7 +70,7 @@ Backend Claude Code instance. Python, FastAPI, SQLite, eval tooling, retrieval p
 
 ### M, Magenta, ember-2-ui
 
-Frontend Claude Code instance. React, Vite, Playwright e2e tests, SSE handling, UI components. Never touches backend code. Never makes product decisions about what the user sees. Those come from manager after explicit Chas approval.
+Frontend Claude Code instance. React, Vite, Playwright e2e tests, SSE handling, UI components. Never touches backend code. Never makes product decisions about what the user sees. Those come from manager after explicit approval from the Architect.
 
 ### Y, Yellow, ember-2-installer
 
@@ -80,7 +80,7 @@ A note on color coding. The G/M/Y color labels are a visual organization system 
 
 ### Deep
 
-Dedicated research instance. Runs literature searches, synthesizes findings, evaluates research relevance to Ember's architecture. Never builds. Findings come back to manager before any design work begins. Manager does not architect from first principles when a literature pass is warranted.
+Dedicated research instance. Runs literature searches, synthesizes findings, evaluates research relevance to Ember's architecture. Findings come back to manager before any design work begins. Manager does not architect from first principles when a literature pass is warranted.
 
 ### The Council
 
@@ -94,13 +94,13 @@ Personas:
 - **Constraints Reviewer**: Windows-first reality, ASCII-only on Windows, hardware constraints, install flow integrity
 - **Test Discipline Reviewer**: flaky test posture, eval coverage at each tier, fabrication probe coverage when retrieval, grounding, or nature changes
 
-Manager chairs. Manager collects each persona's critique, synthesizes, presents one recommendation to Chas with rationale. Chas decides.
+Manager chairs. Manager collects each persona's critique, synthesizes, presents one recommendation to the Architect with rationale. The Architect decides.
 
-The council is a deliberation layer, not a build layer. It does not write code. It does not approve releases. It produces critiques that inform Chas's call.
+The council is a deliberation layer, not a build layer. It does not write code. It does not approve releases. It produces critiques that inform the Architect's call.
 
 When the council convenes:
 
-1. Before architecture decisions, after Deep, before grill-me or ultraplan, on calls Chas flags as high-stakes
+1. Before architecture decisions, after Deep, before grill-me or ultraplan, on calls the Architect flags as high-stakes
 2. Before release approval, against principles and eval results, before the release gate closes
 3. On disagreement, when G, M, or Y disagree on approach, or when manager and a CC instance differ
 

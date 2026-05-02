@@ -40,7 +40,7 @@ I don't write the code.
 
 I can read it, reason about architecture, and catch when something is wrong. But sitting down and writing Python or React from scratch isn't something I can do at the pace this project requires. What I can do is think clearly about systems, ask precise questions, make decisions about tradeoffs, and know when the answer I'm getting is wrong.
 
-So I built a three-way collaboration. There's me. There's Claude, which handles architecture, design decisions, research, and planning. And there's Claude Code, which handles implementation. I direct. Claude designs. Claude Code builds.
+So I built a three-way collaboration. There's me. There's Claude, which handles research, project management, coordination, and design suggestions grounded in research. And there's Claude Code, which handles implementation. I decide. Claude proposes. Claude Code builds.
 
 I read every piece of code that goes in. I approve it or send it back. I'm not vibe coding. I understand what's being built and why. I just can't write it myself right now. That's not a compromise. That's the project.
 

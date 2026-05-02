@@ -80,7 +80,7 @@ A note on color coding. The G/M/Y color labels are a visual organization system 
 
 ### Deep
 
-Dedicated research instance. Runs literature searches, synthesizes findings, evaluates research relevance to Ember's architecture. Never builds. Findings come back to manager before any design work begins. Manager does not architect from first principles when a literature pass is warranted.
+Dedicated research instance. Runs literature searches, synthesizes findings, evaluates research relevance to Ember's architecture. Findings come back to manager before any design work begins. Manager does not architect from first principles when a literature pass is warranted.
 
 ### The Council
 

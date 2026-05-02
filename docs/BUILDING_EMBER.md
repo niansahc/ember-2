@@ -2,7 +2,7 @@
 
 Last updated: v0.18.0, May 2026
 
-I work in technology. I've done full-stack development, and for the past few years I've been on the business analysis and QA side of the house. I understand systems. I can read code. I'm just not writing it every day anymore.
+I work in technology. I've done full-stack development, and for the past four years I've been on the business analysis and QA side of the house. I understand systems. I can read code. I'm just not writing it every day anymore.
 
 That context matters for what follows.
 

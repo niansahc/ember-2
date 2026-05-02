@@ -3,12 +3,14 @@ src/llm/post_gen_pipeline.py
 
 Unified post-generation validator pipeline.
 
-Runs four validators in a fixed order against a completed response:
+Runs five validators in a fixed order against a completed response:
 
   1. source allowlist (strip fabricated citations)
   2. web search refusal (deterministic fallback when model ignores web results)
   3. vision refusal (substitute when vision fired but model refused)
   4. ask-first (substitute when web_search intent skipped the confirmation)
+  5. URL validator (B-MEM-005: strip fabricated https?:// URLs against a
+     per-turn allowlist; runs last so it sees the final returned text)
 
 Followed by an empty-response guard that fills zero-byte replies with a
 fallback so the streaming path never emits a blank message to the client
@@ -21,8 +23,12 @@ The ordering is deliberate:
     answer regardless of vision or ask-first state.
   - Vision before ask-first: a vision refusal is a direct failure to use
     the <vision_context> section, so it wins over any ask-first logic.
-  - Empty guard last: if earlier substitutions zeroed the reply somehow,
-    this catches it.
+  - Empty guard before URL validator: ensures URL validation runs against
+    whatever text is actually returned, including any empty-fallback text.
+  - URL validator last: substitutions earlier in the pipeline can introduce
+    or remove URLs, so validating the final text is the only correct
+    position. URLs in substituted snippet text come from web_items by
+    construction and pass the allowlist cleanly.
 
 Callers should log the returned `substitutions` list so eval can track
 intervention rates.
@@ -31,7 +37,7 @@ intervention rates.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.llm.ask_first_validator import validate_ask_first_response
 from src.llm.source_validator import (
@@ -40,6 +46,10 @@ from src.llm.source_validator import (
 )
 from src.llm.vision_refusal_validator import validate_vision_response
 from src.llm.web_search_refusal_validator import validate_web_search_response
+from src.safety.url_validator import (
+    build_url_allowlist,
+    validate_and_strip_urls,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +67,8 @@ class PostGenResult:
     vision_substituted: bool
     ask_first_substituted: bool
     empty_fallback_fired: bool
+    stripped_urls: list[dict] = field(default_factory=list)
+    kept_urls: list[str] = field(default_factory=list)
 
 
 def run_post_gen_pipeline(
@@ -73,6 +85,9 @@ def run_post_gen_pipeline(
     confirmation_search_failed: bool = False,
     explicit_search_request: bool = False,
     ask_first_active: bool = False,
+    user_message: str | None = None,
+    memory_items: list | None = None,
+    state_items: list | None = None,
 ) -> PostGenResult:
     """Run source → vision → ask-first → empty-guard against a full reply.
 
@@ -145,6 +160,32 @@ def run_post_gen_pipeline(
         empty_fallback_fired = True
         logger.warning("[POSTGEN] empty-response guard fired")
 
+    stripped_urls: list[dict] = []
+    kept_urls: list[str] = []
+    try:
+        url_allowlist = build_url_allowlist(
+            web_items=web_items,
+            memory_items=memory_items,
+            state_items=state_items,
+            user_message=user_message,
+        )
+        reply, stripped_urls, kept_urls = validate_and_strip_urls(
+            reply, url_allowlist
+        )
+        if stripped_urls:
+            logger.info(
+                "[POSTGEN] stripped fabricated urls (%d stripped, %d kept): %s",
+                len(stripped_urls),
+                len(kept_urls),
+                stripped_urls,
+            )
+    except Exception as exc:
+        logger.warning(
+            "[POSTGEN] url_validator failed: %s", type(exc).__name__
+        )
+        stripped_urls = []
+        kept_urls = []
+
     return PostGenResult(
         reply=reply,
         stripped_sources=stripped_sources,
@@ -152,4 +193,6 @@ def run_post_gen_pipeline(
         vision_substituted=vision_substituted,
         ask_first_substituted=ask_first_substituted,
         empty_fallback_fired=empty_fallback_fired,
+        stripped_urls=stripped_urls,
+        kept_urls=kept_urls,
     )

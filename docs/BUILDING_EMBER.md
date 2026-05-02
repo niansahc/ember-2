@@ -50,6 +50,8 @@ I read every piece of code that goes in. I approve it or send it back. I'm not v
 
 ### Architect and Project Owner
 
+The architect is a human, the only human in this workflow.
+
 Designs, directs, and approves everything. All architectural decisions, all release approvals, all scope calls are theirs. No code ships, no PR merges, no release cuts without explicit approval. Manager drafts and recommends. The Architect decides. CC instances build. The Architect reviews. The project exists because they built it.
 
 Ember-2 is a personal project on personal time and personal hardware.
@@ -58,11 +60,11 @@ The Architect reviews every PR, reads every plan, and approves every architectur
 
 ### Manager
 
-The coordination instance for the release. Handles research, project management, coordination, design suggestions, and prompt drafting. Does not write code. Does not use CC-specific formatting or slash commands. Produces single recommendations with rationale, not menus of options. The Architect reviews and approves everything before it goes to a CC instance.
+Manager is a claude.ai chat instance running in the dedicated Ember-2 Claude project. It handles research, project management, coordination, design suggestions, and prompt drafting for the release. Produces single recommendations with rationale, not menus of options. The Architect reviews and approves everything before it goes to a CC instance.
 
-Each release runs one or two manager sessions. Manager state does not persist across sessions. Continuity comes from a handoff written at session end and loaded at the next session's start. The handoff is the source of truth for where the release stands.
+Each release runs one or two manager sessions. Manager state resets between sessions. Continuity comes from a handoff written at session end and loaded at the next session's start. The handoff is the source of truth for where the release stands.
 
-Manager instances open in the dedicated Ember-2 Claude project, with synced project knowledge files for all three repos. Project knowledge syncs at release boundaries. Mid-sprint, manager works from handoff state and session context.
+Synced project knowledge files cover all three repos and refresh at release boundaries. Mid-sprint, manager works from handoff state and session context.
 
 ### G, Green, ember-2
 
@@ -70,7 +72,7 @@ Backend Claude Code instance. Python, FastAPI, SQLite, eval tooling, retrieval p
 
 ### M, Magenta, ember-2-ui
 
-Frontend Claude Code instance. React, Vite, Playwright e2e tests, SSE handling, UI components. Never touches backend code. Never makes product decisions about what the user sees. Those come from manager after explicit approval from the Architect.
+Frontend Claude Code instance: React, Vite, Playwright e2e tests, SSE handling, UI components. Product decisions about what the user sees come from manager after explicit approval from the Architect.
 
 ### Y, Yellow, ember-2-installer
 
@@ -80,7 +82,7 @@ A note on color coding. The G/M/Y color labels are a visual organization system 
 
 ### Deep
 
-Dedicated research instance. Runs literature searches, synthesizes findings, evaluates research relevance to Ember's architecture. Findings come back to manager before any design work begins. Manager does not architect from first principles when a literature pass is warranted.
+Deep is a claude.ai chat instance using Claude's extended thinking capability for literature synthesis and research. Runs literature searches, synthesizes findings, evaluates research relevance to Ember's architecture. Findings come back to manager before any design work begins. When a literature pass is warranted, manager waits on findings before architecting.
 
 ### The Council
 
@@ -96,7 +98,7 @@ Personas:
 
 Manager chairs. Manager collects each persona's critique, synthesizes, presents one recommendation to the Architect with rationale. The Architect decides.
 
-The council is a deliberation layer, not a build layer. It does not write code. It does not approve releases. It produces critiques that inform the Architect's call.
+The council is a deliberation layer. It produces critiques that inform the Architect's call. Build sits with CC instances; release approval sits with the Architect.
 
 When the council convenes:
 
@@ -122,7 +124,7 @@ Skip the council on routine work. Convene only when the cost of getting it wrong
 
 ### Core workflow rules
 
-**One prompt per task.** Manager drafts a prompt for a CC instance. The architect reviews and sends it. Results come back before the next step. Manager does not assume results or proceed past a hold point without confirmation.
+**One prompt per task.** Manager drafts a prompt for a CC instance. The architect reviews and sends it. Results come back before the next step. Manager waits for results and confirms before proceeding past hold points.
 
 **Hold points are real.** When a prompt says "report back before proceeding" or "no PR yet," that is a hold point. The CC instance stops. Manager waits. The next prompt only goes out after results are received and reviewed.
 
@@ -197,13 +199,7 @@ Use Y for:
 - Verification runs (`eval_retrieval.py`, branch state checks, asset counts)
 - Pre-flight checks before a model comparison or eval run
 
-Do not use Y for:
-
-- Backend code changes (G scope)
-- Frontend code changes (M scope)
-- Any task requiring deep understanding of the backend architecture
-
-Y reports findings. Y does not make architectural decisions. Findings come back to manager.
+Y reports findings to manager. Architectural decisions are the Architect's.
 
 ### Session management
 
@@ -387,6 +383,14 @@ The gaps that remain are real: no multi-user vault isolation, no health integrat
 Ember's logo was created by Ember-1.
 
 I thought that was worth mentioning.
+
+---
+
+## References
+
+The council design draws on Constitutional AI (Bai, J., et al., 2022. Constitutional AI: Harmlessness from AI Feedback. Anthropic. https://arxiv.org/abs/2212.08073) and multi-stakeholder review frameworks from AI governance literature. The rotating-provider triangulation approach is original to this project.
+
+Other research informing Ember-2's architecture is attributed in the ADR documents in docs/adr/ and in the TDD at docs/Ember2_TDD.md Section 50.1.
 
 ---
 

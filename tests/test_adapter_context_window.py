@@ -62,15 +62,29 @@ def test_get_num_ctx_clamps_below_2048_to_floor() -> None:
         assert adapter._get_num_ctx() == 2048
 
 
-def test_get_num_ctx_clamps_above_131072_to_ceiling() -> None:
-    adapter = _bare_adapter("qwen3:8b")
-    with patch("src.core.preferences.get", return_value=999_999):
-        assert adapter._get_num_ctx() == 131072
-
-
 def test_get_num_ctx_invalid_preference_falls_back_to_model_default() -> None:
     """A non-int preference value falls through to the model-aware default,
     not to a hardcoded number."""
     adapter = _bare_adapter("qwen3:8b")
     with patch("src.core.preferences.get", return_value="garbage"):
         assert adapter._get_num_ctx() == 32768
+
+
+def test_get_num_ctx_clamps_user_preference_to_model_declared_ceiling() -> None:
+    """A user pref of 200000 on qwen3:8b must resolve to 40960 (the model's
+    true declared context length), not 131072 (the prior hard upper clamp).
+    Otherwise Ollama silently truncates at the real ceiling and the response
+    degrades mid-sentence -- the original B-QUAL-001 / 2026-04-26 failure
+    pattern that this clamp is meant to prevent."""
+    adapter = _bare_adapter("qwen3:8b")
+    with patch("src.core.preferences.get", return_value=200_000):
+        assert adapter._get_num_ctx() == 40960
+
+
+def test_get_num_ctx_clamps_above_model_ceiling_for_unknown_model() -> None:
+    """Unknown models fall back to the conservative 8192 declared base.
+    A high user pref must not lift the resolved value above that base
+    just because the prior hard ceiling was 131072."""
+    adapter = _bare_adapter("unknown-model:99b")
+    with patch("src.core.preferences.get", return_value=999_999):
+        assert adapter._get_num_ctx() == 8192

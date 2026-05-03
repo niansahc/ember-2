@@ -14,6 +14,7 @@ from src.core.config import get_ember_model, get_ember_vision_model
 
 logger = logging.getLogger("ember.llm")
 from src.llm.prompt_builder import PromptBuilder
+from src.llm.prompt_guardrail import OLLAMA_NUM_PREDICT, trim_to_fit
 from src.memory.service import MemoryService
 from src.reflection.session_summary import write_session_summary
 from src.safety.models import SafetyReviewContext
@@ -217,17 +218,33 @@ class LLMAdapter:
         delta.status SSE event so the UI breathing-dot indicator
         activates during the genuine review window (ADR-036 Option A;
         UI commit ed858c9)."""
-        system_prompt = self.prompt_builder.build_prompt(
-            context_packet,
-            style=style,
-            project_name=project_name,
-            last_session_label=last_session_label,
-            suppress_relational_lodestone=suppress_relational_lodestone,
-            bare_mode=bare_mode,
-            vision_description=vision_description,
-            ask_first_active=ask_first_active,
-            intent_class=intent_class,
-        )
+        _build_kwargs = {
+            "style": style,
+            "project_name": project_name,
+            "last_session_label": last_session_label,
+            "suppress_relational_lodestone": suppress_relational_lodestone,
+            "bare_mode": bare_mode,
+            "vision_description": vision_description,
+            "ask_first_active": ask_first_active,
+            "intent_class": intent_class,
+        }
+        if self._is_cloud_model(self.model):
+            system_prompt = self.prompt_builder.build_prompt(
+                context_packet, **_build_kwargs
+            )
+        else:
+            system_prompt, context_packet, _trim_log = trim_to_fit(
+                packet=context_packet,
+                model=self.model,
+                num_ctx=self._get_num_ctx(self.model),
+                builder=self.prompt_builder,
+                build_kwargs=_build_kwargs,
+                buffer_compress_callback=self._maybe_compress_buffer,
+            )
+            if _trim_log["sections_dropped"]:
+                logger.info("[PROMPT_GUARD] %s", _trim_log)
+            if _trim_log["overflow"]:
+                logger.warning("[PROMPT_GUARD] OVERFLOW %s", _trim_log)
 
         # Vision pipeline: the VisionService preprocessor (called upstream
         # in openai_adapter.py) extracts a text description that's already
@@ -407,17 +424,33 @@ class LLMAdapter:
             for chunk in llm_adapter.generate_response_stream(packet):
                 yield chunk  # send to client
         """
-        system_prompt = self.prompt_builder.build_prompt(
-            context_packet,
-            style=style,
-            project_name=project_name,
-            last_session_label=last_session_label,
-            suppress_relational_lodestone=suppress_relational_lodestone,
-            bare_mode=bare_mode,
-            vision_description=vision_description,
-            ask_first_active=ask_first_active,
-            intent_class=intent_class,
-        )
+        _build_kwargs = {
+            "style": style,
+            "project_name": project_name,
+            "last_session_label": last_session_label,
+            "suppress_relational_lodestone": suppress_relational_lodestone,
+            "bare_mode": bare_mode,
+            "vision_description": vision_description,
+            "ask_first_active": ask_first_active,
+            "intent_class": intent_class,
+        }
+        if self._is_cloud_model(self.model):
+            system_prompt = self.prompt_builder.build_prompt(
+                context_packet, **_build_kwargs
+            )
+        else:
+            system_prompt, context_packet, _trim_log = trim_to_fit(
+                packet=context_packet,
+                model=self.model,
+                num_ctx=self._get_num_ctx(self.model),
+                builder=self.prompt_builder,
+                build_kwargs=_build_kwargs,
+                buffer_compress_callback=self._maybe_compress_buffer,
+            )
+            if _trim_log["sections_dropped"]:
+                logger.info("[PROMPT_GUARD] %s", _trim_log)
+            if _trim_log["overflow"]:
+                logger.warning("[PROMPT_GUARD] OVERFLOW %s", _trim_log)
 
         # Assistant prefill for web-search-grounded turns (streaming path).
         _prefix = None
@@ -598,7 +631,8 @@ class LLMAdapter:
         declared = MODEL_CONTEXT_WINDOWS.get(resolved_model, 8192)
         model_default = int(declared * 0.8)
 
-        # Honor explicit user preference if set; missing → model-aware default.
+        # Honor explicit user preference if set; missing falls back to
+        # model-aware default.
         val = get_pref("context_length", None)
         if val is None:
             val = model_default
@@ -608,7 +642,11 @@ class LLMAdapter:
             except (TypeError, ValueError):
                 val = model_default
 
-        return max(2048, min(131072, val))
+        # Clamp to the model's true declared ceiling. A user preference
+        # of e.g. 200000 must not resolve to 131072 when the model only
+        # supports 40960 -- Ollama would silently truncate at the real
+        # ceiling and the response would degrade.
+        return max(2048, min(declared, val))
 
     def _chat_ollama(
         self, system_prompt: str, user_message: str,
@@ -641,9 +679,10 @@ class LLMAdapter:
                 "num_ctx": self._get_num_ctx(model),
                 # Explicit output cap so Ollama runtime defaults can't
                 # silently truncate mid-sentence on conversational
-                # responses (Fix 2, 2026-04-27). 2048 is well above
-                # realistic conversational response lengths.
-                "num_predict": 2048,
+                # responses (Fix 2, 2026-04-27). Single source of truth
+                # for the cap lives in src/llm/prompt_guardrail.py so
+                # the budget arithmetic stays in sync.
+                "num_predict": OLLAMA_NUM_PREDICT,
             },
         )
         generated = response["message"]["content"]
@@ -677,11 +716,9 @@ class LLMAdapter:
             options={
                 "temperature": temperature,
                 "num_ctx": self._get_num_ctx(model),
-                # Explicit output cap so Ollama runtime defaults can't
-                # silently truncate mid-sentence on streaming responses
-                # (Fix 2, 2026-04-27). 2048 is well above realistic
-                # conversational response lengths.
-                "num_predict": 2048,
+                # Explicit output cap; same cap as the non-streaming
+                # path. Constant lives in src/llm/prompt_guardrail.py.
+                "num_predict": OLLAMA_NUM_PREDICT,
             },
             stream=True,
         )

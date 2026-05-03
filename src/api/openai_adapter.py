@@ -1161,6 +1161,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
     _early_policy = None
     _explicit_search = False
+    # Vision turn snapshot. The packet's image_data is cleared after VL
+    # preprocessing succeeds (line ~1297), so any check downstream of that
+    # point must use this snapshot, not context_packet.image_data.
+    _has_image = bool(image_data)
 
     if _skip_vault:
         # Stateless mode: empty context packet, no vault reads
@@ -1187,9 +1191,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         # is NOT a bypass — the deferred search at line 956 already ran
         # with the correct stored query. Letting context_service also
         # search would pass "Yes" (the confirmation word) to SearXNG.
+        # Vision turns never trigger web search. Image-bearing queries are
+        # served by the VL preprocessor; mixing in unrelated web hits wastes
+        # tokens, pollutes attribution, and contradicts what the user asked
+        # for. Gate wins over autonomous preference and over explicit search
+        # markers — image present means no web search this turn.
         _skip_search = (
-            not _web_autonomous_early
-            and not _explicit_search
+            _has_image
+            or (not _web_autonomous_early and not _explicit_search)
         )
         context_packet = context_service.build_context(
             latest_user_message,
@@ -1220,6 +1229,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
     # Stash intent class on request for audit log
     request.state.intent_class = _intent_class
+
+    # Vision-gate suppression telemetry. Single log line per request when
+    # the image-present gate prevents an otherwise-eligible web search.
+    # Pairs with the gates at _skip_search, _ask_first_active, and the
+    # autonomous backstop below.
+    if _has_image and _intent_class == "web_search":
+        logger.info("[VISION_GATE] suppressed web_search: image present")
 
     # Build retrieved context string for grounding check.
     # S2: include state_items and reflection_items in addition to memory_items.
@@ -1319,6 +1335,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         and not _web_autonomous
         and not _explicit_search
         and not _confirmation_confirmed
+        and not _has_image
     )
     # Web search execution gate. Relaxed from the original triple condition
     # (required vault to return NOTHING but profile records) which meant
@@ -1337,7 +1354,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # "Hi there, happy Friday. What's the latest news about AI?" -- the
     # classifier returned web_search intent but the conversational-prefix
     # match overrode it.
-    if not context_packet.web_items:
+    if not context_packet.web_items and not _has_image:
         _should_search = False
 
         if _intent_class == "web_search" and _web_autonomous:

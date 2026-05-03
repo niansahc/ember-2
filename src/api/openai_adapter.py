@@ -156,13 +156,20 @@ def _resolve_original_pending(pending) -> None:
 def _check_pending_confirmation(
     session_id: str,
     user_message: str,
-) -> dict | None:
+) -> tuple[dict | None, list]:
     """Check for a pending_confirmation state record and interpret the user's response.
 
     Uses the LLM to determine whether the user is confirming or declining
-    a pending action — no keyword matching. Returns a dict with the action
-    details if confirmed, None if no pending confirmation exists, or a dict
-    with confirmed=False if declined.
+    a pending action — no keyword matching. Returns a tuple of (result, records):
+
+      result  : dict with action details if confirmed,
+                dict with confirmed=False if declined,
+                None if no pending confirmation exists.
+      records : the pending_confirmation records read during this call,
+                with any record this call resolved (via mark_resolved)
+                filtered out. The request handler can pass this list to
+                _write_pending_confirmation later in the same request to
+                skip the duplicate-write guard's redundant vault scan.
     """
     try:
         resolver = state_service._state_resolver if hasattr(state_service, '_state_resolver') else None
@@ -172,12 +179,13 @@ def _check_pending_confirmation(
         # the old pending fires on the first message).
         records = state_service.read_by_category("pending_confirmation")
         if not records:
-            return None
+            return None, []
 
         # Latest pending confirmation that is not resolved AND belongs to
         # this session. Cross-session pendings are stale — resolve them
         # silently so they don't accumulate.
         pending = None
+        resolved_ids: set[str] = set()
         for r in records:
             if (r.metadata or {}).get("resolved"):
                 continue
@@ -188,9 +196,13 @@ def _check_pending_confirmation(
             else:
                 # Stale cross-session pending — resolve it silently
                 _resolve_original_pending(r)
+                resolved_ids.add(r.id)
 
         if not pending:
-            return None
+            # No matching pending in this session, but stale cross-session
+            # records may have been resolved — filter them from the returned list.
+            filtered = [r for r in records if r.id not in resolved_ids]
+            return None, filtered
 
         action = (pending.metadata or {}).get("action", "unknown")
         action_query = (pending.metadata or {}).get("query", "")
@@ -202,6 +214,8 @@ def _check_pending_confirmation(
         # subsequent turn. The append-only rule is preserved by updating
         # metadata (same pattern as soft-delete and resolved_priority fix).
         _resolve_original_pending(pending)
+        resolved_ids.add(pending.id)
+        filtered = [r for r in records if r.id not in resolved_ids]
 
         # Deterministic keyword match for YES/NO — replaces the LLM call
         # that added ~500ms latency and could misinterpret at 8B scale.
@@ -223,20 +237,26 @@ def _check_pending_confirmation(
 
         if _confirmed:
             logger.info("[CONFIRM] User confirmed pending %s action", action)
-            return {"confirmed": True, "action": action, "query": action_query}
+            return {"confirmed": True, "action": action, "query": action_query}, filtered
         else:
             logger.info("[CONFIRM] User declined pending %s action", action)
-            return {"confirmed": False, "action": action, "query": action_query}
+            return {"confirmed": False, "action": action, "query": action_query}, filtered
 
     except Exception as exc:
         logger.warning("[CONFIRM] Pending confirmation check failed (non-fatal): %s", exc)
-        return None
+        return None, []
 
 
 def _write_pending_confirmation(
     reply: str, user_message: str, session_id: str,
+    existing_pending: list | None = None,
 ) -> None:
-    """Detect ask-first offers in Ember's response and write pending_confirmation state."""
+    """Detect ask-first offers in Ember's response and write pending_confirmation state.
+
+    existing_pending: optional pre-fetched pending_confirmation records
+    (from _check_pending_confirmation earlier in the same request) used to
+    skip a redundant vault scan. Pass None to fall back to a fresh read.
+    """
     try:
         # Detect the ask-first pattern: Ember offering to search
         ask_patterns = [
@@ -269,7 +289,10 @@ def _write_pending_confirmation(
         # already exists for this session + query (prevents re-offer loops
         # when the deferred search fails and the model falls back to the
         # scripted ask-first response again).
-        existing = state_service.read_by_category("pending_confirmation")
+        if existing_pending is not None:
+            existing = existing_pending
+        else:
+            existing = state_service.read_by_category("pending_confirmation")
         for er in existing:
             em = er.metadata or {}
             if (
@@ -952,7 +975,12 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     _confirmation_web_items: list[dict] = []
     _confirmation_search_failed = False
     _confirmation_confirmed = False
-    _confirmation_result = _check_pending_confirmation(session_id, latest_user_message) if not is_test else None
+    if not is_test:
+        _confirmation_result, _pending_records = _check_pending_confirmation(
+            session_id, latest_user_message
+        )
+    else:
+        _confirmation_result, _pending_records = None, []
     if _confirmation_result is not None:
         if _confirmation_result["confirmed"] and _confirmation_result["action"] == "web_search":
             _confirmation_confirmed = True
@@ -1461,7 +1489,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             # user's "Yes" on the next turn arrived before the pending record
             # was written, so the confirmation path never fired.
             if not _skip_vault:
-                _write_pending_confirmation(full_reply, _raw_user_message, session_id)
+                _write_pending_confirmation(
+                    full_reply, _raw_user_message, session_id,
+                    existing_pending=_pending_records,
+                )
 
             # Deviation detection — async, no latency impact (ADR-026)
             if not _skip_vault:
@@ -1882,7 +1913,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
     # Ask-first confirmation detection — write pending_confirmation
     if not _skip_vault:
-        _write_pending_confirmation(reply, _raw_user_message, session_id)
+        _write_pending_confirmation(
+            reply, _raw_user_message, session_id,
+            existing_pending=_pending_records,
+        )
 
     # Deviation detection — async, no latency impact (ADR-026)
     if not _skip_vault:

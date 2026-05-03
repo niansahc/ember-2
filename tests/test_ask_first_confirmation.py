@@ -125,7 +125,7 @@ class TestCheckPendingConfirmation:
         with patch("src.api.openai_adapter.state_service", svc):
             from src.api.openai_adapter import _check_pending_confirmation
 
-            result = _check_pending_confirmation("sess_test_010", "yes please")
+            result, _ = _check_pending_confirmation("sess_test_010", "yes please")
 
         assert result is None
 
@@ -145,7 +145,7 @@ class TestCheckPendingConfirmation:
         ):
             from src.api.openai_adapter import _check_pending_confirmation
 
-            result = _check_pending_confirmation("sess_test_010", "Sure, go ahead")
+            result, _ = _check_pending_confirmation("sess_test_010", "Sure, go ahead")
 
         assert result is not None
         assert result["confirmed"] is True
@@ -168,7 +168,7 @@ class TestCheckPendingConfirmation:
         ):
             from src.api.openai_adapter import _check_pending_confirmation
 
-            result = _check_pending_confirmation("sess_test_010", "Nah, skip it")
+            result, _ = _check_pending_confirmation("sess_test_010", "Nah, skip it")
 
         assert result is not None
         assert result["confirmed"] is False
@@ -190,7 +190,7 @@ class TestCheckPendingConfirmation:
         ):
             from src.api.openai_adapter import _check_pending_confirmation
 
-            result = _check_pending_confirmation("sess_test_010", "Yes please")
+            result, _ = _check_pending_confirmation("sess_test_010", "Yes please")
 
         assert result is not None
         assert result["confirmed"] is True
@@ -211,7 +211,7 @@ class TestCheckPendingConfirmation:
         ):
             from src.api.openai_adapter import _check_pending_confirmation
 
-            result = _check_pending_confirmation("sess_test_010", "No thanks")
+            result, _ = _check_pending_confirmation("sess_test_010", "No thanks")
 
         assert result is not None
         assert result["confirmed"] is False

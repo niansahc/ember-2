@@ -28,6 +28,25 @@ EMBER_MODEL_ID = "ember-2"
 SUPPORTED_MODELS = [EMBER_MODEL_ID]
 
 
+# Refusal markers used by both streaming and non-streaming paths to skip
+# the coaching filter on responses that intentionally end short. Keeping
+# both paths' lists in sync is the whole point of centralising this.
+_REFUSAL_PATTERNS: tuple[str, ...] = (
+    "i can't help with that",
+    "i'm not going to do that",
+    "that's not something i'm going to do",
+    "i had trouble generating a response",
+)
+
+
+def _is_refusal_response(text: str) -> bool:
+    """True if `text` looks like a refusal."""
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(m in lowered for m in _REFUSAL_PATTERNS)
+
+
 # MEMORY_PREVIEW_LENGTH removed -- full conversation text is now stored
 
 model=EMBER_MODEL_ID
@@ -1491,6 +1510,20 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             """Format a status SSE event for the UI."""
             return f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'status': status}, 'finish_reason': None}]})}\n\n"
 
+        def _emit_chunk(content: str | None, finish_reason: str | None = None) -> str:
+            """Format a chat.completion.chunk SSE event.
+
+            content=None  -> delta is {} (final chunk)
+            content=""    -> delta is {"content": ""} (initial typing indicator)
+            content=text  -> delta is {"content": text}
+            """
+            delta: dict = {"content": content} if content is not None else {}
+            return f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish_reason}]})}\n\n"
+
+        def _emit_final_chunk_and_done() -> str:
+            """Final chunk (finish_reason='stop') concatenated with [DONE]."""
+            return _emit_chunk(content=None, finish_reason="stop") + "data: [DONE]\n\n"
+
         if _needs_grounding:
             # --- BUFFER-THEN-STREAM PATH (ADR-019) ---
             async def _stream_sse():
@@ -1499,7 +1532,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     yield _status_event("searching")
 
                 # 1. Yield typing indicator
-                yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'content': ''}, 'finish_reason': None}]})}\n\n"
+                yield _emit_chunk(content="")
 
                 # 2. Generate full response (non-streaming) - iterate
                 # generate_response_iter so review_pending / review_complete
@@ -1572,14 +1605,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 # text must not be rewritten or stripped by the filter. Short
                 # refusals like "I can't help with that." match coaching-closing
                 # patterns and get deleted, producing a blank response.
-                _REFUSAL_MARKERS = (
-                    "i can't help with that",
-                    "i'm not going to do that",
-                    "that's not something i'm going to do",
-                    "i had trouble generating a response",
-                )
-                _is_refusal = any(m in full_reply.lower() for m in _REFUSAL_MARKERS)
-                if not _is_refusal:
+                if not _is_refusal_response(full_reply):
                     from src.llm.coaching_filter import filter_coaching_frame
                     full_reply = filter_coaching_frame(full_reply, _intent_class, _is_conversational)
                     # Post-coaching empty check — if coaching_filter
@@ -1646,18 +1672,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 tokens = full_reply.split(" ")
                 for i, token in enumerate(tokens):
                     text = token if i == len(tokens) - 1 else token + " "
-                    sse_data = json.dumps({
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": "ember-2",
-                        "choices": [{
-                            "index": 0,
-                            "delta": {"content": text},
-                            "finish_reason": None,
-                        }],
-                    })
-                    yield f"data: {sse_data}\n\n"
+                    yield _emit_chunk(content=text)
 
                 # 5. Web search sources event (if applicable) — suppressed
                 # when ask-first substituted (search hasn't run yet).
@@ -1676,8 +1691,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     yield f"data: {json.dumps({'type': 'vault_sources', 'sources': vault_sources})}\n\n"
 
                 # Final chunk
-                yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
-                yield "data: [DONE]\n\n"
+                yield _emit_final_chunk_and_done()
 
                 _post_stream_cleanup(full_reply)
 
@@ -1705,26 +1719,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     filtered = think_filter.filter(chunk)
                     if filtered:
                         accumulated.append(filtered)
-                        sse_data = json.dumps({
-                            "id": completion_id,
-                            "object": "chat.completion.chunk",
-                            "created": int(time.time()),
-                            "model": "ember-2",
-                            "choices": [{
-                                "index": 0,
-                                "delta": {"content": filtered},
-                                "finish_reason": None,
-                            }],
-                        })
-                        yield f"data: {sse_data}\n\n"
+                        yield _emit_chunk(content=filtered)
 
                 # Vault sources event (if applicable)
                 if vault_sources:
                     yield f"data: {json.dumps({'type': 'vault_sources', 'sources': vault_sources})}\n\n"
 
                 # Final chunk
-                yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
-                yield "data: [DONE]\n\n"
+                yield _emit_final_chunk_and_done()
 
                 full_reply = "".join(accumulated)
                 # Coaching-frame filter — applied to accumulated text.
@@ -1797,11 +1799,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
     # Coaching-frame filter — post-generation, pre-return.
     # Skip on refusal responses to prevent stripping.
-    _is_refusal_ns = any(m in reply.lower() for m in (
-        "i can't help with that", "i'm not going to do that",
-        "that's not something i'm going to do", "i had trouble generating a response",
-    ))
-    if not _is_refusal_ns:
+    if not _is_refusal_response(reply):
         from src.llm.coaching_filter import filter_coaching_frame as _filter_cf
         reply = _filter_cf(reply, _intent_class, _is_conversational)
 

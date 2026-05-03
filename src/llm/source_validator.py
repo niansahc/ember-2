@@ -20,7 +20,8 @@ can track fabrication rate.
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
+
+from src.safety.url_validator import extract_host
 
 # Patterns: prefer the parenthesised form, but also catch trailing bare
 # "source: X" at the end of a sentence. Both case-insensitive.
@@ -62,19 +63,7 @@ def extract_web_domains(web_items: list) -> list[str]:
 
 def _hostname_of(value: str) -> str:
     """Return a lowercase hostname from a URL or a bare domain string."""
-    value = value.strip().lower()
-    if not value:
-        return ""
-    if "://" not in value:
-        value = "http://" + value
-    try:
-        host = urlparse(value).hostname or ""
-    except ValueError:
-        return ""
-    # Strip www. for allowlist comparison — the model often omits it.
-    if host.startswith("www."):
-        host = host[4:]
-    return host
+    return extract_host(value)
 
 
 def _citation_is_allowed(

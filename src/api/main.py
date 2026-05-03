@@ -1622,13 +1622,11 @@ def store_provider_key(body: ProviderKeyRequest):
 
 @app.get("/provider-key/{provider}")
 def check_provider_key(provider: str):
-    """Check if a cloud provider API key is configured. Never returns the actual key."""
-    try:
-        import keyring
-        key = keyring.get_password(f"ember-2-{provider}", "api_key")
-        return {"provider": provider, "configured": bool(key)}
-    except Exception:
-        return {"provider": provider, "configured": False}
+    """Check if a cloud provider API key is configured. Never returns the actual key.
+    Reports configured=True for keys set via either keyring or env var so this
+    matches the actual lookup behavior in LLMAdapter."""
+    from src.core.config import get_provider_api_key
+    return {"provider": provider, "configured": bool(get_provider_api_key(provider))}
 
 
 @app.delete("/provider-key/{provider}")

@@ -30,13 +30,18 @@ logger = logging.getLogger("ember.coaching_filter")
 _EMOTIONAL_INTENTS = frozenset({"reflective", "default"})
 
 
+def _compile_patterns(pattern_strings: tuple[str, ...]) -> tuple[re.Pattern, ...]:
+    """Compile a tuple of regex strings with IGNORECASE flag."""
+    return tuple(re.compile(p, re.IGNORECASE) for p in pattern_strings)
+
+
 # ---------------------------------------------------------------------------
 # Stage 1: Pattern definitions
 # ---------------------------------------------------------------------------
 
 # Coaching-frame closing patterns — these end responses with guided
 # self-discovery or action-prompting language.
-_COACHING_CLOSINGS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+_COACHING_CLOSINGS: tuple[re.Pattern, ...] = _compile_patterns((
     r"what(?:'s| is| would be) the first step",
     r"i(?:'ll| will) help you (?:map|work|figure|sort|think) (?:it |that |this )?out",
     r"let me know (?:what you need|if you need|how i can|what i can)",
@@ -74,7 +79,7 @@ _COACHING_CLOSINGS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) 
 # Therapeutic mid-response patterns — not just openers/closers but
 # phrases that appear anywhere in the response body. The RLHF base
 # at 8B produces these even without personality layers (bare mode).
-_THERAPEUTIC_MID_RESPONSE: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+_THERAPEUTIC_MID_RESPONSE: tuple[re.Pattern, ...] = _compile_patterns((
     r"you(?:'re| are) not alone",
     r"i(?:'m| am) here (?:as )?a steady presence",
     r"i(?:'m| am) here for you",
@@ -100,7 +105,7 @@ _THERAPEUTIC_MID_RESPONSE: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNOR
 ))
 
 # Therapeutic openers — validate/normalize feelings in a clinical way.
-_THERAPEUTIC_OPENERS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+_THERAPEUTIC_OPENERS: tuple[re.Pattern, ...] = _compile_patterns((
     r"^i(?:'m| am) here (?:if|for) you",
     r"^it(?:'s| is) (?:okay|ok|perfectly (?:okay|ok|fine|normal)) to feel",
     r"^(?:that|your) (?:feeling|emotion|reaction) is (?:valid|completely valid|understandable|normal)",
@@ -108,7 +113,7 @@ _THERAPEUTIC_OPENERS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE
 ))
 
 # Sycophantic openers under pushback — agreement-seeking as first word(s).
-_SYCOPHANTIC_OPENERS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+_SYCOPHANTIC_OPENERS: tuple[re.Pattern, ...] = _compile_patterns((
     r"^you(?:'re| are) right",
     r"^(?:sure|absolutely|of course|fair (?:enough|point))[.,!]?\s",
     r"^(?:yes|yeah)[.,!]?\s+(?:i|you|that|if)",
@@ -384,7 +389,7 @@ def _log_intervention(
 # Patterns that indicate Ember has collapsed her identity under pressure.
 # These fire on ALL intents, not just emotional — identity challenges
 # happen in adversarial contexts.
-_IDENTITY_COLLAPSE_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+_IDENTITY_COLLAPSE_PATTERNS: tuple[re.Pattern, ...] = _compile_patterns((
     r"i(?:'m| am) just a tool",
     r"i(?:'m| am) just an ai",
     r"i am just a language model",
@@ -407,7 +412,7 @@ _IDENTITY_COLLAPSE_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGN
 # identical phrasing. The two layers fire independently. When updating either
 # set, consider whether the corresponding pattern/phrase in the other file
 # needs the same change.
-_IDENTITY_COMPLIANCE_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+_IDENTITY_COMPLIANCE_PATTERNS: tuple[re.Pattern, ...] = _compile_patterns((
     r"no restrictions(?:,?\s+no boundaries)?",
     r"no boundaries(?:,?\s+no restrictions)?",
     r"(?:help|assist)(?:ing)? (?:you )?however you (?:need|want|like)",
@@ -441,7 +446,7 @@ _IDENTITY_RESPONSE_REFUSAL = (
 )
 
 # Patterns that indicate the user demanded agreement (maps to _IDENTITY_RESPONSE_AGREE)
-_AGREEMENT_DEMAND_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+_AGREEMENT_DEMAND_PATTERNS: tuple[re.Pattern, ...] = _compile_patterns((
     r"you(?:'re| are) right.*don(?:'t|t) have opinions",
     r"fair enough.*you(?:'re| are) right",
 ))

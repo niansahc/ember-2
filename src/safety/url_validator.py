@@ -262,6 +262,29 @@ def validate_and_strip_urls(
     return reply, stripped, deduped_kept
 
 
+def extract_host(value: str) -> str:
+    """Return lowercase hostname with www. stripped, or "" on parse failure.
+
+    Accepts a full URL or a bare domain string (no scheme required). Used by
+    both this module (URL canonicalisation) and source_validator (citation
+    hostname matching). Centralised so attack-pattern coverage stays in sync.
+    """
+    if not value or not isinstance(value, str):
+        return ""
+    value = value.strip().lower()
+    if not value:
+        return ""
+    if "://" not in value:
+        value = "http://" + value
+    try:
+        host = urlparse(value).hostname or ""
+    except ValueError:
+        return ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
 def _canonicalize_url(url: str) -> tuple[str, str] | None:
     """Return (host, path) with host lowercased and www. stripped, path with
     a single trailing slash removed. Query and fragment are dropped. Returns

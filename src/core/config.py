@@ -102,6 +102,26 @@ def get_ember_api_key() -> str | None:
     return os.getenv("EMBER_API_KEY") or None
 
 
+def get_provider_api_key(provider: str) -> str | None:
+    """Return a cloud provider API key (Anthropic, OpenAI, etc.).
+
+    Looks in this order:
+      1. System credential store via keyring under service "ember-2-{provider}"
+      2. {PROVIDER}_API_KEY env var (e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY)
+
+    Returns None if not found, never raises. Distinct from get_ember_api_key()
+    which returns the Ember UI auth key, not provider keys.
+    """
+    try:
+        import keyring
+        key = keyring.get_password(f"ember-2-{provider}", "api_key")
+        if key:
+            return key
+    except Exception:
+        pass
+    return os.getenv(f"{provider.upper()}_API_KEY") or None
+
+
 def get_ember_embed_model() -> str:
     """
     Returns the Ollama embedding model for vector indexing.

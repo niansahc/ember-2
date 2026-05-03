@@ -302,6 +302,7 @@ class PromptBuilder:
         bare_mode: bool = False,
         ask_first_active: bool = False,
         intent_class: str | None = None,
+        suppress_lodestone_living: bool = False,
     ) -> str:
         # Conversational check — used to conditionally omit "I don't have
         # that in my memory" framing from both AUTHORITY_RULES and the
@@ -342,7 +343,7 @@ class PromptBuilder:
                 is_conversational=is_conversational,
                 intent_class=intent_class,
             ),
-            "" if bare_mode else self._build_lodestone_living_section(
+            "" if (bare_mode or suppress_lodestone_living) else self._build_lodestone_living_section(
                 context_packet, suppress_relational=suppress_relational_lodestone
             ),
             self._build_web_search_section(context_packet),

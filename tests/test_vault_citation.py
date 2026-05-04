@@ -164,11 +164,15 @@ class TestWebSearchAuthorityInstruction:
         from src.llm.prompt_builder import _render_authority_rules
         rules = _render_authority_rules(is_conversational=False)
         assert "live data" in rules
-        assert "current as of today" in rules
+        # Phrasing of the "treat web results as current" instruction was
+        # softened when the published_at freshness signal was added; the
+        # intent (web results are authoritative; don't discount on training
+        # cutoff) is now carried by these two phrases.
+        assert "authoritative for the topic queried" in rules
+        assert "Do not discount" in rules
         # v0.16.0-dev: citation instruction rewritten from "Cite specific
         # URLs" to answer-first-then-cite pattern.
         assert "ANSWER THE QUESTION DIRECTLY" in rules
-        assert "Do not discount" in rules
 
     def test_authority_rules_no_longer_hedge_web_results(self):
         from src.llm.prompt_builder import _render_authority_rules

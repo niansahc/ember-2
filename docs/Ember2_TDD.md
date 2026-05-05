@@ -2015,6 +2015,20 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
   → informs: continued use of qwen3:8b; backlog item — gemma3:12b chat template / prompt honoring investigation
   → graduation trigger: gemma3:12b chat template / prompt honoring investigation completed
 
+- **MemX local-first memory** (Sun, arXiv:2603.16171, March 2026) — Rust/libSQL implementation with RRF (vector + keyword fusion) and low-confidence rejection gate suppressing spurious recalls. Hit@1 = 91.3% default, 100% high-confusion. RRF fusion pattern relevant to retrieval depth ablation; rejection gate validates ZERO confidence block design.
+  → informs: retrieval depth ablation (deferred, no failure pattern yet)
+  → graduation trigger: retrieval depth ablation scheduled
+
+- **Dynamic Affective Memory entropy-minimization** (Lu & Li, arXiv:2510.27418) — Bayesian-inspired memory update using entropy as consolidation signal. Minimizing global memory entropy as vault health metric is more principled than time-based triggers. Relevant to vault knowledge linting design.
+  → informs: post-v0.18.0 vault linting
+  → graduation trigger: vault linting scoped for implementation
+
+- **Social Sycophancy taxonomy** (Cheng et al., arXiv:2505.13995, May 2025) — Extends sycophancy beyond opinion capitulation to social dimensions: impression management, agreeableness under pressure, self-presentation. Ember's coaching_frame and therapeutic_register failure modes are instances of social sycophancy, not classical opinion sycophancy. Cite in paper Section 2.2 for precision.
+  → informs: academic paper Section 2.2
+  → graduation trigger: Section 2.2 revision begins
+
+- **MemOS** (Li et al., arXiv:2505.22101) — parametric/activation/plaintext memory taxonomy. Frames why plaintext-only (RAG) memory is insufficient and why Ember's local-first scope is correctly bounded. Use in Section 3 architecture framing.
+
 ---
 
 ## 50.2 Graduated

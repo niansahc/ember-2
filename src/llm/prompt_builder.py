@@ -16,7 +16,7 @@ XML-tagged sections for qwen3:8b structure tracking.
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from src.context.models import ContextPacket
@@ -150,8 +150,18 @@ _AUTHORITY_RULES_BODY_COMMON = (
     "No 'source:' prefix — just confidence and age. The badge and the hedge serve different "
     "purposes: badge = where the answer came from, hedge = how reliable the grounding is.\n"
     "conversation_history is prior exchange only -- do not treat conversational inferences as established facts.\n"
-    "web_search_results are live data retrieved at request time and are current as of today. "
-    "Treat them as authoritative. Do not discount or second-guess them based on training cutoff dates.\n"
+    "web_search_results are live data retrieved at request time. Treat them "
+    "as authoritative for the topic queried. Do not discount them based on "
+    "training cutoff dates.\n"
+    "Each result has a 'published:' line showing the source's age. When per-"
+    "result published dates are present, weight more recent sources more "
+    "heavily. If the most relevant dated source is older than about 24 hours "
+    "and the query is about something that changes quickly (news, prices, "
+    "scores, software releases, current events), qualify the answer with the "
+    "source's age (for example, 'as of three hours ago'). For evergreen "
+    "topics, ignore the dates and answer normally. 'published: unknown' means "
+    "the source did not surface a date — treat it with normal skepticism, do "
+    "not invent a date.\n"
     "CRITICAL: When web_search_results are present, ANSWER THE QUESTION DIRECTLY using the "
     "information in them. Extract the specific facts the user asked for — names, numbers, "
     "dates, outcomes — and state them in your response. Then cite the source URL so the "
@@ -241,6 +251,40 @@ _DECLINE_STOPWORDS = frozenset(
     {"my", "the", "this", "that", "a", "an", "his", "her", "their",
      "our", "its", "about", "with", "from", "and", "or", "of", "in", "on"}
 )
+
+
+def _format_relative_age(iso_str, now=None):
+    """Render an ISO 8601 published_at as a human-relative phrase.
+
+    Returns "unknown" for None / empty / unparseable input so the renderer
+    can stay branchless. The model uses this string directly to apply the
+    24-hour qualification rule from authority_rules.
+    """
+    if not iso_str:
+        return "unknown"
+    try:
+        dt = datetime.fromisoformat(iso_str)
+    except (TypeError, ValueError):
+        return "unknown"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if now is None:
+        now = datetime.now(timezone.utc)
+    seconds = max(0, (now - dt).total_seconds())
+    if seconds < 3600:
+        n = max(1, int(seconds // 60))
+        return f"{n} minute{'s' if n != 1 else ''} ago"
+    if seconds < 86400:
+        n = int(seconds // 3600)
+        return f"{n} hour{'s' if n != 1 else ''} ago"
+    if seconds < 86400 * 30:
+        n = int(seconds // 86400)
+        return f"{n} day{'s' if n != 1 else ''} ago"
+    if seconds < 86400 * 365:
+        n = int(seconds // (86400 * 30))
+        return f"{n} month{'s' if n != 1 else ''} ago"
+    n = int(seconds // (86400 * 365))
+    return f"{n} year{'s' if n != 1 else ''} ago"
 
 
 def _extract_decline_keywords(declined_topics: list[str]) -> list[list[str]]:
@@ -774,7 +818,10 @@ class PromptBuilder:
             title = item.get("title", "")
             url = item.get("url", "")
             snippet = item.get("snippet", "")
-            lines.append(f"[{i}] {title}\n    {url}\n    {snippet}")
+            age = _format_relative_age(item.get("published_at"))
+            lines.append(
+                f"[{i}] {title}\n    {url}\n    published: {age}\n    {snippet}"
+            )
 
         # Reframe as Ember's own retrieval — the model engages with content
         # attributed to its own actions more reliably than content framed as

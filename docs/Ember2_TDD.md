@@ -2005,7 +2005,7 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 
 - **Local LLM landscape, April 2026** — 80.7% of LLM workloads handleable by models under 20B parameters. AWQ quantization outperforms GGUF on NVIDIA hardware (95% vs 90% quality, higher speed). Future model eval queue: `qwen3:14b` (timeout issue from prior run, needs retest after config fix), the qwen3 MoE variant (`qwen3:30b-a3b`, Mixture-of-Experts architecture, ~3B active parameters per token), and `qwen3.5:9b` (next-generation Qwen base model in the same parameter class as the qwen3:8b production baseline). Gemma 3 12B and Llama 3.1 8B were evaluated in the v0.18.0 comparison (results below); the prior research review's "Gemma 3 9B" and "Llama 3.3 8B" names do not correspond to Ollama tags (Gemma 3 ships 1B/4B/12B/27B; Llama 3.3 is 70B only). AWQ becomes the target quantization format post-GPU upgrade.
   → informs: next model eval run (`qwen3:14b` retest, `qwen3:30b-a3b` MoE, `qwen3.5:9b`); post-GPU-upgrade (AWQ quantization)
-  → graduation trigger: model eval run with `qwen3:14b` retest, qwen3 MoE variant, and `qwen3.5:9b` completed
+  → graduation trigger: hardware upgrade required before qwen3:14b and qwen3:30b-a3b can be benchmarked on Ember-specific prompts
 
 - **v0.18.0 model comparison result, 2026-04-30** — Test vault, 3 models, 54 evaluations. qwen3:8b retained per Pareto rule. Results:
     - qwen3:8b: 7.3 overall (Pref 8.7 / Const 9.0 / Mem 6.0 / Self-A 8.3 / State 8.0 / Tone 4.0), 18.4s avg, 15/0/3/0
@@ -2014,6 +2014,10 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
   gemma3:12b Tone/Constitutional tradeoff confirmed as real model behavior, not eval noise — reproduced on clean test vault two runs apart. Constitutional drop (9.0 → 6.7) blocks gemma3:12b as a primary model candidate. Chat template / prompt honoring investigation deferred.
   → informs: continued use of qwen3:8b; backlog item — gemma3:12b chat template / prompt honoring investigation
   → graduation trigger: gemma3:12b chat template / prompt honoring investigation completed
+
+- **v0.18.0+ model comparison attempt, 2026-05-08** — Test vault, shortlist [`qwen3:8b`, `qwen3:14b`, `qwen3:30b-a3b`], two runs (second run with per-model pre-warm). qwen3:8b reproduced production baseline (7.4–7.8 overall across both runs, within expected stochastic variance from non-zero temperature). Neither qwen3:14b nor qwen3:30b-a3b benchmarkable on current hardware (RTX 5080, Windows): Ember's assembled system prompt is ~8.7K tokens (per `[PROMPT_GUARD] OVERFLOW` logs: `initial_estimate=8724`, qwen3:14b effective context budget `5836`), and per-call inference at that prompt size exceeds the 180s eval harness timeout on every test case. Pre-warming the model into Ollama VRAM addressed cold-start load latency only; sustained per-call inference on the long static-prompt budget is the binding constraint. qwen3:8b retained as Pareto winner. Neither model is benchmarkable on current hardware at Ember's actual prompt size.
+  → informs: continued use of qwen3:8b; hardware upgrade gates further local-model graduation at current static-prompt size
+  → graduation trigger: hardware upgrade required before qwen3:14b and qwen3:30b-a3b can be benchmarked on Ember-specific prompts
 
 - **MemX local-first memory** (Sun, arXiv:2603.16171, March 2026) — Rust/libSQL implementation with RRF (vector + keyword fusion) and low-confidence rejection gate suppressing spurious recalls. Hit@1 = 91.3% default, 100% high-confusion. RRF fusion pattern relevant to retrieval depth ablation; rejection gate validates ZERO confidence block design.
   → informs: retrieval depth ablation (deferred, no failure pattern yet)

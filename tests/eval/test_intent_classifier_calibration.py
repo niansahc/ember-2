@@ -59,33 +59,17 @@ _NEEDS_INTERNET_QUERIES = [
 ]
 
 
-# Note on the "who am I" case: at the time of writing (v0.18.0,
-# nomic-embed-text on the current example pool) this query routes to
-# needs_internet with confidence ~0.79 -- the cosine top-1 against the
-# 60-example pool is a "current X" / "who is X" public-info exemplar.
-# It is the canonical drift signal for this calibration test: the
-# example pool has no strong personal-identity exemplar, so the
-# query lands on the wrong side of the threshold. Marked xfail(
-# strict=False) so the calibration suite exits green while the drift
-# stays visible in the report. Resolution path: add a "who am I" /
-# "tell me about myself" exemplar to src/llm/classifier_examples.py
-# (handled outside this commit, no production code changes).
+# The earlier xfail on "who am I" (Stage 2 drift to needs_internet at
+# ~0.79 cosine) was resolved by adding personal-identity exemplars to
+# classifier_examples.py along with general-knowledge counter-anchors
+# on the needs_internet side. The query now routes correctly. Plain
+# string entry restored; if the calibration regresses, the test will
+# fail strictly rather than xfail.
 _VAULT_ANSWERABLE_QUERIES = [
     pytest.param("what have I been working on", id="what have I been working on"),
     pytest.param("how have I been doing lately", id="how have I been doing lately"),
     pytest.param("what are my open loops", id="what are my open loops"),
-    pytest.param(
-        "who am I",
-        id="who am I",
-        marks=pytest.mark.xfail(
-            strict=False,
-            reason=(
-                "Known Stage 2 drift: 'who am I' routes to needs_internet "
-                "(~0.79 cosine) due to missing personal-identity exemplar "
-                "in classifier_examples.py. Surfaced; not blocking."
-            ),
-        ),
-    ),
+    pytest.param("who am I", id="who am I"),
     pytest.param("what's my current focus", id="what's my current focus"),
 ]
 

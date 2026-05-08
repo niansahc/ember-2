@@ -79,6 +79,16 @@ _NEEDS_INTERNET: list[LabeledExample] = [
     {"query": "help me figure out when the next iPhone is releasing", "label": "needs_internet"},
     {"query": "help me find out the current price of Tesla stock", "label": "needs_internet"},
     {"query": "find me the latest news about the AI industry", "label": "needs_internet"},
+    # General-knowledge counter-anchors: ensure the "tell me about X",
+    # "describe X", and "what do you know about X" openings have ground
+    # truth on the needs_internet side too. Without these, queries about
+    # external concepts route to vault_answerable because the only
+    # "tell me about X" / "describe X" exemplars in the pool are personal
+    # ("tell me about my goals", "describe me"). Paired with personal-
+    # identity exemplars in _VAULT_ANSWERABLE to prevent mirror drift.
+    {"query": "tell me about quantum computing", "label": "needs_internet"},
+    {"query": "describe how transformers work", "label": "needs_internet"},
+    {"query": "what do you know about Rust", "label": "needs_internet"},
 ]
 
 
@@ -141,6 +151,17 @@ _VAULT_ANSWERABLE: list[LabeledExample] = [
     {"query": "I keep going back and forth on it", "label": "vault_answerable"},
     {"query": "I haven't been able to work that out", "label": "vault_answerable"},
     {"query": "that's what I've been trying to understand", "label": "vault_answerable"},
+    # Personal-identity exemplars (G6 drift fix). The pool previously had
+    # no strong "who am I" / "describe me" anchors; "who am I" was
+    # cosine-matching needs_internet "who is X" patterns at ~0.79.
+    # Paired with general-knowledge counter-anchors in _NEEDS_INTERNET
+    # to prevent mirror drift on "tell me about X" / "describe X" /
+    # "what do you know about X" general queries.
+    {"query": "who am I", "label": "vault_answerable"},
+    {"query": "describe me", "label": "vault_answerable"},
+    {"query": "what kind of person am I", "label": "vault_answerable"},
+    {"query": "tell me about myself", "label": "vault_answerable"},
+    {"query": "what do you know about who I am", "label": "vault_answerable"},
 ]
 
 

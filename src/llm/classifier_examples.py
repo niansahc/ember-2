@@ -70,6 +70,15 @@ _NEEDS_INTERNET: list[LabeledExample] = [
     # Explicit current state
     {"query": "what is the current state of the housing market", "label": "needs_internet"},
     {"query": "what is currently happening in Ukraine", "label": "needs_internet"},
+    # Imperative help-with-factual-anchor — contrastive control for the
+    # introspective-uncertainty anchor in _VAULT_ANSWERABLE. Without these,
+    # the verb "figure out" pulls "help me figure out X" toward vault even
+    # when X is concretely external. These keep imperative-help-with-
+    # external-topic queries on the needs_internet side.
+    {"query": "help me figure out the best Python framework for 2026", "label": "needs_internet"},
+    {"query": "help me figure out when the next iPhone is releasing", "label": "needs_internet"},
+    {"query": "help me find out the current price of Tesla stock", "label": "needs_internet"},
+    {"query": "find me the latest news about the AI industry", "label": "needs_internet"},
 ]
 
 
@@ -118,6 +127,20 @@ _VAULT_ANSWERABLE: list[LabeledExample] = [
     {"query": "how are you today", "label": "vault_answerable"},
     {"query": "how are you doing", "label": "vault_answerable"},
     {"query": "hello what is up", "label": "vault_answerable"},
+    # Introspective uncertainty — conversational signal, not information-
+    # seeking. qwen3:8b at Stage 3 reads "trying to figure out" as intent
+    # to search the web; anchoring this family at Stage 2 short-circuits
+    # the misclassification before Stage 3 runs (B-WS-001).
+    {"query": "that's what I'm trying to figure out", "label": "vault_answerable"},
+    {"query": "I'm still trying to figure that out", "label": "vault_answerable"},
+    {"query": "I haven't figured that out yet", "label": "vault_answerable"},
+    {"query": "I'm still wondering about that", "label": "vault_answerable"},
+    {"query": "I'm trying to make sense of it", "label": "vault_answerable"},
+    {"query": "I'm trying to wrap my head around it", "label": "vault_answerable"},
+    {"query": "I'm not sure what to make of it", "label": "vault_answerable"},
+    {"query": "I keep going back and forth on it", "label": "vault_answerable"},
+    {"query": "I haven't been able to work that out", "label": "vault_answerable"},
+    {"query": "that's what I've been trying to understand", "label": "vault_answerable"},
 ]
 
 

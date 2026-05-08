@@ -17,10 +17,12 @@ from __future__ import annotations
 import concurrent.futures
 import json
 
+import httpx
 import numpy as np
 import pytest
 
 import src.llm.intent_classifier as intent_classifier
+from src.llm.classifier_examples import EXAMPLES
 from src.llm.intent_classifier import (
     NEEDS_INTERNET,
     VAULT_ANSWERABLE,
@@ -29,6 +31,26 @@ from src.llm.intent_classifier import (
     _stage3_classify_with_timeout,
     _stage3_llm_call,
     classify_intent,
+)
+
+
+def _ollama_reachable() -> bool:
+    """Return True if a local Ollama instance responds to /api/version.
+
+    Stage 2 (nomic-embed-text) and Stage 3 (qwen3:8b) both require a
+    running Ollama. Tests that exercise the live classifier path skip
+    when it is not reachable (e.g. CI without an Ollama service).
+    """
+    try:
+        httpx.get("http://localhost:11434/api/version", timeout=1.0)
+        return True
+    except Exception:
+        return False
+
+
+_NEEDS_OLLAMA = pytest.mark.skipif(
+    not _ollama_reachable(),
+    reason="stage 2/3 classifier needs Ollama (nomic-embed-text + qwen3:8b)",
 )
 
 
@@ -602,3 +624,74 @@ class TestClassifyIntentStage3Flow:
         matches = [r for r in caplog.records if "[INTENT_CLASSIFY]" in r.message]
         assert len(matches) == 1
         assert "stage=stage3" in matches[0].message
+
+
+# ---------------------------------------------------------------------------
+# B-WS-001: introspective uncertainty anchoring (Stage 2)
+# ---------------------------------------------------------------------------
+
+_INTROSPECTIVE_UNCERTAINTY_PHRASES = [
+    "that's what I'm trying to figure out",
+    "I'm still trying to figure that out",
+    "I haven't figured that out yet",
+    "I'm still wondering about that",
+    "I'm trying to make sense of it",
+    "I'm trying to wrap my head around it",
+    "I'm not sure what to make of it",
+    "I keep going back and forth on it",
+    "I haven't been able to work that out",
+    "that's what I've been trying to understand",
+]
+
+
+class TestIntrospectiveUncertaintyPoolInclusion:
+    """The introspective-uncertainty anchor phrases must remain in the
+    example pool. Catches accidental removal in a future refactor without
+    needing Ollama. Non-Ollama-gated."""
+
+    @pytest.mark.parametrize("phrase", _INTROSPECTIVE_UNCERTAINTY_PHRASES)
+    def test_phrase_present_and_labeled_vault(self, phrase):
+        match = next(
+            (e for e in EXAMPLES if e["query"] == phrase),
+            None,
+        )
+        assert match is not None, (
+            f"introspective-uncertainty anchor missing from EXAMPLES: {phrase!r}"
+        )
+        assert match["label"] == "vault_answerable"
+
+
+@_NEEDS_OLLAMA
+class TestStage2IntrospectiveUncertainty:
+    """End-to-end: the live classifier path must route introspective-
+    uncertainty phrases to vault_answerable. Exercises Stage 2 via the
+    real nomic-embed-text embedding similarity against the production
+    example pool. If Stage 2 misses the 0.65 threshold, Stage 3 (qwen3:8b)
+    runs and the legacy bug pattern returns."""
+
+    @pytest.mark.parametrize("phrase", _INTROSPECTIVE_UNCERTAINTY_PHRASES)
+    def test_phrase_routes_to_vault_answerable(self, phrase):
+        assert classify_intent(phrase) == VAULT_ANSWERABLE
+
+
+@_NEEDS_OLLAMA
+class TestBWS001Regression:
+    """Direct regression coverage for the B-WS-001 observed cases.
+
+    The literal observed phrase must classify as vault_answerable. The
+    contrastive imperative search ('Help me figure out X') must NOT be
+    pulled toward vault_answerable by the introspective anchor; its
+    verb structure and factual anchor should keep it on the
+    needs_internet side."""
+
+    def test_observed_phrase_routes_to_vault(self):
+        assert classify_intent("That's what I'm trying to figure out.") == VAULT_ANSWERABLE
+
+    def test_imperative_search_with_factual_anchor_still_routes_to_internet(self):
+        # Contrastive control: same verb root ("figure out") but imperative
+        # subject and concrete external anchor ("Python web framework in
+        # 2026"). Must not collapse to vault_answerable.
+        result = classify_intent(
+            "Help me figure out the best Python web framework in 2026"
+        )
+        assert result != VAULT_ANSWERABLE

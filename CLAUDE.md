@@ -322,6 +322,7 @@ Eval regressions require running the eval twice before concluding a 3+ point dro
 - Always replace full files — never partial find-and-replace edits
 - Work on one file at a time
 - Small, frequent commits with clear descriptive messages
+- Never add Co-authored-by: Claude or any Claude attribution to commit messages or PR bodies. Attribution is acknowledged in docs/BUILDING_EMBER.md.
 - Tag commits at major milestones
 - After milestones: update TDD first, then README
 - Code must be clean, well-commented, forward-thinking, and scalable

@@ -130,23 +130,50 @@ def test_summary_table(all_results, capsys):
     print("\n".join(lines))
 
 
+def _compute_current_avgs(all_results) -> dict[str, float]:
+    """Aggregate dimension averages across all golden cases.
+
+    Shared by test_no_regression_vs_baseline and test_export_current_avgs.
+    """
+    current: dict[str, list[float]] = {}
+    for case in GOLDEN_CASES:
+        multi = all_results[case["id"]]
+        for dim, avg in multi.dimension_averages().items():
+            current.setdefault(dim, []).append(avg)
+    return {dim: sum(v) / len(v) for dim, v in current.items()}
+
+
 def test_no_regression_vs_baseline(all_results):
     """Compare current multi-run averages against saved baseline."""
     baseline = load_baseline_scores()
     if not baseline:
         pytest.skip("No baseline_scores.json found — skipping regression check")
 
-    # Aggregate current scores across all cases
-    current: dict[str, list[float]] = {}
-    for case in GOLDEN_CASES:
-        multi = all_results[case["id"]]
-        for dim, avg in multi.dimension_averages().items():
-            current.setdefault(dim, []).append(avg)
-
-    current_avgs = {dim: sum(v) / len(v) for dim, v in current.items()}
+    current_avgs = _compute_current_avgs(all_results)
 
     for metric in baseline:
         if metric not in current_avgs:
             continue
         delta = baseline[metric] - current_avgs[metric]
         assert delta <= 0.05, f"Regression on {metric}: dropped {delta:.1%}"
+
+
+def test_export_current_avgs(all_results):
+    """Helper for baseline rebuilds. Writes the current per-dimension averages
+    (same aggregation as test_no_regression_vs_baseline) to the path in
+    EVAL_EXPORT_PATH. Skipped when the env var is unset, so this test is a
+    no-op during normal eval runs.
+    """
+    import json
+    import os
+    from pathlib import Path
+
+    out_path = os.getenv("EVAL_EXPORT_PATH")
+    if not out_path:
+        pytest.skip("EVAL_EXPORT_PATH not set")
+
+    current_avgs = _compute_current_avgs(all_results)
+    Path(out_path).write_text(
+        json.dumps(current_avgs, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )

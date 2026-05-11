@@ -127,7 +127,11 @@ class ContextRetriever:
                     item_type=mem_type,
                     memory_type=mem_type,
                     score=result.get("score", 0.0),
-                    timestamp=metadata.get("created_at"),
+                    # B-RET-002: created_at lives on the vectors-table
+                    # column, not in the JSON metadata blob. Read it from
+                    # the row dict directly. Falls back to None when the
+                    # field is absent (legacy rows or non-SQLite paths).
+                    timestamp=result.get("created_at"),
                     tags=metadata.get("tags", []),
                     metadata=_enriched_metadata,
                     tier=result.get("tier", "hot"),

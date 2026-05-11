@@ -630,10 +630,11 @@ class PromptBuilder:
         if not turns:
             return "<conversation_history>\nNone\n</conversation_history>"
 
-        # Summarize at turn 6+ to prevent cascade risk and attention dilution
-        if len(turns) > 6:
-            return self._build_summarized_conversation(turns)
-
+        # Always render raw turns. Compression beyond the buffer's own
+        # _maybe_compress_buffer / max_turns mechanisms is handled at the
+        # buffer layer, not here. A second summarization layer at prompt-build
+        # time produced fresh LLM-generated summaries on every turn that lost
+        # role / identity / debugging context (UAT 2026-05-11).
         lines: list[str] = []
         for turn in turns:
             lines.append(f"User: {turn['user']}")
@@ -667,54 +668,6 @@ class PromptBuilder:
                 "Do not raise it again this session.]"
             )
         return notes
-
-    def _build_summarized_conversation(self, turns: list[dict]) -> str:
-        """Summarize long conversation history to prevent cascade and attention dilution."""
-        try:
-            import ollama
-            from src.core.config import get_ember_model
-
-            # Format raw conversation for summarization
-            conv_lines = []
-            for i, turn in enumerate(turns, 1):
-                conv_lines.append(f"User: {turn['user']}")
-                conv_lines.append(f"Assistant: {turn['assistant']}")
-            conv_text = "\n".join(conv_lines)
-
-            prompt = (
-                "Summarize this conversation in 3-5 sentences. Include: main topics discussed, "
-                "key facts established about the user, any commitments or open loops mentioned. "
-                "Be factual and brief.\n\n"
-                f"CONVERSATION:\n{conv_text}\n\nSUMMARY:"
-            )
-
-            response = ollama.chat(
-                model=get_ember_model(),
-                messages=[{"role": "user", "content": prompt}],
-                options={"temperature": 0.2, "num_predict": 200},
-            )
-            summary = response["message"]["content"].strip()
-
-            # Include the last 2 turns raw for recency
-            recent_lines = []
-            for turn in turns[-2:]:
-                recent_lines.append(f"User: {turn['user']}")
-                recent_lines.append(f"Ember: {turn['assistant']}")
-
-            return (
-                "<conversation_history>\n"
-                f"[Summary of {len(turns)} turns]: {summary}\n\n"
-                "[Recent turns]:\n" + "\n".join(recent_lines) +
-                "\n</conversation_history>"
-            )
-        except Exception as exc:
-            logger.warning("[PROMPT] Conversation summarization failed: %s", exc)
-            # Fallback: just use last 4 turns
-            lines = []
-            for turn in turns[-4:]:
-                lines.append(f"User: {turn['user']}")
-                lines.append(f"Ember: {turn['assistant']}")
-            return "<conversation_history>\n" + "\n".join(lines) + "\n</conversation_history>"
 
     @staticmethod
     def _build_self_knowledge_boundary() -> str:

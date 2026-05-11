@@ -13,7 +13,6 @@ import re
 import warnings
 
 from src.context.models import ContextItem
-from src.memory.search_conversation import search_conversation_memories
 from src.memory.service import MemoryService
 from src.retrieval.semantic_search import semantic_search as _semantic_search
 from src.state.models import StateItem
@@ -252,33 +251,6 @@ class ContextRetriever:
 
         return items
 
-    def get_conversation_items(self, user_message: str) -> list[ContextItem]:
-        results = search_conversation_memories(user_message, top_k=6)
-        items: list[ContextItem] = []
-
-        for result in results:
-            memory = result.get("memory", {})
-            content = memory.get("text", "")
-
-            if self._should_exclude_content(content, user_message):
-                continue
-
-            items.append(
-                ContextItem(
-                    id=memory.get("timestamp", ""),
-                    content=content,
-                    source="conversation",
-                    item_type="conversation",
-                    memory_type="conversation",
-                    score=result.get("score", 0.0),
-                    timestamp=memory.get("timestamp"),
-                    tags=memory.get("tags", []),
-                    metadata=memory,
-                )
-            )
-
-        return items
-
     def retrieve(
         self, user_message: str
     ) -> tuple[list[StateItem], list[TaskItem], list[ContextItem], list[ContextItem], list[float] | None]:
@@ -333,11 +305,13 @@ class ContextRetriever:
             query_embedding = None
 
         profile_items = self.get_profile_items(user_message, query_embedding=query_embedding)
-        # get_memory_items() does a full semantic_search() which already searches
-        # the conversation index. get_conversation_items() would load and search
-        # the same conversation index again via search_conversation_memories().
-        # Skipping get_conversation_items() to avoid the double index load --
-        # conversation results are already included in get_memory_items().
+        # Conversation records live in memory.db (SQLite vector store) alongside
+        # other migrated types. get_memory_items() iterates SQLITE_MEMORY_TYPES,
+        # which includes "conversation", so conversation results surface here.
+        # B-RET-001: the legacy file-based conversation_index.json path is
+        # retired -- src/memory/search_conversation.py and the prior
+        # get_conversation_items wrapper were dead code that read a stale
+        # index never refreshed on writes.
         memory_items = self.get_memory_items(user_message, query_embedding=query_embedding)
         reflection_items = self.get_reflection_items(user_message)
 

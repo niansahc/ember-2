@@ -906,7 +906,17 @@ class LLMAdapter:
                     continue
 
     def _maybe_compress_buffer(self) -> None:
-        """Summarize and compress the oldest half of the buffer when it exceeds 70% of the context window."""
+        """Summarize and compress the oldest half of the buffer when token
+        count exceeds COMPRESSION_THRESHOLD (1500 buffer-tokens, ~turn 20
+        at typical density).
+
+        Failure mode: the buffer is mutated (pop_oldest_half) BEFORE the
+        LLM summarization call. If the summarization raises, the popped
+        turns must be restored -- otherwise context is silently lost with
+        no log line, since the async daemon-thread call site swallows
+        exceptions. Wrap the LLM call in try/except and re-prepend on
+        failure.
+        """
         buf = self.prompt_builder.conversation_buffer
         if not buf.needs_compression():
             return
@@ -931,7 +941,18 @@ class LLMAdapter:
             f"CONVERSATION TURNS:\n{turns_text}\n\nSUMMARY:"
         )
 
-        summary = self._summarize_with_plain_prompt(prompt)
+        try:
+            summary = self._summarize_with_plain_prompt(prompt)
+        except Exception as exc:
+            # Restore popped turns so context is not silently lost. Order
+            # is preserved: oldest_turns came from the head of the buffer
+            # and are prepended back in the same order.
+            buf.buffer = oldest_turns + buf.buffer
+            logger.warning(
+                "[BUFFER] Compression failed; restored %d turns. error=%s",
+                len(oldest_turns), exc,
+            )
+            return
 
         write_session_summary(
             memory_service=self.memory_service,
@@ -941,7 +962,10 @@ class LLMAdapter:
 
         buf.inject_summary_turn(summary)
 
-        print(f"[BUFFER] Compressed {len(oldest_turns)} turns into session summary.")
+        logger.info(
+            "[BUFFER] Compressed %d turns into session summary.",
+            len(oldest_turns),
+        )
 
     def _summarize_with_plain_prompt(self, prompt: str) -> str:
         """Plain summarization call — neutral system message, no JSON instruction.

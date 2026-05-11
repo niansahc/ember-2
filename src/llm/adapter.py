@@ -914,9 +914,17 @@ class LLMAdapter:
             for t in oldest_turns
         )
         prompt = (
-            "Summarize the following conversation turns into 2-4 sentences. "
-            "Preserve key facts, decisions, and topics discussed. Be concise.\n\n"
-            f"{turns_text}\n\nSummary:"
+            "Summarize the following conversation turns into 2-4 sentences.\n\n"
+            "Preserve, in order of priority:\n"
+            "1. Who the user has identified themselves as in this conversation "
+            "(role, capacity, intent -- e.g. \"a writer reviewing a draft\", "
+            "\"a researcher gathering sources\", \"a parent troubleshooting bedtime\")\n"
+            "2. Any operational, debugging, or testing context the user has stated\n"
+            "3. Open threads, unresolved questions, or things the user is trying "
+            "to figure out\n"
+            "4. Key facts, decisions, and topics discussed\n\n"
+            "Be factual and brief. Do not invent context the user did not state.\n\n"
+            f"CONVERSATION TURNS:\n{turns_text}\n\nSUMMARY:"
         )
 
         summary = self._summarize_with_plain_prompt(prompt)

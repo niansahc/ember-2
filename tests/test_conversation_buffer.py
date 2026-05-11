@@ -353,3 +353,83 @@ def test_needs_compression_false_after_compression():
     buf.inject_summary_turn("brief summary")
     # Now buffer has summary + 4 turns — should be under 1500
     assert buf.needs_compression() is False
+
+
+# ---------------------------------------------------------------------------
+# Session-aware reset (cross-session pollution prevention)
+# ---------------------------------------------------------------------------
+
+def test_session_change_clears_buffer():
+    """A new session_id on add_turn clears the prior session's turns."""
+    buf = ConversationBuffer()
+    buf.add_turn("a", "1", session_id="sess_A")
+    buf.add_turn("b", "2", session_id="sess_A")
+    assert len(buf.get_recent()) == 2
+
+    buf.add_turn("c", "3", session_id="sess_B")
+    turns = buf.get_recent()
+    assert len(turns) == 1
+    assert turns[0]["user"] == "c"
+    assert buf.current_session_id == "sess_B"
+
+
+def test_session_unchanged_preserves_buffer():
+    """Same session_id across calls accumulates turns normally."""
+    buf = ConversationBuffer()
+    buf.add_turn("a", "1", session_id="sess_X")
+    buf.add_turn("b", "2", session_id="sess_X")
+    buf.add_turn("c", "3", session_id="sess_X")
+    turns = buf.get_recent()
+    assert [t["user"] for t in turns] == ["a", "b", "c"]
+
+
+def test_session_id_none_preserves_legacy_behavior():
+    """add_turn called without session_id (or with None) does not clear
+    an existing buffer. Preserves the 2-arg call form for legacy callers
+    and tests."""
+    buf = ConversationBuffer()
+    buf.add_turn("a", "1")
+    buf.add_turn("b", "2")
+    buf.add_turn("c", "3", session_id=None)
+    assert len(buf.get_recent()) == 3
+
+
+def test_session_change_clears_sticky_flags():
+    """Cross-session reset must also clear session-sticky state
+    (question_suppressed, declined_topics, hedged_record_ids) so the new
+    conversation isn't constrained by the old one's behavior flags."""
+    buf = ConversationBuffer()
+    buf.add_turn("stop asking me questions", "okay", session_id="sess_A")
+    assert buf.question_suppressed is True
+
+    buf.mark_hedge_emitted(["rec_old_1", "rec_old_2"])
+    assert len(buf.hedged_record_ids) == 2
+
+    buf.add_turn("hello", "hi", session_id="sess_B")
+    assert buf.question_suppressed is False
+    assert buf.declined_topics == []
+    assert len(buf.hedged_record_ids) == 0
+
+
+def test_session_first_assignment_no_clear_on_empty():
+    """The very first add_turn with a session_id (when buffer is empty
+    and current_session_id is None) should set current_session_id but
+    not log a clearing event for nothing."""
+    buf = ConversationBuffer()
+    assert buf.current_session_id is None
+    buf.add_turn("hi", "hello", session_id="sess_first")
+    assert buf.current_session_id == "sess_first"
+    assert len(buf.get_recent()) == 1
+
+
+def test_session_change_logs_clearing(caplog):
+    """Cross-session clear emits a structured [BUFFER] log line so the
+    reset is visible in stdout for diagnosis if it ever fires unexpectedly."""
+    import logging
+    buf = ConversationBuffer()
+    buf.add_turn("a", "1", session_id="sess_A")
+
+    with caplog.at_level(logging.INFO, logger="ember.conversation_buffer"):
+        buf.add_turn("b", "2", session_id="sess_B")
+
+    assert any("[BUFFER] Session changed" in r.message for r in caplog.records)

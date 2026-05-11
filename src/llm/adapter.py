@@ -209,6 +209,7 @@ class LLMAdapter:
         vision_description: str | None = None,
         ask_first_active: bool = False,
         intent_class: str | None = None,
+        session_id: str | None = None,
     ) -> Iterator[StatusSignal | str]:
         """Generator form of generate_response. Yields StatusSignal
         sentinels around the constitutional review call (only when
@@ -389,6 +390,7 @@ class LLMAdapter:
         self.prompt_builder.conversation_buffer.add_turn(
             context_packet.user_message,
             final_response,
+            session_id=session_id,
         )
         # Background compression — avoids blocking the response by 3-8 seconds
         # when the buffer exceeds 70% of context window (~every 70 turns).
@@ -412,6 +414,7 @@ class LLMAdapter:
         vision_description: str | None = None,
         ask_first_active: bool = False,
         intent_class: str | None = None,
+        session_id: str | None = None,
     ):
         """
         Stream a response token by token. Yields string chunks.
@@ -547,6 +550,7 @@ class LLMAdapter:
         self.prompt_builder.conversation_buffer.add_turn(
             context_packet.user_message,
             full_response,
+            session_id=session_id,
         )
         threading.Thread(target=self._maybe_compress_buffer, daemon=True).start()
 

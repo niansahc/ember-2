@@ -723,3 +723,75 @@ class TestContextPacketOrdering:
                 f"{positions[earlier]}) must appear before {later!r} "
                 f"(pos {positions[later]}) in the assembled prompt"
             )
+
+
+# ---------------------------------------------------------------------------
+# B-RET-002: retrieval confidence block must NOT emit aggregate oldest age
+# ---------------------------------------------------------------------------
+
+
+def _ts_days_ago_str(n: int) -> str:
+    """Vault canonical hyphenated timestamp from n days back."""
+    dt = datetime.now() - timedelta(days=n)
+    return dt.strftime("%Y-%m-%dT%H-%M-%S")
+
+
+def test_retrieval_confidence_omits_aggregate_oldest_age_line() -> None:
+    """The 'oldest record: N days ago' line was a misattribution surface:
+    the model lifted the aggregate day-count and applied it to whichever
+    specific record it cited. After B-RET-002 the block must contain
+    scores and confidence but no aggregate age line."""
+    pb = PromptBuilder()
+    fresh = _make_memory_item("Record one with substantive content.", id="m1")
+    fresh.timestamp = _ts_days_ago_str(0)
+    old = _make_memory_item("Record two also with enough content for filters.", id="m2")
+    old.timestamp = _ts_days_ago_str(345)
+
+    block = pb._build_retrieval_confidence([fresh, old])
+
+    assert "[Retrieval confidence:]" in block
+    assert "scores:" in block
+    assert "confidence:" in block
+    # Pin against regression: the aggregate day-count line must not return.
+    assert "oldest record:" not in block
+    assert "days ago" not in block
+
+
+def test_per_item_age_renders_for_recent_timestamp() -> None:
+    """Per-item age labels must render when a real vault-canonical
+    timestamp is present. This is the path that replaces the deleted
+    aggregate line."""
+    label = PromptBuilder._format_item_age(_ts_days_ago_str(0))
+    # Today's record renders as moments / minutes / hours / yesterday
+    # depending on exact time-of-day arithmetic; just confirm we got a
+    # bracketed label and it includes "recorded".
+    assert label.startswith(" [recorded ")
+    assert label.endswith("]")
+
+
+def test_per_item_age_handles_none_timestamp_gracefully() -> None:
+    """Legacy or unparseable timestamps must produce an empty string,
+    not crash and not invent a label."""
+    assert PromptBuilder._format_item_age(None) == ""
+    assert PromptBuilder._format_item_age("") == ""
+    assert PromptBuilder._format_item_age("not a timestamp") == ""
+
+
+def test_retrieval_confidence_keeps_oldest_age_for_confidence_level() -> None:
+    """The oldest_age computation is still used internally to derive the
+    confidence level (low / moderate / high). Removing the emitted line
+    must not have removed that calibration. An all-old retrieval should
+    still produce a 'low' confidence level."""
+    pb = PromptBuilder()
+    old1 = _make_memory_item("Old record one with adequate content.", id="o1")
+    old1.timestamp = _ts_days_ago_str(400)
+    old1.score = 0.1
+    old2 = _make_memory_item("Old record two with adequate content.", id="o2")
+    old2.timestamp = _ts_days_ago_str(500)
+    old2.score = 0.1
+
+    block = pb._build_retrieval_confidence([old1, old2])
+
+    # Confidence string is derived from low score + old age; should land
+    # in the "low" bucket (avg_score < 0.4 and oldest_age > 30).
+    assert "low" in block.lower()

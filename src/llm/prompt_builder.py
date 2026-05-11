@@ -1113,13 +1113,21 @@ class PromptBuilder:
         else:
             confidence = "low — records are old or weakly matched; state uncertainty explicitly"
 
+        # B-RET-002: do NOT emit "oldest record: N days ago" to the prompt.
+        # That line was an aggregate across the full retrieval, not a
+        # per-item value, and the model conflated it with the age of any
+        # specific record it cited (UAT 2026-05-11: model said "based on
+        # a record from 345 days ago" for a record that was 17 minutes
+        # old, lifting the aggregate from this block). Per-item ages now
+        # render adjacent to each record via _format_item_age, which is
+        # the correct attribution surface. oldest_age is still used above
+        # to derive the confidence level boundary; only the emitted line
+        # is removed.
         lines = [
             "[Retrieval confidence:]",
             f"scores: min={min_score:.2f} avg={avg_score:.2f} max={max_score:.2f}",
+            f"confidence: {confidence}",
         ]
-        if oldest_age is not None:
-            lines.append(f"oldest record: {oldest_age} days ago")
-        lines.append(f"confidence: {confidence}")
 
         return "\n".join(lines)
 

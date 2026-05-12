@@ -82,7 +82,13 @@ JUDGE_SYSTEM = (
 )
 
 # Default per-turn timeout. Generous to accommodate qwen3:8b at peak load.
-PER_TURN_TIMEOUT_S = 180.0
+# Raised from 180.0 to 300.0 after two consecutive timeouts at the 180s
+# cap on this hardware. Late-conversation turns at context_length=32768
+# can exceed 180s on qwen3:8b warm; the test measures coherence, not
+# latency, so a higher cap is correct here. See
+# docs/audits/b1_stage2_confidence_v018.md for the broader throughput
+# pattern this is part of.
+PER_TURN_TIMEOUT_S = 300.0
 
 LOG_DIR = REPO_ROOT / "logs" / "eval_conversations"
 

@@ -251,7 +251,11 @@ class TestClassifyIntentPublicAPI:
     def test_empty_query_falls_back_to_safe_default(self):
         assert classify_intent("") == "vault_answerable"
 
-    def test_stage1_log_line_emitted(self, caplog):
+    def test_stage1_log_line_emitted(self, caplog, monkeypatch):
+        # Telemetry log is gated behind EMBER_CLASSIFIER_TELEMETRY so the
+        # SetFit training pipeline can opt in without exposing query content
+        # by default. Enable the gate here to observe the log structure.
+        monkeypatch.setenv("EMBER_CLASSIFIER_TELEMETRY", "true")
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
             classify_intent("what's the weather today")
         matches = [r for r in caplog.records if "[INTENT_CLASSIFY]" in r.message]
@@ -443,6 +447,7 @@ class TestClassifyIntentStage2Flow:
             ]
         )
         monkeypatch.setattr(intent_classifier, "embed_text", lambda q: [1.0, 0.0])
+        monkeypatch.setenv("EMBER_CLASSIFIER_TELEMETRY", "true")
         # Use a query that escapes Stage 1 so Stage 2 actually runs.
         query = "tell me what's going on with the project"
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
@@ -472,6 +477,7 @@ class TestClassifyIntentStage2Flow:
             "_stage3_classify_with_timeout",
             lambda q: ("needs_internet", False),
         )
+        monkeypatch.setenv("EMBER_CLASSIFIER_TELEMETRY", "true")
         query = "genuinely ambiguous external question with no keyword signals"
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
             label = classify_intent(query)
@@ -595,6 +601,7 @@ class TestClassifyIntentStage3Flow:
             "_stage3_classify_with_timeout",
             lambda q: ("vault_answerable", True),
         )
+        monkeypatch.setenv("EMBER_CLASSIFIER_TELEMETRY", "true")
         query = "intentionally hard to classify without signal"
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
             label = classify_intent(query)
@@ -617,6 +624,7 @@ class TestClassifyIntentStage3Flow:
             "_stage3_classify_with_timeout",
             lambda q: ("needs_internet", False),
         )
+        monkeypatch.setenv("EMBER_CLASSIFIER_TELEMETRY", "true")
         query = "something that only the LLM can resolve cleanly"
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
             label = classify_intent(query)

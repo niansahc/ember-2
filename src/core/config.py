@@ -171,6 +171,28 @@ def get_intent_classifier_timeout_ms() -> int:
     return int(os.getenv("INTENT_CLASSIFIER_TIMEOUT_MS", "800"))
 
 
+def get_ember_debug() -> bool:
+    """Return True when EMBER_DEBUG is enabled.
+
+    Gates diagnostic logs that may include query, response, or vault
+    content. Evaluated at call time so toggling the env var without an
+    API restart still takes effect on the next call. Default is False so
+    privacy-sensitive diagnostics stay off unless an operator opts in.
+    """
+    return os.getenv("EMBER_DEBUG", "").lower() in ("1", "true", "yes")
+
+
+def get_ember_classifier_telemetry() -> bool:
+    """Return True when EMBER_CLASSIFIER_TELEMETRY is enabled.
+
+    Gates the per-call intent classification training-pipeline log line
+    (ADR-034 Upgrade Path). Separate from EMBER_DEBUG so the SetFit
+    training feed can run with scrubbed query telemetry independently of
+    full diagnostic logging. Default False.
+    """
+    return os.getenv("EMBER_CLASSIFIER_TELEMETRY", "").lower() in ("1", "true", "yes")
+
+
 def get_ember_vision_model() -> str | None:
     """
     Returns the Ollama vision model for image analysis, or None if not configured.

@@ -4,6 +4,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 
+from src.core.config import get_ember_debug
 from src.llm.intent_classifier import NEEDS_INTERNET, classify_intent
 
 logger = logging.getLogger("ember.policies")
@@ -136,7 +137,10 @@ def classify_query(user_message: str) -> ContextPolicy:
     # Normalize curly apostrophes to straight so markers like "what's" match
     # regardless of input source (Open WebUI, mobile keyboards, etc.)
     q = q.replace("\u2018", "'").replace("\u2019", "'")
-    logger.warning("[CLASSIFY] normalized query: %s", q[:120])
+    if get_ember_debug():
+        # Gated behind EMBER_DEBUG: query content is vault-adjacent and must
+        # not enter stdout by default. See CLAUDE.md vault privacy rule.
+        logger.warning("[CLASSIFY] normalized query: %s", q[:120])
 
     # Stage 0: explicit web-search request. User-stated instruction, not
     # intent inference — bypass ask-first and skip the intent classifier.

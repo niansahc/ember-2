@@ -10,8 +10,13 @@ examples designed to span the classification failure modes Stage 2 must
 handle.
 
 As production traffic accumulates in the [INTENT_CLASSIFY] log pipeline,
-real representative queries can be added to this list (with any personal
-content paraphrased / stripped). Target: 80 per class for stable accuracy;
+real representative queries can be added to this list. Note: the
+telemetry log line is gated behind EMBER_CLASSIFIER_TELEMETRY and the
+query is scrubbed via _scrub_for_telemetry before logging — multi-word
+Title Case sequences, 4+ digit runs, and emails are replaced with
+placeholders. Single-word proper nouns and most surface phrasing are
+preserved. Operators may want to paraphrase further before promoting a
+scrubbed query into this pool. Target: 80 per class for stable accuracy;
 upgrade to SetFit at 150 per class per ADR-034 Upgrade Path.
 """
 

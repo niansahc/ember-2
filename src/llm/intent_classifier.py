@@ -30,7 +30,12 @@ import re
 import numpy as np
 import ollama
 
-from src.core.config import get_ember_model, get_intent_classifier_timeout_ms
+from src.core.config import (
+    get_ember_classifier_telemetry,
+    get_ember_debug,
+    get_ember_model,
+    get_intent_classifier_timeout_ms,
+)
 from src.retrieval.embed_memory import embed_text, embed_texts
 
 logger = logging.getLogger("ember.intent_classifier")
@@ -185,10 +190,13 @@ def _get_example_embeddings() -> tuple[list[str], np.ndarray] | None:
         _example_embeddings = (labels, matrix)
         return _example_embeddings
     except Exception as exc:
-        logger.warning(
-            "[INTENT_CLASSIFY] Stage 2 example embedding load failed (non-fatal): %s",
-            exc,
-        )
+        if get_ember_debug():
+            # Exception payload may include text from the example pool; gate
+            # behind EMBER_DEBUG so it does not enter stdout by default.
+            logger.warning(
+                "[INTENT_CLASSIFY] Stage 2 example embedding load failed (non-fatal): %s",
+                exc,
+            )
         return None
 
 
@@ -210,10 +218,12 @@ def _stage2_classify(query: str) -> tuple[str | None, float | None]:
     try:
         query_emb = embed_text(query)
     except Exception as exc:
-        logger.warning(
-            "[INTENT_CLASSIFY] Stage 2 query embed failed (non-fatal): %s",
-            exc,
-        )
+        if get_ember_debug():
+            # Exception payload may echo the query; gate behind EMBER_DEBUG.
+            logger.warning(
+                "[INTENT_CLASSIFY] Stage 2 query embed failed (non-fatal): %s",
+                exc,
+            )
         return None, None
 
     query_vec = np.asarray(query_emb, dtype=np.float32)
@@ -278,13 +288,18 @@ def _stage3_llm_call(query: str) -> str:
         label = data.get("label")
         if label in _VALID_LABELS:
             return label
-        logger.warning(
-            "[INTENT_CLASSIFY] Stage 3 returned unknown label: %r", label
-        )
+        if get_ember_debug():
+            logger.warning(
+                "[INTENT_CLASSIFY] Stage 3 returned unknown label: %r", label
+            )
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        logger.warning("[INTENT_CLASSIFY] Stage 3 JSON parse failed: %s", exc)
+        if get_ember_debug():
+            # Exception may include raw LLM output that echoes the query.
+            logger.warning("[INTENT_CLASSIFY] Stage 3 JSON parse failed: %s", exc)
     except Exception as exc:
-        logger.warning("[INTENT_CLASSIFY] Stage 3 LLM call failed: %s", exc)
+        if get_ember_debug():
+            # Exception may include the request payload sent to Ollama.
+            logger.warning("[INTENT_CLASSIFY] Stage 3 LLM call failed: %s", exc)
     return _SAFE_DEFAULT
 
 
@@ -338,16 +353,52 @@ def classify_intent(query: str) -> str:
     return stage3_label
 
 
+_PROPER_NOUN_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b")
+_DIGIT_RUN_RE = re.compile(r"\b\d{4,}\b")
+_EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w.-]+\.\w+\b")
+
+
+def _scrub_for_telemetry(query: str) -> str:
+    """Strip PII-like tokens from a query before logging to telemetry.
+
+    Preserves intent-discriminative structure (interrogative words, verbs,
+    possessive markers) while replacing multi-word Title Case sequences
+    with [PROPER], 4+ digit runs with [NUM], and email addresses with
+    [EMAIL]. Output is ASCII-only and truncated to 60 chars.
+
+    Single-word proper nouns and the first capitalized word of a sentence
+    are not stripped; the latter would over-fire on every query that
+    starts with "What", "Where", etc. The privacy/utility tradeoff is
+    noted in classifier_examples.py.
+    """
+    if not query:
+        return ""
+    scrubbed = _EMAIL_RE.sub("[EMAIL]", query)
+    scrubbed = _PROPER_NOUN_RE.sub("[PROPER]", scrubbed)
+    scrubbed = _DIGIT_RUN_RE.sub("[NUM]", scrubbed)
+    scrubbed = scrubbed.encode("ascii", "ignore").decode("ascii")
+    return scrubbed[:60]
+
+
 def _log(stage: str, label: str, confidence: float | None, query: str) -> None:
     """Emit the structured classification log line.
 
+    Gated behind EMBER_CLASSIFIER_TELEMETRY (separate from EMBER_DEBUG)
+    so the ADR-034 training-data pipeline can run independently of full
+    diagnostic logging. Returns silently when telemetry is unset.
+
+    Query is scrubbed via _scrub_for_telemetry before logging — proper
+    nouns, digit runs, and emails are replaced with placeholders. The
+    raw query never enters stdout from this call.
+
     ASCII-only to avoid Windows cp1252 corruption (CLAUDE.md rule 7).
-    Query is truncated to 200 chars per ADR-034 logging spec.
     """
+    if not get_ember_classifier_telemetry():
+        return
     logger.info(
         "[INTENT_CLASSIFY] stage=%s label=%s confidence=%s query=%s",
         stage,
         label,
         "none" if confidence is None else f"{confidence:.3f}",
-        query[:200],
+        _scrub_for_telemetry(query),
     )

@@ -13,6 +13,7 @@ from pydantic import BaseModel
 logger = logging.getLogger("ember.openai_adapter")
 
 from src.api.limiter import limiter
+from src.core.config import get_ember_debug
 from src.memory.service import MemoryService
 from src.memory.write_memory import write_memory
 from src.memory.session import create_session, session_exists, get_session, list_sessions
@@ -45,6 +46,60 @@ def _is_refusal_response(text: str) -> bool:
         return False
     lowered = text.lower()
     return any(m in lowered for m in _REFUSAL_PATTERNS)
+
+
+def _log_payload_diagnostics(raw_json: dict) -> None:
+    """Log incoming chat completion payload structure for diagnostics.
+
+    Defensive gate: callers should already check get_ember_debug() before
+    invoking this helper, but the helper re-checks so that no payload
+    content can leak via a future caller that forgets to gate.
+    """
+    if not get_ember_debug():
+        return
+    logger.warning("[PAYLOAD] top-level keys: %s", list(raw_json.keys()))
+    for i, msg in enumerate(raw_json.get("messages", [])):
+        role = msg.get("role")
+        content = msg.get("content")
+        if isinstance(content, list):
+            logger.warning(
+                "[PAYLOAD] messages[%d] role=%s content=LIST len=%d parts=%s",
+                i, role, len(content),
+                [p.get("type") for p in content if isinstance(p, dict)],
+            )
+            for j, part in enumerate(content):
+                if isinstance(part, dict):
+                    part_type = part.get("type", "unknown")
+                    if part_type == "text":
+                        logger.warning(
+                            "[PAYLOAD]   part[%d] type=text len=%d content=%s",
+                            j, len(part.get("text", "")), part.get("text", "")[:120],
+                        )
+                    elif part_type == "image_url":
+                        img = part.get("image_url", {})
+                        url_val = img.get("url", "")
+                        logger.warning(
+                            "[PAYLOAD]   part[%d] type=image_url image_url.keys=%s url.len=%d url.prefix=%s",
+                            j, list(img.keys()), len(url_val), url_val[:80],
+                        )
+                    else:
+                        logger.warning(
+                            "[PAYLOAD]   part[%d] type=%s keys=%s snippet=%s",
+                            j, part_type, list(part.keys()), str(part)[:200],
+                        )
+        else:
+            content_len = len(content) if content else 0
+            if role == "system":
+                logger.warning(
+                    "[PAYLOAD] messages[%d] role=system len=%d FULL_CONTENT=%s",
+                    i, content_len, repr(content),
+                )
+            else:
+                snippet = str(content)[:120] if content else ""
+                logger.warning(
+                    "[PAYLOAD] messages[%d] role=%s content=STR len=%s snippet=%s",
+                    i, role, content_len, snippet,
+                )
 
 
 # MEMORY_PREVIEW_LENGTH removed -- full conversation text is now stored
@@ -760,55 +815,15 @@ def _ensure_session(session_id: str, first_user_message: str, *, test: bool = Fa
 @limiter.limit("30/minute")
 async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # --- FILE UPLOAD DIAGNOSTIC LOGGING ---
-    try:
-        raw_body = await request.body()
-        raw_json = json.loads(raw_body)
-        logger.warning("[PAYLOAD] top-level keys: %s", list(raw_json.keys()))
-        for i, msg in enumerate(raw_json.get("messages", [])):
-            role = msg.get("role")
-            content = msg.get("content")
-            if isinstance(content, list):
-                logger.warning(
-                    "[PAYLOAD] messages[%d] role=%s content=LIST len=%d parts=%s",
-                    i, role, len(content),
-                    [p.get("type") for p in content if isinstance(p, dict)],
-                )
-                for j, part in enumerate(content):
-                    if isinstance(part, dict):
-                        part_type = part.get("type", "unknown")
-                        if part_type == "text":
-                            logger.warning(
-                                "[PAYLOAD]   part[%d] type=text len=%d content=%s",
-                                j, len(part.get("text", "")), part.get("text", "")[:120],
-                            )
-                        elif part_type == "image_url":
-                            img = part.get("image_url", {})
-                            url_val = img.get("url", "")
-                            logger.warning(
-                                "[PAYLOAD]   part[%d] type=image_url image_url.keys=%s url.len=%d url.prefix=%s",
-                                j, list(img.keys()), len(url_val), url_val[:80],
-                            )
-                        else:
-                            logger.warning(
-                                "[PAYLOAD]   part[%d] type=%s keys=%s snippet=%s",
-                                j, part_type, list(part.keys()), str(part)[:200],
-                            )
-            else:
-                content_len = len(content) if content else 0
-                # Log full content for system messages so we can see injected context
-                if role == "system":
-                    logger.warning(
-                        "[PAYLOAD] messages[%d] role=system len=%d FULL_CONTENT=%s",
-                        i, content_len, repr(content),
-                    )
-                else:
-                    snippet = str(content)[:120] if content else ""
-                    logger.warning(
-                        "[PAYLOAD] messages[%d] role=%s content=STR len=%s snippet=%s",
-                        i, role, content_len, snippet,
-                    )
-    except Exception as exc:
-        logger.warning("[PAYLOAD] failed to log raw request: %s", exc)
+    # Gated behind EMBER_DEBUG so query/payload content does not enter
+    # stdout by default. See CLAUDE.md vault privacy rule.
+    if get_ember_debug():
+        try:
+            raw_body = await request.body()
+            raw_json = json.loads(raw_body)
+            _log_payload_diagnostics(raw_json)
+        except Exception as exc:
+            logger.warning("[PAYLOAD] failed to log raw request: %s", exc)
     # --- END DIAGNOSTIC LOGGING ---
 
     # --- SESSION ID ---

@@ -42,8 +42,14 @@ from src.retrieval.embedding_model import embed_texts
 # Batch size for embedding calls — balances speed vs memory
 BATCH_SIZE = 50
 
-# Memory types that use JSON indexes
-JSON_INDEX_TYPES = ["conversation", "profile", "reflection", "journal"]
+# Memory types that use JSON indexes.
+# B-RET-001: "conversation" removed -- conversation records live in
+# memory.db (SQLite vector store) alongside the other migrated types.
+# The legacy file-based conversation_index.json was never read by any
+# live retrieval path and was only rebuilt by manual runs of this
+# script, producing a stale-by-default index. Stale conversation_index.json
+# files in user vaults are left in place (user data); nothing reads them.
+JSON_INDEX_TYPES = ["profile", "reflection", "journal"]
 
 
 def rebuild_json_index(vault: Path, memory_type: str) -> int:

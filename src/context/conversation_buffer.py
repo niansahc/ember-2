@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from collections import OrderedDict
+
+logger = logging.getLogger("ember.conversation_buffer")
 
 # B-MEM-005: bound the hedged_record_ids tracker so long sessions don't grow
 # the set without limit. LRU eviction keeps the most-recently hedged records.
@@ -78,8 +81,33 @@ class ConversationBuffer:
         # finalizes the response — so failed LLM calls or stripped hedges don't
         # leave spurious marks that suppress confidence blocks on later turns.
         self.pending_hedge_record_ids: list[str] = []
+        # Session tracking: the buffer is a process-level singleton, but only
+        # one UI session at a time is "the current conversation". When the
+        # session_id changes between add_turn calls, prior turns belong to a
+        # different conversation and must not bleed into the new one.
+        self.current_session_id: str | None = None
 
-    def add_turn(self, user: str, assistant: str) -> None:
+    def add_turn(
+        self, user: str, assistant: str, session_id: str | None = None,
+    ) -> None:
+        # Cross-session reset: if a non-None session_id arrives that differs
+        # from the prior one, the prior turns are not history for this
+        # conversation. Clear the buffer (and session-sticky state) to
+        # prevent cross-session pollution. session_id=None preserves the
+        # legacy 2-arg behavior so existing callers/tests are unaffected.
+        if session_id is not None and session_id != self.current_session_id:
+            if self.buffer or self.current_session_id is not None:
+                logger.info(
+                    "[BUFFER] Session changed (%s -> %s); clearing %d turns.",
+                    self.current_session_id, session_id, len(self.buffer),
+                )
+            self.buffer = []
+            self.question_suppressed = False
+            self.declined_topics = []
+            self.hedged_record_ids.clear()
+            self.pending_hedge_record_ids = []
+            self.current_session_id = session_id
+
         user_lower = user.lower()
         self._check_question_objection(user_lower)
         self._check_topic_decline(user_lower)

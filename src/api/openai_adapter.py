@@ -1600,6 +1600,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     vision_description=_vision_description,
                     ask_first_active=_ask_first_active,
                     intent_class=_intent_class,
+                    session_id=session_id,
                 ):
                     if isinstance(_item, StatusSignal):
                         yield _status_event(_item.name)
@@ -1763,6 +1764,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     vision_description=_vision_description,
                     ask_first_active=_ask_first_active,
                     intent_class=_intent_class,
+                    session_id=session_id,
                 ):
                     filtered = think_filter.filter(chunk)
                     if filtered:

@@ -222,6 +222,13 @@ class SqliteVectorStore:
                     "metadata": metadata,
                     "tier": tier,
                     "authorship": authorship,
+                    # B-RET-002: surface the column-level created_at so
+                    # ContextItem.timestamp populates correctly. The JSON
+                    # metadata blob does not carry this field
+                    # (write_memory.py composes metadata without it), so
+                    # callers were reading None from metadata.get and
+                    # per-item age labels never rendered.
+                    "created_at": row["created_at"],
                     # ADR-021 amendment 2026-04-24: surface the cached
                     # embedding so the T2 pattern detector can read it
                     # from ContextItem.metadata without recomputation.

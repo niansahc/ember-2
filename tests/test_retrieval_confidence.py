@@ -90,14 +90,23 @@ class TestRetrievalConfidenceBlock:
         block = pb._build_retrieval_confidence([])
         assert block == ""
 
-    def test_oldest_record_age_shown(self):
+    def test_oldest_record_age_not_emitted_to_prompt(self):
+        """B-RET-002: the aggregate 'oldest record: N days ago' line was a
+        misattribution surface -- model lifted the aggregate and applied
+        it to whichever specific record it cited. Removed. Per-item ages
+        now flow via _format_item_age adjacent to each record."""
         pb = PromptBuilder()
         items = [
             _make_item("Recent", score=0.6, days_ago=2),
             _make_item("Older", score=0.5, days_ago=14),
         ]
         block = pb._build_retrieval_confidence(items)
-        assert "14 days ago" in block
+        # Aggregate day-count line must NOT appear in the emitted block.
+        assert "14 days ago" not in block
+        assert "oldest record:" not in block
+        # But the confidence level (derived in part from oldest_age) is
+        # still emitted so the model has a calibration signal.
+        assert "confidence:" in block
 
     def test_authority_rules_reference_confidence(self):
         """Authority rules should tell the model to check retrieval confidence."""

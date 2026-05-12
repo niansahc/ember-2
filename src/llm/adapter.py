@@ -209,6 +209,7 @@ class LLMAdapter:
         vision_description: str | None = None,
         ask_first_active: bool = False,
         intent_class: str | None = None,
+        session_id: str | None = None,
     ) -> Iterator[StatusSignal | str]:
         """Generator form of generate_response. Yields StatusSignal
         sentinels around the constitutional review call (only when
@@ -389,6 +390,7 @@ class LLMAdapter:
         self.prompt_builder.conversation_buffer.add_turn(
             context_packet.user_message,
             final_response,
+            session_id=session_id,
         )
         # Background compression — avoids blocking the response by 3-8 seconds
         # when the buffer exceeds 70% of context window (~every 70 turns).
@@ -412,6 +414,7 @@ class LLMAdapter:
         vision_description: str | None = None,
         ask_first_active: bool = False,
         intent_class: str | None = None,
+        session_id: str | None = None,
     ):
         """
         Stream a response token by token. Yields string chunks.
@@ -547,6 +550,7 @@ class LLMAdapter:
         self.prompt_builder.conversation_buffer.add_turn(
             context_packet.user_message,
             full_response,
+            session_id=session_id,
         )
         threading.Thread(target=self._maybe_compress_buffer, daemon=True).start()
 
@@ -902,7 +906,17 @@ class LLMAdapter:
                     continue
 
     def _maybe_compress_buffer(self) -> None:
-        """Summarize and compress the oldest half of the buffer when it exceeds 70% of the context window."""
+        """Summarize and compress the oldest half of the buffer when token
+        count exceeds COMPRESSION_THRESHOLD (1500 buffer-tokens, ~turn 20
+        at typical density).
+
+        Failure mode: the buffer is mutated (pop_oldest_half) BEFORE the
+        LLM summarization call. If the summarization raises, the popped
+        turns must be restored -- otherwise context is silently lost with
+        no log line, since the async daemon-thread call site swallows
+        exceptions. Wrap the LLM call in try/except and re-prepend on
+        failure.
+        """
         buf = self.prompt_builder.conversation_buffer
         if not buf.needs_compression():
             return
@@ -914,12 +928,31 @@ class LLMAdapter:
             for t in oldest_turns
         )
         prompt = (
-            "Summarize the following conversation turns into 2-4 sentences. "
-            "Preserve key facts, decisions, and topics discussed. Be concise.\n\n"
-            f"{turns_text}\n\nSummary:"
+            "Summarize the following conversation turns into 2-4 sentences.\n\n"
+            "Preserve, in order of priority:\n"
+            "1. Who the user has identified themselves as in this conversation "
+            "(role, capacity, intent -- e.g. \"a writer reviewing a draft\", "
+            "\"a researcher gathering sources\", \"a parent troubleshooting bedtime\")\n"
+            "2. Any operational, debugging, or testing context the user has stated\n"
+            "3. Open threads, unresolved questions, or things the user is trying "
+            "to figure out\n"
+            "4. Key facts, decisions, and topics discussed\n\n"
+            "Be factual and brief. Do not invent context the user did not state.\n\n"
+            f"CONVERSATION TURNS:\n{turns_text}\n\nSUMMARY:"
         )
 
-        summary = self._summarize_with_plain_prompt(prompt)
+        try:
+            summary = self._summarize_with_plain_prompt(prompt)
+        except Exception as exc:
+            # Restore popped turns so context is not silently lost. Order
+            # is preserved: oldest_turns came from the head of the buffer
+            # and are prepended back in the same order.
+            buf.buffer = oldest_turns + buf.buffer
+            logger.warning(
+                "[BUFFER] Compression failed; restored %d turns. error=%s",
+                len(oldest_turns), exc,
+            )
+            return
 
         write_session_summary(
             memory_service=self.memory_service,
@@ -929,7 +962,10 @@ class LLMAdapter:
 
         buf.inject_summary_turn(summary)
 
-        print(f"[BUFFER] Compressed {len(oldest_turns)} turns into session summary.")
+        logger.info(
+            "[BUFFER] Compressed %d turns into session summary.",
+            len(oldest_turns),
+        )
 
     def _summarize_with_plain_prompt(self, prompt: str) -> str:
         """Plain summarization call — neutral system message, no JSON instruction.

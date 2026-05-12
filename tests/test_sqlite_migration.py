@@ -46,6 +46,70 @@ def test_sqlite_store_inserts_and_searches(tmp_path: Path) -> None:
     store.close()
 
 
+# ── B-RET-002 regression: created_at flows through search results ──────
+
+
+def test_search_returns_created_at(tmp_path: Path) -> None:
+    """B-RET-002: the search() result dict must include created_at from
+    the vectors-table column. Without this, ContextItem.timestamp is None
+    for every SQLite-backed record and per-item age labels never render."""
+    db_path = tmp_path / "memory.db"
+    store = SqliteVectorStore(db_path)
+
+    embedding = [0.1] * 768
+    store.insert({
+        "id": "ret-002-1",
+        "text": "Record under age-rendering test",
+        "embedding": embedding,
+        "source": "api",
+        "memory_type": "conversation",
+        "created_at": "2026-05-11T18-09-47",
+        "metadata": {"role": "user"},
+    })
+
+    results = store.search(
+        query_embedding=embedding,
+        limit=5,
+        memory_type="conversation",
+    )
+
+    assert len(results) == 1
+    assert "created_at" in results[0]
+    assert results[0]["created_at"] == "2026-05-11T18-09-47"
+    store.close()
+
+
+def test_search_handles_null_created_at(tmp_path: Path) -> None:
+    """Defensive: legacy rows may have NULL created_at. The search dict
+    should still include the key (with None value) so callers can use
+    result.get('created_at') without distinguishing 'absent' from 'null'."""
+    db_path = tmp_path / "memory.db"
+    store = SqliteVectorStore(db_path)
+
+    embedding = [0.1] * 768
+    # Explicitly omit created_at from the insert payload to exercise the
+    # column-default (NULL) path through search().
+    store.insert({
+        "id": "ret-002-null",
+        "text": "Legacy record without created_at",
+        "embedding": embedding,
+        "source": "api",
+        "memory_type": "conversation",
+        "metadata": {},
+    })
+
+    results = store.search(
+        query_embedding=embedding,
+        limit=5,
+        memory_type="conversation",
+    )
+
+    assert len(results) == 1
+    assert "created_at" in results[0]
+    assert results[0]["created_at"] is None
+    store.close()
+
+
 def test_sqlite_store_filters_by_memory_type(tmp_path: Path) -> None:
     """Verify memory_type filtering works in SQLite search."""
     db_path = tmp_path / "memory.db"

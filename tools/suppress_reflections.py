@@ -2,18 +2,30 @@
 tools/suppress_reflections.py
 
 Suppress junk reflection records by marking them in-place.
-Does NOT delete records — append-only principle.
+Canonical JSON records are NOT deleted - append-only principle.
 
 Adds metadata.quality = "suppressed" and metadata.suppressed_reason
-to each flagged record's JSON file. Also updates the reflection vector
-index to exclude suppressed records.
+to each flagged record's canonical JSON file. Also hard-deletes the
+corresponding row from memory.db (the SQLite vector index) so the
+record is invisible to semantic search.
+
+Reflection records are SQLite-backed (memory.db). The legacy JSON index
+path (vault/embeddings/reflection_index.json) is dead for reflections,
+and any stale file in a user vault is left untouched - same B-RET-001
+precedent applied to conversation_index.json.
+
+Known tool-debt: running scripts/rebuild_indexes.py against canonical
+records will re-insert suppressed rows into memory.db because the insert
+path does not currently read metadata.quality. Re-run this tool after
+any manual rebuild. A schema-level "suppressed" propagation would close
+this gap but is out of scope.
 
 Usage:
     python tools/audit_reflections.py          # audit first
     python tools/suppress_reflections.py       # then suppress
 
-This is a one-time cleanup tool for junk that accumulated before
-the reflection skip filters were tightened.
+This is a one-time cleanup tool for junk that accumulated before the
+reflection skip filters were tightened.
 """
 
 from __future__ import annotations
@@ -28,12 +40,15 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.core.config import get_private_vault_path
+from src.retrieval.sqlite_vector_store import SqliteVectorStore
 from tools.audit_reflections import is_junk_reflection
 
 
 def suppress_reflections() -> tuple[int, int, str]:
     """
-    Mark junk reflections as suppressed in their JSON files.
+    Mark junk reflections as suppressed in their canonical JSON records
+    and hard-delete them from memory.db.
+
     Returns (total, suppressed_count, summary_text).
     """
     vault = get_private_vault_path()
@@ -45,9 +60,10 @@ def suppress_reflections() -> tuple[int, int, str]:
     lines: list[str] = []
     total = 0
     suppressed = 0
+    suppressed_ids: list[str] = []
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    lines.append(f"Reflection Suppression — {timestamp}")
+    lines.append(f"Reflection Suppression - {timestamp}")
     lines.append(f"{'=' * 50}")
 
     for json_file in sorted(reflection_dir.glob("*.json")):
@@ -70,7 +86,7 @@ def suppress_reflections() -> tuple[int, int, str]:
 
         junk, reason = is_junk_reflection(text)
         if junk:
-            # Mark as suppressed in the record itself
+            # Flag the canonical record. Append-only: file stays in place.
             metadata["quality"] = "suppressed"
             metadata["suppressed_reason"] = reason
             metadata["suppressed_at"] = timestamp
@@ -80,62 +96,47 @@ def suppress_reflections() -> tuple[int, int, str]:
                 encoding="utf-8",
             )
 
+            record_id = record.get("id")
+            if record_id:
+                suppressed_ids.append(record_id)
+
             suppressed += 1
-            lines.append(f"  SUPPRESSED: {json_file.name} — {reason}")
+            lines.append(f"  SUPPRESSED: {json_file.name} - {reason}")
 
     lines.append(f"\nTotal reflections: {total}")
     lines.append(f"Suppressed: {suppressed}")
     lines.append(f"Remaining: {total - suppressed}")
 
-    # Update the reflection vector index to exclude suppressed records
-    index_suppressed = _update_reflection_index(vault, reflection_dir)
-    lines.append(f"Index entries removed: {index_suppressed}")
+    # Hard-delete suppressed rows from memory.db. Canonical JSON records
+    # remain on disk; only the vector index entries are removed so the
+    # records are invisible to semantic_search.
+    deleted = _delete_from_memory_db(vault, suppressed_ids)
+    lines.append(f"memory.db rows deleted: {deleted}")
 
     summary = "\n".join(lines)
     return total, suppressed, summary
 
 
-def _update_reflection_index(vault: Path, reflection_dir: Path) -> int:
-    """Remove suppressed records from the reflection vector index."""
-    index_path = vault / "embeddings" / "reflection_index.json"
-    if not index_path.exists():
+def _delete_from_memory_db(vault: Path, ids: list[str]) -> int:
+    """Hard-delete the listed record ids from memory.db.
+
+    Returns the count of rows actually removed. Returns 0 if memory.db
+    does not exist (fresh vault, never indexed). Leaves any stale
+    reflection_index.json in user vaults untouched - same B-RET-001
+    precedent applied to conversation_index.json.
+    """
+    if not ids:
         return 0
 
+    db_path = vault / "embeddings" / "memory.db"
+    if not db_path.exists():
+        return 0
+
+    store = SqliteVectorStore(db_path)
     try:
-        index_data = json.loads(index_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return 0
-
-    if not isinstance(index_data, list):
-        return 0
-
-    # Build set of suppressed file paths
-    suppressed_paths = set()
-    for json_file in reflection_dir.glob("*.json"):
-        try:
-            record = json.loads(json_file.read_text(encoding="utf-8"))
-            metadata = record.get("metadata", {})
-            if isinstance(metadata, dict) and metadata.get("quality") == "suppressed":
-                suppressed_paths.add(str(json_file))
-        except (json.JSONDecodeError, OSError):
-            continue
-
-    # Filter index
-    original_count = len(index_data)
-    filtered = [
-        item for item in index_data
-        if item.get("file_path") not in suppressed_paths
-    ]
-
-    removed = original_count - len(filtered)
-
-    if removed > 0:
-        index_path.write_text(
-            json.dumps(filtered, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-    return removed
+        return store.delete_by_ids(ids)
+    finally:
+        store.close()
 
 
 def main():

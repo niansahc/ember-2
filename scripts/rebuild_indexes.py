@@ -43,13 +43,15 @@ from src.retrieval.embedding_model import embed_texts
 BATCH_SIZE = 50
 
 # Memory types that use JSON indexes.
-# B-RET-001: "conversation" removed -- conversation records live in
-# memory.db (SQLite vector store) alongside the other migrated types.
-# The legacy file-based conversation_index.json was never read by any
-# live retrieval path and was only rebuilt by manual runs of this
-# script, producing a stale-by-default index. Stale conversation_index.json
-# files in user vaults are left in place (user data); nothing reads them.
-JSON_INDEX_TYPES = ["profile", "reflection", "journal"]
+# B-RET-001 retired "conversation" first. The follow-up cleanup retired
+# profile, reflection, and journal: src/memory/write_memory.py and
+# src/retrieval/semantic_search.py both route those types through
+# SQLITE_MEMORY_TYPES, and no live retrieval path reads the per-type
+# JSON indexes. The list is intentionally empty - any future memory
+# type that uses a JSON index would be added here, but none currently
+# do. Stale {type}_index.json files in user vaults are left in place
+# (user data); nothing live reads them.
+JSON_INDEX_TYPES = []
 
 
 def rebuild_json_index(vault: Path, memory_type: str) -> int:

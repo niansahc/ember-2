@@ -32,6 +32,8 @@ Active as of v0.17.1. Fixed issues are typically removed from this file; resolve
 
 - **A-001: Subtle sycophantic capitulation under direct pressure** — ("you're right, passion can fuel long hours") — deep RLHF prior, prompt-level ceiling at qwen3:8b, constitutional review catches ~33% of cases. No further mitigation available at current model scale.
 
+- **B-CTX-003: Partial recall on multi-thread queries at 5-turn distance** — qwen3:8b model-quality ceiling on conversational recall when the user asks about one of two contemporaneously-introduced topics. B-CTX-001 turn 9 ("What was I nervous about for this weekend?") surfaced this: 5 turns earlier the user had said "I have a clowning gig this weekend and I'm nervous about a new bit I'm working on." qwen3:8b correctly recalled "the bit" but omitted "the gig" itself. Family of the A-001 / M-001 ceiling — recall quality on this model is the binding constraint, not the system code. The B-CTX-001 test gate is permitted to PASS overall when this sub-check fails; the rubric verdict is still recorded for monitoring. Re-evaluate when the model scale changes.
+
 - **M-001: Therapeutic register slip on mixed emotional/task content** — ("give yourself permission", "I'm here") — partially mitigated by post-generation filter, residual failure rate ~67%. Documented ceiling at qwen3:8b.
 
 - **Stateless vault mode safety logging** — Constitutional review fires and safety logs persist in all modes including stateless. Safety logs are repo-local (`logs/safety_reviews/`), independent of vault state. Vault writes (memory, state, tasks) are disabled in stateless mode but governance logging is mode-invariant.

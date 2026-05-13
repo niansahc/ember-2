@@ -77,6 +77,44 @@ def test_rebuild_indexes_excludes_conversation() -> None:
     )
 
 
+def test_rebuild_indexes_excludes_sqlite_backed_types() -> None:
+    """All four SQLite-backed memory types (conversation, profile,
+    reflection, journal) must be absent from JSON_INDEX_TYPES.
+
+    Background: B-RET-001 retired the JSON index path for conversation
+    records once memory.db became the sole backend. The follow-up
+    cleanup extended the same treatment to profile, reflection, and
+    journal: src/memory/write_memory.py and src/retrieval/semantic_search
+    .py both route those types through SQLITE_MEMORY_TYPES, and no live
+    code reads the per-type JSON indexes. Listing any of them in
+    JSON_INDEX_TYPES would have manual rebuilds keep producing
+    stale-by-default files."""
+    import importlib.util
+    import os
+    import re
+    spec = importlib.util.spec_from_file_location(
+        "rebuild_indexes_under_test",
+        os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "scripts",
+            "rebuild_indexes.py",
+        ),
+    )
+    if spec is None or spec.loader is None:
+        pytest.skip("Could not locate scripts/rebuild_indexes.py via spec")
+    with open(spec.origin, encoding="utf-8") as f:
+        src = f.read()
+    match = re.search(r"JSON_INDEX_TYPES\s*=\s*\[([^\]]*)\]", src)
+    assert match is not None, "JSON_INDEX_TYPES list not found in script"
+    body = match.group(1)
+    for sqlite_type in ("conversation", "profile", "reflection", "journal"):
+        assert f'"{sqlite_type}"' not in body and f"'{sqlite_type}'" not in body, (
+            f"JSON_INDEX_TYPES must not contain '{sqlite_type}' - it is "
+            f"SQLite-backed and the JSON index is orphaned."
+        )
+
+
 def test_no_stray_imports_of_search_conversation() -> None:
     """No source file in src/ should still IMPORT the deleted module.
 

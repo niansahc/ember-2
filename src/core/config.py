@@ -164,11 +164,18 @@ def get_retrieval_min_raw_score() -> float:
 def get_intent_classifier_timeout_ms() -> int:
     """Hard timeout for Stage 3 of the ADR-034 intent classifier.
 
-    Per ADR-034, Stage 3 calls qwen3:8b in non-thinking mode; 800ms is
-    a conservative cap on target hardware. On timeout the classifier
-    falls back to vault_answerable (the behavioral-contract-safe default).
+    Per ADR-034, Stage 3 calls qwen3:8b in non-thinking mode. The default
+    cap is 1500ms on target hardware: the B1 audit (docs/audits/b1_stage2_
+    confidence_v018.md) measured 5/5 Stage 3 timeouts at 830-857ms under
+    the prior 800ms cap, meaning the safe-default fired in place of any
+    real Stage 3 decision. Raising to 1500ms lets the prompt content
+    influence outcome on ambiguous queries while preserving the bounded
+    worst-case latency contribution.
+
+    On timeout the classifier still falls back to vault_answerable (the
+    behavioral-contract-safe default).
     """
-    return int(os.getenv("INTENT_CLASSIFIER_TIMEOUT_MS", "800"))
+    return int(os.getenv("INTENT_CLASSIFIER_TIMEOUT_MS", "1500"))
 
 
 def get_ember_debug() -> bool:

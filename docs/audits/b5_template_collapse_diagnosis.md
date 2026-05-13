@@ -117,3 +117,30 @@ B7 (circular dodge) has no detector. If the fix lands in `coaching_filter` as a 
 - A similarity-metric choice (Jaccard vs Levenshtein vs character-trigram overlap).
 - A threshold value for the deterministic pre-filter.
 - An eval harness that would have caught B5 pre-merge.
+
+## Known related issue: ADR-026 section5 single-pass drift
+
+While diagnosing B5, surfaced a separate predating drift between ADR-026 section5 and the current implementation of `detect()` in `src/safety/deviation_detector.py:353-376`.
+
+**ADR-026 section5** prescribes:
+
+> One second pass per response maximum. Do not run multiple passes for multiple pattern classes in the same turn - pick the highest-risk class for the intent and run once.
+
+**Current code** (lines 353-376): iterates ALL eligible pattern classes from `_load_pattern_classes()` and runs `_run_second_pass` on each until the first YES. That is N second-pass LLM calls per response (worst case ~10), not one.
+
+A helper consistent with the ADR exists at `_select_pattern_class` (lines 72-118) - it returns a single highest-priority class. The helper is referenced in tests (`tests/test_deviation_detector.py:139-155`) but is **not called** by `detect()`. Dead code from the ADR's perspective.
+
+**Impact:**
+- Performance: a turn that ultimately gets flagged on the 10th class burned 10x the intended GPU time on the second-pass calls.
+- Detection bias: classes earlier in the YAML order have first-claim on a YES. A response that genuinely matches both `closing_question` and `template_collapse` will be recorded as `closing_question` because the loop returns on the first YES. Earlier YAML positions get more attribution; later positions get less.
+- Logging: per-pattern logs are written for every class checked, inflating `logs/deviation/<date>.log` size.
+
+**Not a blocker for B5.** The B5 fix is a localized pre-filter inside `_run_second_pass` and does not modify `detect()`. The drift was confirmed not to be a cause of B5's miss (the diagnosis already showed template_collapse's second-pass DID run and DID return NO - which means the loop DID reach template_collapse, and the failure was inside the LLM judgment, not at the dispatch layer).
+
+**Recommended follow-up** (separate workstream, not blocking):
+1. Decide whether the ADR or the code is right. The code's "iterate-all" behavior may have been deliberately chosen for detection coverage but the ADR rationale (one-pass-per-turn for performance and clean attribution) is also defensible.
+2. If the ADR wins: wire `detect()` to call `_select_pattern_class` once, run a single `_run_second_pass`, log one entry per turn.
+3. If the code wins: amend ADR-026 section5 to reflect the iterate-all reality and delete the unused `_select_pattern_class` helper + its tests.
+4. If a hybrid wins: define the contract precisely (e.g., "iterate but stop at first YES, cap at N classes").
+
+This is a documentation-or-code consistency decision, not a correctness fix. Filed here so a future reader who notices the drift can find the context.

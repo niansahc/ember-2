@@ -37,17 +37,17 @@ class TestExplicitSearchClassification:
     @pytest.mark.parametrize("query", [
         "search the web for tokyo population",
         "google that",
-        "look it up",
-        "look this up for me",
         "search online for the latest news",
-        # ADR-034 tightening: "can you find" alone is too broad — it was
+        # ADR-034 tightening: "can you find" alone is too broad - it was
         # misclassifying vault lookups like "can you find my current focus"
         # as explicit web requests. The marker now requires "online" to
         # scope it to actual web requests.
         "can you find online the latest inflation data",
-        "can you find it online please",
-        "find this online please",
         "web search for NVIDIA stock price",
+        # B2: queries with explicit markers PLUS actual content stay on
+        # the dispatch path. Bare-marker variants ("look it up", "look
+        # this up for me", "find this online please") moved to
+        # TestBareMarkerRoutesToClarification below.
     ])
     def test_explicit_phrases_set_flag(self, query):
         policy = classify_query(query)
@@ -76,6 +76,45 @@ class TestExplicitSearchClassification:
         policy = classify_query(query)
         assert policy.name != "web_search"
         assert policy.explicit_search_request is False
+
+
+class TestBareMarkerRoutesToClarification:
+    """When the user invokes an explicit search marker but provides no
+    actual search content, the policy routes to clarification instead
+    of dispatching a useless bare query to SearXNG. The B2 fix."""
+
+    @pytest.mark.parametrize("query", [
+        "google please",
+        "google please.",
+        "could you google please",
+        "search the web for me",
+        "look this up please",
+        "look this up for me",
+        "look it up",
+        "find this online please",
+        "google now",
+    ])
+    def test_bare_marker_routes_to_clarification(self, query):
+        policy = classify_query(query)
+        assert policy.name == "clarification", (
+            f"{query!r} expected clarification policy, got "
+            f"name={policy.name!r}, use_web_search={policy.use_web_search}"
+        )
+        assert policy.use_web_search is False
+        assert policy.emit_clarification is True
+
+    @pytest.mark.parametrize("query", [
+        "google iphone 16 release please",
+        "look this up for the latest news",
+        "search the web for tokyo population",
+    ])
+    def test_marker_with_content_still_dispatches(self, query):
+        """A marker with real search content must still dispatch -
+        only dispatch-empty queries clarify."""
+        policy = classify_query(query)
+        assert policy.name == "web_search"
+        assert policy.use_web_search is True
+        assert policy.explicit_search_request is True
 
 
 class TestExplicitSearchBypassesAskFirst:

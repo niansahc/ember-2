@@ -85,6 +85,11 @@ class ContextPolicy:
     # up", "search the web"). Explicit requests bypass ask-first — the user's
     # own words ARE the confirmation.
     explicit_search_request: bool = False
+    # B2 fix: True when an explicit web marker matched but the query carries
+    # no search content. openai_adapter.py short-circuits the request and
+    # emits SCRIPTED_CLARIFICATION_RESPONSE instead of dispatching a useless
+    # bare query to SearXNG.
+    emit_clarification: bool = False
     # ADR-018: Intent-aware memory type gating.
     # eligible_memory_types: which types are candidates. None = all eligible.
     # suppress_memory_types: types excluded from candidates.
@@ -114,6 +119,69 @@ _EXPLICIT_WEB_MARKERS: tuple[str, ...] = (
 )
 
 
+# Conservative starter set. Natural language filler is not enumerable.
+# Add items here when a real dispatch-empty case is observed in production logs.
+# Do not pre-emptively expand; each addition is a maintenance surface.
+META_PHRASES: frozenset[str] = frozenset({
+    "please",
+    "now",
+    "thanks",
+    "thank you",
+    "for me",
+    "for it",
+    "for that",
+    "would you",
+    "could you",
+})
+
+
+# Hardcoded response emitted when an explicit web marker matches but
+# the query carries no actual search content (B2 fix). Same trust
+# class as SCRIPTED_ASK_FIRST_RESPONSE in src/llm/ask_first_validator.py.
+SCRIPTED_CLARIFICATION_RESPONSE: str = "What would you like me to search for?"
+
+
+_RESIDUAL_PUNCTUATION_RE = re.compile(r"[,.!?;:]+")
+
+
+def _is_bare_marker_query(q: str, marker: str) -> bool:
+    """Return True if `q` contains `marker` but no actual search content.
+
+    Strips the first occurrence of the marker substring, normalizes the
+    residual (punctuation, whitespace), and walks tokens left-to-right
+    consuming the longest META_PHRASES prefix at each step. Returns
+    True if either the residual is empty or all tokens get consumed by
+    a META_PHRASES match.
+
+    Caller is expected to pass a lowercase, apostrophe-normalized `q`
+    (matches the existing classify_query() pipeline at line 136).
+    """
+    residual = q.replace(marker, "", 1)
+    residual = _RESIDUAL_PUNCTUATION_RE.sub(" ", residual)
+    residual = " ".join(residual.split())
+    if not residual:
+        return True
+    tokens = residual.split(" ")
+    # Greedy multi-word match: at each position, try the longest
+    # META_PHRASES entry first. If no entry matches starting at the
+    # current position, the residual contains content - not bare.
+    max_phrase_len = max(
+        len(phrase.split(" ")) for phrase in META_PHRASES
+    )
+    i = 0
+    while i < len(tokens):
+        matched = False
+        for length in range(min(max_phrase_len, len(tokens) - i), 0, -1):
+            candidate = " ".join(tokens[i:i + length])
+            if candidate in META_PHRASES:
+                i += length
+                matched = True
+                break
+        if not matched:
+            return False
+    return True
+
+
 def _web_search_policy(explicit: bool) -> ContextPolicy:
     """Construct the shared web_search policy shape.
 
@@ -132,6 +200,21 @@ def _web_search_policy(explicit: bool) -> ContextPolicy:
     )
 
 
+def _clarification_policy() -> ContextPolicy:
+    """Construct the clarification policy (B2 fix).
+
+    Returned when an explicit web marker matches but the query carries
+    no search content. openai_adapter.py short-circuits the request and
+    emits SCRIPTED_CLARIFICATION_RESPONSE rather than dispatching a
+    bare query to SearXNG.
+    """
+    return ContextPolicy(
+        name="clarification",
+        use_web_search=False,
+        emit_clarification=True,
+    )
+
+
 def classify_query(user_message: str) -> ContextPolicy:
     q = user_message.lower()
     # Normalize curly apostrophes to straight so markers like "what's" match
@@ -144,7 +227,17 @@ def classify_query(user_message: str) -> ContextPolicy:
 
     # Stage 0: explicit web-search request. User-stated instruction, not
     # intent inference — bypass ask-first and skip the intent classifier.
-    if any(marker in q for marker in _EXPLICIT_WEB_MARKERS):
+    matched_marker = next(
+        (marker for marker in _EXPLICIT_WEB_MARKERS if marker in q), None,
+    )
+    if matched_marker is not None:
+        # B2 fix: a marker without content is dispatch-empty. Route to
+        # the clarification policy so openai_adapter.py emits a
+        # scripted "what would you like me to search for?" instead of
+        # firing SearXNG with a useless bare query.
+        if _is_bare_marker_query(q, matched_marker):
+            logger.warning("[CLASSIFY] intent=clarification trigger=bare_marker")
+            return _clarification_policy()
         logger.warning("[CLASSIFY] intent=web_search trigger=explicit")
         return _web_search_policy(explicit=True)
 

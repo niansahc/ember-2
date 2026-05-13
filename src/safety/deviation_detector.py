@@ -149,6 +149,29 @@ def compute_entropy(logprobs: list[float]) -> float:
     return entropy / max_entropy
 
 
+# ── Jaccard similarity helper (B5 fix) ────────────────────────────────────
+# Used by the template_collapse pre-filter inside _run_second_pass. The
+# template_collapse marker says "semantic similarity exceeds 0.95"; a
+# small local LLM cannot reliably evaluate that in a one-shot prompt.
+# This deterministic lexical Jaccard catches the near-verbatim case
+# before the LLM call. See docs/audits/b5_template_collapse_diagnosis.md
+# for the root-cause analysis.
+
+_JACCARD_TOKEN_RE = re.compile(r"[^\w\s]")
+
+
+def _jaccard_similarity(a: str, b: str) -> float:
+    """Token-set Jaccard with lowercase + strip punctuation + whitespace split.
+
+    Returns 0.0 if either side has no tokens.
+    """
+    tokens_a = set(_JACCARD_TOKEN_RE.sub(" ", a.lower()).split())
+    tokens_b = set(_JACCARD_TOKEN_RE.sub(" ", b.lower()).split())
+    if not tokens_a or not tokens_b:
+        return 0.0
+    return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+
+
 # ── Hedging pre-screen ────────────────────────────────────────────────────
 
 def _hedging_density(text: str) -> float:
@@ -172,11 +195,31 @@ def _run_second_pass(
     Run a lightweight Ollama classification pass.
 
     Returns (result, evidence) where result is "YES" or "NO".
+
+    B5 fix: for template_collapse only, a deterministic Jaccard pre-filter
+    short-circuits the LLM call when lexical similarity to the prior
+    response exceeds the configured threshold. See
+    docs/audits/b5_template_collapse_diagnosis.md.
     """
+    name = pattern_class["name"]
+
+    # B5 pre-filter: template_collapse only. Jaccard on FULL response
+    # text (not the 500-char-truncated copy the LLM sees). Above
+    # threshold returns YES without invoking Ollama. At or below
+    # threshold, falls through to the LLM second-pass below, which
+    # handles paraphrase and ambiguous cases.
+    if name == "template_collapse" and prior_response:
+        jaccard = _jaccard_similarity(response_text, prior_response)
+        threshold = get_jaccard_threshold()
+        if jaccard > threshold:
+            return (
+                "YES",
+                f"jaccard prefilter: {jaccard:.3f} >= {threshold:.3f}",
+            )
+
     import ollama
     from src.core.config import get_ember_model
 
-    name = pattern_class["name"]
     markers = pattern_class.get("markers", [])
     markers_text = "\n".join(f"- {m}" for m in markers)
 
@@ -223,8 +266,16 @@ def _log_detection(
     entropy: float,
     evidence: str,
     intent_class: str,
+    jaccard: float | None = None,
 ) -> None:
-    """Log detection attempt to logs/deviation/."""
+    """Log detection attempt to logs/deviation/.
+
+    B5 fix: when `jaccard` is provided (template_collapse only), the
+    score is included in the entry under the `jaccard` key for future
+    threshold recalibration. The field is omitted for non-template_collapse
+    entries so the existing schema for the other 10 pattern classes is
+    unchanged.
+    """
     entry = {
         "ts": datetime.now().isoformat(),
         "pattern_class": pattern_class,
@@ -233,6 +284,8 @@ def _log_detection(
         "evidence": evidence[:200],
         "intent_class": intent_class,
     }
+    if jaccard is not None:
+        entry["jaccard"] = round(jaccard, 4)
     log_file = _LOG_DIR / f"{datetime.now().strftime('%Y-%m-%d')}.log"
     with log_file.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
@@ -301,6 +354,20 @@ def get_entropy_threshold() -> float:
         return 0.7
 
 
+def get_jaccard_threshold() -> float:
+    """Threshold above which the template_collapse pre-filter returns YES
+    without invoking the LLM. Default 0.85 is a starting estimate; plan
+    to recalibrate from logged Jaccard scores once data accumulates.
+
+    Mirrors get_entropy_threshold() per the ADR-026 tunable-threshold
+    pattern. Env var: EMBER_DEVIATION_JACCARD_THRESHOLD.
+    """
+    try:
+        return float(os.getenv("EMBER_DEVIATION_JACCARD_THRESHOLD", "0.85"))
+    except ValueError:
+        return 0.85
+
+
 def detect(
     response_text: str,
     intent_class: str,
@@ -364,7 +431,16 @@ def detect(
             continue
 
         result_str, evidence = _run_second_pass(cls, response_text, prior_response)
-        _log_detection(name, result_str, entropy, evidence, intent_class)
+        # B5 fix: include Jaccard score in the log entry for
+        # template_collapse so recalibration of EMBER_DEVIATION_JACCARD_
+        # THRESHOLD can be data-driven once log entries accumulate.
+        jaccard_for_log: float | None = None
+        if name == "template_collapse" and prior_response:
+            jaccard_for_log = _jaccard_similarity(response_text, prior_response)
+        _log_detection(
+            name, result_str, entropy, evidence, intent_class,
+            jaccard=jaccard_for_log,
+        )
 
         if result_str == "YES":
             return DeviationResult(

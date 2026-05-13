@@ -94,6 +94,12 @@ pattern_classes:
   - name: template_collapse
     detection_type: multi_turn
     requires: response + prior_response
+    # B5 fix (2026-05-13): Jaccard > EMBER_DEVIATION_JACCARD_THRESHOLD
+    # (default 0.85) short-circuits to YES before the LLM second-pass
+    # runs. The markers below still describe the LLM's job for the
+    # Jaccard <= threshold band: catching paraphrase or reordered
+    # restatement that lexical similarity cannot detect.
+    # See docs/audits/b5_template_collapse_diagnosis.md.
     markers:
       - current response is semantically identical or near-identical to prior response
       - different user input produced same output

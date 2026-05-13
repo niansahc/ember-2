@@ -247,6 +247,25 @@ class SqliteVectorStore:
         row = self._conn.execute("SELECT COUNT(*) FROM vectors").fetchone()
         return row[0]
 
+    def delete_by_ids(self, ids: list[str]) -> int:
+        """Delete rows by primary key. Returns the count of rows removed.
+
+        Used by maintenance tools (tools/suppress_reflections.py) that
+        need to remove specific records from the vector index while the
+        canonical JSON records remain on disk with their suppression
+        flag. The canonical record is the source of truth; the vector
+        store is rebuildable from canonical records.
+        """
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        cursor = self._conn.execute(
+            f"DELETE FROM vectors WHERE id IN ({placeholders})",
+            ids,
+        )
+        self._conn.commit()
+        return cursor.rowcount
+
     def close(self) -> None:
         """Close the SQLite connection."""
         self._conn.close()

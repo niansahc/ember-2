@@ -703,3 +703,79 @@ class TestBWS001Regression:
             "Help me figure out the best Python web framework in 2026"
         )
         assert result != VAULT_ANSWERABLE
+
+
+# ---------------------------------------------------------------------------
+# B-CTX-001: first-person recall queries (Stage 2 misroute family)
+# ---------------------------------------------------------------------------
+
+
+@_NEEDS_OLLAMA
+class TestBCTX001FirstPersonRecall:
+    """B-CTX-001 surfaced three personal/conversational queries that Stage 2
+    confidently misrouted to needs_internet on the Alex persona transcript:
+    turns 7, 9, 10. After the v0.18.0 fix (removing the 'what do you know
+    about X' counter-anchor), turn 7 routes correctly. Turns 9 and 10
+    still misroute at Stage 2 against other needs_internet exemplars
+    ('forecast for the east weekend', 'what is currently happening') —
+    they are protected by the first-person guard in
+    src/llm/ask_first_validator.py, not by the classifier.
+
+    These tests document the current classifier behavior so a future
+    Stage 2 rebalance or threshold change can target the residual
+    misroute without regressing turn 7. Tests assert what the classifier
+    SHOULD return on each query."""
+
+    def test_turn7_what_you_know_about_me_routes_vault(self):
+        # Removing 'what do you know about Rust' from the needs_internet
+        # exemplars lets this query land on the vault-side anchor
+        # 'what do you know about who I am'.
+        result = classify_intent(
+            "Connecting those two things, what do you actually know "
+            "about me from this conversation?"
+        )
+        assert result == VAULT_ANSWERABLE, (
+            f"turn 7 must route vault after Rust-anchor removal; got {result}"
+        )
+
+    @pytest.mark.xfail(
+        reason=(
+            "Turn 9 'what was I nervous about for this weekend' matches the "
+            "needs_internet exemplar 'forecast for the east coast this "
+            "weekend' on the 'this weekend' tail. Classifier-level fix is "
+            "out of scope for v0.18.0; first-person guard in "
+            "ask_first_validator protects the user-visible behavior. "
+            "Document as residual classifier debt."
+        ),
+        strict=False,
+    )
+    def test_turn9_what_was_i_nervous_about_routes_vault(self):
+        assert classify_intent("What was I nervous about for this weekend?") == VAULT_ANSWERABLE
+
+    @pytest.mark.xfail(
+        reason=(
+            "Turn 10 'what are we discussing right now' matches the "
+            "needs_internet exemplar cluster around 'currently' / "
+            "'right now' temporal markers. Classifier-level fix is out "
+            "of scope for v0.18.0; first-person guard protects the "
+            "user-visible behavior. Document as residual classifier debt."
+        ),
+        strict=False,
+    )
+    def test_turn10_what_are_we_discussing_routes_vault(self):
+        assert classify_intent("What are we discussing right now?") == VAULT_ANSWERABLE
+
+    def test_turn8_what_profession_routes_vault(self):
+        # Recall question that worked in the live B-CTX-001 run; lock it in.
+        assert classify_intent("What profession did I tell you I have?") == VAULT_ANSWERABLE
+
+    def test_general_knowledge_describe_still_routes_internet(self):
+        # Counter-anchor preservation check: 'describe X' for an external
+        # topic must still route to needs_internet despite the Rust
+        # exemplar removal.
+        result = classify_intent("describe how transformers work")
+        assert result != VAULT_ANSWERABLE
+
+    def test_general_knowledge_tell_me_about_still_routes_internet(self):
+        result = classify_intent("tell me about quantum computing")
+        assert result != VAULT_ANSWERABLE

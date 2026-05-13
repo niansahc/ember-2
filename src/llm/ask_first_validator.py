@@ -15,6 +15,13 @@ Fix: if ask-first was instructed but the response lacks an explicit
 search-confirmation question, substitute a scripted response that asks.
 The original response is discarded — it's a trained-in wrong answer and
 keeping any of it risks carrying the RLHF refusal through.
+
+First-person guard (v0.18.0): the intent classifier occasionally misroutes
+clearly first-person/conversational queries to web_search (B-CTX-001
+turns 7/9/10 surfaced this — recall queries hitting Stage 2 false-
+positive on needs_internet exemplars). When the user_message contains a
+first-person marker, we skip the substitution and let the model's draft
+through. The downstream coaching filter still trims any RLHF residue.
 """
 
 from __future__ import annotations
@@ -24,6 +31,32 @@ import re
 SCRIPTED_ASK_FIRST_RESPONSE = (
     "I don't have current information on that — want me to search?"
 )
+
+# First-person markers: pronouns and contractions that indicate the user
+# is asking about themselves or the conversation. When present, we treat
+# the query as personal/conversational regardless of classifier output
+# and skip the ask-first substitution. Pattern is case-insensitive and
+# word-bounded so common-word substrings ("welcome", "remembered") do
+# not false-match.
+#
+# 'me' and 'us' are intentionally NOT included: in English they are
+# routinely dative-object pronouns in imperative constructions
+# ("tell me about X", "show us how Y works") where the speaker is
+# asking the system to act on an external topic, not about themselves.
+# Possessives ('my', 'our'), subjects ('I', 'we'), reflexives ('myself',
+# 'ourselves'), and contractions are unambiguous first-person markers.
+_FIRST_PERSON_GUARD = re.compile(
+    r"\b(I|my|mine|myself|i'?m|i'?ve|i'?d|i'?ll|"
+    r"we|our|ours|ourselves|we'?re|we'?ve|we'?d|we'?ll)\b",
+    re.IGNORECASE,
+)
+
+
+def _has_first_person_marker(user_message: str) -> bool:
+    """Return True if the user message contains a first-person marker."""
+    if not user_message:
+        return False
+    return bool(_FIRST_PERSON_GUARD.search(user_message))
 
 # Confirmation patterns. Case-insensitive. The "?" check is loose because
 # the model sometimes drops terminal punctuation.
@@ -64,18 +97,27 @@ def validate_ask_first_response(
     response: str,
     intent_class: str,
     ask_first_mode: bool,
+    user_message: str = "",
 ) -> tuple[str, bool]:
     """Enforce the ask-first confirmation pattern.
 
     Returns (final_response, was_substituted). Substitution happens only
     when all of: intent_class == "web_search", ask_first_mode is True,
-    and the response lacks any recognised confirmation question. Empty
-    responses pass through unchanged — the empty-response guard runs
-    separately and will fill them.
+    the response lacks any recognised confirmation question, AND the
+    user_message lacks a first-person marker. Empty responses pass
+    through unchanged — the empty-response guard runs separately.
+
+    The first-person guard protects the user from receiving a canned
+    "want me to search?" response on conversational/recall queries that
+    the classifier mistakenly routed to web_search (B-CTX-001 family).
+    When the guard fires, the model's actual draft is preserved; any
+    RLHF residue is handled by the coaching filter downstream.
     """
     if intent_class != "web_search":
         return response, False
     if not ask_first_mode:
+        return response, False
+    if _has_first_person_marker(user_message):
         return response, False
     if not is_substitutable(response):
         return response, False

@@ -141,7 +141,10 @@ def run_post_gen_pipeline(
 
     ask_first_mode = ask_first_active
     reply, ask_first_substituted = validate_ask_first_response(
-        reply, intent_class=intent_class, ask_first_mode=ask_first_mode
+        reply,
+        intent_class=intent_class,
+        ask_first_mode=ask_first_mode,
+        user_message=user_message or "",
     )
     if ask_first_substituted:
         logger.info("[POSTGEN] ask-first response substituted")

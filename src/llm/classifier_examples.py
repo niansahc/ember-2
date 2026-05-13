@@ -79,16 +79,25 @@ _NEEDS_INTERNET: list[LabeledExample] = [
     {"query": "help me figure out when the next iPhone is releasing", "label": "needs_internet"},
     {"query": "help me find out the current price of Tesla stock", "label": "needs_internet"},
     {"query": "find me the latest news about the AI industry", "label": "needs_internet"},
-    # General-knowledge counter-anchors: ensure the "tell me about X",
-    # "describe X", and "what do you know about X" openings have ground
-    # truth on the needs_internet side too. Without these, queries about
-    # external concepts route to vault_answerable because the only
-    # "tell me about X" / "describe X" exemplars in the pool are personal
-    # ("tell me about my goals", "describe me"). Paired with personal-
-    # identity exemplars in _VAULT_ANSWERABLE to prevent mirror drift.
+    # General-knowledge counter-anchors: ensure the "tell me about X" and
+    # "describe X" openings have ground truth on the needs_internet side
+    # too. Without these, queries about external concepts route to
+    # vault_answerable because the only "tell me about X" / "describe X"
+    # exemplars in the pool are personal ("tell me about my goals",
+    # "describe me"). Paired with personal-identity exemplars in
+    # _VAULT_ANSWERABLE to prevent mirror drift.
+    #
+    # "what do you know about X" was previously here as a third counter-
+    # anchor but was removed in v0.18.0: it was demonstrably misrouting
+    # first-person recall queries like "what do you actually know about me
+    # from this conversation?" — the embedding distance from "what do you
+    # know about Rust" to "what do you know about me" is small enough that
+    # nomic-embed-text could not disambiguate. The vault-side anchor
+    # "what do you know about who I am" lost the cosine tie. The B-CTX-001
+    # regression test caught this on the synthetic Alex persona's turn 7.
+    # See docs/audits/b1_stage2_confidence_v018.md for the broader pattern.
     {"query": "tell me about quantum computing", "label": "needs_internet"},
     {"query": "describe how transformers work", "label": "needs_internet"},
-    {"query": "what do you know about Rust", "label": "needs_internet"},
 ]
 
 

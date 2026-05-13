@@ -583,6 +583,28 @@ class TestStage3Timeout:
         assert timed_out is True
 
 
+class TestStage3TimeoutDefault:
+    """The default Stage 3 timeout cap (B1 audit gating).
+
+    The B1 audit (docs/audits/b1_stage2_confidence_v018.md) measured 5/5
+    Stage 3 timeouts at 830-857ms under the prior 800ms default cap on
+    qwen3:8b warm latency. The default was raised to 1500ms so Stage 3
+    can actually complete on target hardware and the prompt content
+    influences the outcome rather than the safe-default firing on every
+    ambiguous query.
+
+    This test pins the default at 1500ms to prevent silent regression.
+    Operators may still override via INTENT_CLASSIFIER_TIMEOUT_MS env var.
+    """
+
+    def test_default_timeout_is_1500ms(self, monkeypatch):
+        # Clear any override so we observe the code default.
+        monkeypatch.delenv("INTENT_CLASSIFIER_TIMEOUT_MS", raising=False)
+        from src.core.config import get_intent_classifier_timeout_ms
+
+        assert get_intent_classifier_timeout_ms() == 1500
+
+
 class TestClassifyIntentStage3Flow:
     """Stage 3 result flows through classify_intent's top-level log line."""
 

@@ -10,10 +10,10 @@ Classifies each user query as either:
 Architecture (ADR-034):
   Stage 1  Structural rules with compound first-person guard   ~2ms
   Stage 2  Embedding similarity against labeled examples       ~30-50ms
-  Stage 3  qwen3:8b non-thinking with JSON grammar, 800ms cap  ~300-800ms
+  Stage 3  qwen3:8b non-thinking with JSON grammar, 1500ms cap ~300-1500ms
 
 Stage 3 runs qwen3:8b in a background thread with a hard timeout read
-from INTENT_CLASSIFIER_TIMEOUT_MS (default 800ms). On timeout, the
+from INTENT_CLASSIFIER_TIMEOUT_MS (default 1500ms). On timeout, the
 classifier returns the safe default (vault_answerable) per the ADR-034
 behavioral contract.
 
@@ -256,7 +256,7 @@ def _stage2_classify(query: str) -> tuple[str | None, float | None]:
 # a stuck Ollama call would cascade-timeout every subsequent Stage 3 query
 # because later submissions would queue behind it. Per-call executors let
 # concurrent classify_intent calls attempt Stage 3 in parallel; the creation
-# overhead (~2-5ms) is noise next to the 800ms budget.
+# overhead (~2-5ms) is noise next to the 1500ms budget.
 
 _STAGE3_SYSTEM_PROMPT: str = (
     "You are a binary intent classifier. Decide whether the user's query "

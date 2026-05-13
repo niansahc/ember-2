@@ -15,6 +15,7 @@ logger = logging.getLogger("ember.openai_adapter")
 from src.api.limiter import limiter
 from src.core.config import get_ember_debug
 from src.memory.service import MemoryService
+from src.memory.read_memory import read_memories
 from src.memory.write_memory import write_memory
 from src.memory.session import create_session, session_exists, get_session, list_sessions
 from src.context.service import ContextService
@@ -987,6 +988,113 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         except Exception:
             project_name = None  # Non-fatal — proceed without project name
 
+    # --- BARE-MARKER CLARIFICATION SHORT-CIRCUIT (B2) ---
+    # When the user invokes an explicit web marker ("google please",
+    # "look it up", "search the web for me") but provides no actual
+    # search content, route to a hardcoded clarification response
+    # rather than dispatching a useless bare query to SearXNG.
+    #
+    # Bypasses constitutional review. The clarification text is a
+    # hardcoded trusted string identical in trust class to
+    # SCRIPTED_ASK_FIRST_RESPONSE substitution.
+    from src.context.policies import (
+        SCRIPTED_CLARIFICATION_RESPONSE,
+        classify_query as _classify_for_clarification,
+    )
+    _clarification_check_policy = _classify_for_clarification(latest_user_message)
+    if _clarification_check_policy.emit_clarification:
+        logger.warning("[CLARIFY] emit clarification, bypass classifier+search")
+        _clarification_id = f"chatcmpl-{uuid.uuid4().hex}"
+
+        # Write both turns so the next-turn handler can detect
+        # awaiting_search_content on the assistant record.
+        if not (is_test or not vault_enabled):
+            _user_clar_meta = {
+                "role": "user",
+                "content_kind": "user_content",
+                "session_id": session_id,
+            }
+            _assistant_clar_meta = {
+                "role": "assistant",
+                "content_kind": "answer",
+                "session_id": session_id,
+                "source": "clarification",
+                "awaiting_search_content": True,
+            }
+            if project_id:
+                _user_clar_meta["project_id"] = project_id
+                _assistant_clar_meta["project_id"] = project_id
+            write_memory(
+                text=latest_user_message,
+                memory_type="conversation",
+                source="chat",
+                tags=["conversation"],
+                metadata=_user_clar_meta,
+            )
+            write_memory(
+                text=SCRIPTED_CLARIFICATION_RESPONSE,
+                memory_type="conversation",
+                source="chat",
+                tags=["conversation", "clarification"],
+                metadata=_assistant_clar_meta,
+            )
+
+        if body.stream:
+            async def _clarification_sse():
+                import json as _json
+                yield (
+                    "data: "
+                    + _json.dumps({
+                        "id": _clarification_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": "ember-2",
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": SCRIPTED_CLARIFICATION_RESPONSE},
+                            "finish_reason": None,
+                        }],
+                    })
+                    + "\n\n"
+                )
+                yield (
+                    "data: "
+                    + _json.dumps({
+                        "id": _clarification_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": "ember-2",
+                        "choices": [{
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "stop",
+                        }],
+                    })
+                    + "\n\n"
+                )
+                yield "data: [DONE]\n\n"
+            return StreamingResponse(
+                _clarification_sse(),
+                media_type="text/event-stream",
+            )
+
+        return ChatCompletionsResponse(
+            id=_clarification_id,
+            object="chat.completion",
+            created=int(time.time()),
+            model="ember-2",
+            choices=[
+                ChatCompletionsChoice(
+                    index=0,
+                    message=ChatCompletionsResponseMessage(
+                        role="assistant",
+                        content=SCRIPTED_CLARIFICATION_RESPONSE,
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+        )
+
     # --- RESOLVE INTER-SESSION TIME GAP (BUG-003) ---
     # Compute a human label for "how long since the previous session was active"
     # so the prompt builder can surface it as an explicit context section. The
@@ -1199,7 +1307,38 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         # "look it up" etc. The user's own words ARE the confirmation —
         # ask-first gate must not block this.
         from src.context.policies import classify_query as _classify_early
+        from src.context.policies import _web_search_policy as _force_web_search_policy
         _early_policy = _classify_early(latest_user_message)
+
+        # B2 next-turn dispatch: if the immediately prior assistant turn
+        # was a clarification ("What would you like me to search for?"),
+        # treat this user message as the search content. Bypass the
+        # classifier (which would inspect the bare follow-up in isolation
+        # and may mis-route) and dispatch directly to web_search.
+        try:
+            _recent_conv = read_memories(memory_type="conversation", limit=5)
+            for _r in _recent_conv:
+                _meta = _r.get("metadata", {}) if isinstance(_r, dict) else {}
+                if not isinstance(_meta, dict):
+                    continue
+                if _meta.get("session_id") != session_id:
+                    continue
+                if _meta.get("role") != "assistant":
+                    continue
+                # First (most recent) assistant turn in this session.
+                if _meta.get("awaiting_search_content") is True:
+                    logger.info(
+                        "[CLARIFY] Next-turn dispatch: prior assistant turn "
+                        "carried awaiting_search_content; bypassing classifier "
+                        "and routing user message to web_search"
+                    )
+                    _early_policy = _force_web_search_policy(explicit=True)
+                break
+        except Exception as exc:
+            logger.warning(
+                "[CLARIFY] Next-turn check failed (non-fatal): %s", exc,
+            )
+
         _explicit_search = getattr(_early_policy, "explicit_search_request", False)
         # Gate bypass: skip_web_search is False when autonomous is on OR
         # the user explicitly requested a search. Confirmation-confirmed

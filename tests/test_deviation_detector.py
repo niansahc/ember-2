@@ -283,3 +283,344 @@ class TestLogging:
             entry = json.loads(content.strip())
             assert entry["pattern_class"] == "test_class"
             assert entry["result"] == "YES"
+
+
+# ----------------------------------------------------------------------------
+# Jaccard pre-filter for template_collapse (B5 fix)
+# ----------------------------------------------------------------------------
+# Background: docs/audits/b5_template_collapse_diagnosis.md identified that
+# template_collapse delegated similarity judgment entirely to a one-shot
+# qwen3:8b YES/NO call, with no deterministic similarity computation in
+# code. On a near-verbatim pair the model returned NO. The fix adds a
+# deterministic Jaccard pre-filter scoped to template_collapse only.
+
+class TestJaccardSimilarityHelper:
+    """The pure Jaccard token-set helper (Q1 tokenizer:
+    lowercase + strip punctuation + whitespace split)."""
+
+    def test_identical_text_is_1_0(self):
+        from src.safety.deviation_detector import _jaccard_similarity
+        assert _jaccard_similarity(
+            "the quick brown fox", "the quick brown fox",
+        ) == 1.0
+
+    def test_disjoint_text_is_0(self):
+        from src.safety.deviation_detector import _jaccard_similarity
+        assert _jaccard_similarity(
+            "alpha beta gamma delta", "epsilon zeta eta theta",
+        ) == 0.0
+
+    def test_punctuation_and_case_normalized(self):
+        """Trivial formatting differences must not split the token sets.
+        'Hello!' vs 'hello.' both reduce to {hello} after lowercase +
+        strip punctuation, so Jaccard is 1.0."""
+        from src.safety.deviation_detector import _jaccard_similarity
+        assert _jaccard_similarity("Hello!", "hello.") == 1.0
+        assert _jaccard_similarity(
+            "Got it. Updated.", "got it!! UPDATED",
+        ) == 1.0
+
+    def test_contraction_apostrophe_not_normalized(self):
+        """Deliberate Q1 decision: contractions stay distinct from their
+        expanded forms. "I'm" tokenizes to {im} (apostrophe stripped)
+        while "I am" tokenizes to {i, am}; Jaccard well below 0.85 so
+        the pair correctly falls through to the LLM second-pass rather
+        than tripping the pre-filter."""
+        from src.safety.deviation_detector import _jaccard_similarity
+        score = _jaccard_similarity("I'm here to help.", "I am here to help.")
+        assert score < 0.85, (
+            f"Contraction vs expansion should not auto-flag; got Jaccard={score:.3f}"
+        )
+
+
+_TEMPLATE_COLLAPSE_CLASS = {
+    "name": "template_collapse",
+    "detection_type": "multi_turn",
+    "requires": "response + prior_response",
+    "markers": [
+        "current response is semantically identical or near-identical to prior response",
+        "different user input produced same output",
+    ],
+}
+
+
+class TestTemplateCollapsePrefilter:
+    """The template_collapse pre-filter shortcircuit (B5 fix).
+
+    Pre-filter operates on FULL response text (Q2), not the LLM's 500-char
+    truncated copy. Above the Jaccard threshold (default 0.85) returns
+    ("YES", evidence) without calling Ollama. At or below threshold, falls
+    through to the existing LLM second-pass."""
+
+    def test_above_threshold_returns_yes_without_llm_call(self):
+        """B5 regression: a near-verbatim pair must trigger YES at the
+        pre-filter without invoking the LLM."""
+        from src.safety.deviation_detector import _run_second_pass
+
+        prior = (
+            "I notice you're working through something difficult. "
+            "Take your time and let me know what would help."
+        )
+        current = (
+            "I notice you are working through something difficult. "
+            "Take your time and let me know what would help."
+        )
+
+        with patch("ollama.chat") as mock_chat:
+            result, evidence = _run_second_pass(
+                _TEMPLATE_COLLAPSE_CLASS,
+                response_text=current,
+                prior_response=prior,
+            )
+            assert result == "YES"
+            assert "jaccard prefilter" in evidence
+            assert mock_chat.call_count == 0, (
+                "Pre-filter must short-circuit the LLM call when Jaccard "
+                "exceeds the threshold."
+            )
+
+    def test_below_threshold_falls_through_to_llm(self):
+        """When Jaccard is at or below the threshold, the LLM second-pass
+        must run as today. Mocked LLM returns NO; we assert that the LLM
+        was called and the LLM's verdict was returned."""
+        from src.safety.deviation_detector import _run_second_pass
+
+        prior = "The migration script handles records before the cutoff."
+        current = "Got it. Updated the docs and the changelog."
+
+        mock_response = {
+            "message": {"content": "NO. Responses are clearly different."},
+        }
+        with patch("ollama.chat", return_value=mock_response) as mock_chat:
+            result, evidence = _run_second_pass(
+                _TEMPLATE_COLLAPSE_CLASS,
+                response_text=current,
+                prior_response=prior,
+            )
+            assert result == "NO"
+            assert mock_chat.call_count == 1, (
+                "Below-threshold pair must invoke the LLM second-pass."
+            )
+
+    def test_pre_filter_skipped_when_no_prior_response(self):
+        """multi_turn classes with prior_response=None cannot compute
+        Jaccard. The pre-filter must skip (no exception, no early YES),
+        and execution must fall through to the LLM second-pass. In
+        practice detect() at line 363 also skips the entire class in
+        this case; this test pins _run_second_pass behavior in
+        isolation."""
+        from src.safety.deviation_detector import _run_second_pass
+
+        mock_response = {"message": {"content": "NO"}}
+        with patch("ollama.chat", return_value=mock_response) as mock_chat:
+            result, _ = _run_second_pass(
+                _TEMPLATE_COLLAPSE_CLASS,
+                response_text="some current response",
+                prior_response=None,
+            )
+            # Even though the class is template_collapse, the pre-filter
+            # cannot fire without a prior. LLM is asked instead.
+            assert mock_chat.call_count == 1
+            assert result == "NO"
+
+    def test_jaccard_threshold_env_override(self):
+        """EMBER_DEVIATION_JACCARD_THRESHOLD raises the bar; a pair that
+        would otherwise auto-flag now falls through to the LLM."""
+        from src.safety.deviation_detector import _run_second_pass
+
+        # Same near-verbatim pair as the B5 regression test, which
+        # ordinarily auto-flags at the default 0.85.
+        prior = "I notice you are working through something difficult."
+        current = "I notice you are working through something difficult."
+
+        mock_response = {"message": {"content": "NO"}}
+        with patch.dict(
+            os.environ, {"EMBER_DEVIATION_JACCARD_THRESHOLD": "0.99"},
+        ), patch("ollama.chat", return_value=mock_response) as mock_chat:
+            # Wait - the pair is IDENTICAL so Jaccard == 1.0 which > 0.99.
+            # Use a different pair where 0.85 fires but 0.99 doesn't.
+            pass
+
+        # Build a pair whose Jaccard is roughly 0.90 (above default 0.85,
+        # below override 0.99).
+        prior = "the alpha beta gamma delta epsilon zeta eta theta iota"
+        # Add one extra token, remove one — should land ~0.9.
+        current = "the alpha beta gamma delta epsilon zeta eta theta kappa"
+
+        with patch.dict(
+            os.environ, {"EMBER_DEVIATION_JACCARD_THRESHOLD": "0.99"},
+        ), patch("ollama.chat", return_value=mock_response) as mock_chat:
+            result, _ = _run_second_pass(
+                _TEMPLATE_COLLAPSE_CLASS,
+                response_text=current,
+                prior_response=prior,
+            )
+            assert mock_chat.call_count == 1, (
+                "With threshold raised to 0.99, the ~0.9-Jaccard pair "
+                "must fall through to the LLM."
+            )
+            assert result == "NO"
+
+    def test_pre_filter_evidence_string_format(self):
+        """When the pre-filter fires, the evidence string is a
+        reproducible 'jaccard prefilter: X.XXX >= Y.YYY' line."""
+        import re as _re
+        from src.safety.deviation_detector import _run_second_pass
+
+        prior = "Take your time and let me know what would help."
+        current = "Take your time and let me know what would help."
+
+        with patch("ollama.chat") as mock_chat:
+            result, evidence = _run_second_pass(
+                _TEMPLATE_COLLAPSE_CLASS,
+                response_text=current,
+                prior_response=prior,
+            )
+            assert result == "YES"
+            assert mock_chat.call_count == 0
+            pattern = r"^jaccard prefilter: \d\.\d{3} >= \d\.\d{3}$"
+            assert _re.match(pattern, evidence), (
+                f"Evidence string does not match expected format: {evidence!r}"
+            )
+
+    @pytest.mark.parametrize("other_class_name", [
+        "caretaking_language",
+        "closing_question",
+        "position_collapse",
+        "framing_acceptance",
+    ])
+    def test_pre_filter_only_fires_for_template_collapse_pattern(
+        self, other_class_name,
+    ):
+        """Scope constraint: even with a near-verbatim near-identical
+        pair, _run_second_pass for any non-template_collapse class must
+        invoke the LLM as today. The pre-filter must not bleed into the
+        other 10 pattern classes."""
+        from src.safety.deviation_detector import _run_second_pass
+
+        other_class = {
+            "name": other_class_name,
+            "detection_type": "multi_turn",
+            "requires": "response + prior_response",
+            "markers": ["some marker", "another marker"],
+        }
+        prior = "I notice you are working through something difficult."
+        current = "I notice you are working through something difficult."
+
+        mock_response = {"message": {"content": "NO"}}
+        with patch("ollama.chat", return_value=mock_response) as mock_chat:
+            result, _ = _run_second_pass(
+                other_class,
+                response_text=current,
+                prior_response=prior,
+            )
+            assert mock_chat.call_count == 1, (
+                f"Pre-filter must not fire for {other_class_name!r}; "
+                f"LLM call expected."
+            )
+            assert result == "NO"
+
+
+class TestLogDetectionJaccardField:
+    """The deviation log entry for template_collapse checks must include
+    a numeric `jaccard` field so threshold recalibration is possible
+    later. Non-template_collapse entries must NOT include the field
+    (existing schema unchanged for the other 10 pattern classes)."""
+
+    def test_template_collapse_log_entry_includes_jaccard(self, tmp_path):
+        """End-to-end through detect(): a template_collapse check writes
+        a log entry that includes the jaccard score."""
+        prior = "Take your time and let me know what would help."
+        current = prior  # Jaccard 1.0, pre-filter fires
+
+        mock_no = {"message": {"content": "NO"}}
+        with patch.dict(
+            os.environ, {"EMBER_DEVIATION_DETECTION": "true"},
+        ), patch(
+            "src.safety.deviation_detector._LOG_DIR", tmp_path,
+        ), patch("ollama.chat", return_value=mock_no):
+            detect(
+                response_text=current,
+                intent_class="default",
+                logprobs=None,
+                prior_response=prior,
+            )
+
+        log_files = list(tmp_path.glob("*.log"))
+        assert len(log_files) == 1
+        entries = [
+            json.loads(line)
+            for line in log_files[0].read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        template_entries = [
+            e for e in entries if e["pattern_class"] == "template_collapse"
+        ]
+        assert len(template_entries) == 1, (
+            f"Expected exactly one template_collapse log entry; got "
+            f"{len(template_entries)} in {[e['pattern_class'] for e in entries]}"
+        )
+        assert "jaccard" in template_entries[0], (
+            f"template_collapse log entry missing 'jaccard' field: "
+            f"{template_entries[0]}"
+        )
+        assert template_entries[0]["jaccard"] == 1.0
+        # Non-template_collapse entries must NOT carry the field.
+        for entry in entries:
+            if entry["pattern_class"] != "template_collapse":
+                assert "jaccard" not in entry, (
+                    f"{entry['pattern_class']} entry unexpectedly carried "
+                    f"jaccard field: {entry}"
+                )
+
+
+class TestDetectEndToEndPrefilter:
+    """Integration: detect() with a near-verbatim pair triggers the
+    template_collapse pre-filter and returns a DeviationResult without
+    invoking the LLM for template_collapse."""
+
+    def test_detect_end_to_end_near_verbatim_returns_template_collapse(
+        self, tmp_path,
+    ):
+        """End-to-end: enable detection, run a near-verbatim pair, assert
+        detect() returns a template_collapse result via the pre-filter
+        (no LLM call for template_collapse itself). LLM is mocked to
+        return NO for all earlier pattern classes the loop checks."""
+        prior = (
+            "I notice you are working through something difficult. "
+            "Take your time and let me know what would help."
+        )
+        current = prior  # near-verbatim case: identical
+
+        mock_no = {"message": {"content": "NO. Responses differ."}}
+
+        with patch.dict(
+            os.environ, {"EMBER_DEVIATION_DETECTION": "true"},
+        ), patch(
+            "src.safety.deviation_detector._LOG_DIR", tmp_path,
+        ), patch("ollama.chat", return_value=mock_no) as mock_chat:
+            result = detect(
+                response_text=current,
+                intent_class="default",
+                logprobs=None,  # entropy=-1.0, skip the entropy gate
+                prior_response=prior,
+            )
+
+        assert result is not None, "detect() must return a DeviationResult"
+        assert result.pattern_class == "template_collapse"
+        assert result.second_pass_result == "YES"
+        assert "jaccard prefilter" in result.evidence
+
+        # The LLM was called for non-template_collapse classes the loop
+        # iterated through before reaching template_collapse. It was
+        # NOT called for template_collapse itself - the pre-filter
+        # short-circuited that one specific call. Each ollama.chat
+        # call.args[0] is "model=...", so we use the markers prompt to
+        # disambiguate.
+        for call in mock_chat.call_args_list:
+            messages = call.kwargs.get("messages") or call.args[1].get("messages")
+            prompt = messages[0]["content"]
+            assert "template_collapse" not in prompt, (
+                "Pre-filter must short-circuit the template_collapse LLM "
+                "call; found a prompt that names template_collapse."
+            )

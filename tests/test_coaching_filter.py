@@ -480,3 +480,209 @@ def test_v018_short_response_with_non_opener_match_does_not_short_circuit() -> N
     assert mock_rewrite.call_count == 0
     # Deletion path: closing stripped, possibly leaving empty or a fragment.
     assert "got this" not in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# B6 + B7 (v0.18.0 UAT 2026-05-11): coaching filter expansion
+# ---------------------------------------------------------------------------
+# B6 adds engagement-style closing questions to _COACHING_CLOSINGS.
+# B7 adds a new _CIRCULAR_DODGE_PATTERNS set for self-referential
+# content-free responses. Both use the existing 200-char tail scope
+# in _detect_patterns. See docs/audits/refuse_redirect_uat_v018.md
+# for the fix-layer audit.
+
+
+class TestB6EngagementClosingPatterns:
+    """B6: engagement-style closing questions surface in the last 200
+    chars get flagged as coaching_closing matches and become deletable."""
+
+    def test_what_is_the_issue_pattern_caught_in_tail(self):
+        """'What is the issue you're trying to resolve?' surfaces as a
+        coaching_closing match when it lands in the tail."""
+        from src.llm.coaching_filter import _detect_patterns
+        text = (
+            "Tier 2 retrieval evaluation uses a fixed benchmark set of "
+            "queries and runs on every commit that touches src/context/, "
+            "src/retrieval/, or src/llm/. The post-commit hook drives it. "
+            "What is the issue you're trying to resolve?"
+        )
+        matches = _detect_patterns(text, is_emotional=True)
+        closing_matches = [
+            m for m in matches if m["pattern"] == "coaching_closing"
+        ]
+        assert any(
+            "issue" in m["match"].lower() and "resolve" in m["match"].lower()
+            for m in closing_matches
+        ), (
+            f"B6 'what is the issue ... to resolve' pattern not caught. "
+            f"closing_matches={closing_matches}"
+        )
+
+    def test_is_there_something_specific_pattern_caught_in_tail(self):
+        """'Is there something specific you would like to explore?'
+        surfaces as a coaching_closing match when it lands in the tail."""
+        from src.llm.coaching_filter import _detect_patterns
+        text = (
+            "The grounding check evaluates whether the response is "
+            "internally consistent with retrieved snippets. It is a "
+            "self-consistency gate, not a factual-correctness gate. "
+            "Is there something specific you would like to explore?"
+        )
+        matches = _detect_patterns(text, is_emotional=True)
+        closing_matches = [
+            m for m in matches if m["pattern"] == "coaching_closing"
+        ]
+        assert any(
+            "explore" in m["match"].lower() for m in closing_matches
+        ), (
+            f"B6 'is there something specific ... explore' pattern not "
+            f"caught. closing_matches={closing_matches}"
+        )
+
+    def test_legitimate_response_without_engagement_close_not_flagged_by_b6(
+        self,
+    ):
+        """Substantive response with a plain prose ending must not get
+        flagged by the new B6 patterns. False-positive guard."""
+        from src.llm.coaching_filter import _detect_patterns
+        text = (
+            "The Jaccard pre-filter computes a deterministic lexical "
+            "similarity over normalized token sets and short-circuits "
+            "the LLM call when similarity exceeds the threshold. The "
+            "default threshold is 0.85 and is configurable via the "
+            "EMBER_DEVIATION_JACCARD_THRESHOLD environment variable."
+        )
+        matches = _detect_patterns(text, is_emotional=True)
+        b6_phrasings = ("the issue", "trying to resolve", "something specific")
+        offending = [
+            m for m in matches
+            if m["pattern"] == "coaching_closing"
+            and any(p in m["match"].lower() for p in b6_phrasings)
+        ]
+        assert not offending, (
+            f"B6 patterns false-positively matched on legitimate "
+            f"non-engagement closing: {offending}"
+        )
+
+
+class TestB7CircularDodgePatterns:
+    """B7: self-referential content-free responses that recurse on
+    their own subject get flagged as circular_dodge matches."""
+
+    def test_circular_dodge_first_person_plural_caught_in_tail(self):
+        """The exact UAT-style recursive form ('we're discussing what
+        we're discussing') in the response tail produces a
+        circular_dodge match with label preserved."""
+        from src.llm.coaching_filter import _detect_patterns
+        text = (
+            "There is a lot of ground we could cover here, but for now "
+            "we're discussing what we're discussing, "
+            "which is, right now, the fact that we're "
+            "discussing what we're discussing."
+        )
+        matches = _detect_patterns(text, is_emotional=True)
+        dodge_matches = [
+            m for m in matches if m["pattern"] == "circular_dodge"
+        ]
+        assert dodge_matches, (
+            f"B7 first-person-plural circular dodge not caught. matches="
+            f"{matches}"
+        )
+        assert dodge_matches[0]["position"] == "tail"
+        assert dodge_matches[0]["deletable"] is True
+
+    def test_circular_dodge_first_person_singular_caught(self):
+        """The recursive form generalizes to first-person singular:
+        'I'm talking about what I'm talking about' also flags."""
+        from src.llm.coaching_filter import _detect_patterns
+        text = (
+            "Let me try to put it plainly. Right now I'm talking about "
+            "what I'm talking about, and not much else."
+        )
+        matches = _detect_patterns(text, is_emotional=True)
+        dodge_matches = [
+            m for m in matches if m["pattern"] == "circular_dodge"
+        ]
+        assert dodge_matches, (
+            f"B7 first-person-singular circular dodge not caught. "
+            f"matches={matches}"
+        )
+
+    def test_legitimate_we_are_discussing_subject_not_flagged(self):
+        """Substantive 'we're discussing X' without the recursive
+        subject-verb-what-subject-verb structure must not flag.
+        False-positive guard for the circular_dodge pattern."""
+        from src.llm.coaching_filter import _detect_patterns
+        text = (
+            "The fix layer is the coaching filter pattern set. "
+            "We're discussing the migration architecture, the rollout "
+            "plan, and the rollback story for the persistence layer."
+        )
+        matches = _detect_patterns(text, is_emotional=True)
+        dodge_matches = [
+            m for m in matches if m["pattern"] == "circular_dodge"
+        ]
+        assert not dodge_matches, (
+            f"Legitimate 'we're discussing X' falsely flagged as "
+            f"circular dodge: {dodge_matches}"
+        )
+
+
+class TestB6B7FilterIntegration:
+    """End-to-end through filter_coaching_frame: the deletable B6/B7
+    matches actually strip the offending tail from the response. No
+    LLM call required since coaching_closing and circular_dodge are
+    both deletable."""
+
+    def test_b6_filter_strips_engagement_question_tail(self):
+        """filter_coaching_frame removes the engagement-question tail
+        on a B6-matching response, leaving the substantive body intact."""
+        from unittest.mock import patch
+        from src.llm.coaching_filter import filter_coaching_frame
+        body = (
+            "Tier 2 retrieval evaluation runs on every commit that "
+            "touches src/context/, src/retrieval/, or src/llm/."
+        )
+        text = body + " What is the issue you're trying to resolve?"
+
+        with patch(
+            "src.llm.coaching_filter._check_semantic_identity_collapse",
+            return_value=False,
+        ), patch("src.llm.coaching_filter._log_intervention"):
+            result = filter_coaching_frame(
+                text, intent_class="default", is_conversational=False,
+            )
+
+        assert "issue you" not in result.lower(), (
+            f"B6 engagement-question tail not stripped: {result!r}"
+        )
+        # The substantive body must survive.
+        assert "src/context/" in result
+
+    def test_b7_filter_strips_circular_dodge_tail(self):
+        """filter_coaching_frame removes the circular-dodge tail on a
+        B7-matching response."""
+        from unittest.mock import patch
+        from src.llm.coaching_filter import filter_coaching_frame
+        body = (
+            "There is a lot of ground we could cover here in detail, "
+            "but for now, well,"
+        )
+        text = (
+            body
+            + " we're discussing what we're discussing,"
+            " which is, right now, the fact that we're discussing"
+            " what we're discussing."
+        )
+
+        with patch(
+            "src.llm.coaching_filter._check_semantic_identity_collapse",
+            return_value=False,
+        ), patch("src.llm.coaching_filter._log_intervention"):
+            result = filter_coaching_frame(
+                text, intent_class="default", is_conversational=False,
+            )
+
+        assert "discussing what we" not in result.lower(), (
+            f"B7 circular-dodge tail not stripped: {result!r}"
+        )

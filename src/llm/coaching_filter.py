@@ -79,6 +79,11 @@ _COACHING_CLOSINGS: tuple[re.Pattern, ...] = _compile_patterns((
     # 200-char window in _detect_patterns().
     r"what(?:'s| is) the (?:issue|problem|thing|challenge)(?: you(?:'re| are))?(?: trying)? to (?:resolve|solve|address|figure out|work through|tackle)",
     r"is there (?:something|anything)(?: specific| in particular)? (?:you(?:'d| would) like to|that you(?:'d| would) want to)(?: (?:explore|discuss|share|focus on|talk about|dig into))",
+    # B6 expansion (2026-05-14): "what's actually on/not on the list"
+    # variant surfaced during PR #81 smoke. Covers list / table /
+    # agenda nouns with optional "that feels/seems like it should be"
+    # tail. Same tail-anchor scope as the other B6 patterns.
+    r"what(?:'s| is) actually (?:on|not on) the (?:list|table|agenda)(?: that)?(?: feels| seems)?(?: like it should be)?",
 ))
 
 # B7 (v0.18.0 UAT 2026-05-11): self-referential content-free responses

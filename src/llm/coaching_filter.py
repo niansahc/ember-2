@@ -74,6 +74,23 @@ _COACHING_CLOSINGS: tuple[re.Pattern, ...] = _compile_patterns((
     # position, producing a hedged, coaching-tone close. Tail-anchored
     # by the 200-char window in _detect_patterns().
     r"though i(?:'d| would) still (?:bet|think|guess)",
+    # B6 (v0.18.0 UAT 2026-05-11): engagement-style closing questions
+    # that offer help instead of providing it. Tail-anchored by the
+    # 200-char window in _detect_patterns().
+    r"what(?:'s| is) the (?:issue|problem|thing|challenge)(?: you(?:'re| are))?(?: trying)? to (?:resolve|solve|address|figure out|work through|tackle)",
+    r"is there (?:something|anything)(?: specific| in particular)? (?:you(?:'d| would) like to|that you(?:'d| would) want to)(?: (?:explore|discuss|share|focus on|talk about|dig into))",
+))
+
+# B7 (v0.18.0 UAT 2026-05-11): self-referential content-free responses
+# that recurse on their own subject ("we're discussing what we're
+# discussing"). Narrow surface-form matcher; novel phrasings will not
+# generalize. See docs/KNOWN_ISSUES.md B-DODGE-001.
+_CIRCULAR_DODGE_PATTERNS: tuple[re.Pattern, ...] = _compile_patterns((
+    # Subject + copula contraction (we're/we are/i'm/i am) + verb +
+    # "what" + same subject+copula+verb. Catches both first-person
+    # plural ("we're discussing what we're discussing") and first-
+    # person singular ("I'm talking about what I'm talking about").
+    r"(?:we(?:'re| are)|i(?:'m| am)) (?:discussing|talking about|focused on|here to talk about)\s+what (?:we(?:'re| are)|i(?:'m| am)) (?:discussing|talking about|focused on|here to talk about)",
 ))
 
 # Therapeutic mid-response patterns — not just openers/closers but
@@ -169,6 +186,17 @@ def _detect_patterns(text: str, is_emotional: bool, intent_class: str = "default
         if m:
             matches.append({
                 "pattern": "coaching_closing",
+                "match": m.group(),
+                "position": "tail",
+                "deletable": True,
+            })
+
+    # B7 circular dodges - tail-anchored, same 200-char window.
+    for pat in _CIRCULAR_DODGE_PATTERNS:
+        m = pat.search(tail)
+        if m:
+            matches.append({
+                "pattern": "circular_dodge",
                 "match": m.group(),
                 "position": "tail",
                 "deletable": True,

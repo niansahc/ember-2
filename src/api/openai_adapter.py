@@ -1627,6 +1627,25 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
         def _post_stream_cleanup(full_reply: str) -> None:
             """Shared post-stream cleanup: write memories, extract state, detect tasks."""
+            # B3 self-narrative class-based audit. Pure regex pass, no
+            # vault read, no LLM call. Runs synchronously - no user
+            # latency contribution. Audit-only: flags are logged to
+            # logs/safety_reviews/, never block or rewrite the response.
+            # See docs/audits/b3_self_narrative_diagnosis.md.
+            try:
+                from src.safety.self_narrative_check import (
+                    check as _self_narrative_check,
+                    log_self_narrative_outcome,
+                )
+                _sn_count, _sn_indices = _self_narrative_check(full_reply)
+                log_self_narrative_outcome(
+                    _sn_count, _sn_indices, intent_class=_intent_class,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[SELF_NARRATIVE] Audit pass failed (non-fatal): %s", exc,
+                )
+
             # Skip vault writes for test sessions — prevents eval artifacts
             # from accumulating in the user's personal vault.
             if not _skip_vault:
@@ -2033,6 +2052,24 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     if _postgen_ns.ask_first_substituted or _postgen_ns.web_refusal_substituted:
         used_vault = False
         vault_sources = []
+
+    # B3 self-narrative class-based audit. Non-streaming path. Same
+    # contract as the streaming path: sync inline, audit-only, no
+    # vault read, no LLM call. See _post_stream_cleanup for streaming
+    # path variant. docs/audits/b3_self_narrative_diagnosis.md.
+    try:
+        from src.safety.self_narrative_check import (
+            check as _self_narrative_check,
+            log_self_narrative_outcome,
+        )
+        _sn_count, _sn_indices = _self_narrative_check(reply)
+        log_self_narrative_outcome(
+            _sn_count, _sn_indices, intent_class=_intent_class,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[SELF_NARRATIVE] Audit pass failed (non-fatal): %s", exc,
+        )
 
     # Skip vault writes for test sessions
     if not _skip_vault:

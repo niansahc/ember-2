@@ -564,6 +564,30 @@ class TestB6EngagementClosingPatterns:
             f"non-engagement closing: {offending}"
         )
 
+    def test_whats_actually_on_the_list_variant_caught_in_tail(self):
+        """B6 expansion (2026-05-14 PR #81 smoke): the 'what's actually
+        on the list that feels like it should be' variant was observed
+        three times in a single short smoke session. Same class as the
+        original B6 patterns but different noun + verb vocabulary."""
+        from src.llm.coaching_filter import _detect_patterns
+        text = (
+            "Stuck usually means something about the decision isn't "
+            "settled yet. Not a bad place to be if you can name what's "
+            "unresolved. What's actually on the list that feels like "
+            "it should be?"
+        )
+        matches = _detect_patterns(text, is_emotional=True)
+        closing_matches = [
+            m for m in matches if m["pattern"] == "coaching_closing"
+        ]
+        assert any(
+            "actually on the list" in m["match"].lower()
+            for m in closing_matches
+        ), (
+            f"B6 'what's actually on the list' variant not caught. "
+            f"closing_matches={closing_matches}"
+        )
+
 
 class TestB7CircularDodgePatterns:
     """B7: self-referential content-free responses that recurse on

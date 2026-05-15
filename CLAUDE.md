@@ -238,7 +238,7 @@ See [docs/current_state.md](docs/current_state.md).
 - ~~Shutdown endpoint~~ ✓ — `POST /v1/service/shutdown`
 - BUG-STOP-001 — stop button latency: still open
 
-**v0.17.1 — Retrieval quality, vision, and routing fixes** (in progress)
+**v0.17.1 — Retrieval quality, vision, and routing fixes** ✓ (shipped 2026-04-29)
 - Constitutional review context signal (ADR-035) — `SafetyReviewContext` extension for vault-grounded and T2-pattern review prompts
 - Cross-session pattern detection (ADR-021) — `PatternSignal`, `contains_named_third_party` flag
 - Lodestone path 2 — three-stage reflection synthesis, inferred records, monthly cadence
@@ -247,8 +247,12 @@ See [docs/current_state.md](docs/current_state.md).
 - Conversational acks short-circuit at intent classifier Stage 1
 - Coaching filter span-based deletion fix
 - Retrieval proper-noun boost
-- ChatGPT import timestamp normalization (Unix epoch → ISO 8601)
+- ChatGPT import timestamp normalization (Unix epoch -> ISO 8601)
 - Vision pipeline structured logging
+
+**v0.18.0 - UAT Response Cycle (Workstream B)** (in final release gate)
+- Classifier, coaching filter, deviation detector, and self-narrative check fixes addressing 2026-05-11 UAT findings (B1-B7, B-CTX-001, B-NARR-001/002, B-DODGE-001, B-LOOP-001)
+- Known issues catalogued in `docs/KNOWN_ISSUES.md`
 
 **Deferred until actively using Ember:**
 - Health ingestion (Fitbit/Apple/Garmin)

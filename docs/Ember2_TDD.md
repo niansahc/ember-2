@@ -2022,7 +2022,7 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 - **v0.18.0+ qwen3:4b vs qwen3:8b comparison, 2026-05-15** — Test vault, two models, two runs (variance check; pass-1-attempt-2 launched after uvicorn restart cleared a mid-run degraded API state that produced 14/18 transient `Ember error` responses on the first attempt). qwen3:4b is a candidate for a low-latency tier; qwen3:8b is the existing production baseline. Results:
     - Run 1: qwen3:4b 6.2 / qwen3:8b 5.6
     - Run 2: qwen3:4b 6.6 / qwen3:8b 6.5
-    - Latency: qwen3:4b consistently 13-23s faster
+    - Latency: qwen3:4b consistently 23-26s faster per question
   qwen3:4b won both runs but the run-2 margin (+0.1) is within stochastic noise from the non-deterministic Haiku judge; category-level scores swung up to +6.7 between runs on the same model. Conclusion: 4b is competitive with 8b, the overall-score margin is within noise, and qwen3:8b retains the recommended default. Logs: `logs/model_eval/eval_2026-05-15T09-43-49.log` and `logs/model_eval/eval_2026-05-15T11-27-17.log`.
   → informs: optional qwen3:4b deployment for latency-sensitive paths; no change to default model
   → graduation trigger: deliberate decision to ship 4b as a configurable tier alongside 8b

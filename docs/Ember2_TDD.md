@@ -2019,6 +2019,14 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
   → informs: continued use of qwen3:8b; hardware upgrade gates further local-model graduation at current static-prompt size
   → graduation trigger: hardware upgrade required before qwen3:14b and qwen3:30b-a3b can be benchmarked on Ember-specific prompts
 
+- **v0.18.0+ qwen3:4b vs qwen3:8b comparison, 2026-05-15** — Test vault, two models, two runs (variance check; pass-1-attempt-2 launched after uvicorn restart cleared a mid-run degraded API state that produced 14/18 transient `Ember error` responses on the first attempt). qwen3:4b is a candidate for a low-latency tier; qwen3:8b is the existing production baseline. Results:
+    - Run 1: qwen3:4b 6.2 / qwen3:8b 5.6
+    - Run 2: qwen3:4b 6.6 / qwen3:8b 6.5
+    - Latency: qwen3:4b consistently 13-23s faster
+  qwen3:4b won both runs but the run-2 margin (+0.1) is within stochastic noise from the non-deterministic Haiku judge; category-level scores swung up to +6.7 between runs on the same model. Conclusion: 4b is competitive with 8b, the overall-score margin is within noise, and qwen3:8b retains the recommended default. Logs: `logs/model_eval/eval_2026-05-15T09-43-49.log` and `logs/model_eval/eval_2026-05-15T11-27-17.log`.
+  → informs: optional qwen3:4b deployment for latency-sensitive paths; no change to default model
+  → graduation trigger: deliberate decision to ship 4b as a configurable tier alongside 8b
+
 - **MemX local-first memory** (Sun, arXiv:2603.16171, March 2026) — Rust/libSQL implementation with RRF (vector + keyword fusion) and low-confidence rejection gate suppressing spurious recalls. Hit@1 = 91.3% default, 100% high-confusion. RRF fusion pattern relevant to retrieval depth ablation; rejection gate validates ZERO confidence block design.
   → informs: retrieval depth ablation (deferred, no failure pattern yet)
   → graduation trigger: retrieval depth ablation scheduled

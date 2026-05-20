@@ -97,7 +97,7 @@ metadata:
 
 # ---------------------------------------------------------------------------
 # Real constitution file smoke tests — catch accidental corruption of
-# config/constitution.yaml at load time and lock in v0.7 principle structure.
+# config/constitution.yaml at load time and lock in v0.8 principle structure.
 # ---------------------------------------------------------------------------
 
 
@@ -105,7 +105,7 @@ def test_real_constitution_loads_cleanly() -> None:
     loader = ConstitutionLoader(config_path=REAL_CONSTITUTION)
     constitution = loader.load()
 
-    assert constitution.version == "v0.7"
+    assert constitution.version == "v0.8"
     principle_ids = {p.id for p in constitution.principles}
     # Lock in the expected principle set so accidental deletions fail loudly.
     expected = {

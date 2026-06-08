@@ -14,8 +14,23 @@ import logging
 import re
 
 from src.context.formatter import ContextFormatter
+from src.core.config import get_ember_debug
 
 logger = logging.getLogger("ember.context_service")
+
+
+def _log_context_selection(selected_memory) -> None:
+    """Log the final selected memory items. Gated by EMBER_DEBUG.
+
+    Each item's content is vault material. Defense in depth: even when a
+    caller constructs ContextService(debug=True), nothing reaches stdout
+    or the warning channel unless EMBER_DEBUG is also explicitly set.
+    Matches the PR #73 privacy-gating precedent.
+    """
+    if not get_ember_debug():
+        return
+    for item in selected_memory:
+        logger.debug("[CTX] %s: %s", item.item_type, item.content[:120])
 
 
 # ---------------------------------------------------------------------------
@@ -223,8 +238,7 @@ class ContextService:
         selected_reflections = deduped_reflections[:reflection_limit]
 
         if self.debug:
-            for item in selected_memory:
-                print(f"[CTX] {item.item_type}: {item.content[:120]}")
+            _log_context_selection(selected_memory)
 
         # ADR-015: Update retrieval stats on selected records only.
         # Only records that made it into the final context packet get

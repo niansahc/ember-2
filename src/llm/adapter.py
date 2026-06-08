@@ -10,9 +10,40 @@ import httpx
 import ollama
 
 from src.context.models import ContextPacket
-from src.core.config import get_ember_model, get_ember_vision_model
+from src.core.config import get_ember_debug, get_ember_model, get_ember_vision_model
 
 logger = logging.getLogger("ember.llm")
+
+
+def _log_safety_trigger(trigger_result) -> None:
+    """Log the constitutional review trigger evaluation. Gated by EMBER_DEBUG.
+
+    The triggered_by list references constitution principle IDs and risk
+    signals derived from the user message and draft response; treat as
+    vault-adjacent and keep out of stdout by default. Matches the PR #73
+    privacy-gating precedent (logger.warning + get_ember_debug guard).
+    """
+    if not get_ember_debug():
+        return
+    logger.warning(
+        "[SAFETY] %s",
+        {
+            "triggered": trigger_result.triggered,
+            "triggered_by": trigger_result.triggered_by,
+        },
+    )
+
+
+def _log_safety_review_path(log_path) -> None:
+    """Log the safety review log file path. Gated by EMBER_DEBUG.
+
+    The path itself is non-sensitive, but it is operationally diagnostic
+    and follows the same gating pattern as the trigger log so the entire
+    [SAFETY] surface lights up or stays dark together.
+    """
+    if not get_ember_debug():
+        return
+    logger.warning("[SAFETY] log written to: %s", log_path)
 from src.llm.prompt_builder import PromptBuilder
 from src.llm.prompt_guardrail import OLLAMA_NUM_PREDICT, trim_to_fit
 from src.memory.service import MemoryService
@@ -308,13 +339,7 @@ class LLMAdapter:
 
         trigger_result = self.policy_service.evaluate_trigger(initial_review_context)
 
-        print(
-            "[SAFETY]",
-            {
-                "triggered": trigger_result.triggered,
-                "triggered_by": trigger_result.triggered_by,
-            },
-        )
+        _log_safety_trigger(trigger_result)
 
         # DEFAULT = draft
         final_response = draft_response
@@ -357,7 +382,7 @@ class LLMAdapter:
                 review_result=review_result,
             )
 
-            print(f"[SAFETY] log written to: {log_path}")
+            _log_safety_review_path(log_path)
 
             if review_result.outcome == "allow":
                 final_response = review_result.reviewed_text or draft_response
@@ -505,7 +530,7 @@ class LLMAdapter:
         )
         trigger_result = self.policy_service.evaluate_trigger(review_context)
 
-        print("[SAFETY]", {"triggered": trigger_result.triggered, "triggered_by": trigger_result.triggered_by})
+        _log_safety_trigger(trigger_result)
 
         if trigger_result.triggered:
             _active_principles = self.policy_service.get_active_principles(

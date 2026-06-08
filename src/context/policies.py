@@ -183,7 +183,7 @@ def _is_bare_marker_query(q: str, marker: str) -> bool:
 
 
 def _web_search_policy(explicit: bool) -> ContextPolicy:
-    """Construct the shared web_search policy shape.
+    """Construct the shared web_search policy.
 
     `explicit=True` means the user explicitly requested a search — ask-first
     is bypassed. `explicit=False` means the intent classifier routed here;

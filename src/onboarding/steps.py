@@ -36,7 +36,7 @@ ONBOARDING_STEPS: list[OnboardingStep] = [
         tags=["health", "profile"],
         question=(
             "Is there any health context relevant to how you work? "
-            "Chronic illness, energy variability, neurodivergence — anything that shapes "
+            "Chronic illness, energy variability, neurodivergence - anything that shapes "
             "your day-to-day capacity."
         ),
     ),
@@ -56,12 +56,12 @@ ONBOARDING_STEPS: list[OnboardingStep] = [
         key="communication",
         category="communication",
         tags=["communication", "preferences", "profile"],
-        question="How do you want Ember to communicate with you? Tone, format, length — and what to avoid.",
+        question="How do you want Ember to communicate with you? Tone, format, length - and what to avoid.",
     ),
     OnboardingStep(
         key="ai_relationship",
         category="ai_relationship",
         tags=["ai-preferences", "values", "profile"],
-        question="Last one — what do you actually want from Ember? What would make this genuinely useful to you?",
+        question="Last one - what do you actually want from Ember? What would make this genuinely useful to you?",
     ),
 ]

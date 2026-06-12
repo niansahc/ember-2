@@ -19,6 +19,7 @@ Design rules (per CLAUDE.md):
 from __future__ import annotations
 
 import json
+import logging
 import warnings
 from dataclasses import asdict
 from datetime import datetime
@@ -26,6 +27,8 @@ from pathlib import Path
 
 from src.core.config import get_private_vault_path
 from src.state.models import VALID_STATE_CATEGORIES, StateRecord
+
+logger = logging.getLogger("ember.state_service")
 
 
 # Subdirectory within the vault where state records live.
@@ -325,35 +328,69 @@ class StateService:
 
         return resolved_count
 
-    def mark_resolved(self, record_id: str) -> bool:
-        """Set metadata.resolved=True on the vault file matching *record_id*.
+    @staticmethod
+    def resolved_ids(records: list[StateRecord]) -> set[str]:
+        """Compute the set of record ids considered resolved (ADR-038).
 
-        In-place metadata update — same pattern as soft-delete. Returns True
-        if a matching unresolved record was found and updated, False otherwise.
+        Resolution is derived from append-only data, never from an in-place
+        edit. A record id is resolved if either:
+
+          - some record carries metadata.original_id equal to that id (an
+            append-only resolution tombstone written by resolve_record), or
+          - the record itself carries metadata.resolved == True (back-compat
+            with records resolved in place by the pre-ADR-038 code path).
+
+        Callers compute "is this record still active?" as
+        `record.id not in resolved_ids(records)`.
         """
-        import json as _json
+        resolved: set[str] = set()
+        for r in records:
+            meta = r.metadata or {}
+            if meta.get("resolved"):
+                resolved.add(r.id)
+            original_id = meta.get("original_id")
+            if original_id:
+                resolved.add(original_id)
+        return resolved
 
-        state_dir = self._get_state_dir()
-        if not state_dir.is_dir():
+    def resolve_record(self, record_id: str, *, resolution: str | None = None) -> bool:
+        """Resolve a state record append-only by appending a resolution tombstone.
+
+        Finds the record whose id == record_id and, if it is not already
+        resolved (per resolved_ids), writes a NEW record of the same category
+        carrying metadata.original_id == record_id and metadata.resolved == True.
+        The original record file is never modified (CLAUDE.md Rule 3, ADR-038).
+
+        Returns True when a tombstone was written, False when no matching
+        record exists or it was already resolved. Idempotent: a second call
+        for an already-resolved id is a no-op and writes no duplicate tombstone.
+        """
+        records = self.read_all()
+        target = next((r for r in records if r.id == record_id), None)
+        if target is None:
+            return False
+        if record_id in self.resolved_ids(records):
             return False
 
-        for f in state_dir.glob("*.json"):
-            try:
-                data = _json.loads(f.read_text(encoding="utf-8"))
-                if data.get("id") == record_id:
-                    meta = data.get("metadata") or {}
-                    if meta.get("resolved"):
-                        return False
-                    meta["resolved"] = True
-                    data["metadata"] = meta
-                    f.write_text(
-                        _json.dumps(data, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
-                    return True
-            except Exception:
-                continue
-        return False
+        meta: dict = {"resolved": True, "original_id": record_id}
+        if resolution:
+            meta["resolution"] = resolution
+        session_id = (target.metadata or {}).get("session_id")
+        if session_id:
+            meta["session_id"] = session_id
+
+        tombstone = self.make_record(
+            state_type=target.type,
+            text=f"[resolved] {target.text}",
+            source="state_resolver",
+            metadata=meta,
+        )
+        self.write(tombstone)
+        logger.info(
+            "[STATE] resolve_record: appended tombstone for %s (type=%s resolution=%s)",
+            record_id, target.type, resolution,
+        )
+        return True
 
     @staticmethod
     def make_record(

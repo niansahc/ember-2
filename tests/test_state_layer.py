@@ -414,3 +414,97 @@ def test_resolved_open_loop_excluded(tmp_path: Path) -> None:
     open_loops = [i for i in items if i.category == "open_loop"]
     assert len(open_loops) == 1
     assert open_loops[0].text == "Active loop."
+
+
+# ---------------------------------------------------------------------------
+# A2: append-only derived resolution (ADR-038)
+# ---------------------------------------------------------------------------
+
+class TestResolveRecordAppendOnly:
+    """resolve_record() resolves a record without mutating it in place, and
+    resolved_ids() derives the resolved set from the append-only tombstones
+    (plus the legacy in-place resolved flag for back-compat)."""
+
+    def _pending(self, service: StateService, session_id: str = "sess_a2") -> StateRecord:
+        rec = StateService.make_record(
+            state_type="pending_confirmation",
+            text="Want me to search for the weather?",
+            source="ask_first_detector",
+            metadata={"action": "web_search", "session_id": session_id, "resolved": False},
+        )
+        service.write(rec)
+        return rec
+
+    def test_resolve_record_is_append_only(self, tmp_path):
+        service = make_service(tmp_path)
+        rec = self._pending(service)
+        original_path = service._get_state_dir() / service._filename_for(rec)
+        original_bytes = original_path.read_bytes()
+
+        result = service.resolve_record(rec.id)
+
+        assert result is True
+        # The original record file is byte-for-byte unchanged: no in-place mutation.
+        assert original_path.read_bytes() == original_bytes
+        # A tombstone was appended pointing back at the original.
+        all_records = service.read_all()
+        tombstones = [
+            r for r in all_records if (r.metadata or {}).get("original_id") == rec.id
+        ]
+        assert len(tombstones) == 1
+        assert tombstones[0].metadata.get("resolved") is True
+        # The derived resolved set marks the original id as resolved.
+        assert rec.id in service.resolved_ids(all_records)
+
+    def test_resolve_record_is_idempotent(self, tmp_path):
+        service = make_service(tmp_path)
+        rec = self._pending(service)
+
+        assert service.resolve_record(rec.id) is True
+        # Second call: already resolved -> no-op, no duplicate tombstone.
+        assert service.resolve_record(rec.id) is False
+
+        tombstones = [
+            r for r in service.read_all()
+            if (r.metadata or {}).get("original_id") == rec.id
+        ]
+        assert len(tombstones) == 1
+
+    def test_resolve_record_unknown_id_returns_false(self, tmp_path):
+        service = make_service(tmp_path)
+        assert service.resolve_record("2099-01-01T00-00-00") is False
+
+    def test_resolved_ids_honors_legacy_in_place_flag(self, tmp_path):
+        # Back-compat: a record resolved in place by the pre-ADR-038 code path
+        # (metadata.resolved=True on the record itself) must still be treated
+        # as resolved by the derived set.
+        service = make_service(tmp_path)
+        rec = StateService.make_record(
+            state_type="pending_confirmation",
+            text="Old in-place resolved pending",
+            source="test",
+            metadata={"resolved": True},
+        )
+        service.write(rec)
+        assert rec.id in StateService.resolved_ids(service.read_all())
+
+
+class TestResolverExcludesPendingConfirmation:
+    """pending_confirmation is internal ask-first control flow, consumed
+    directly by the chat endpoint. It must never surface as 'current state'
+    in the prompt (ADR-038). This also prevents append-only resolved pendings
+    (original keeps resolved=False) from leaking into context."""
+
+    def test_active_pending_not_surfaced(self, tmp_path):
+        service = make_service(tmp_path)
+        rec = StateService.make_record(
+            state_type="pending_confirmation",
+            text="Want me to search for that?",
+            source="ask_first_detector",
+            metadata={"action": "web_search", "resolved": False},
+        )
+        rec.timestamp = _recent_ts(0)
+        service.write(rec)
+
+        items = StateResolver(service=service).get_current_state()
+        assert all(i.category != "pending_confirmation" for i in items)

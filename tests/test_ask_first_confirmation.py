@@ -175,49 +175,54 @@ class TestCheckPendingConfirmation:
         assert result["action"] == "web_search"
 
     # -------------------------------------------------------------------
-    # 6. Writes a resolution record regardless of outcome
+    # 6. Resolution is append-only and derived (ADR-038)
     # -------------------------------------------------------------------
 
-    def test_marks_original_resolved_on_yes(self, svc, vault):
-        """Confirming marks the ORIGINAL pending record as resolved."""
-        self._seed_pending(svc, query="weather forecast")
+    def test_resolves_pending_append_only_on_yes(self, svc, vault):
+        """Confirming resolves the pending append-only: the original file is
+        unchanged, a tombstone is written, the derived resolved-set marks the
+        original, and the pending is not re-found on the next turn."""
+        rec = self._seed_pending(svc, query="weather forecast")
+        original_path = svc._get_state_dir() / svc._filename_for(rec)
+        original_bytes = original_path.read_bytes()
 
-        mock_response = {"message": {"content": "YES"}}
-
-        with (
-            patch("src.api.openai_adapter.state_service", svc),
-            patch("ollama.chat", return_value=mock_response),
-        ):
+        with patch("src.api.openai_adapter.state_service", svc):
             from src.api.openai_adapter import _check_pending_confirmation
 
             result, _ = _check_pending_confirmation("sess_test_010", "Yes please")
 
-        assert result is not None
-        assert result["confirmed"] is True
-        # The original record should now be marked resolved on disk
-        records = svc.read_by_category("pending_confirmation")
-        unresolved = [r for r in records if not (r.metadata or {}).get("resolved")]
-        assert len(unresolved) == 0
+            assert result is not None
+            assert result["confirmed"] is True
+            # Append-only: the original record file is byte-for-byte unchanged.
+            assert original_path.read_bytes() == original_bytes
+            # A tombstone resolves the original via the derived resolved-set.
+            records = svc.read_by_category("pending_confirmation")
+            assert rec.id in StateService.resolved_ids(records)
+            assert any(
+                (r.metadata or {}).get("original_id") == rec.id for r in records
+            )
+            # Derived suppression: the resolved pending is not re-found.
+            again, _ = _check_pending_confirmation("sess_test_010", "anything else")
+            assert again is None
 
-    def test_marks_original_resolved_on_no(self, svc, vault):
-        """Declining also marks the ORIGINAL pending record as resolved."""
-        self._seed_pending(svc, query="weather forecast")
+    def test_resolves_pending_append_only_on_no(self, svc, vault):
+        """Declining also resolves the pending append-only (same contract)."""
+        rec = self._seed_pending(svc, query="weather forecast")
+        original_path = svc._get_state_dir() / svc._filename_for(rec)
+        original_bytes = original_path.read_bytes()
 
-        mock_response = {"message": {"content": "NO"}}
-
-        with (
-            patch("src.api.openai_adapter.state_service", svc),
-            patch("ollama.chat", return_value=mock_response),
-        ):
+        with patch("src.api.openai_adapter.state_service", svc):
             from src.api.openai_adapter import _check_pending_confirmation
 
             result, _ = _check_pending_confirmation("sess_test_010", "No thanks")
 
-        assert result is not None
-        assert result["confirmed"] is False
-        records = svc.read_by_category("pending_confirmation")
-        unresolved = [r for r in records if not (r.metadata or {}).get("resolved")]
-        assert len(unresolved) == 0
+            assert result is not None
+            assert result["confirmed"] is False
+            assert original_path.read_bytes() == original_bytes
+            records = svc.read_by_category("pending_confirmation")
+            assert rec.id in StateService.resolved_ids(records)
+            again, _ = _check_pending_confirmation("sess_test_010", "ok then")
+            assert again is None
 
 
 # ---------------------------------------------------------------------------
@@ -256,57 +261,85 @@ class TestExtractorExclusion:
 
 
 # ---------------------------------------------------------------------------
-# 9. pending_confirmation exempt from staleness filtering
+# 9. pending_confirmation is internal control flow, never surfaced (ADR-038)
 # ---------------------------------------------------------------------------
 
-class TestStalenessExemption:
+class TestPendingConfirmationNotSurfaced:
 
-    def test_staleness_exempt_set_includes_pending_confirmation(self, vault):
-        """StateResolver's _STALENESS_EXEMPT set includes pending_confirmation.
-
-        We verify this by writing a very old pending_confirmation record to
-        the vault and confirming it still appears in resolved state items.
-        A non-exempt category with the same timestamp would be filtered out.
+    def test_pending_confirmation_excluded_from_current_state(self, vault):
+        """pending_confirmation is ask-first control flow consumed directly by
+        the chat endpoint; the resolver never surfaces it as current state
+        (ADR-038). This is what lets pending resolution be append-only without
+        leaking resolved-but-flag-False pendings into the prompt. A normal
+        category still resolves, proving the exclusion is specific.
         """
         from src.state.state_resolver import StateResolver
-        from src.state.models import StateRecord
 
         service = StateService(vault_path=vault)
 
-        # Write a very old pending_confirmation record — should survive
-        # staleness for exempt categories but not for normal ones.
-        old_pc = StateRecord(
-            id="2020-01-01T00-00-00",
-            timestamp="2020-01-01T00-00-00",
-            type="pending_confirmation",
+        # An unresolved, recent pending would have surfaced under the old
+        # contract; it must not surface now.
+        pc = StateService.make_record(
+            state_type="pending_confirmation",
             text="Want me to search for that?",
             source="ask_first_detector",
             metadata={"action": "web_search", "resolved": False},
         )
-        service.write(old_pc)
+        service.write(pc)
 
-        # Also write an equally old non-exempt record for contrast.
-        old_focus = StateRecord(
-            id="2020-01-01T00-00-01",
-            timestamp="2020-01-01T00-00-01",
-            type="current_focus",
-            text="Old focus item",
+        # A normal recent state record still resolves, for contrast.
+        focus = StateService.make_record(
+            state_type="current_focus",
+            text="Active focus item",
             source="test",
         )
-        service.write(old_focus)
+        service.write(focus)
 
-        resolver = StateResolver(service=service)
+        items = StateResolver(service=service).get_current_state()
 
-        with patch(
-            "src.core.config.get_state_staleness_days", return_value=7
-        ):
-            items = resolver.get_current_state()
+        assert all(i.category != "pending_confirmation" for i in items)
+        assert any(i.category == "current_focus" for i in items)
 
-        # The old pending_confirmation should survive staleness filtering
-        pc_items = [i for i in items if i.category == "pending_confirmation"]
-        assert len(pc_items) == 1
-        assert "search" in pc_items[0].text.lower()
 
-        # The old current_focus should be filtered out by staleness
-        focus_items = [i for i in items if i.category == "current_focus"]
-        assert len(focus_items) == 0
+# ---------------------------------------------------------------------------
+# 10. Regression: resolved pending does not re-trigger (infinite-loop guard)
+# ---------------------------------------------------------------------------
+
+class TestNoInfiniteConfirmationLoop:
+
+    def _seed(self, svc, query="weather"):
+        rec = StateService.make_record(
+            state_type="pending_confirmation",
+            text="Want me to search for that?",
+            source="ask_first_detector",
+            metadata={
+                "action": "web_search", "query": query,
+                "session_id": "sess_loop", "resolved": False,
+            },
+        )
+        svc.write(rec)
+        return rec
+
+    def test_resolved_pending_does_not_retrigger(self, svc, vault):
+        """After a pending is resolved append-only, subsequent turns in the
+        same session never re-find it, so the confirmation prompt cannot loop
+        (the regression the in-place mark_resolved used to guard against).
+        Exactly one resolution tombstone is written - no per-turn accumulation.
+        """
+        rec = self._seed(svc)
+
+        with patch("src.api.openai_adapter.state_service", svc):
+            from src.api.openai_adapter import _check_pending_confirmation
+
+            first, _ = _check_pending_confirmation("sess_loop", "yes")
+            assert first is not None and first["confirmed"] is True
+
+            for msg in ("tell me a joke", "what's the time", "hello"):
+                again, _ = _check_pending_confirmation("sess_loop", msg)
+                assert again is None
+
+        records = svc.read_by_category("pending_confirmation")
+        tombstones = [
+            r for r in records if (r.metadata or {}).get("original_id") == rec.id
+        ]
+        assert len(tombstones) == 1

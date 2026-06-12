@@ -283,15 +283,16 @@ def _background_deviation_detection(
         logger.warning("[DEVIATION] Background detection failed (non-fatal): %s", exc)
 
 
-def _resolve_original_pending(pending) -> None:
-    """Mark the original pending_confirmation vault file as resolved.
+def _resolve_original_pending(pending, reason: str = "user_response") -> None:
+    """Resolve the original pending_confirmation record append-only (ADR-038).
 
-    Without this, the original record stays metadata.resolved=False and
-    _check_pending_confirmation re-finds it on every subsequent turn,
+    Writes a resolution tombstone via StateService.resolve_record rather than
+    mutating the original file in place. Without resolution the original would
+    be re-found by _check_pending_confirmation on every subsequent turn,
     creating an infinite confirmation loop.
     """
-    if state_service.mark_resolved(pending.id):
-        logger.info("[CONFIRM] Marked original pending %s as resolved", pending.id)
+    if state_service.resolve_record(pending.id, resolution=reason):
+        logger.info("[CONFIRM] Resolved original pending %s append-only", pending.id)
 
 
 def _check_pending_confirmation(
@@ -307,10 +308,10 @@ def _check_pending_confirmation(
                 dict with confirmed=False if declined,
                 None if no pending confirmation exists.
       records : the pending_confirmation records read during this call,
-                with any record this call resolved (via mark_resolved)
-                filtered out. The request handler can pass this list to
-                _write_pending_confirmation later in the same request to
-                skip the duplicate-write guard's redundant vault scan.
+                with any record this call resolved (via resolve_record,
+                append-only) filtered out. The request handler can pass this
+                list to _write_pending_confirmation later in the same request
+                to skip the duplicate-write guard's redundant vault scan.
     """
     try:
         resolver = state_service._state_resolver if hasattr(state_service, '_state_resolver') else None
@@ -322,13 +323,18 @@ def _check_pending_confirmation(
         if not records:
             return None, []
 
-        # Latest pending confirmation that is not resolved AND belongs to
-        # this session. Cross-session pendings are stale - resolve them
-        # silently so they don't accumulate.
+        # Resolution is derived (ADR-038): a record is resolved if it carries
+        # the legacy in-place resolved flag OR an append-only tombstone exists
+        # for it. Records are never mutated in place.
+        _resolved = state_service.resolved_ids(records)
+
+        # Latest ACTIVE pending confirmation that belongs to this session.
+        # Cross-session pendings are stale - resolve them silently so they
+        # don't fire on an unrelated conversation.
         pending = None
-        resolved_ids: set[str] = set()
+        _resolved_this_call: set[str] = set()
         for r in records:
-            if (r.metadata or {}).get("resolved"):
+            if r.id in _resolved:
                 continue
             r_session = (r.metadata or {}).get("session_id", "")
             if r_session == session_id:
@@ -336,27 +342,26 @@ def _check_pending_confirmation(
                 break
             else:
                 # Stale cross-session pending - resolve it silently
-                _resolve_original_pending(r)
-                resolved_ids.add(r.id)
+                _resolve_original_pending(r, reason="stale")
+                _resolved_this_call.add(r.id)
 
         if not pending:
-            # No matching pending in this session, but stale cross-session
-            # records may have been resolved - filter them from the returned list.
-            filtered = [r for r in records if r.id not in resolved_ids]
+            # No active pending in this session, but stale cross-session
+            # records may have been resolved - filter them from the list.
+            filtered = [r for r in records if r.id not in _resolved_this_call]
             return None, filtered
 
         action = (pending.metadata or {}).get("action", "unknown")
         action_query = (pending.metadata or {}).get("query", "")
         offer_text = pending.text
 
-        # Mark the ORIGINAL pending record as resolved FIRST - before
-        # the LLM interpretation. This prevents the infinite loop where
-        # the original record stays unresolved and gets re-found on every
-        # subsequent turn. The append-only rule is preserved by updating
-        # metadata (same pattern as soft-delete and resolved_priority fix).
+        # Resolve the ORIGINAL pending FIRST - before interpretation - so it
+        # is never re-found on a subsequent turn (the infinite-loop guard).
+        # Append-only: resolve_record writes a tombstone, it does not mutate
+        # the original file (ADR-038).
         _resolve_original_pending(pending)
-        resolved_ids.add(pending.id)
-        filtered = [r for r in records if r.id not in resolved_ids]
+        _resolved_this_call.add(pending.id)
+        filtered = [r for r in records if r.id not in _resolved_this_call]
 
         # Deterministic keyword match for YES/NO - replaces the LLM call
         # that added ~500ms latency and could misinterpret at 8B scale.
@@ -434,11 +439,16 @@ def _write_pending_confirmation(
             existing = existing_pending
         else:
             existing = state_service.read_by_category("pending_confirmation")
+        # Resolution is derived (ADR-038): only an ACTIVE (unresolved) pending
+        # for the same session+query should suppress a new offer. Tombstoned
+        # or legacy-flag-resolved records must not block re-offering.
+        _resolved = state_service.resolved_ids(existing)
         for er in existing:
+            if er.id in _resolved:
+                continue
             em = er.metadata or {}
             if (
-                not em.get("resolved")
-                and em.get("session_id") == session_id
+                em.get("session_id") == session_id
                 and em.get("query") == user_message
             ):
                 logger.info("[ASK_FIRST] Duplicate suppressed for session %s", session_id)

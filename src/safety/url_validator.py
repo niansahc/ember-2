@@ -27,7 +27,7 @@ Out of scope (documented):
 
 Streaming caveat: this validator only protects the buffered/stored copy of
 the response. The fast-streaming path (B-CON-002) emits raw token chunks to
-the client before any post-gen validator runs. Same shape as every existing
+the client before any post-gen validator runs. Same pattern as every existing
 validator in post_gen_pipeline; not a regression.
 
 Degenerate case: if every URL in a response is disallowed, the user sees a

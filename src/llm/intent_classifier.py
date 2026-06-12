@@ -160,7 +160,7 @@ def _stage1_classify(query: str) -> str | None:
 
 _STAGE2_CONFIDENCE_THRESHOLD: float = 0.65
 
-# Cache shape: (labels_list, normalized_matrix) where matrix rows are unit
+# Cache layout: (labels_list, normalized_matrix) where matrix rows are unit
 # vectors so cosine similarity reduces to a pure dot product at query time.
 _example_embeddings: tuple[list[str], np.ndarray] | None = None
 

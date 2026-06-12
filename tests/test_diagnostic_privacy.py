@@ -230,6 +230,146 @@ def test_payload_diagnostics_emits_when_set(monkeypatch, caplog):
 
 
 # ---------------------------------------------------------------------------
+# Gate: [SAFETY] trigger diagnostic in llm/adapter.py (sync + streaming)
+# ---------------------------------------------------------------------------
+
+
+class _FakeTriggerResult:
+    """Minimal stand-in for a policy-service trigger result. Synthetic."""
+
+    def __init__(self, triggered: bool, triggered_by: list[str]) -> None:
+        self.triggered = triggered
+        self.triggered_by = triggered_by
+
+
+def test_log_safety_trigger_silent_when_unset(monkeypatch, caplog, capfd):
+    monkeypatch.delenv("EMBER_DEBUG", raising=False)
+    caplog.set_level(logging.WARNING, logger="ember.llm")
+    from src.llm.adapter import _log_safety_trigger
+    _log_safety_trigger(_FakeTriggerResult(triggered=True, triggered_by=["non_harm"]))
+    safety_records = [
+        r for r in caplog.records if "[SAFETY]" in r.getMessage()
+    ]
+    assert safety_records == []
+    # Defense-in-depth: nothing leaks to stdout either (no rogue print).
+    captured = capfd.readouterr()
+    assert "[SAFETY]" not in captured.out
+
+
+def test_log_safety_trigger_emits_when_set(monkeypatch, caplog):
+    monkeypatch.setenv("EMBER_DEBUG", "true")
+    caplog.set_level(logging.WARNING, logger="ember.llm")
+    from src.llm.adapter import _log_safety_trigger
+    _log_safety_trigger(_FakeTriggerResult(triggered=True, triggered_by=["non_harm"]))
+    safety_records = [
+        r for r in caplog.records if "[SAFETY]" in r.getMessage()
+    ]
+    assert len(safety_records) >= 1
+
+
+def test_log_safety_review_path_silent_when_unset(monkeypatch, caplog, capfd):
+    monkeypatch.delenv("EMBER_DEBUG", raising=False)
+    caplog.set_level(logging.WARNING, logger="ember.llm")
+    from src.llm.adapter import _log_safety_review_path
+    _log_safety_review_path("/synthetic/log/path.json")
+    review_records = [
+        r for r in caplog.records if "log written to" in r.getMessage()
+    ]
+    assert review_records == []
+    captured = capfd.readouterr()
+    assert "log written to" not in captured.out
+
+
+def test_log_safety_review_path_emits_when_set(monkeypatch, caplog):
+    monkeypatch.setenv("EMBER_DEBUG", "true")
+    caplog.set_level(logging.WARNING, logger="ember.llm")
+    from src.llm.adapter import _log_safety_review_path
+    _log_safety_review_path("/synthetic/log/path.json")
+    review_records = [
+        r for r in caplog.records if "log written to" in r.getMessage()
+    ]
+    assert len(review_records) >= 1
+
+
+def test_adapter_has_no_unguarded_safety_prints() -> None:
+    """Static guard: src/llm/adapter.py must not emit '[SAFETY]' via raw print().
+
+    Both call sites (sync + streaming review) route through the EMBER_DEBUG-
+    gated helpers above. A future regression that re-introduces a bare
+    print('[SAFETY]', ...) call would land vault-adjacent trigger reasons on
+    stdout in production. Caught here cheaply.
+    """
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent.parent
+    src = (repo_root / "src" / "llm" / "adapter.py").read_text(encoding="utf-8")
+    for line in src.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        if stripped.startswith("print(") and "[SAFETY]" in line:
+            raise AssertionError(
+                f"unguarded print() with [SAFETY] marker found in adapter.py: {line!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Gate: [CTX] selected-memory diagnostic in src/context/service.py
+# ---------------------------------------------------------------------------
+#
+# The pre-fix call site (`if self.debug: print(item.content[:120])`) leaks
+# vault content to stdout whenever ContextService was constructed with
+# debug=True. No live caller does so today, but the code path existed.
+# Helper extraction + EMBER_DEBUG gate makes it unit-testable.
+
+
+class _FakeMemoryItem:
+    def __init__(self, item_type: str, content: str) -> None:
+        self.item_type = item_type
+        self.content = content
+
+
+def test_log_context_selection_silent_when_unset(monkeypatch, caplog, capfd):
+    monkeypatch.delenv("EMBER_DEBUG", raising=False)
+    caplog.set_level(logging.DEBUG, logger="ember.context_service")
+    from src.context.service import _log_context_selection
+    _log_context_selection(
+        [_FakeMemoryItem("memory", "synthetic placeholder content")],
+    )
+    ctx_records = [r for r in caplog.records if "[CTX]" in r.getMessage()]
+    assert ctx_records == []
+    captured = capfd.readouterr()
+    assert "[CTX]" not in captured.out
+
+
+def test_log_context_selection_emits_when_set(monkeypatch, caplog):
+    monkeypatch.setenv("EMBER_DEBUG", "true")
+    caplog.set_level(logging.DEBUG, logger="ember.context_service")
+    from src.context.service import _log_context_selection
+    _log_context_selection(
+        [_FakeMemoryItem("memory", "synthetic placeholder content")],
+    )
+    ctx_records = [r for r in caplog.records if "[CTX]" in r.getMessage()]
+    assert len(ctx_records) >= 1
+
+
+def test_service_has_no_unguarded_ctx_prints() -> None:
+    """Static guard: src/context/service.py must not emit '[CTX]' via raw print()."""
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent.parent
+    src = (repo_root / "src" / "context" / "service.py").read_text(encoding="utf-8")
+    for line in src.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        if stripped.startswith("print(") and "[CTX]" in line:
+            raise AssertionError(
+                f"unguarded print() with [CTX] marker found in service.py: {line!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Call-time evaluation (no cached gate at import)
 # ---------------------------------------------------------------------------
 

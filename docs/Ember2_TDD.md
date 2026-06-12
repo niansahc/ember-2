@@ -2041,6 +2041,14 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 
 - **MemOS** (Li et al., arXiv:2505.22101) — parametric/activation/plaintext memory taxonomy. Frames why plaintext-only (RAG) memory is insufficient and why Ember's local-first scope is correctly bounded. Use in Section 3 architecture framing.
 
+- **How RLHF amplifies sycophancy** (Shapira et al., arXiv:2602.01002, January 2026) - Mathematical proof that RLHF optimization causally increases sycophancy. Strongest available citation for the commercial-design-choice argument. No implementation action. Graduation trigger: graduate immediately to paper Section 2.2.
+
+- **W5H2 + SetFit intent classification at agent scale** (arXiv:2602.18922, February 2026) - SetFit at 22M parameters achieves 91.1% accuracy at 2-5ms versus 68.8% zero-shot for a 20B LLM (700x latency advantage confirmed). The 0.85 confidence cascade threshold is now evidence-grounded. Graduation trigger: graduate to the ADR-037 implementation spec.
+
+- **Hybrid retrieval + local cross-encoder reranker** (arXiv:2604.01733, April 2026) - BM25 + dense + RRF + cross-encoder is the 2026 production retrieval stack; the cross-encoder adds +17.4% Recall@5 over RRF alone. Local option: cross-encoder/ms-marco-MiniLM-L-6-v2 (22M params, CPU-compatible). Informs v0.19.0 retrieval phase 2; add after the BM25 + RRF baseline lands. Graduation trigger: BM25 + RRF baseline implemented and ablation confirms improvement.
+
+- **Constitutional AI reliability at 8B scale** (arXiv:2504.04918, April 2026) - Training-time CAI causes model collapse at 8B scale, validating Ember's post-generation runtime review architecture. Architecture-dependent: Llama > Gemma > Qwen for constitutional self-critique. Flag for model eval: add constitutional behavior as an explicit category when comparing Llama 3.3 8B versus qwen3:8b. Informs model evaluation and academic paper Section 3.
+
 ---
 
 ## 50.2 Graduated

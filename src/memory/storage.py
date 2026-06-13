@@ -9,7 +9,6 @@ single enforcement point for typed memory — any invalid type raises
 a ValueError before a directory is created or a file is written.
 """
 
-import json
 from pathlib import Path
 
 from src.core.jsonio import safe_read_json, safe_write_json

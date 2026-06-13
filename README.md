@@ -366,7 +366,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - Cloud model provider support — Anthropic Claude and OpenAI via LLMAdapter
 - Provider API key storage via OS credential store (Windows, macOS, Linux)
 - Auto state extraction from conversation turns (background thread)
-- State layer (StateService, StateResolver, 9 categories including timer, context packet integration)
+- State layer (StateService, StateResolver, 10 categories including timer and pending_confirmation, context packet integration)
 - Multi-record state categories for open_loop and next_action (capped at 5)
 - Commitment detection — post-generation detector writes open_loop state records
 - Daily, weekly, and session reflection generation

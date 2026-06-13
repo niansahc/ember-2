@@ -13,6 +13,7 @@ from pydantic import BaseModel
 logger = logging.getLogger("ember.openai_adapter")
 
 from src.api.limiter import limiter
+from src.api.sse import sse_chunk, sse_done, sse_sources, sse_vault_sources
 from src.core.config import get_ember_debug
 from src.memory.service import MemoryService
 from src.memory.read_memory import read_memories
@@ -71,30 +72,9 @@ def early_return_response(
 
     if stream:
         async def _sse():
-            created = int(time.time())
-            yield "data: " + json.dumps({
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": EMBER_MODEL_ID,
-                "choices": [{
-                    "index": 0,
-                    "delta": {"content": text},
-                    "finish_reason": None,
-                }],
-            }) + "\n\n"
-            yield "data: " + json.dumps({
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": EMBER_MODEL_ID,
-                "choices": [{
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": "stop",
-                }],
-            }) + "\n\n"
-            yield "data: [DONE]\n\n"
+            yield sse_chunk(completion_id, content=text)
+            yield sse_chunk(completion_id, finish_reason="stop")
+            yield sse_done()
 
         return StreamingResponse(_sse(), media_type="text/event-stream")
 
@@ -1710,7 +1690,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
         def _status_event(status: str) -> str:
             """Format a status SSE event for the UI."""
-            return f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'status': status}, 'finish_reason': None}]})}\n\n"
+            return sse_chunk(completion_id, status=status)
 
         def _emit_chunk(content: str | None, finish_reason: str | None = None) -> str:
             """Format a chat.completion.chunk SSE event.
@@ -1719,12 +1699,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             content=""    -> delta is {"content": ""} (initial typing indicator)
             content=text  -> delta is {"content": text}
             """
-            delta: dict = {"content": content} if content is not None else {}
-            return f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish_reason}]})}\n\n"
+            return sse_chunk(completion_id, content=content, finish_reason=finish_reason)
 
         def _emit_final_chunk_and_done() -> str:
             """Final chunk (finish_reason='stop') concatenated with [DONE]."""
-            return _emit_chunk(content=None, finish_reason="stop") + "data: [DONE]\n\n"
+            return _emit_chunk(content=None, finish_reason="stop") + sse_done()
 
         if _needs_grounding:
             # --- BUFFER-THEN-STREAM PATH (ADR-019) ---
@@ -1886,12 +1865,12 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                         if item.get("url")
                     ]
                     if sources:
-                        yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+                        yield sse_sources(sources)
 
                 # 6. Vault sources event (if applicable) - suppressed when
                 # the post-gen pipeline substituted the response.
                 if vault_sources and not _suppress_source_badges:
-                    yield f"data: {json.dumps({'type': 'vault_sources', 'sources': vault_sources})}\n\n"
+                    yield sse_vault_sources(vault_sources)
 
                 # Final chunk
                 yield _emit_final_chunk_and_done()
@@ -1927,7 +1906,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
                 # Vault sources event (if applicable)
                 if vault_sources:
-                    yield f"data: {json.dumps({'type': 'vault_sources', 'sources': vault_sources})}\n\n"
+                    yield sse_vault_sources(vault_sources)
 
                 # Final chunk
                 yield _emit_final_chunk_and_done()

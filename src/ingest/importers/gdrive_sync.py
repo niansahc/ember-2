@@ -1,6 +1,6 @@
-import json
 from pathlib import Path
 
+from src.core.jsonio import safe_read_json, safe_write_json
 from src.ingest.importers.gdrive import list_drive_files
 from src.ingest.importers.gdrive_download import download_drive_file
 from src.ingest.importers.files import load_file
@@ -9,16 +9,14 @@ from src.ingest.writers import write_chunks_to_vault
 
 
 def load_sync_index(sync_index_path):
-    if not sync_index_path.exists():
-        return {}
-    with open(sync_index_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    # Missing index -> {} silently (first sync); corrupt index -> log + {}
+    # (re-sync rather than crash). ADR-039.
+    return safe_read_json(sync_index_path, default={})
 
 
 def save_sync_index(sync_index_path, data):
-    sync_index_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(sync_index_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    # Atomic write so an interrupted sync never leaves a half-written index.
+    safe_write_json(sync_index_path, data)
 
 
 def sync_gdrive_folder(folder_id, vault_path):

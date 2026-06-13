@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from src.core.config import get_private_vault_path
+from src.core.jsonio import safe_read_json
 from src.memory.storage import MemoryStorage
 
 logger = logging.getLogger("ember.lodestone")
@@ -38,12 +39,9 @@ def _lodestone_dir() -> Path:
 
 
 def _load_record(file_path: Path) -> dict[str, Any] | None:
-    try:
-        with file_path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("[LODESTONE] Failed to read %s: %s", file_path.name, exc)
-        return None
+    # safe_read_json logs corruption (ADR-039) and returns None so a single
+    # bad lodestone file is skipped, not fatal.
+    return safe_read_json(file_path, default=None)
 
 
 def _all_records() -> list[dict[str, Any]]:

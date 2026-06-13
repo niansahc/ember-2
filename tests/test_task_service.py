@@ -100,7 +100,9 @@ class TestTaskServiceRead:
         service = TaskService(vault_path=tmp_path)
         assert service.read_all() == []
 
-    def test_read_all_skips_corrupted_json(self, tmp_path):
+    def test_read_all_skips_corrupted_json(self, tmp_path, caplog):
+        import logging
+
         service = TaskService(vault_path=tmp_path)
         record = _make_record()
         service.write(record)
@@ -110,10 +112,14 @@ class TestTaskServiceRead:
         bad_file = task_dir / "2026-01-01T00-00-00_bad.json"
         bad_file.write_text("not json!", encoding="utf-8")
 
-        with pytest.warns(match="unreadable"):
+        # Behavior: the corrupt file is skipped and the valid record returned.
+        # Corruption is surfaced via the ember.jsonio logger (ADR-039), not a
+        # warnings.warn.
+        with caplog.at_level(logging.WARNING, logger="ember.jsonio"):
             records = service.read_all()
 
         assert len(records) == 1
+        assert any("read failed" in r.message for r in caplog.records)
 
     def test_read_all_skips_invalid_type(self, tmp_path):
         service = TaskService(vault_path=tmp_path)

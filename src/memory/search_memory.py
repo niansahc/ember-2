@@ -1,4 +1,5 @@
 from src.core.config import get_private_vault_path
+from src.core.jsonio import JsonIoError
 from src.memory.storage import MemoryStorage
 
 
@@ -15,7 +16,12 @@ def search_memories(query: str, memory_type: str = "journal", limit: int = 5):
     scored_results = []
 
     for file_path in files:
-        memory = storage.read_json(file_path)
+        try:
+            memory = storage.read_json(file_path)
+        except JsonIoError:
+            # Skip a single corrupt/unreadable record (ADR-039); logged by
+            # safe_read_json.
+            continue
         # Skip suppressed records (junk flagged by audit tools)
         metadata = memory.get("metadata", {})
         if isinstance(metadata, dict) and metadata.get("quality") == "suppressed":

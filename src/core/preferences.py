@@ -12,11 +12,11 @@ Location: private_vault/preferences.json
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
 from src.core.config import get_private_vault_path
+from src.core.jsonio import JsonIoError, safe_read_json, safe_write_json
 
 logger = logging.getLogger("ember.preferences")
 
@@ -73,12 +73,11 @@ def read(vault_path: Path | None = None) -> dict:
     where a deliberate user choice could be clobbered by an interleaved read.
     """
     path = _get_prefs_path(vault_path)
-    stored: dict = {}
-    if path.exists():
-        try:
-            stored = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("[PREFERENCES] Failed to read %s: %s", path.name, exc)
+    # safe_read_json returns {} silently for a missing file (first run) and
+    # logs + returns {} on a corrupt file (ADR-039).
+    stored = safe_read_json(path, default={})
+    if not isinstance(stored, dict):
+        stored = {}
 
     # Atomic migration: gated on the schema-version sentinel so this fires
     # at most once per vault. The check inspects the in-memory stored dict
@@ -99,20 +98,17 @@ def read(vault_path: Path | None = None) -> dict:
             )
         else:
             try:
-                path.write_text(
-                    json.dumps(stored, indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
+                safe_write_json(path, stored)
                 # Only log the success message after the write actually
-                # succeeded — avoids the misleading "one-shot" claim when
+                # succeeded -- avoids the misleading "one-shot" claim when
                 # the write later raises.
                 logger.info(
-                    "[PREFERENCES] Migrated v0.15.x web_search_autonomous=False → True (one-shot, sentinel set)"
+                    "[PREFERENCES] Migrated v0.15.x web_search_autonomous=False -> True (one-shot, sentinel set)"
                 )
                 # In case this path was previously failing and the underlying
                 # condition cleared, stop suppressing future attempts.
                 _migration_write_failed_paths.discard(path)
-            except OSError as exc:
+            except JsonIoError as exc:
                 logger.warning(
                     "[PREFERENCES] Migration write failed for %s: %s", path.name, exc
                 )
@@ -131,7 +127,7 @@ def write(key: str, value, vault_path: Path | None = None) -> None:
     path = _get_prefs_path(vault_path)
     prefs = read(vault_path)
     prefs[key] = value
-    path.write_text(json.dumps(prefs, indent=2, ensure_ascii=False), encoding="utf-8")
+    safe_write_json(path, prefs)
 
 
 def update(updates: dict, vault_path: Path | None = None) -> None:
@@ -139,4 +135,4 @@ def update(updates: dict, vault_path: Path | None = None) -> None:
     path = _get_prefs_path(vault_path)
     prefs = read(vault_path)
     prefs.update(updates)
-    path.write_text(json.dumps(prefs, indent=2, ensure_ascii=False), encoding="utf-8")
+    safe_write_json(path, prefs)

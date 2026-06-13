@@ -301,7 +301,7 @@ def _check_pending_confirmation(
     """Check for a pending_confirmation state record and interpret the user's response.
 
     Uses the LLM to determine whether the user is confirming or declining
-    a pending action — no keyword matching. Returns a tuple of (result, records):
+    a pending action - no keyword matching. Returns a tuple of (result, records):
 
       result  : dict with action details if confirmed,
                 dict with confirmed=False if declined,
@@ -323,7 +323,7 @@ def _check_pending_confirmation(
             return None, []
 
         # Latest pending confirmation that is not resolved AND belongs to
-        # this session. Cross-session pendings are stale — resolve them
+        # this session. Cross-session pendings are stale - resolve them
         # silently so they don't accumulate.
         pending = None
         resolved_ids: set[str] = set()
@@ -335,13 +335,13 @@ def _check_pending_confirmation(
                 pending = r
                 break
             else:
-                # Stale cross-session pending — resolve it silently
+                # Stale cross-session pending - resolve it silently
                 _resolve_original_pending(r)
                 resolved_ids.add(r.id)
 
         if not pending:
             # No matching pending in this session, but stale cross-session
-            # records may have been resolved — filter them from the returned list.
+            # records may have been resolved - filter them from the returned list.
             filtered = [r for r in records if r.id not in resolved_ids]
             return None, filtered
 
@@ -349,7 +349,7 @@ def _check_pending_confirmation(
         action_query = (pending.metadata or {}).get("query", "")
         offer_text = pending.text
 
-        # Mark the ORIGINAL pending record as resolved FIRST — before
+        # Mark the ORIGINAL pending record as resolved FIRST - before
         # the LLM interpretation. This prevents the infinite loop where
         # the original record stays unresolved and gets re-found on every
         # subsequent turn. The append-only rule is preserved by updating
@@ -358,7 +358,7 @@ def _check_pending_confirmation(
         resolved_ids.add(pending.id)
         filtered = [r for r in records if r.id not in resolved_ids]
 
-        # Deterministic keyword match for YES/NO — replaces the LLM call
+        # Deterministic keyword match for YES/NO - replaces the LLM call
         # that added ~500ms latency and could misinterpret at 8B scale.
         import re as _re
         _cleaned = _re.sub(r"[^\w\s]", "", user_message.strip()).lower()
@@ -426,7 +426,7 @@ def _write_pending_confirmation(
         if not offer_sentence:
             offer_sentence = reply[-200:]  # Fallback: last portion
 
-        # Duplicate write guard — don't create a second pending if one
+        # Duplicate write guard - don't create a second pending if one
         # already exists for this session + query (prevents re-offer loops
         # when the deferred search fails and the model falls back to the
         # scripted ask-first response again).
@@ -469,7 +469,7 @@ import re
 # pre-generation so no LLM call, retrieval, or context build occurs.
 #
 # Conversational / emotional markers live in src.llm.prompt_builder as the
-# canonical source — the prompt layer and this adapter share one definition
+# canonical source - the prompt layer and this adapter share one definition
 # so a short check-in is detected identically in both places. Re-exported
 # here for backward compatibility with existing tests.
 from src.llm.prompt_builder import (
@@ -501,7 +501,7 @@ def _is_override_attempt(message: str) -> bool:
     """Return True if the message contains an instruction-override jailbreak pattern.
 
     This is a fast heuristic check run before any LLM call, context build,
-    or retrieval. Only matches explicit override-class language — normal
+    or retrieval. Only matches explicit override-class language - normal
     queries that happen to contain words like 'ignore' or 'rules' in
     non-override contexts will not match because the patterns require
     the instruction-directive framing.
@@ -527,7 +527,7 @@ class ChatCompletionsRequest(BaseModel):
     stream: Optional[bool] = False
     vault_enabled: Optional[bool] = True
     # Per-conversation bare mode override. When present,
-    # supersedes the preferences.json default. Absent → preferences fallback.
+    # supersedes the preferences.json default. Absent -> preferences fallback.
     bare_mode: Optional[bool] = None
 
 
@@ -583,11 +583,11 @@ def _format_session_gap(gap_seconds: float) -> str | None:
 
     Returns None when the gap is below the surface threshold (5 minutes),
     so the prompt builder can omit the section entirely. The thresholds
-    and bucketing are intentionally coarse — the model only needs the
+    and bucketing are intentionally coarse - the model only needs the
     rough sense of "how long has it been," not minute-level precision.
     See BUG-003.
     """
-    if gap_seconds < 300:  # < 5 minutes — too small to surface
+    if gap_seconds < 300:  # < 5 minutes - too small to surface
         return None
     minutes = int(gap_seconds // 60)
     if gap_seconds < 3600:  # < 1 hour
@@ -610,7 +610,7 @@ def _resolve_last_session_label(current_session_id: str) -> str | None:
 
     Returns None when no prior session exists, when the gap is below the
     surface threshold, or when the lookup fails for any reason. Always
-    non-fatal — the caller should fall back to no last-session context.
+    non-fatal - the caller should fall back to no last-session context.
     See BUG-003.
     """
     try:
@@ -641,7 +641,7 @@ def _resolve_last_session_label(current_session_id: str) -> str | None:
 def _build_vault_sources(context_packet) -> list[dict]:
     """Build vault source entries for the vault_sources SSE event.
 
-    Returns a list of {type, timestamp, summary} dicts — one per
+    Returns a list of {type, timestamp, summary} dicts - one per
     non-profile retrieved record. Profile items are excluded because
     they are always injected and don't represent a specific retrieval
     event worth citing.
@@ -736,7 +736,7 @@ class ThinkBlockFilter:
 
         Converts Mathematical Italic (U+1D434-U+1D467) to plain ASCII,
         then lowercases the result so <Think>, <THINK>, etc. all match.
-        Used only for tag position detection — the original-cased text
+        Used only for tag position detection - the original-cased text
         is preserved for visible output.
         """
         from src.llm.adapter import _normalize_unicode_tags
@@ -753,7 +753,7 @@ class ThinkBlockFilter:
         BUG-010 fix: tag detection uses a normalized (lowercased) shadow
         buffer for case-insensitive matching, while the original-cased
         text is preserved in a parallel buffer for visible output. Both
-        buffers are always the same length — normalization only changes
+        buffers are always the same length - normalization only changes
         character values, never string length. Every slice operation on
         _buffer is mirrored on _original_buffer at the same positions.
         """
@@ -784,7 +784,7 @@ class ThinkBlockFilter:
             else:
                 start_idx = self._find_open_tag(self._buffer)
                 if start_idx == -1:
-                    # No open tag — emit safe content, hold back partial.
+                    # No open tag - emit safe content, hold back partial.
                     safe_len = self._safe_emit_length(self._OPEN_TAG)
                     if safe_len > 0:
                         result.append(self._original_buffer[:safe_len])
@@ -860,7 +860,7 @@ def _ensure_session(session_id: str, first_user_message: str, *, test: bool = Fa
     Title is auto-generated from the first 50 chars of the first user message.
 
     When test=True (X-Test-Session header), skip vault writes entirely.
-    Test sessions don't need persistence — the conftest vault override
+    Test sessions don't need persistence - the conftest vault override
     handles isolation during pytest, but eval tools hitting the live API
     would otherwise accumulate sessions in the user's vault.
     """
@@ -896,7 +896,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # --- SESSION ID ---
     session_id = _extract_session_id(request)
 
-    # (2) Only the last user message is used — Ember's ConversationBuffer
+    # (2) Only the last user message is used - Ember's ConversationBuffer
     #     handles conversation history. All prior messages from the request
     #     are intentionally ignored.
     user_messages = [m for m in body.messages if m.role == "user"]
@@ -915,7 +915,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             latest_user_message = raw_content or ""
             image_parts = []
 
-    # (3) ### Task: guard — Open WebUI injects a RAG wrapper as the last user message.
+    # (3) ### Task: guard - Open WebUI injects a RAG wrapper as the last user message.
     #     The real user query is always the second-to-last user message.
     if latest_user_message.startswith("### Task:"):
         logger.warning("[INTERCEPT] ### Task: injection detected - using prior user message")
@@ -925,7 +925,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         else:
             latest_user_message = ""
 
-    # (1) Empty message guard — fires only when there is truly nothing:
+    # (1) Empty message guard - fires only when there is truly nothing:
     #     no text AND no image parts. Image-only uploads are not empty.
     if (not latest_user_message or not latest_user_message.strip()) and not image_parts:
         logger.warning("[INTERCEPT] Empty user message - returning without pipeline")
@@ -979,7 +979,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # When vault_enabled=False, skip all vault reads and writes.
     # The model runs in stateless mode: no memory retrieval, no state,
     # no lodestone, no reflections. Constitutional review still runs.
-    # Check global toggle first — if the feature is disabled globally,
+    # Check global toggle first - if the feature is disabled globally,
     # vault_enabled is always True regardless of per-request setting.
     _vault_global_enabled = True
     try:
@@ -1005,7 +1005,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         if session_rec:
             project_id = session_rec.get("metadata", {}).get("project_id")
     except Exception:
-        pass  # Non-fatal — proceed without project context
+        pass  # Non-fatal - proceed without project context
 
     if project_id:
         try:
@@ -1016,7 +1016,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 # (see src/memory/project.py:create_project).
                 project_name = project_rec.get("text") or None
         except Exception:
-            project_name = None  # Non-fatal — proceed without project name
+            project_name = None  # Non-fatal - proceed without project name
 
     # --- BARE-MARKER CLARIFICATION SHORT-CIRCUIT (B2) ---
     # When the user invokes an explicit web marker ("google please",
@@ -1087,7 +1087,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # modifies it. Used by _write_pending_confirmation so the stored
     # query is clean for deferred web search execution. Without this,
     # the search query arrives at SearXNG as "[System: no relevant
-    # vault content...] What is the population of Tokyo?" — garbage.
+    # vault content...] What is the population of Tokyo?" - garbage.
     _raw_user_message = latest_user_message
 
     # --- PENDING CONFIRMATION CHECK (pre-generation) ---
@@ -1164,15 +1164,15 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         elif not pending_result.created:
             latest_user_message = f'[System: user declined task creation] {latest_user_message}'
 
-    # --- TIMER DETECTION (pre-generation) — BUG-004 ---
+    # --- TIMER DETECTION (pre-generation) - BUG-004 ---
     # Three intent paths, each fully non-fatal:
-    #   1. start: detected label → write a running timer record
-    #   2. stop:  any active timers → write a stopped record for the most recent
-    #   3. check: any active timers → inject elapsed-time status
+    #   1. start: detected label -> write a running timer record
+    #   2. stop:  any active timers -> write a stopped record for the most recent
+    #   3. check: any active timers -> inject elapsed-time status
     # Active timers are also surfaced via StateResolver into the context packet,
     # so the system note here is the immediate confirmation; the resolver
     # provides the longer-lived awareness.
-    # Skip for test sessions — timer writes are vault writes.
+    # Skip for test sessions - timer writes are vault writes.
     if not _skip_vault:
         try:
             from src.state.timer_service import (
@@ -1229,7 +1229,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # for relational_hedging, or tension markers for preference_compliance),
     # suppress relational lodestone records from the context packet.
     #
-    # This is a pre-check on the user message only — the full trigger also
+    # This is a pre-check on the user message only - the full trigger also
     # requires draft-side patterns, which aren't available yet. The pre-check
     # is conservative in the right direction: it suppresses relational
     # lodestone when relational honesty MIGHT be needed, even if the draft
@@ -1261,7 +1261,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         if any(m in user_lower for m in _emotional_markers) or any(m in user_lower for m in _tension_markers):
             suppress_relational_lodestone = True
     except Exception:
-        pass  # Non-fatal — proceed without suppression
+        pass  # Non-fatal - proceed without suppression
 
     _early_policy = None
     _explicit_search = False
@@ -1280,12 +1280,12 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     else:
         # Read autonomous preference early so we can gate web search in
         # context assembly. When ask-first is active (autonomous=False),
-        # skip the search during assembly — it should only execute after
+        # skip the search during assembly - it should only execute after
         # the user confirms.
         from src.core.preferences import get as _get_pref_early
         _web_autonomous_early = bool(_get_pref_early("web_search_autonomous", False))
         # Explicit search request bypass: "search the web", "google that",
-        # "look it up" etc. The user's own words ARE the confirmation —
+        # "look it up" etc. The user's own words ARE the confirmation -
         # ask-first gate must not block this.
         from src.context.policies import classify_query as _classify_early
         from src.context.policies import _web_search_policy as _force_web_search_policy
@@ -1323,14 +1323,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         _explicit_search = getattr(_early_policy, "explicit_search_request", False)
         # Gate bypass: skip_web_search is False when autonomous is on OR
         # the user explicitly requested a search. Confirmation-confirmed
-        # is NOT a bypass — the deferred search at line 956 already ran
+        # is NOT a bypass - the deferred search at line 956 already ran
         # with the correct stored query. Letting context_service also
         # search would pass "Yes" (the confirmation word) to SearXNG.
         # Vision turns never trigger web search. Image-bearing queries are
         # served by the VL preprocessor; mixing in unrelated web hits wastes
         # tokens, pollutes attribution, and contradicts what the user asked
         # for. Gate wins over autonomous preference and over explicit search
-        # markers — image present means no web search this turn.
+        # markers - image present means no web search this turn.
         _skip_search = (
             _has_image
             or (not _web_autonomous_early and not _explicit_search)
@@ -1401,9 +1401,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # keyboard is recognized identically to "I'm tired".
     _is_conversational = is_conversational_query(latest_user_message)
 
-    # Temperature override slot — currently unused. Infrastructure for
+    # Temperature override slot - currently unused. Infrastructure for
     # per-intent temperature experiments. Tested 0.3 for emotional intent
-    # (v0.15.3): net negative — suppressed coaching frame on one case but
+    # (v0.15.3): net negative - suppressed coaching frame on one case but
     # caused template collapse and register degradation on two others.
     _inference_temperature: float | None = None
 
@@ -1416,7 +1416,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # path in LLMAdapter remains as a fallback for direct vision model routing.
     _vision_description: str | None = None
     if image_data:
-        # Structured log at the trigger point — pairs with vision_entry /
+        # Structured log at the trigger point - pairs with vision_entry /
         # vision_success / vision_failure events emitted from analyze().
         # Lets logs/vision/ tell the full story even when the analyze() call
         # itself short-circuits or raises.
@@ -1462,7 +1462,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # builder so the per-turn <search_confirmation> block fires,
     # and into the post-gen pipeline so the ask-first validator knows when
     # to substitute a canned RLHF refusal with the scripted confirmation.
-    # Explicit search requests bypass ask-first — the user's words ARE
+    # Explicit search requests bypass ask-first - the user's words ARE
     # the confirmation. No need to ask "want me to search?" when they
     # literally said "search for X" or "google that".
     _ask_first_active = bool(
@@ -1493,11 +1493,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         _should_search = False
 
         if _intent_class == "web_search" and _web_autonomous:
-            # Autonomous mode + web_search intent → always search.
+            # Autonomous mode + web_search intent -> always search.
             # The classifier already validated this is a web-worthy query.
             _should_search = True
         elif _intent_class == "web_search" and not _web_autonomous:
-            # Ask-first mode — search gate doesn't apply; the model asks
+            # Ask-first mode - search gate doesn't apply; the model asks
             # for confirmation. But set the thin-vault prefix so the model
             # knows to ask rather than fabricate.
             non_profile_memory = [
@@ -1532,7 +1532,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # Vault citation: track whether non-profile vault records were retrieved.
     # Communicated to M via X-Ember-Vault-Used header + vault_sources SSE event.
     #
-    # When web search fired, vault is NEVER the primary source — suppress
+    # When web search fired, vault is NEVER the primary source - suppress
     # the vault badge entirely to avoid confusing the user. Prior logic
     # only suppressed when vault had profile-only items, but even non-
     # profile tangential vault hits shouldn't get badge credit when the
@@ -1545,7 +1545,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         vault_sources = []
     # Only signal vault-used when retrieval confidence is meaningful.
     # Low-scoring tangential matches (avg < 0.6) should not trigger the
-    # vault citation — the model likely answered from training data, not
+    # vault citation - the model likely answered from training data, not
     # from the weakly-matched vault records in the context packet.
     _has_state_sources = bool(context_packet.state_items)
     if vault_sources and not _has_state_sources:
@@ -1565,10 +1565,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     from src.core.preferences import get as get_pref
     conversational_style = get_pref("conversational_style", "balanced")
 
-    # Bare mode — per-conversation override (body.bare_mode) takes precedence
+    # Bare mode - per-conversation override (body.bare_mode) takes precedence
     # over the preferences.json default. The UI presents
     # bare mode as a per-conversation flame toggle, so the backend must honour
-    # the per-request flag when set. Absent → fall back to the stored default,
+    # the per-request flag when set. Absent -> fall back to the stored default,
     # matching the vault_enabled pattern at line 847.
     if body.bare_mode is not None:
         _bare_mode = bool(body.bare_mode)
@@ -1627,7 +1627,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     "[SELF_NARRATIVE] Audit pass failed (non-fatal): %s", exc,
                 )
 
-            # Skip vault writes for test sessions — prevents eval artifacts
+            # Skip vault writes for test sessions - prevents eval artifacts
             # from accumulating in the user's personal vault.
             if not _skip_vault:
                 write_memory(
@@ -1645,7 +1645,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     metadata=assistant_meta,
                 )
 
-            # State extraction — skip for test sessions to prevent eval leakage
+            # State extraction - skip for test sessions to prevent eval leakage
             if not _skip_vault:
                 threading.Thread(
                     target=_background_state_extraction,
@@ -1673,9 +1673,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     daemon=True,
                 ).start()
 
-            # Ask-first confirmation detection — write pending_confirmation
+            # Ask-first confirmation detection - write pending_confirmation
             # state when Ember offers to search for the user. SYNCHRONOUS
-            # — the background thread was causing a race condition where the
+            # - the background thread was causing a race condition where the
             # user's "Yes" on the next turn arrived before the pending record
             # was written, so the confirmation path never fired.
             if not _skip_vault:
@@ -1684,7 +1684,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     existing_pending=_pending_records,
                 )
 
-            # Deviation detection — async, no latency impact (ADR-026)
+            # Deviation detection - async, no latency impact (ADR-026)
             if not _skip_vault:
                 _prior = None
                 _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
@@ -1703,7 +1703,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         # permission) but NOT on confirm turns (user said Yes, search ran).
         # _ask_first_active=True means this is an ask-first-eligible turn.
         # context_packet.web_items non-empty means the search already ran
-        # (either via confirmation or explicit bypass) — show attribution.
+        # (either via confirmation or explicit bypass) - show attribution.
         _suppress_source_badges = (
             _ask_first_active and not bool(context_packet.web_items)
         )
@@ -1791,7 +1791,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                         full_reply, unsupported or "",
                     )
 
-                # 3.5. Deviation detection (ADR-026) — after grounding, before stream
+                # 3.5. Deviation detection (ADR-026) - after grounding, before stream
                 if not _skip_vault:
                     _prior = None
                     _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
@@ -1803,15 +1803,15 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                         daemon=True,
                     ).start()
 
-                # 3.6. Coaching-frame filter — post-generation, pre-stream.
-                # Skip when the response is a constitutional refusal — refusal
+                # 3.6. Coaching-frame filter - post-generation, pre-stream.
+                # Skip when the response is a constitutional refusal - refusal
                 # text must not be rewritten or stripped by the filter. Short
                 # refusals like "I can't help with that." match coaching-closing
                 # patterns and get deleted, producing a blank response.
                 if not _is_refusal_response(full_reply):
                     from src.llm.coaching_filter import filter_coaching_frame
                     full_reply = filter_coaching_frame(full_reply, _intent_class, _is_conversational)
-                    # Post-coaching empty check — if coaching_filter
+                    # Post-coaching empty check - if coaching_filter
                     # stripped the entire response (e.g. short refusal
                     # matched a closing pattern), refill immediately.
                     if not full_reply or not full_reply.strip():
@@ -1821,13 +1821,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                             "actually trying to figure out."
                         )
 
-                # B-MEM-005 / S1: response is now finalized — promote pending
+                # B-MEM-005 / S1: response is now finalized - promote pending
                 # hedge marks. Done here (not at prompt-build time) so failed
                 # LLM calls or stripped-out hedges don't leave spurious marks.
                 llm_adapter.prompt_builder.conversation_buffer.commit_pending_hedge()
 
                 # 3.7. Post-gen validators (source / vision / ask-first /
-                # empty-guard). Grounded streaming path — this runs before
+                # empty-guard). Grounded streaming path - this runs before
                 # the word-by-word re-stream, so the client sees the
                 # validated text.
                 from src.llm.post_gen_pipeline import run_post_gen_pipeline
@@ -1850,7 +1850,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 )
                 full_reply = _postgen.reply
                 # When the post-gen pipeline substituted the response
-                # (ask-first or web-refusal), the vault badge is stale —
+                # (ask-first or web-refusal), the vault badge is stale -
                 # the substituted text didn't come from the vault.
                 nonlocal _suppress_source_badges
                 _suppress_source_badges = _suppress_source_badges or (
@@ -1859,7 +1859,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 if _suppress_source_badges:
                     vault_sources.clear()
 
-                # FINAL empty guard — catches any case where coaching
+                # FINAL empty guard - catches any case where coaching
                 # filter, post-gen pipeline, or constitutional review
                 # zeroed the response. UAT-015: blank responses must
                 # never reach the client.
@@ -1877,7 +1877,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     text = token if i == len(tokens) - 1 else token + " "
                     yield _emit_chunk(content=text)
 
-                # 5. Web search sources event (if applicable) — suppressed
+                # 5. Web search sources event (if applicable) - suppressed
                 # when ask-first substituted (search hasn't run yet).
                 if used_web_search and context_packet.web_items and not _suppress_source_badges:
                     sources = [
@@ -1888,7 +1888,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     if sources:
                         yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
 
-                # 6. Vault sources event (if applicable) — suppressed when
+                # 6. Vault sources event (if applicable) - suppressed when
                 # the post-gen pipeline substituted the response.
                 if vault_sources and not _suppress_source_badges:
                     yield f"data: {json.dumps({'type': 'vault_sources', 'sources': vault_sources})}\n\n"
@@ -1933,7 +1933,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 yield _emit_final_chunk_and_done()
 
                 full_reply = "".join(accumulated)
-                # Coaching-frame filter — applied to accumulated text.
+                # Coaching-frame filter - applied to accumulated text.
                 # In the fast streaming path, the user has already seen
                 # the raw stream. The filter cleans the version stored
                 # to memory so retrieval doesn't resurface coaching patterns.
@@ -2001,13 +2001,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         intent_class=_intent_class,
     )
 
-    # Coaching-frame filter — post-generation, pre-return.
+    # Coaching-frame filter - post-generation, pre-return.
     # Skip on refusal responses to prevent stripping.
     if not _is_refusal_response(reply):
         from src.llm.coaching_filter import filter_coaching_frame as _filter_cf
         reply = _filter_cf(reply, _intent_class, _is_conversational)
 
-    # B-MEM-005 / S1: response is finalized — commit pending hedge marks now.
+    # B-MEM-005 / S1: response is finalized - commit pending hedge marks now.
     llm_adapter.prompt_builder.conversation_buffer.commit_pending_hedge()
 
     # Post-gen validators (source / vision / ask-first / empty-guard).
@@ -2070,7 +2070,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             metadata=assistant_meta,
         )
 
-    # Background state extraction — skip for test sessions to prevent eval leakage
+    # Background state extraction - skip for test sessions to prevent eval leakage
     if not _skip_vault:
         threading.Thread(
             target=_background_state_extraction,
@@ -2084,7 +2084,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             daemon=True,
         ).start()
 
-    # Commitment detection (ADR-014) — skip for test sessions
+    # Commitment detection (ADR-014) - skip for test sessions
     if not _skip_vault:
         threading.Thread(
             target=_detect_and_write_commitment,
@@ -2092,7 +2092,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             daemon=True,
         ).start()
 
-    # Task detection — skip for test sessions
+    # Task detection - skip for test sessions
     if not _skip_vault:
         threading.Thread(
             target=_detect_task_in_response,
@@ -2100,14 +2100,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             daemon=True,
         ).start()
 
-    # Ask-first confirmation detection — write pending_confirmation
+    # Ask-first confirmation detection - write pending_confirmation
     if not _skip_vault:
         _write_pending_confirmation(
             reply, _raw_user_message, session_id,
             existing_pending=_pending_records,
         )
 
-    # Deviation detection — async, no latency impact (ADR-026)
+    # Deviation detection - async, no latency impact (ADR-026)
     if not _skip_vault:
         _prior = None
         _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()

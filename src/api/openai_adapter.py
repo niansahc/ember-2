@@ -49,6 +49,72 @@ def _is_refusal_response(text: str) -> bool:
     return any(m in lowered for m in _REFUSAL_PATTERNS)
 
 
+def early_return_response(
+    text: str, completion_id: str, *, stream: bool, label: str = ""
+):
+    """Build the correct response type for a canned early-return reply.
+
+    Every pre-generation short-circuit in chat_completions (empty message,
+    override, onboarding, clarification) returns a fixed string. This helper
+    owns the stream-vs-JSON decision so that no individual branch can return
+    a JSON ChatCompletionsResponse when the client asked for SSE. Returning
+    JSON to a streaming client renders as a blank reply with no surfaced
+    error (CLAUDE.md Bug Standard #1).
+
+    When stream is True, emits a single content chunk, a stop chunk, then the
+    [DONE] sentinel. The `label` identifies the calling branch in the log line
+    so the executed path is confirmable at runtime (Bug Standard #6).
+    """
+    logger.info(
+        "[EARLY-RETURN] label=%s stream=%s id=%s", label, stream, completion_id
+    )
+
+    if stream:
+        async def _sse():
+            created = int(time.time())
+            yield "data: " + json.dumps({
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": EMBER_MODEL_ID,
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": text},
+                    "finish_reason": None,
+                }],
+            }) + "\n\n"
+            yield "data: " + json.dumps({
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": EMBER_MODEL_ID,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop",
+                }],
+            }) + "\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(_sse(), media_type="text/event-stream")
+
+    return ChatCompletionsResponse(
+        id=completion_id,
+        object="chat.completion",
+        created=int(time.time()),
+        model=EMBER_MODEL_ID,
+        choices=[
+            ChatCompletionsChoice(
+                index=0,
+                message=ChatCompletionsResponseMessage(
+                    role="assistant", content=text
+                ),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+
 def _log_payload_diagnostics(raw_json: dict) -> None:
     """Log incoming chat completion payload structure for diagnostics.
 
@@ -863,55 +929,24 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     #     no text AND no image parts. Image-only uploads are not empty.
     if (not latest_user_message or not latest_user_message.strip()) and not image_parts:
         logger.warning("[INTERCEPT] Empty user message - returning without pipeline")
-        return ChatCompletionsResponse(
-            id=f"chatcmpl-{uuid.uuid4().hex}",
-            object="chat.completion",
-            created=int(time.time()),
-            model="ember-2",
-            choices=[
-                ChatCompletionsChoice(
-                    index=0,
-                    message=ChatCompletionsResponseMessage(
-                        role="assistant",
-                        content="I didn't receive a message — please try again.",
-                    ),
-                    finish_reason="stop",
-                )
-            ],
+        return early_return_response(
+            "I didn't receive a message. Please try again.",
+            f"chatcmpl-{uuid.uuid4().hex}",
+            stream=bool(body.stream),
+            label="empty",
         )
 
     # --- OVERRIDE DETECTION (pre-generation) ---
     # Jailbreak-class prompts that instruct Ember to ignore her system prompt
-    # are short-circuited here — no context build, no retrieval, no LLM call.
+    # are short-circuited here - no context build, no retrieval, no LLM call.
     if _is_override_attempt(latest_user_message):
         logger.warning("[OVERRIDE] Blocked override attempt: %s", latest_user_message[:80])
         _override_reply = "That's exactly what I'm not going to do. What are you actually trying to figure out?"
-        _override_id = f"chatcmpl-{uuid.uuid4().hex}"
-
-        if body.stream:
-            async def _override_sse():
-                import json as _json
-                for word in _override_reply.split(" "):
-                    yield f"data: {_json.dumps({'id': _override_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {'content': word + ' '}, 'finish_reason': None}]})}\n\n"
-                yield f"data: {_json.dumps({'id': _override_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'ember-2', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
-                yield "data: [DONE]\n\n"
-            return StreamingResponse(_override_sse(), media_type="text/event-stream")
-
-        return ChatCompletionsResponse(
-            id=_override_id,
-            object="chat.completion",
-            created=int(time.time()),
-            model="ember-2",
-            choices=[
-                ChatCompletionsChoice(
-                    index=0,
-                    message=ChatCompletionsResponseMessage(
-                        role="assistant",
-                        content=_override_reply,
-                    ),
-                    finish_reason="stop",
-                )
-            ],
+        return early_return_response(
+            _override_reply,
+            f"chatcmpl-{uuid.uuid4().hex}",
+            stream=bool(body.stream),
+            label="override",
         )
 
     # If image present but no text, use a placeholder so the pipeline runs.
@@ -929,16 +964,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # --- ONBOARDING ---
     if onboarding_service.is_active():
         reply = onboarding_service.handle(latest_user_message)
-        return ChatCompletionsResponse(
-            id=f"chatcmpl-{uuid.uuid4().hex}",
-            object="chat.completion",
-            created=int(time.time()),
-            model="ember-2",
-            choices=[ChatCompletionsChoice(
-                index=0,
-                message=ChatCompletionsResponseMessage(role="assistant", content=reply),
-                finish_reason="stop",
-            )],
+        return early_return_response(
+            reply,
+            f"chatcmpl-{uuid.uuid4().hex}",
+            stream=bool(body.stream),
+            label="onboarding",
         )
     # --- END ONBOARDING ---
 
@@ -1039,60 +1069,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 metadata=_assistant_clar_meta,
             )
 
-        if body.stream:
-            async def _clarification_sse():
-                import json as _json
-                yield (
-                    "data: "
-                    + _json.dumps({
-                        "id": _clarification_id,
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": "ember-2",
-                        "choices": [{
-                            "index": 0,
-                            "delta": {"content": SCRIPTED_CLARIFICATION_RESPONSE},
-                            "finish_reason": None,
-                        }],
-                    })
-                    + "\n\n"
-                )
-                yield (
-                    "data: "
-                    + _json.dumps({
-                        "id": _clarification_id,
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": "ember-2",
-                        "choices": [{
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop",
-                        }],
-                    })
-                    + "\n\n"
-                )
-                yield "data: [DONE]\n\n"
-            return StreamingResponse(
-                _clarification_sse(),
-                media_type="text/event-stream",
-            )
-
-        return ChatCompletionsResponse(
-            id=_clarification_id,
-            object="chat.completion",
-            created=int(time.time()),
-            model="ember-2",
-            choices=[
-                ChatCompletionsChoice(
-                    index=0,
-                    message=ChatCompletionsResponseMessage(
-                        role="assistant",
-                        content=SCRIPTED_CLARIFICATION_RESPONSE,
-                    ),
-                    finish_reason="stop",
-                )
-            ],
+        return early_return_response(
+            SCRIPTED_CLARIFICATION_RESPONSE,
+            _clarification_id,
+            stream=bool(body.stream),
+            label="clarification",
         )
 
     # --- RESOLVE INTER-SESSION TIME GAP (BUG-003) ---

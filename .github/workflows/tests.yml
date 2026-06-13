@@ -37,18 +37,16 @@ jobs:
         # the override applies. Setting the env var gives those paths a
         # valid fallback pointing to a throwaway dir on the runner.
         #
-        # Ignore tests/eval/test_conversation_quality.py — it imports
+        # Ignore tests/eval/test_conversation_quality.py - it imports
         # tests/eval/harness.py which requires the anthropic package
         # (Tier 4 cloud eval only, not in requirements.txt).
         #
-        # Ignore tests/test_streaming_regression.py — it is explicitly
-        # documented as a Tier 3 release-gate test (mocks ollama.chat
-        # but some call path slips through and needs real Ollama).
-        # Tier 3 runs manually before releases, not in Tier 1 CI.
+        # test_streaming_regression.py now runs in CI: ollama.chat and
+        # ollama.embed are mocked, so it is fully self-contained (verified
+        # passing with Ollama unreachable).
         env:
           PRIVATE_VAULT_PATH: ${{ runner.temp }}/ember_test_vault
         run: |
           mkdir -p "$PRIVATE_VAULT_PATH"
           pytest tests/ -q \
-            --ignore=tests/eval/test_conversation_quality.py \
-            --ignore=tests/test_streaming_regression.py
+            --ignore=tests/eval/test_conversation_quality.py

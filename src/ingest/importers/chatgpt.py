@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.core.jsonio import safe_read_json
 from src.ingest.models import NormalizedDocument
 
 
@@ -52,8 +53,9 @@ def load_chatgpt_export(folder_path: str):
     docs = []
 
     for file in folder.glob("conversations-*.json"):
-        with open(file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        # No default: a corrupt export must fail loudly (JsonIoError) rather
+        # than silently importing zero conversations and looking successful.
+        data = safe_read_json(file)
 
         for i, convo in enumerate(data):
             title = convo.get("title", f"chat_{file.stem}_{i}")

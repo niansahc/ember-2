@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from src.core.config import get_private_vault_path
+from src.core.jsonio import JsonIoError
 from src.memory.storage import MemoryStorage
 
 
@@ -18,7 +19,12 @@ def read_memories(memory_type: str = "journal", limit: int = 5):
     memories = []
 
     for file_path in files:
-        memory = storage.read_json(file_path)
+        try:
+            memory = storage.read_json(file_path)
+        except JsonIoError:
+            # A single corrupt/unreadable record must not crash the whole read
+            # (ADR-039). It is logged by safe_read_json; skip it and continue.
+            continue
         # Skip suppressed records (junk flagged by audit tools)
         metadata = memory.get("metadata", {})
         if isinstance(metadata, dict) and metadata.get("quality") == "suppressed":

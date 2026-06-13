@@ -220,30 +220,26 @@ def get_ember_model() -> str:
 
     Supports both local (Ollama) and cloud (Anthropic) models.
     """
-    # Check persisted override first
-    try:
-        import json
-        vault = get_private_vault_path()
-        override_path = vault / "model_override.json"
-        if override_path.exists():
-            data = json.loads(override_path.read_text(encoding="utf-8"))
-            model = data.get("model")
-            if model:
-                return model
-    except Exception:
-        pass
+    # Check persisted override first. safe_read_json returns {} silently for a
+    # missing override (the common case) and logs + returns {} on corruption
+    # (ADR-039), so a bad override file falls back to the env/default model.
+    from src.core.jsonio import safe_read_json
+    vault = get_private_vault_path()
+    override_path = vault / "model_override.json"
+    data = safe_read_json(override_path, default={})
+    if isinstance(data, dict):
+        model = data.get("model")
+        if model:
+            return model
     return os.getenv("EMBER_MODEL", "qwen3:8b")
 
 
 def set_ember_model_override(model: str) -> None:
     """Persist a model selection so it survives API restarts."""
-    import json
+    from src.core.jsonio import safe_write_json
     vault = get_private_vault_path()
     override_path = vault / "model_override.json"
-    override_path.write_text(
-        json.dumps({"model": model}, indent=2),
-        encoding="utf-8",
-    )
+    safe_write_json(override_path, {"model": model})
 
 
 # Cloud model providers and their available models.

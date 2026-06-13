@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.core.config import get_private_vault_path
+from src.core.jsonio import safe_read_json, safe_write_json
 from src.tasks.models import VALID_TASK_STATUSES, TaskRecord
 
 
@@ -178,9 +179,8 @@ class TaskService:
             return file_path
 
         data = self._record_to_dict(record)
-
-        with file_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # Atomic write (ADR-039): a reader never sees a half-written task.
+        safe_write_json(file_path, data)
 
         return file_path
 
@@ -201,14 +201,10 @@ class TaskService:
         records: list[TaskRecord] = []
 
         for file_path in json_files:
-            try:
-                with file_path.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except (json.JSONDecodeError, OSError) as exc:
-                warnings.warn(
-                    f"[TASK_SERVICE] Skipping unreadable file {file_path.name}: {exc}",
-                    stacklevel=2,
-                )
+            # safe_read_json logs corruption (ADR-039) and returns None so a
+            # single bad task file is skipped, not fatal.
+            data = safe_read_json(file_path, default=None)
+            if data is None:
                 continue
 
             record = self._dict_to_record(data, file_path)

@@ -12,6 +12,8 @@ a ValueError before a directory is created or a file is written.
 import json
 from pathlib import Path
 
+from src.core.jsonio import safe_read_json, safe_write_json
+
 
 # Canonical list of valid memory types. Any write to the vault must use
 # one of these. This matches the taxonomy in CLAUDE.md § Memory Record Schema.
@@ -64,12 +66,13 @@ class MemoryStorage:
         return memory_dir
 
     def write_json(self, file_path: Path, data: dict):
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # Atomic write (ADR-039): a reader never sees a half-written record.
+        safe_write_json(file_path, data)
 
     def read_json(self, file_path: Path) -> dict:
-        with open(file_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        # Raises JsonIoError on a corrupt/unreadable file (ADR-039); collection
+        # readers (read_memories, search_memories) catch and skip per file.
+        return safe_read_json(file_path)
 
     def list_memory_files(self, memory_dir: Path):
         return sorted(memory_dir.glob("*.json"), reverse=True)

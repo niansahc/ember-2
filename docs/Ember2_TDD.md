@@ -978,7 +978,7 @@ Reflections should:
 
 # 16. State Layer Design
 
-**Status: Complete (v0.5.2 initial, v0.10.0 auto-extraction).** StateService, StateResolver, StateExtractor, 8 categories, context packet integration, API endpoints, auto-extraction from conversation turns.
+**Status: Complete (v0.5.2 initial, v0.10.0 auto-extraction).** StateService, StateResolver, StateExtractor, 10 categories (active_project, open_loop, current_focus, blocker, routine, priority, next_action, onboarding, timer, pending_confirmation), context packet integration, API endpoints, auto-extraction from conversation turns.
 
 ## 16.1 Why State Exists
 
@@ -1869,6 +1869,41 @@ The API already supports all of these. The frontend is a surface, not a new back
 
 ---
 
+# 26. Conversation Modes
+
+Ember runs in one of three conversation modes. Mode is session-scoped (a
+per-conversation choice, not a global setting), and the active mode must be
+visible in the UI. All three are implemented and UI-surfaced.
+
+**Standard.** The full pipeline. Context assembly, identity rules, nature
+injection, lodestone, and conversational style all apply, and the draft passes
+through the full constitutional review (SafetyPolicyService trigger +
+ResponseReviewService critique/revision).
+
+**Bare (ADR-028).** Personality and grounding layers are stripped: the nature
+document, lodestone injection, identity rules, and conversational style are
+skipped. Constitutional review is reduced to the Minimum Viable Review set
+(position_collapse, sycophancy, embellishment). Vault retrieval, writes, and
+web search remain active. Surfaced as a per-conversation flame toggle; gated by
+a two-layer check (the per-request body.bare_mode override, else the
+preferences default). The post-generation coaching filter still runs, but with
+the personality layers removed the base model behavior is less constrained (a
+documented tradeoff in KNOWN_ISSUES).
+
+**Stateless (ADR-031).** A per-conversation vault toggle. When disabled, Ember
+performs no vault reads or writes: no memory retrieval, state, lodestone, or
+reflection, and nothing is persisted (no conversation, state, or task records).
+Constitutional review still fires and safety logs still persist - governance is
+mode-invariant and safety logs are repo-local, not vault data - but review
+outcomes are not written to the vault. Gated by a two-layer check (the global
+vault_toggle_enabled preference AND the per-request body.vault_enabled flag).
+
+Implementation: src/api/openai_adapter.py resolves the active mode per request
+(_bare_mode; vault_enabled / _skip_vault). See ADR-028 (bare mode) and ADR-031
+(per-conversation vault toggle).
+
+---
+
 # 50. Research
 
 TDD is the single source of truth for research tracking. New relevant research is added to Active Watch Items with full attribution, roadmap version or ADR mapping, and a graduation trigger condition. Research is reviewed at each major release boundary before opening the next sprint.
@@ -1964,8 +1999,7 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 - **Web search Layer 2 pre-classifier** — prompt-based pre-classification for web search trigger decisions. Layer 1 (implemented v0.14.2) uses regex pattern matching: VOLATILE_ENTITY_SIGNALS × STATE_QUERY_PATTERNS dual-condition gate in src/context/policies.py. Layer 2 would add a 50-token Ollama call when Layer 1 is uncertain (entity signal present but no state query pattern, or vice versa) to ask the model: "Does this query require current external data? yes/no." Estimated cost: ~100ms latency per uncertain query, negligible token cost at 50 tokens. Implement only if Layer 1 trigger rate is still insufficient after v0.14.2 eval — may not be needed if the entity-type patterns cover enough of the query space. Eval gate: run eval_web_search.py before and after to measure trigger rate improvement.
   → informs: v0.15.0+ (web search trigger broadening, only if Layer 1 insufficient)
 
-- **Vision model pipeline integration** — llama3.2-vision:11b currently bypasses the cognitive layer entirely. Image analysis requests go through LLMAdapter._chat() with the base system prompt and image data, but skip context assembly (no vault memory, no state, no reflection), identity rules, nature injection, lodestone, and constitutional review. The vision response is not reviewed by SafetyPolicyService or ResponseReviewService. This means image analysis responses have no character consistency, no safety review, and no grounding in the user's vault context. The fix is to wire the vision model through the same PromptBuilder.build_prompt() path as text, passing image_data alongside the full context packet. Constitutional review should run on the vision response identically to text responses. The vision model override in LLMAdapter.generate_response() (line ~147-151) is the insertion point.
-  → partially shipped v0.16.0 (image_data passthrough wired through LLMAdapter.chat); full cognitive layer parity — context assembly, identity rules, constitutional review on vision responses — deferred to post-v0.17.0
+- **Vision model pipeline integration** - RESOLVED (ADR-032, v0.17.1). Image requests no longer bypass the cognitive layer. VisionService.analyze() runs the vision model as a preprocessor and returns a text description; image_data is cleared from the context packet after preprocessing so raw bytes never reach the text model. The description is injected as a <vision_context> section into the full system prompt, so context assembly, identity rules, nature injection, and lodestone all apply identically to text. The draft is reviewed by SafetyPolicyService + ResponseReviewService on the same path as text (src/llm/adapter.py:375 streaming-iter, :556 stream). The legacy direct-to-vision path remains a fallback only when preprocessing returns nothing, and its draft still goes through review. Effective default vision model is qwen3-vl:8b (VisionService fallback when EMBER_VISION_MODEL is unset).
 
 - **ELEPHANT** (ICLR 2026, arXiv) — social sycophancy as face-preservation. Theory: sycophancy is excessive preservation of the user's face via affirming (positive face) or avoiding challenge (negative face). Extends beyond explicit agreement detection to implicit face-preservation patterns. Cited via Kirk et al. socioaffective alignment framework. Design implication: the deviation engine's sycophancy detection currently catches explicit agreement-under-pushback (position_collapse) and hedging-as-avoidance (relational_hedging), but does not name face-preservation as a pattern class. Face-preservation is a distinct behavioral mode — affirming the user's self-image rather than agreeing with their claims. The deviation engine has no detector for this. Log as v0.16.0 candidate: add face-preservation as a named deviation pattern class alongside position_collapse and sycophancy.
   → informs: v0.17.0+ (deviation engine pattern classes, face-preservation detection — deferred from v0.16.0)
@@ -2179,7 +2213,7 @@ This architecture phase is considered successful when:
 - ~~retrieval quality improves through policy, not topic hacks~~ ✓ (policy-weighted ranking, project-scoped boost, 15-case eval harness)
 - ~~source, derived, and reference artifacts are clearly separated~~ ✓ (VALID_MEMORY_TYPES enforced at write time, 17 types)
 - ~~current README, architecture doc, and TDD agree on system direction~~ ✓ (updated v0.10.0)
-- ~~a state layer design exists, even if partially implemented~~ ✓ (fully implemented: StateService, StateResolver, StateExtractor, auto-extraction, 8 categories, context integration)
+- ~~a state layer design exists, even if partially implemented~~ ✓ (fully implemented: StateService, StateResolver, StateExtractor, auto-extraction, 10 categories, context integration)
 - ~~rebuild workflows are documented and testable~~ ✓ (SETUP.md, installer, audit script)
 - ~~constitutional review is integrated end-to-end~~ ✓ (8 principles, triggered post-draft, streaming-compatible)
 - ~~review logs make policy paths inspectable~~ ✓ (logs/safety_reviews/, trigger_result + review_result logged)

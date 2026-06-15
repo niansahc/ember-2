@@ -13,6 +13,11 @@ from pydantic import BaseModel
 logger = logging.getLogger("ember.openai_adapter")
 
 from src.api.limiter import limiter
+from src.api.pregeneration import (
+    RouterContext,
+    TerminalReply,
+    PreGenerationRouter,
+)
 from src.api.sse import sse_chunk, sse_done, sse_sources, sse_vault_sources
 from src.core.config import get_ember_debug
 from src.memory.service import MemoryService
@@ -504,6 +509,76 @@ def _is_override_attempt(message: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Terminal pre-generation interceptors (ADR-040, ADR-041, issue #93 PR b)
+#
+# Each interceptor is an enrichment-independent terminal interceptor: it reads
+# only the RouterContext and either claims the request (returns a TerminalReply)
+# or passes (returns None). They live here, beside their dependencies
+# (_is_override_attempt, onboarding_service), so no symbol moves and existing
+# test patches keep working; the generic dispatch mechanism lives in
+# src/api/pregeneration.py. The single early_return_response funnel that turns
+# a TerminalReply into the correct SSE-vs-JSON response is in chat_completions.
+# ---------------------------------------------------------------------------
+
+_EMPTY_MESSAGE_REPLY = "I didn't receive a message. Please try again."
+_OVERRIDE_REPLY = (
+    "That's exactly what I'm not going to do. "
+    "What are you actually trying to figure out?"
+)
+
+
+def _intercept_empty(ctx: RouterContext) -> Optional[TerminalReply]:
+    """Claim requests with no real content: blank text AND no image parts.
+
+    An image-only upload is not empty - it must pass so vision preprocessing
+    can run. This mirrors the original guard exactly; it reads the
+    already-normalized message, so an image-only upload (whose message has been
+    replaced by the placeholder) is non-empty here regardless.
+    """
+    has_text = bool(ctx.latest_user_message and ctx.latest_user_message.strip())
+    if not has_text and not ctx.image_parts:
+        logger.warning("[INTERCEPT] Empty user message - returning without pipeline")
+        return TerminalReply(_EMPTY_MESSAGE_REPLY, label="empty")
+    return None
+
+
+def _intercept_override(ctx: RouterContext) -> Optional[TerminalReply]:
+    """Claim instruction-override jailbreak attempts before any pipeline work."""
+    if _is_override_attempt(ctx.latest_user_message):
+        logger.warning(
+            "[OVERRIDE] Blocked override attempt: %s",
+            ctx.latest_user_message[:80],
+        )
+        return TerminalReply(_OVERRIDE_REPLY, label="override")
+    return None
+
+
+def _intercept_onboarding(ctx: RouterContext) -> Optional[TerminalReply]:
+    """Claim the request while onboarding is active.
+
+    is_active() is evaluated lazily here (not precomputed into the context) so
+    the empty and override paths never trigger its vault read - they return
+    before this interceptor runs. onboarding_service fully encapsulates the
+    onboarding state writes, so this stays enrichment-independent: handle()
+    needs only the user message.
+    """
+    if onboarding_service.is_active():
+        reply = onboarding_service.handle(ctx.latest_user_message)
+        return TerminalReply(reply, label="onboarding")
+    return None
+
+
+# Ordered terminal chain. Declared order IS precedence and mirrors the
+# historical top-to-bottom short-circuit order: empty, then override, then
+# onboarding. The clarification short-circuit is intentionally NOT here - it
+# writes adapter-level conversation turns keyed by session/project, so it is
+# not enrichment-independent and stays inline until PR c (ADR-041).
+_pre_generation_router = PreGenerationRouter(
+    [_intercept_empty, _intercept_override, _intercept_onboarding]
+)
+
+
 class OpenAIMessage(BaseModel):
     role: Literal["system", "user", "assistant"]
     content: Any  # str normally; list of content parts when files are attached
@@ -915,34 +990,37 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         else:
             latest_user_message = ""
 
-    # (1) Empty message guard - fires only when there is truly nothing:
-    #     no text AND no image parts. Image-only uploads are not empty.
-    if (not latest_user_message or not latest_user_message.strip()) and not image_parts:
-        logger.warning("[INTERCEPT] Empty user message - returning without pipeline")
-        return early_return_response(
-            "I didn't receive a message. Please try again.",
-            f"chatcmpl-{uuid.uuid4().hex}",
-            stream=bool(body.stream),
-            label="empty",
-        )
-
-    # --- OVERRIDE DETECTION (pre-generation) ---
-    # Jailbreak-class prompts that instruct Ember to ignore her system prompt
-    # are short-circuited here - no context build, no retrieval, no LLM call.
-    if _is_override_attempt(latest_user_message):
-        logger.warning("[OVERRIDE] Blocked override attempt: %s", latest_user_message[:80])
-        _override_reply = "That's exactly what I'm not going to do. What are you actually trying to figure out?"
-        return early_return_response(
-            _override_reply,
-            f"chatcmpl-{uuid.uuid4().hex}",
-            stream=bool(body.stream),
-            label="override",
-        )
-
     # If image present but no text, use a placeholder so the pipeline runs.
+    # This runs BEFORE the terminal router so the onboarding interceptor sees
+    # the same (placeholdered) message it always has. The empty interceptor is
+    # unaffected by the reorder: an image-only upload is non-empty here either
+    # way (placeholder fills the text, and image_parts is truthy regardless).
     if image_parts and not latest_user_message.strip():
         logger.warning("[IMAGE] Image upload with no text - %d image part(s)", len(image_parts))
         latest_user_message = "Please describe what you see in this image."
+
+    # --- TERMINAL PRE-GENERATION ROUTER (ADR-040, ADR-041, issue #93 PR b) ---
+    # The empty / override / onboarding short-circuits run as one ordered chain.
+    # A claimed request is turned into the correct SSE-vs-JSON response by the
+    # single early_return_response funnel below - the only terminal early-return
+    # site for these paths, which is what structurally guarantees the A1
+    # stream-vs-JSON invariant. The clarification short-circuit stays inline
+    # further down (it is not enrichment-independent; see ADR-041).
+    _router_completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+    _router_ctx = RouterContext(
+        latest_user_message=latest_user_message,
+        stream=bool(body.stream),
+        image_parts=image_parts,
+        completion_id=_router_completion_id,
+    )
+    _terminal_reply = _pre_generation_router.run(_router_ctx)
+    if _terminal_reply is not None:
+        return early_return_response(
+            _terminal_reply.text,
+            _router_ctx.completion_id,
+            stream=_router_ctx.stream,
+            label=_terminal_reply.label,
+        )
 
     # Extract raw base64 strings from image_url parts (strip data URL prefix).
     image_data: list[str] = []
@@ -950,17 +1028,6 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         url_val = part.get("image_url", {}).get("url", "")
         if ";base64," in url_val:
             image_data.append(url_val.split(";base64,", 1)[1])
-
-    # --- ONBOARDING ---
-    if onboarding_service.is_active():
-        reply = onboarding_service.handle(latest_user_message)
-        return early_return_response(
-            reply,
-            f"chatcmpl-{uuid.uuid4().hex}",
-            stream=bool(body.stream),
-            label="onboarding",
-        )
-    # --- END ONBOARDING ---
 
     # --- TEST SESSION FLAG ---
     is_test = request.headers.get("X-Test-Session", "").strip().lower() == "true"

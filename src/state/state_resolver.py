@@ -189,9 +189,16 @@ class StateResolver:
         # Timer records have their own resolution semantics (latest-per-
         # timer_id with status filtering) and are excluded from both the
         # single-category and multi-category buckets here.
+        # pending_confirmation is internal ask-first control flow consumed
+        # directly by the chat endpoint (_check_pending_confirmation). It is
+        # never surfaced as "current state" in the prompt. Excluding it here
+        # also prevents append-only resolved pendings (whose original keeps
+        # metadata.resolved=False) from leaking into context (ADR-038).
         single_records = [
             r for r in records
-            if r.type not in MULTI_RECORD_CATEGORIES and r.type != "timer"
+            if r.type not in MULTI_RECORD_CATEGORIES
+            and r.type != "timer"
+            and r.type != "pending_confirmation"
         ]
         multi_records = [r for r in records if r.type in MULTI_RECORD_CATEGORIES]
 

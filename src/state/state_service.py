@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.core.config import get_private_vault_path
+from src.core.jsonio import safe_write_json
 from src.state.models import VALID_STATE_CATEGORIES, StateRecord
 
 logger = logging.getLogger("ember.state_service")
@@ -212,8 +213,11 @@ class StateService:
 
         data = self._record_to_dict(record)
 
-        with file_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # Atomic write (ADR-039): a torn write can no longer leave a truncated
+        # record file in the state directory. safe_write_json writes to a temp
+        # file and os.replace()s it onto the target, so a reader (read_all)
+        # sees either no file or a complete one, never a half-written record.
+        safe_write_json(file_path, data)
 
         return file_path
 

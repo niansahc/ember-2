@@ -8,10 +8,11 @@ They are cached in memory after first load to avoid re-reading from disk
 on every query. The cache is invalidated when an index is written to.
 """
 
-import json
 import logging
 import os
 from pathlib import Path
+
+from src.core.jsonio import safe_read_json, safe_write_json
 
 logger = logging.getLogger("ember.vector_index")
 
@@ -70,25 +71,29 @@ class VectorIndex:
 
             logger.info("[VECTOR_INDEX] Cache miss - loading: %s (%.2f MB)", index_path.name, size_mb)
 
-            with index_path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
+            # Derived/rebuildable index: a corrupt file is skipped, not fatal.
+            # default=None makes safe_read_json return None (logged) instead of
+            # raising; we treat that the same as an empty index (ADR-039).
+            data = safe_read_json(index_path, default=None)
 
             if isinstance(data, list):
                 _index_cache[key] = data
                 return data
 
-            logger.warning("[VECTOR_INDEX] Invalid index format (expected list): %s", index_path)
+            if data is not None:
+                logger.warning("[VECTOR_INDEX] Invalid index format (expected list): %s", index_path)
             return []
 
-        except (json.JSONDecodeError, OSError) as exc:
+        except OSError as exc:
+            # stat() on the index can still fail before the read is attempted.
             logger.warning("[VECTOR_INDEX] Failed to load index %s: %s", index_path, exc)
             return []
 
     def save_index(self, index_path: Path, index_data: list) -> None:
-        index_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with index_path.open("w", encoding="utf-8") as f:
-            json.dump(index_data, f, ensure_ascii=False)
+        # Atomic write (ADR-039): a torn write can no longer truncate the
+        # prior index. On failure safe_write_json raises and the old file
+        # (and cache) are left untouched, so we invalidate only after success.
+        safe_write_json(index_path, index_data)
 
         # Invalidate cache for this index — next read will load fresh data
         key = str(index_path)

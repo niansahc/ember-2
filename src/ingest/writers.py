@@ -1,7 +1,7 @@
 from pathlib import Path
-import json
 import logging
 
+from src.core.jsonio import safe_write_json
 from src.retrieval.embed_memory import embed_text
 from src.retrieval.vector_index import VectorIndex
 
@@ -34,8 +34,9 @@ def write_chunks_to_vault(chunks, vault_path):
             "metadata": chunk.metadata,
         }
 
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(chunk_payload, f, ensure_ascii=False, indent=2)
+        # Atomic write (ADR-039): an interrupted chunk write can no longer
+        # leave a truncated file where a valid chunk already existed.
+        safe_write_json(file_path, chunk_payload)
 
         # ADR-033: assistant-role chunks from ChatGPT import write to flat
         # storage for thread reconstruction but are not embedded or indexed.

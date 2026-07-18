@@ -13,8 +13,13 @@ def _make_record(state_type: str, text: str, days_ago: int = 0, resolved: bool =
     metadata = {"state_type": state_type}
     if resolved:
         metadata["resolved"] = True
+    # Real state record ids are unique (make_record spins the timestamp to
+    # guarantee it). Fold the distinct text into the fixture id so two records
+    # of the same type/age do not collide — an id collision is an impossible
+    # state that the resolved-id suppression (B-STATE-001) is not expected to
+    # tolerate.
     return StateRecord(
-        id=f"test-{state_type}-{days_ago}",
+        id=f"test-{state_type}-{days_ago}-{text}",
         timestamp=ts,
         type=state_type,
         text=text,

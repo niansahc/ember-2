@@ -202,6 +202,14 @@ class StateResolver:
         ]
         multi_records = [r for r in records if r.type in MULTI_RECORD_CATEGORIES]
 
+        # Derived resolved-id set (B-STATE-001 / ADR-038). Honors both the
+        # legacy metadata.resolved flag AND append-only original_id tombstones,
+        # so a resolved open_loop is suppressed by the tombstone that points at
+        # it even though the original record still carries resolved=False.
+        # Called on the class (pure staticmethod over the records list) so the
+        # resolver does not depend on the injected service exposing it.
+        resolved_ids = StateService.resolved_ids(records)
+
         items = []
 
         # Single-record: latest wins per category, then staleness filter.
@@ -223,8 +231,11 @@ class StateResolver:
             # Skip deleted records
             if record.metadata and record.metadata.get("deleted"):
                 continue
-            # Skip resolved records
-            if record.metadata and record.metadata.get("resolved"):
+            # Skip resolved records — honors both the record's own resolved
+            # flag and an append-only original_id tombstone pointing at it
+            # (B-STATE-001). resolved_ids already includes the tombstone's own
+            # id, so tombstones are suppressed here too.
+            if record.id in resolved_ids:
                 continue
             # Skip stale multi-record items (next_action, open_loop)
             if record.timestamp and record.timestamp < staleness_cutoff:

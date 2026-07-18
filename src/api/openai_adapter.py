@@ -18,7 +18,7 @@ from src.api.pregeneration import (
     TerminalReply,
     PreGenerationRouter,
 )
-from src.api.sse import sse_chunk, sse_done, sse_sources, sse_vault_sources
+from src.api.sse import sse_chunk, sse_done, sse_sources, sse_status, sse_vault_sources
 from src.core.config import get_ember_debug
 from src.memory.service import MemoryService
 from src.memory.read_memory import read_memories
@@ -1766,8 +1766,12 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         )
 
         def _status_event(status: str) -> str:
-            """Format a status SSE event for the UI."""
-            return sse_chunk(completion_id, status=status)
+            """Format a status SSE event for the UI.
+
+            ADR-040 v2 (B-SSE-001): status is a top-level typed frame, not a
+            chat.completion.chunk delta, so completion_id is not part of it.
+            """
+            return sse_status(status)
 
         def _emit_chunk(content: str | None, finish_reason: str | None = None) -> str:
             """Format a chat.completion.chunk SSE event.

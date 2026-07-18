@@ -3,7 +3,14 @@
 **Status:** Accepted
 **Date:** 2026-06-13
 **Target:** v0.18.1
-**Contract version:** 1
+**Contract version:** 2
+
+**Version history:**
+- v1 (2026-06-13) -- initial freeze of the current wire format (issue #93 PR (a)).
+- v2 (2026-07-18) -- B-SSE-001 resolution: status moved from a Family-1
+  `choices[0].delta.status` chunk to a top-level typed frame
+  `{"type": "status", "content": "<value>"}`. See "Family 2" and "Resolved
+  (B-SSE-001)" below.
 
 ## Context
 
@@ -33,20 +40,23 @@ Every frame is one SSE line: `data: <payload>\n\n`. Response `media_type` is
 
 Key order is fixed: `id, object, created, model, choices`; and within a choice:
 `index, delta, finish_reason`. `created` is the only non-deterministic field
-(wall-clock seconds). `delta` has exactly three shapes:
+(wall-clock seconds). `delta` has exactly two shapes:
 
 - **content** -- `{"content": "<text>"}`, `finish_reason: null`. The initial
   typing indicator is a content frame with `content == ""`.
-- **status** -- `{"status": "<value>"}`, `finish_reason: null`. The status
-  value is one of exactly: `searching`, `review_pending`, `review_complete`,
-  `verifying`, `refining`. (`searching`/`verifying`/`refining` are emitted by
-  `openai_adapter`; `review_pending`/`review_complete` are `StatusSignal` names
-  from `src/llm/adapter.py`, the ADR-036 review signals, emitted on the wire
-  today.)
 - **terminal** -- `{}`, `finish_reason: "stop"`.
 
-### Family 2 -- Ember citation frames (NOT OpenAI; top-level `type`)
+(Status is NOT a delta shape as of v2 -- it is a Family-2 top-level frame; see
+below.)
 
+### Family 2 -- Ember typed frames (NOT OpenAI; top-level `type`)
+
+- **status** -- `{"type": "status", "content": "<value>"}`. The value is one of
+  exactly: `searching`, `review_pending`, `review_complete`, `verifying`,
+  `refining`. (`searching`/`verifying`/`refining` are emitted by
+  `openai_adapter`; `review_pending`/`review_complete` are `StatusSignal` names
+  from `src/llm/adapter.py`, the ADR-036 review signals.) The phase is carried
+  in `content` -- the field the UI parser reads. Emitted by `sse_status()`.
 - **web sources** -- `{"type": "sources", "sources": [{"title": "<str>", "url": "<str>"}, ...]}`
 - **vault sources** -- `{"type": "vault_sources", "sources": [{"type": "<state|conversation|...>", "timestamp": "<iso>", "summary": "<str>"}, ...]}`
 
@@ -61,17 +71,22 @@ Optional status frames -> initial `content: ""` -> content tokens ->
 `[DONE]`. Canned early-return paths emit a single content frame -> `stop` ->
 `[DONE]` (no status or sources).
 
-## Known discrepancy (B-SSE-001)
+## Resolved (B-SSE-001)
 
-The backend ships status as `choices[0].delta.status` (a Family-1 delta),
-documented above as the actual current contract. The UI parser
-(`ember.js`) instead checks for a **top-level** `{"type": "status"}` frame and
-therefore silently drops every status event today. This contract freezes the
-**current backend shape** (`delta.status`); the golden tests assert it as-is.
-Reconciling the mismatch (the UI reading `delta.status`, or the backend moving
-status to a top-level frame) is a behavior change executed under the change
-procedure below, tracked as B-SSE-001 in KNOWN_ISSUES. It was deliberately NOT
-folded into the byte-for-byte serializer consolidation.
+In v1 the backend shipped status as `choices[0].delta.status` (a Family-1
+delta), while the UI parser (`ember.js`) checked for a **top-level** frame with
+a `content` field -- so every status event was silently dropped. v2 resolves
+this by moving status to a top-level typed frame,
+`{"type": "status", "content": "<value>"}`, a sibling of the `sources` /
+`vault_sources` frames and consistent with them (all Family-2 frames are
+top-level typed). Because the v1 `delta.status` frames were never consumed by
+the UI, no working behavior was broken by the move.
+
+This was executed under the change procedure below: the backend serializer
+(`sse_status()`) and the golden tests were updated in lockstep with this ADR and
+the contract-version bump (v1 -> v2). The matching UI parser consolidation lands
+in the `ember-2-ui` repo; because the UI already reads the top-level `content`
+field, the backend change alone restores status delivery.
 
 ## Change procedure (the unfreeze rule)
 
@@ -86,8 +101,8 @@ coordinated change set that does all four:
 "Frozen" means no event-shape change lands in one repository without the
 matching change in the other and a contract-version bump. A backend-only or
 UI-only event-shape change is a contract violation -- it is exactly the silent
-break this ADR exists to prevent. The B-SSE-001 status reconciliation will be
-the first worked example of this procedure.
+break this ADR exists to prevent. The B-SSE-001 status reconciliation (v1 -> v2)
+was the first worked example of this procedure.
 
 ## Consequences
 

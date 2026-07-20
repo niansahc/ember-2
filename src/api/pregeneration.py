@@ -43,7 +43,7 @@ exactly one funnel and keeping this module free of any response-builder import.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Generic, Optional, Sequence, TypeVar
 
 if TYPE_CHECKING:
@@ -102,13 +102,29 @@ class GenerationWork:
     """Mutable per-request working state for the Phase B generation-prep builders.
 
     Holds the evolving user message - rewritten at several prep sites
-    (confirmation override, task / timer system-prefixes, thin-vault offer) - and
-    the values those builders derive for the generation handler. NOT frozen and
-    NOT an interceptor input: only the Phase B builders and the generation
-    handler touch it.
+    (confirmation override, task / timer system-prefixes) - and the values those
+    builders derive for the generation handler. NOT frozen and NOT an interceptor
+    input: only the Phase B builders and the generation handler touch it.
+
+    raw_message is the clean pre-prefix snapshot of the query (defaults to the
+    message at construction). The confirmation builder overwrites BOTH message
+    and raw_message with the original deferred query on a confirmed web search;
+    the task and timer builders prefix only message, leaving raw_message clean
+    for _write_pending_confirmation. confirmation_* / pending_records carry the
+    confirmation builder's outputs to the generation handler.
     """
 
     message: str
+    raw_message: str = ""
+    confirmation_web_items: list = field(default_factory=list)
+    confirmation_confirmed: bool = False
+    confirmation_search_failed: bool = False
+    pending_records: list = field(default_factory=list)
+
+    def __post_init__(self):
+        # Snapshot the clean message when a caller does not pass raw_message.
+        if not self.raw_message:
+            self.raw_message = self.message
 
 
 @dataclass(frozen=True)

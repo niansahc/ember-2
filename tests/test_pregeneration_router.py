@@ -259,6 +259,17 @@ def test_generation_work_is_mutable():
     assert work.message == "hello [system-prefixed]"
 
 
+def test_generation_work_defaults_and_prep_fields():
+    # raw_message snapshots the message at construction (the clean pre-prefix
+    # query); the confirmation-derived fields start empty.
+    work = GenerationWork(message="hello")
+    assert work.raw_message == "hello"
+    assert work.confirmation_web_items == []
+    assert work.confirmation_confirmed is False
+    assert work.confirmation_search_failed is False
+    assert work.pending_records == []
+
+
 # ---------------------------------------------------------------------------
 # Enrichment-dependent terminal: clarification (PR c migration).
 # Reads only the frozen GenerationContext; writes the two conversation turns as

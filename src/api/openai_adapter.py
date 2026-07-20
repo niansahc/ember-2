@@ -15,6 +15,8 @@ logger = logging.getLogger("ember.openai_adapter")
 from src.api.limiter import limiter
 from src.api.pregeneration import (
     RouterContext,
+    GenerationContext,
+    GenerationWork,
     TerminalReply,
     PreGenerationRouter,
 )
@@ -569,14 +571,78 @@ def _intercept_onboarding(ctx: RouterContext) -> Optional[TerminalReply]:
     return None
 
 
-# Ordered terminal chain. Declared order IS precedence and mirrors the
+def _intercept_clarification(ctx: GenerationContext) -> Optional[TerminalReply]:
+    """Claim bare-marker queries ("google please", "look it up") that carry an
+    explicit web marker but no search content, before any classifier/search
+    dispatch (B2).
+
+    Enrichment-DEPENDENT terminal (ADR-042): unlike empty/override/onboarding it
+    reads enrichment-resolved values off the frozen GenerationContext. It uses
+    the memoized policy (no re-classification) and, unless the vault is skipped,
+    writes both conversation turns keyed by the resolved session/project so the
+    NEXT turn's dispatch can detect awaiting_search_content on the assistant
+    record. Terminal, so nothing downstream consumes those writes this turn. It
+    reads only the frozen context and never mutates it. The scripted reply shares
+    the request's unified completion_id via the single early_return_response
+    funnel at the call site.
+    """
+    if not ctx.policy.emit_clarification:
+        return None
+
+    from src.context.policies import SCRIPTED_CLARIFICATION_RESPONSE
+
+    logger.warning("[CLARIFY] emit clarification, bypass classifier+search")
+
+    # Write both turns so the next-turn handler can detect awaiting_search_content
+    # on the assistant record. Skipped in test/stateless mode (skip_vault).
+    if not ctx.skip_vault:
+        _user_clar_meta = {
+            "role": "user",
+            "content_kind": "user_content",
+            "session_id": ctx.session_id,
+        }
+        _assistant_clar_meta = {
+            "role": "assistant",
+            "content_kind": "answer",
+            "session_id": ctx.session_id,
+            "source": "clarification",
+            "awaiting_search_content": True,
+        }
+        if ctx.project_id:
+            _user_clar_meta["project_id"] = ctx.project_id
+            _assistant_clar_meta["project_id"] = ctx.project_id
+        write_memory(
+            text=ctx.raw_user_message,
+            memory_type="conversation",
+            source="chat",
+            tags=["conversation"],
+            metadata=_user_clar_meta,
+        )
+        write_memory(
+            text=SCRIPTED_CLARIFICATION_RESPONSE,
+            memory_type="conversation",
+            source="chat",
+            tags=["conversation", "clarification"],
+            metadata=_assistant_clar_meta,
+        )
+
+    return TerminalReply(SCRIPTED_CLARIFICATION_RESPONSE, label="clarification")
+
+
+# Pre-enrichment terminal chain. Declared order IS precedence and mirrors the
 # historical top-to-bottom short-circuit order: empty, then override, then
-# onboarding. The clarification short-circuit is intentionally NOT here - it
-# writes adapter-level conversation turns keyed by session/project, so it is
-# not enrichment-independent and stays inline until PR c (ADR-041).
+# onboarding. These are enrichment-INDEPENDENT (RouterContext only).
 _pre_generation_router = PreGenerationRouter(
     [_intercept_empty, _intercept_override, _intercept_onboarding]
 )
+
+# Post-enrichment terminal chain (ADR-042 PR c). Runs over the frozen
+# GenerationContext after the Phase A value builders resolve session/project/
+# vault and before the Phase B prep builders. Clarification is the only
+# enrichment-dependent terminal; it kept its historical position (before
+# confirmation/task/timer) so a bare-marker turn short-circuits before any of
+# their side effects run.
+_enriched_generation_router = PreGenerationRouter([_intercept_clarification])
 
 
 class OpenAIMessage(BaseModel):
@@ -943,6 +1009,267 @@ def _ensure_session(session_id: str, first_user_message: str, *, test: bool = Fa
     logger.info("[SESSION] Created session %s: %s", session_id, title)
 
 
+# ---------------------------------------------------------------------------
+# Phase A enrichment value builders (ADR-042, issue #93 PR c).
+#
+# These resolve the per-request identity/routing values into the frozen
+# GenerationContext, AFTER the RouterContext-stage terminals (empty / override /
+# onboarding) have passed and BEFORE the enrichment-dependent clarification
+# terminal and the Phase B message-mutating prep builders run. Order within the
+# assembler mirrors the historical inline order exactly: is_test, then vault
+# toggle, then session ensure, then project resolution.
+# ---------------------------------------------------------------------------
+
+def _resolve_is_test(request) -> bool:
+    """Test-session flag from the X-Test-Session header."""
+    return request.headers.get("X-Test-Session", "").strip().lower() == "true"
+
+
+def _resolve_vault_enabled(body) -> bool:
+    """Effective per-request vault flag.
+
+    The global preferences toggle wins: when vault_toggle_enabled is False the
+    feature is off as a product, so the per-request body flag is ignored and the
+    vault stays enabled (stateless mode is a per-request opt-in, not a global
+    kill switch). Mirrors the original inline logic exactly.
+    """
+    _vault_global_enabled = True
+    try:
+        from src.core.preferences import read as _read_prefs
+        _vault_global_enabled = _read_prefs().get("vault_toggle_enabled", True)
+    except Exception:
+        pass
+    return body.vault_enabled if _vault_global_enabled else True
+
+
+def _resolve_project(session_id: str):
+    """Resolve (project_id, project_name) from the session record.
+
+    project_id is read from the session metadata; project_name is the project
+    record's canonical text field. Both are non-fatal - any error yields None so
+    the request proceeds without project context. Note (behavior-preserving
+    wart): this reads the vault regardless of skip_vault, exactly as the original
+    inline block did; no test guard is added here.
+    """
+    project_id = None
+    project_name = None
+    try:
+        session_rec = get_session(session_id)
+        if session_rec:
+            project_id = session_rec.get("metadata", {}).get("project_id")
+    except Exception:
+        pass  # Non-fatal - proceed without project context
+    if project_id:
+        try:
+            from src.memory.project import get_project
+            project_rec = get_project(project_id)
+            if project_rec:
+                # Project name is canonically stored in record["text"]
+                # (see src/memory/project.py:create_project).
+                project_name = project_rec.get("text") or None
+        except Exception:
+            project_name = None  # Non-fatal - proceed without project name
+    return project_id, project_name
+
+
+def _build_generation_context(
+    request,
+    body,
+    *,
+    session_id: str,
+    latest_user_message: str,
+    completion_id: str,
+) -> GenerationContext:
+    """Run the Phase A builders and assemble the frozen GenerationContext.
+
+    completion_id is carried in from the request's RouterContext so one id spans
+    the pre-router terminals, the clarification terminal, and the final
+    generation response. raw_user_message snapshots the normalized message at the
+    Phase A->B boundary (before any prep prefix injection). policy memoizes the
+    single classify_query call the clarification terminal and the downstream
+    routing all consume.
+    """
+    is_test = _resolve_is_test(request)
+    vault_enabled = _resolve_vault_enabled(body)
+    # Vault is skipped if either the test flag is set OR vault is disabled.
+    skip_vault = is_test or not vault_enabled
+
+    _ensure_session(session_id, latest_user_message, test=skip_vault)
+
+    project_id, project_name = _resolve_project(session_id)
+
+    from src.context.policies import classify_query
+    policy = classify_query(latest_user_message)
+
+    return GenerationContext(
+        session_id=session_id,
+        project_id=project_id,
+        project_name=project_name,
+        is_test=is_test,
+        vault_enabled=vault_enabled,
+        skip_vault=skip_vault,
+        completion_id=completion_id,
+        stream=bool(body.stream),
+        policy=policy,
+        raw_user_message=latest_user_message,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase B generation-prep builders (ADR-042, issue #93 PR c).
+#
+# These run AFTER the enriched clarification terminal passes and BEFORE the
+# generation handler. Each operates on the mutable GenerationWork: work.message
+# is the evolving query (rewritten with system prefixes for the model), while
+# work.raw_message stays the clean pre-prefix snapshot _write_pending_confirmation
+# needs. Logic, order, and side effects mirror the previous inline blocks exactly.
+# Runtime-identical to the originals; only the structure changed.
+# ---------------------------------------------------------------------------
+
+def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> None:
+    """Pending-confirmation check (pre-generation).
+
+    If Ember previously asked "want me to search for that?" and the user is now
+    responding, interpret the response via LLM and route accordingly. A confirmed
+    web_search runs the deferred search on the ORIGINAL stored query and
+    overwrites both work.message and work.raw_message with it (so the stored
+    search query stays clean). Sets the confirmation-derived values the generation
+    handler consumes. Gated on is_test.
+    """
+    if not gen_ctx.is_test:
+        _confirmation_result, work.pending_records = _check_pending_confirmation(
+            gen_ctx.session_id, work.message
+        )
+    else:
+        _confirmation_result, work.pending_records = None, []
+    if _confirmation_result is not None:
+        if _confirmation_result["confirmed"] and _confirmation_result["action"] == "web_search":
+            work.confirmation_confirmed = True
+            _original_query = _confirmation_result["query"]
+            work.message = _original_query
+            work.raw_message = _original_query
+            try:
+                from src.tools.web_search import web_search
+                work.confirmation_web_items = web_search(_original_query)
+                logger.info("[CONFIRM] Executing deferred web search for: %s",
+                            _original_query[:80])
+            except Exception as exc:
+                logger.warning("[CONFIRM] Deferred web search failed: %s", exc)
+                work.confirmation_search_failed = True
+        elif not _confirmation_result["confirmed"]:
+            pass
+
+
+def _apply_tasks(gen_ctx: GenerationContext, work: GenerationWork) -> None:
+    """Task creation (pre-generation).
+
+    Path 1: explicit task request ("create a task for X"). Path 2: pending offer
+    confirmation ("yes" after Ember offered a task). Prefixes work.message with a
+    system note so Ember confirms naturally. Gated on is_test. Vault writes via
+    create_task_record.
+    """
+    from src.tasks.task_handler import (
+        detect_explicit_task_request,
+        check_pending_confirmation,
+        create_task as create_task_record,
+    )
+
+    explicit_task_titles = detect_explicit_task_request(work.message) if not gen_ctx.is_test else []
+    if explicit_task_titles:
+        created_titles = []
+        failed_titles = []
+        for task_title in explicit_task_titles:
+            result = create_task_record(
+                title=task_title,
+                source="user_input",
+                session_id=gen_ctx.session_id,
+                project_id=gen_ctx.project_id,
+            )
+            if result.created:
+                created_titles.append(task_title)
+            else:
+                logger.warning("[TASK] Write failed for '%s': %s", task_title, result.error)
+                failed_titles.append(task_title)
+
+        # Inject system context so Ember confirms naturally
+        if created_titles:
+            titles_str = ", ".join(f'"{t}"' for t in created_titles)
+            work.message = f"[System: tasks created - {titles_str}] {work.message}"
+
+    pending_result = check_pending_confirmation(
+        session_id=gen_ctx.session_id,
+        user_message=work.message,
+        project_id=gen_ctx.project_id,
+    ) if not gen_ctx.is_test else None
+    if pending_result is not None:
+        if pending_result.created and pending_result.task_titles:
+            titles_str = ", ".join(f'"{t}"' for t in pending_result.task_titles)
+            work.message = f'[System: tasks created - {titles_str}] {work.message}'
+        elif not pending_result.created:
+            work.message = f'[System: user declined task creation] {work.message}'
+
+
+def _apply_timers(gen_ctx: GenerationContext, work: GenerationWork) -> None:
+    """Timer detection (pre-generation) - BUG-004.
+
+    Three intent paths, each fully non-fatal: start (write a running timer),
+    stop (write a stopped record for the most recent active timer), check (inject
+    elapsed-time status). Prefixes work.message with the immediate confirmation
+    note. Skipped when skip_vault (timer writes are vault writes). The em dash in
+    the stop/check notes is written as \\u2014 so the source stays ASCII while the
+    runtime prompt text is byte-identical to the original.
+    """
+    if not gen_ctx.skip_vault:
+        try:
+            from src.state.timer_service import (
+                detect_check_timer,
+                detect_start_timer,
+                detect_stop_timer,
+                format_elapsed,
+                get_active_timers,
+                start_timer,
+                stop_timer,
+            )
+
+            timer_label = detect_start_timer(work.message)
+            if timer_label:
+                try:
+                    start_timer(label=timer_label, session_id=gen_ctx.session_id)
+                    work.message = (
+                        f'[System: timer started for "{timer_label}"] {work.message}'
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[TIMER] Failed to start timer: %s", exc)
+            elif detect_stop_timer(work.message) or detect_check_timer(work.message):
+                try:
+                    active = get_active_timers()
+                    wants_stop = detect_stop_timer(work.message)
+                    if active:
+                        statuses = []
+                        for t in active:
+                            started_at = (t.metadata or {}).get("started_at", "")
+                            statuses.append(f'"{t.text}" {format_elapsed(started_at)}')
+                        statuses_str = "; ".join(statuses)
+                        if wants_stop:
+                            most_recent = active[0]
+                            stop_timer(timer_id=most_recent.metadata["timer_id"])
+                            work.message = (
+                                f"[System: timer stopped \u2014 was {statuses_str}] {work.message}"
+                            )
+                        else:
+                            work.message = (
+                                f"[System: active timers \u2014 {statuses_str}] {work.message}"
+                            )
+                    else:
+                        note = "no active timer to stop" if wants_stop else "no active timers"
+                        work.message = f"[System: {note}] {work.message}"
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[TIMER] Failed to query/stop timers: %s", exc)
+        except Exception as exc:  # noqa: BLE001
+            # Defensive: timer module load failures should never break a chat request.
+            logger.warning("[TIMER] Detection block failed: %s", exc)
+
+
 @router.post("/v1/chat/completions", response_model=ChatCompletionsResponse)
 @limiter.limit("30/minute")
 async def chat_completions(request: Request, body: ChatCompletionsRequest):
@@ -1029,108 +1356,41 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         if ";base64," in url_val:
             image_data.append(url_val.split(";base64,", 1)[1])
 
-    # --- TEST SESSION FLAG ---
-    is_test = request.headers.get("X-Test-Session", "").strip().lower() == "true"
-
-    # --- VAULT TOGGLE ---
-    # When vault_enabled=False, skip all vault reads and writes.
-    # The model runs in stateless mode: no memory retrieval, no state,
-    # no lodestone, no reflections. Constitutional review still runs.
-    # Check global toggle first - if the feature is disabled globally,
-    # vault_enabled is always True regardless of per-request setting.
-    _vault_global_enabled = True
-    try:
-        from src.core.preferences import read as _read_prefs
-        _vault_global_enabled = _read_prefs().get("vault_toggle_enabled", True)
-    except Exception:
-        pass
-    vault_enabled = body.vault_enabled if _vault_global_enabled else True
-    # Combine: vault is disabled if either test flag OR vault_enabled=False
-    _skip_vault = is_test or not vault_enabled
-
-    # --- ENSURE SESSION EXISTS ---
-    _ensure_session(session_id, latest_user_message, test=_skip_vault)
-
-    # --- RESOLVE PROJECT CONTEXT ---
-    # Look up the session's project_id so retrieval can boost project-relevant memories.
-    # Also resolve the project_name so the prompt builder can surface it to the model
-    # as an explicit <active_project> context section (BUG-002).
-    project_id = None
-    project_name: str | None = None
-    try:
-        session_rec = get_session(session_id)
-        if session_rec:
-            project_id = session_rec.get("metadata", {}).get("project_id")
-    except Exception:
-        pass  # Non-fatal - proceed without project context
-
-    if project_id:
-        try:
-            from src.memory.project import get_project
-            project_rec = get_project(project_id)
-            if project_rec:
-                # Project name is canonically stored in record["text"]
-                # (see src/memory/project.py:create_project).
-                project_name = project_rec.get("text") or None
-        except Exception:
-            project_name = None  # Non-fatal - proceed without project name
-
-    # --- BARE-MARKER CLARIFICATION SHORT-CIRCUIT (B2) ---
-    # When the user invokes an explicit web marker ("google please",
-    # "look it up", "search the web for me") but provides no actual
-    # search content, route to a hardcoded clarification response
-    # rather than dispatching a useless bare query to SearXNG.
-    #
-    # Bypasses constitutional review. The clarification text is a
-    # hardcoded trusted string identical in trust class to
-    # SCRIPTED_ASK_FIRST_RESPONSE substitution.
-    from src.context.policies import (
-        SCRIPTED_CLARIFICATION_RESPONSE,
-        classify_query as _classify_for_clarification,
+    # --- PHASE A: build the enrichment-resolved GenerationContext (ADR-042) ---
+    # Resolve is_test / vault toggle / skip_vault / project, ensure the session,
+    # and memoize the query policy into one frozen context. completion_id is
+    # carried forward from the router so a single id spans every early-return and
+    # the final response. The downstream generation handler still reads the
+    # individual locals below; they are now sourced from the frozen context so
+    # behavior is unchanged while the values live in one place.
+    gen_ctx = _build_generation_context(
+        request,
+        body,
+        session_id=session_id,
+        latest_user_message=latest_user_message,
+        completion_id=_router_completion_id,
     )
-    _clarification_check_policy = _classify_for_clarification(latest_user_message)
-    if _clarification_check_policy.emit_clarification:
-        logger.warning("[CLARIFY] emit clarification, bypass classifier+search")
-        _clarification_id = f"chatcmpl-{uuid.uuid4().hex}"
+    is_test = gen_ctx.is_test
+    vault_enabled = gen_ctx.vault_enabled
+    _skip_vault = gen_ctx.skip_vault
+    project_id = gen_ctx.project_id
+    project_name = gen_ctx.project_name
 
-        # Write both turns so the next-turn handler can detect
-        # awaiting_search_content on the assistant record.
-        if not (is_test or not vault_enabled):
-            _user_clar_meta = {
-                "role": "user",
-                "content_kind": "user_content",
-                "session_id": session_id,
-            }
-            _assistant_clar_meta = {
-                "role": "assistant",
-                "content_kind": "answer",
-                "session_id": session_id,
-                "source": "clarification",
-                "awaiting_search_content": True,
-            }
-            if project_id:
-                _user_clar_meta["project_id"] = project_id
-                _assistant_clar_meta["project_id"] = project_id
-            write_memory(
-                text=latest_user_message,
-                memory_type="conversation",
-                source="chat",
-                tags=["conversation"],
-                metadata=_user_clar_meta,
-            )
-            write_memory(
-                text=SCRIPTED_CLARIFICATION_RESPONSE,
-                memory_type="conversation",
-                source="chat",
-                tags=["conversation", "clarification"],
-                metadata=_assistant_clar_meta,
-            )
-
+    # --- ENRICHED TERMINAL ROUTER: clarification (B2, ADR-042 PR c) ---
+    # The bare-marker clarification short-circuit ("google please" with no search
+    # content) now runs as an enrichment-dependent terminal interceptor over the
+    # frozen GenerationContext. It runs AFTER Phase A value resolution and BEFORE
+    # the Phase B prep builders (confirmation/task/timer), preserving its
+    # historical position so a bare-marker turn short-circuits before any of
+    # their side effects run. Same single early_return_response funnel and the
+    # unified completion_id, so the A1 stream-vs-JSON invariant holds.
+    _enriched_reply = _enriched_generation_router.run(gen_ctx)
+    if _enriched_reply is not None:
         return early_return_response(
-            SCRIPTED_CLARIFICATION_RESPONSE,
-            _clarification_id,
-            stream=bool(body.stream),
-            label="clarification",
+            _enriched_reply.text,
+            gen_ctx.completion_id,
+            stream=gen_ctx.stream,
+            label=_enriched_reply.label,
         )
 
     # --- RESOLVE INTER-SESSION TIME GAP (BUG-003) ---
@@ -1140,145 +1400,24 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # the section is omitted from the prompt entirely.
     last_session_label = _resolve_last_session_label(session_id)
 
-    # Capture the raw user message before any system prefix injection
-    # modifies it. Used by _write_pending_confirmation so the stored
-    # query is clean for deferred web search execution. Without this,
-    # the search query arrives at SearXNG as "[System: no relevant
-    # vault content...] What is the population of Tokyo?" - garbage.
-    _raw_user_message = latest_user_message
-
-    # --- PENDING CONFIRMATION CHECK (pre-generation) ---
-    # If Ember previously asked "want me to search for that?" and the user
-    # is now responding, interpret the response via LLM (no keyword matching)
-    # and route accordingly. Confirmation triggers web search on the original
-    # query; decline clears the state and proceeds normally.
-    _confirmation_web_items: list[dict] = []
-    _confirmation_search_failed = False
-    _confirmation_confirmed = False
-    if not is_test:
-        _confirmation_result, _pending_records = _check_pending_confirmation(
-            session_id, latest_user_message
-        )
-    else:
-        _confirmation_result, _pending_records = None, []
-    if _confirmation_result is not None:
-        if _confirmation_result["confirmed"] and _confirmation_result["action"] == "web_search":
-            _confirmation_confirmed = True
-            _original_query = _confirmation_result["query"]
-            latest_user_message = _original_query
-            _raw_user_message = _original_query
-            try:
-                from src.tools.web_search import web_search
-                _confirmation_web_items = web_search(_original_query)
-                logger.info("[CONFIRM] Executing deferred web search for: %s",
-                            _original_query[:80])
-            except Exception as exc:
-                logger.warning("[CONFIRM] Deferred web search failed: %s", exc)
-                _confirmation_search_failed = True
-        elif not _confirmation_result["confirmed"]:
-            pass
-
-    # --- TASK CREATION (pre-generation) ---
-    # Path 1: Explicit task request ("create a task for X")
-    # Path 2: Pending offer confirmation ("yes" after Ember offered a task)
-    from src.tasks.task_handler import (
-        detect_explicit_task_request,
-        check_pending_confirmation,
-        create_task as create_task_record,
-    )
-
-    explicit_task_titles = detect_explicit_task_request(latest_user_message) if not is_test else []
-    if explicit_task_titles:
-        created_titles = []
-        failed_titles = []
-        for task_title in explicit_task_titles:
-            result = create_task_record(
-                title=task_title,
-                source="user_input",
-                session_id=session_id,
-                project_id=project_id,
-            )
-            if result.created:
-                created_titles.append(task_title)
-            else:
-                logger.warning("[TASK] Write failed for '%s': %s", task_title, result.error)
-                failed_titles.append(task_title)
-
-        # Inject system context so Ember confirms naturally
-        if created_titles:
-            titles_str = ", ".join(f'"{t}"' for t in created_titles)
-            latest_user_message = f"[System: tasks created - {titles_str}] {latest_user_message}"
-
-    pending_result = check_pending_confirmation(
-        session_id=session_id,
-        user_message=latest_user_message,
-        project_id=project_id,
-    ) if not is_test else None
-    if pending_result is not None:
-        if pending_result.created and pending_result.task_titles:
-            titles_str = ", ".join(f'"{t}"' for t in pending_result.task_titles)
-            latest_user_message = f'[System: tasks created - {titles_str}] {latest_user_message}'
-        elif not pending_result.created:
-            latest_user_message = f'[System: user declined task creation] {latest_user_message}'
-
-    # --- TIMER DETECTION (pre-generation) - BUG-004 ---
-    # Three intent paths, each fully non-fatal:
-    #   1. start: detected label -> write a running timer record
-    #   2. stop:  any active timers -> write a stopped record for the most recent
-    #   3. check: any active timers -> inject elapsed-time status
-    # Active timers are also surfaced via StateResolver into the context packet,
-    # so the system note here is the immediate confirmation; the resolver
-    # provides the longer-lived awareness.
-    # Skip for test sessions - timer writes are vault writes.
-    if not _skip_vault:
-        try:
-            from src.state.timer_service import (
-                detect_check_timer,
-                detect_start_timer,
-                detect_stop_timer,
-                format_elapsed,
-                get_active_timers,
-                start_timer,
-                stop_timer,
-            )
-
-            timer_label = detect_start_timer(latest_user_message)
-            if timer_label:
-                try:
-                    start_timer(label=timer_label, session_id=session_id)
-                    latest_user_message = (
-                        f'[System: timer started for "{timer_label}"] {latest_user_message}'
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("[TIMER] Failed to start timer: %s", exc)
-            elif detect_stop_timer(latest_user_message) or detect_check_timer(latest_user_message):
-                try:
-                    active = get_active_timers()
-                    wants_stop = detect_stop_timer(latest_user_message)
-                    if active:
-                        statuses = []
-                        for t in active:
-                            started_at = (t.metadata or {}).get("started_at", "")
-                            statuses.append(f'"{t.text}" {format_elapsed(started_at)}')
-                        statuses_str = "; ".join(statuses)
-                        if wants_stop:
-                            most_recent = active[0]
-                            stop_timer(timer_id=most_recent.metadata["timer_id"])
-                            latest_user_message = (
-                                f"[System: timer stopped — was {statuses_str}] {latest_user_message}"
-                            )
-                        else:
-                            latest_user_message = (
-                                f"[System: active timers — {statuses_str}] {latest_user_message}"
-                            )
-                    else:
-                        note = "no active timer to stop" if wants_stop else "no active timers"
-                        latest_user_message = f"[System: {note}] {latest_user_message}"
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("[TIMER] Failed to query/stop timers: %s", exc)
-        except Exception as exc:  # noqa: BLE001
-            # Defensive: timer module load failures should never break a chat request.
-            logger.warning("[TIMER] Detection block failed: %s", exc)
+    # --- PHASE B: generation-prep builders (ADR-042 PR c) ---
+    # Confirmation, task, and timer prep run over a mutable GenerationWork whose
+    # message is the evolving query (rewritten with system prefixes for the
+    # model) and whose raw_message stays the clean pre-prefix snapshot that
+    # _write_pending_confirmation needs for the deferred web-search query. Order
+    # and side effects are identical to the previous inline blocks. (B2 next-turn
+    # dispatch and relational suppression remain inline below - they are
+    # retrieval-gating policy, not message prep; see ADR-042.)
+    work = GenerationWork(message=latest_user_message)
+    _apply_confirmation(gen_ctx, work)
+    _apply_tasks(gen_ctx, work)
+    _apply_timers(gen_ctx, work)
+    latest_user_message = work.message
+    _raw_user_message = work.raw_message
+    _confirmation_web_items = work.confirmation_web_items
+    _confirmation_confirmed = work.confirmation_confirmed
+    _confirmation_search_failed = work.confirmation_search_failed
+    _pending_records = work.pending_records
 
     # --- RELATIONAL INTENSITY AMPLIFICATION GATE ---
     # Pre-generation check: if the user's message contains markers that

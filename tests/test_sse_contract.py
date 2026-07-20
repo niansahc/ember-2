@@ -7,11 +7,12 @@ failure. The `created` field is a wall-clock int and is the only non-frozen
 field; everything else (keys, order, nesting, delta variants, type values) is
 asserted exactly.
 
-FROZEN TO CURRENT REALITY (issue #93 PR (a), resolution #1): status is asserted
-as choices[0].delta.status -- the shape the backend ships today, B-SSE-001 bug
-included. The "correct" top-level {type: "status"} shape is NOT encoded here;
-reconciling it is a separate coordinated change under the ADR-040 change
-procedure. Do not "fix" these assertions.
+Contract v2 (B-SSE-001, ADR-040): status is a top-level typed frame
+{"type": "status", "content": "<value>"} -- a sibling of the sources /
+vault_sources frames -- NOT a choices[0].delta.status chunk. The v1 delta.status
+shape was silently dropped by the UI parser (which reads a top-level frame), so
+no working consumer was broken by the move. These assertions are pinned to v2;
+any further shape change must follow the ADR-040 change procedure.
 """
 
 import json
@@ -60,18 +61,20 @@ def test_initial_typing_indicator_is_empty_content():
     assert p["choices"][0]["finish_reason"] is None
 
 
-def test_status_frames_use_delta_status_for_every_value():
-    # B-SSE-001: status lives INSIDE choices[0].delta. Frozen as-is.
+def test_status_frames_are_top_level_typed_for_every_value():
+    # ADR-040 v2 (B-SSE-001): status is a top-level typed frame carrying the
+    # phase in `content` (the key the UI parser already reads), NOT a
+    # chat.completion.chunk delta.
+    from src.api.sse import sse_status
+
     for value in STATUS_VALUES:
-        frame = sse_chunk(_ID, status=value)
-        assert frame.endswith(
-            ', "choices": [{"index": 0, "delta": {"status": "%s"}, "finish_reason": null}]}\n\n'
-            % value
-        )
+        frame = sse_status(value)
+        assert frame == 'data: {"type": "status", "content": "%s"}\n\n' % value
         p = _payload(frame)
-        assert p["choices"][0]["delta"] == {"status": value}
-        # Explicitly NOT a top-level {"type": "status"} frame.
-        assert "type" not in p
+        assert p == {"type": "status", "content": value}
+        # No OpenAI chunk envelope for status frames anymore.
+        assert "choices" not in p
+        assert "object" not in p
 
 
 def test_terminal_stop_frame():

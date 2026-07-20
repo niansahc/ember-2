@@ -201,3 +201,59 @@ def test_fired_router_skips_context_build_and_generation(caplog):
         mock_gen.assert_not_called()
         # The funnel executed via the override interceptor at runtime.
         assert "[EARLY-RETURN] label=override stream=True" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# PR c (ADR-042): the router is generic over context type. The same mechanism
+# runs enrichment-DEPENDENT terminals over a GenerationContext, and the frozen
+# core / mutable working carrier split is structural.
+# ---------------------------------------------------------------------------
+from src.api.pregeneration import GenerationContext, GenerationWork
+
+
+def _gen_ctx(session_id="sess_test_001", project_id=None, project_name=None,
+             is_test=False, vault_enabled=True, skip_vault=False,
+             completion_id="chatcmpl-test", stream=False, policy=None,
+             raw_user_message="hello"):
+    return GenerationContext(
+        session_id=session_id,
+        project_id=project_id,
+        project_name=project_name,
+        is_test=is_test,
+        vault_enabled=vault_enabled,
+        skip_vault=skip_vault,
+        completion_id=completion_id,
+        stream=stream,
+        policy=policy,
+        raw_user_message=raw_user_message,
+    )
+
+
+def test_router_dispatches_over_generation_context():
+    # The same router mechanism runs an enrichment-dependent interceptor over a
+    # GenerationContext, not just a RouterContext (PR c generalization).
+    seen = {}
+
+    def clarification(ctx):
+        seen["session_id"] = ctx.session_id
+        return TerminalReply("scripted", label="clarification")
+
+    reply = PreGenerationRouter([clarification]).run(_gen_ctx(session_id="sess_abc"))
+    assert reply == TerminalReply("scripted", label="clarification")
+    assert seen["session_id"] == "sess_abc"
+
+
+def test_generation_context_is_frozen():
+    # Identity/routing values are resolved once and structurally immutable, so a
+    # migrated interceptor's inputs cannot be mutated out from under it.
+    ctx = _gen_ctx()
+    with pytest.raises(Exception):
+        ctx.session_id = "mutated"
+
+
+def test_generation_work_is_mutable():
+    # The evolving message + prep-derived values live in a mutable carrier that
+    # is never an interceptor input.
+    work = GenerationWork(message="hello")
+    work.message = "hello [system-prefixed]"
+    assert work.message == "hello [system-prefixed]"

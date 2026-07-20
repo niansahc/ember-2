@@ -8,7 +8,16 @@ or turn text, so a report cannot carry vault-derived response content to disk.
 
 import json
 
-from tests.eval.quality_report import build_case_report, compare_to_baseline
+from tests.eval.quality_report import build_case_report, compare_to_baseline, write_report
+
+
+def test_write_report_creates_missing_parent_dirs(tmp_path):
+    # write_report must not assume the report directory exists - the release-gate
+    # writes to logs/eval_quality/ which may not have been created yet.
+    target = tmp_path / "eval_quality" / "nested" / "latest.json"
+    write_report(str(target), {"reports": []})
+    assert target.exists()
+    assert json.loads(target.read_text(encoding="utf-8")) == {"reports": []}
 
 
 def test_report_is_metadata_only_and_cannot_carry_response_text():

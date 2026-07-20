@@ -14,6 +14,7 @@ metadata-only pattern in tools/eval_manual.py::_run_auto_battery.
 from __future__ import annotations
 
 import json
+import os
 
 
 def build_case_report(
@@ -72,7 +73,14 @@ def compare_to_baseline(
 
 
 def write_report(path: str, report: dict) -> None:
-    """Persist a metadata-only report as JSON (ASCII-safe)."""
+    """Persist a metadata-only report as JSON (ASCII-safe).
+
+    Creates the parent directory if it does not exist - the release gate writes
+    to logs/eval_quality/, which may not have been created yet.
+    """
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(report, fh, indent=2, ensure_ascii=True)
 

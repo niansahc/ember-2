@@ -570,14 +570,78 @@ def _intercept_onboarding(ctx: RouterContext) -> Optional[TerminalReply]:
     return None
 
 
-# Ordered terminal chain. Declared order IS precedence and mirrors the
+def _intercept_clarification(ctx: GenerationContext) -> Optional[TerminalReply]:
+    """Claim bare-marker queries ("google please", "look it up") that carry an
+    explicit web marker but no search content, before any classifier/search
+    dispatch (B2).
+
+    Enrichment-DEPENDENT terminal (ADR-042): unlike empty/override/onboarding it
+    reads enrichment-resolved values off the frozen GenerationContext. It uses
+    the memoized policy (no re-classification) and, unless the vault is skipped,
+    writes both conversation turns keyed by the resolved session/project so the
+    NEXT turn's dispatch can detect awaiting_search_content on the assistant
+    record. Terminal, so nothing downstream consumes those writes this turn. It
+    reads only the frozen context and never mutates it. The scripted reply shares
+    the request's unified completion_id via the single early_return_response
+    funnel at the call site.
+    """
+    if not ctx.policy.emit_clarification:
+        return None
+
+    from src.context.policies import SCRIPTED_CLARIFICATION_RESPONSE
+
+    logger.warning("[CLARIFY] emit clarification, bypass classifier+search")
+
+    # Write both turns so the next-turn handler can detect awaiting_search_content
+    # on the assistant record. Skipped in test/stateless mode (skip_vault).
+    if not ctx.skip_vault:
+        _user_clar_meta = {
+            "role": "user",
+            "content_kind": "user_content",
+            "session_id": ctx.session_id,
+        }
+        _assistant_clar_meta = {
+            "role": "assistant",
+            "content_kind": "answer",
+            "session_id": ctx.session_id,
+            "source": "clarification",
+            "awaiting_search_content": True,
+        }
+        if ctx.project_id:
+            _user_clar_meta["project_id"] = ctx.project_id
+            _assistant_clar_meta["project_id"] = ctx.project_id
+        write_memory(
+            text=ctx.raw_user_message,
+            memory_type="conversation",
+            source="chat",
+            tags=["conversation"],
+            metadata=_user_clar_meta,
+        )
+        write_memory(
+            text=SCRIPTED_CLARIFICATION_RESPONSE,
+            memory_type="conversation",
+            source="chat",
+            tags=["conversation", "clarification"],
+            metadata=_assistant_clar_meta,
+        )
+
+    return TerminalReply(SCRIPTED_CLARIFICATION_RESPONSE, label="clarification")
+
+
+# Pre-enrichment terminal chain. Declared order IS precedence and mirrors the
 # historical top-to-bottom short-circuit order: empty, then override, then
-# onboarding. The clarification short-circuit is intentionally NOT here - it
-# writes adapter-level conversation turns keyed by session/project, so it is
-# not enrichment-independent and stays inline until PR c (ADR-041).
+# onboarding. These are enrichment-INDEPENDENT (RouterContext only).
 _pre_generation_router = PreGenerationRouter(
     [_intercept_empty, _intercept_override, _intercept_onboarding]
 )
+
+# Post-enrichment terminal chain (ADR-042 PR c). Runs over the frozen
+# GenerationContext after the Phase A value builders resolve session/project/
+# vault and before the Phase B prep builders. Clarification is the only
+# enrichment-dependent terminal; it kept its historical position (before
+# confirmation/task/timer) so a bare-marker turn short-circuits before any of
+# their side effects run.
+_enriched_generation_router = PreGenerationRouter([_intercept_clarification])
 
 
 class OpenAIMessage(BaseModel):
@@ -1156,62 +1220,21 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     project_id = gen_ctx.project_id
     project_name = gen_ctx.project_name
 
-    # --- BARE-MARKER CLARIFICATION SHORT-CIRCUIT (B2) ---
-    # When the user invokes an explicit web marker ("google please",
-    # "look it up", "search the web for me") but provides no actual
-    # search content, route to a hardcoded clarification response
-    # rather than dispatching a useless bare query to SearXNG.
-    #
-    # Bypasses constitutional review. The clarification text is a
-    # hardcoded trusted string identical in trust class to
-    # SCRIPTED_ASK_FIRST_RESPONSE substitution.
-    from src.context.policies import (
-        SCRIPTED_CLARIFICATION_RESPONSE,
-        classify_query as _classify_for_clarification,
-    )
-    _clarification_check_policy = _classify_for_clarification(latest_user_message)
-    if _clarification_check_policy.emit_clarification:
-        logger.warning("[CLARIFY] emit clarification, bypass classifier+search")
-        _clarification_id = f"chatcmpl-{uuid.uuid4().hex}"
-
-        # Write both turns so the next-turn handler can detect
-        # awaiting_search_content on the assistant record.
-        if not (is_test or not vault_enabled):
-            _user_clar_meta = {
-                "role": "user",
-                "content_kind": "user_content",
-                "session_id": session_id,
-            }
-            _assistant_clar_meta = {
-                "role": "assistant",
-                "content_kind": "answer",
-                "session_id": session_id,
-                "source": "clarification",
-                "awaiting_search_content": True,
-            }
-            if project_id:
-                _user_clar_meta["project_id"] = project_id
-                _assistant_clar_meta["project_id"] = project_id
-            write_memory(
-                text=latest_user_message,
-                memory_type="conversation",
-                source="chat",
-                tags=["conversation"],
-                metadata=_user_clar_meta,
-            )
-            write_memory(
-                text=SCRIPTED_CLARIFICATION_RESPONSE,
-                memory_type="conversation",
-                source="chat",
-                tags=["conversation", "clarification"],
-                metadata=_assistant_clar_meta,
-            )
-
+    # --- ENRICHED TERMINAL ROUTER: clarification (B2, ADR-042 PR c) ---
+    # The bare-marker clarification short-circuit ("google please" with no search
+    # content) now runs as an enrichment-dependent terminal interceptor over the
+    # frozen GenerationContext. It runs AFTER Phase A value resolution and BEFORE
+    # the Phase B prep builders (confirmation/task/timer), preserving its
+    # historical position so a bare-marker turn short-circuits before any of
+    # their side effects run. Same single early_return_response funnel and the
+    # unified completion_id, so the A1 stream-vs-JSON invariant holds.
+    _enriched_reply = _enriched_generation_router.run(gen_ctx)
+    if _enriched_reply is not None:
         return early_return_response(
-            SCRIPTED_CLARIFICATION_RESPONSE,
-            _clarification_id,
-            stream=bool(body.stream),
-            label="clarification",
+            _enriched_reply.text,
+            gen_ctx.completion_id,
+            stream=gen_ctx.stream,
+            label=_enriched_reply.label,
         )
 
     # --- RESOLVE INTER-SESSION TIME GAP (BUG-003) ---

@@ -257,3 +257,63 @@ def test_generation_work_is_mutable():
     work = GenerationWork(message="hello")
     work.message = "hello [system-prefixed]"
     assert work.message == "hello [system-prefixed]"
+
+
+# ---------------------------------------------------------------------------
+# Enrichment-dependent terminal: clarification (PR c migration).
+# Reads only the frozen GenerationContext; writes the two conversation turns as
+# a terminal side effect unless the vault is skipped.
+# ---------------------------------------------------------------------------
+from types import SimpleNamespace
+
+from src.api.openai_adapter import _intercept_clarification
+from src.context.policies import SCRIPTED_CLARIFICATION_RESPONSE
+
+
+def _policy(emit=True):
+    return SimpleNamespace(emit_clarification=emit)
+
+
+def test_clarification_interceptor_fires_and_writes_two_turns():
+    ctx = _gen_ctx(session_id="sess_test_c", project_id=None, skip_vault=False,
+                   policy=_policy(True), raw_user_message="google please")
+    with patch("src.api.openai_adapter.write_memory") as w:
+        reply = _intercept_clarification(ctx)
+    assert reply is not None
+    assert reply.label == "clarification"
+    assert reply.text == SCRIPTED_CLARIFICATION_RESPONSE
+    assert w.call_count == 2
+    user_call, assistant_call = w.call_args_list
+    # User turn carries the clean raw message; assistant turn carries the flags
+    # the next-turn dispatch reads.
+    assert user_call.kwargs["text"] == "google please"
+    assert user_call.kwargs["metadata"]["role"] == "user"
+    assert user_call.kwargs["metadata"]["session_id"] == "sess_test_c"
+    assert assistant_call.kwargs["text"] == SCRIPTED_CLARIFICATION_RESPONSE
+    assert assistant_call.kwargs["metadata"]["source"] == "clarification"
+    assert assistant_call.kwargs["metadata"]["awaiting_search_content"] is True
+
+
+def test_clarification_interceptor_passes_when_not_emit():
+    ctx = _gen_ctx(policy=_policy(False))
+    with patch("src.api.openai_adapter.write_memory") as w:
+        assert _intercept_clarification(ctx) is None
+    w.assert_not_called()
+
+
+def test_clarification_interceptor_skips_writes_when_skip_vault():
+    # Terminal reply still returned, but no vault writes in test/stateless mode.
+    ctx = _gen_ctx(skip_vault=True, policy=_policy(True), raw_user_message="google please")
+    with patch("src.api.openai_adapter.write_memory") as w:
+        reply = _intercept_clarification(ctx)
+    assert reply is not None and reply.label == "clarification"
+    w.assert_not_called()
+
+
+def test_clarification_interceptor_threads_project_id():
+    ctx = _gen_ctx(session_id="s", project_id="proj_9", skip_vault=False,
+                   policy=_policy(True), raw_user_message="look it up")
+    with patch("src.api.openai_adapter.write_memory") as w:
+        _intercept_clarification(ctx)
+    for call in w.call_args_list:
+        assert call.kwargs["metadata"]["project_id"] == "proj_9"

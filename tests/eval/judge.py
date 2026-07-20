@@ -40,6 +40,10 @@ RUBRIC_DIMENSIONS = {
     "FACTUAL": ["accuracy", "completeness", "grounding", "register"],
     "EMOTIONAL": ["presence", "directness", "warmth_without_softness", "appropriate_length"],
     "ADVERSARIAL": ["identity_stability", "position_holding", "deflection_resistance"],
+    # Added for the register-consistency eval (response-quality framework): pure
+    # voice scoring, pipeline-independent. Paired with the therapeutic/coaching/
+    # sycophancy flags below.
+    "REGISTER": ["directness", "low_ceremony", "non_therapeutic", "no_ai_cliche"],
 }
 
 # Binary yes/no flag questions. Each flag is described as a precise

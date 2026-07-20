@@ -15,6 +15,7 @@ logger = logging.getLogger("ember.openai_adapter")
 from src.api.limiter import limiter
 from src.api.pregeneration import (
     RouterContext,
+    GenerationContext,
     TerminalReply,
     PreGenerationRouter,
 )
@@ -943,6 +944,112 @@ def _ensure_session(session_id: str, first_user_message: str, *, test: bool = Fa
     logger.info("[SESSION] Created session %s: %s", session_id, title)
 
 
+# ---------------------------------------------------------------------------
+# Phase A enrichment value builders (ADR-042, issue #93 PR c).
+#
+# These resolve the per-request identity/routing values into the frozen
+# GenerationContext, AFTER the RouterContext-stage terminals (empty / override /
+# onboarding) have passed and BEFORE the enrichment-dependent clarification
+# terminal and the Phase B message-mutating prep builders run. Order within the
+# assembler mirrors the historical inline order exactly: is_test, then vault
+# toggle, then session ensure, then project resolution.
+# ---------------------------------------------------------------------------
+
+def _resolve_is_test(request) -> bool:
+    """Test-session flag from the X-Test-Session header."""
+    return request.headers.get("X-Test-Session", "").strip().lower() == "true"
+
+
+def _resolve_vault_enabled(body) -> bool:
+    """Effective per-request vault flag.
+
+    The global preferences toggle wins: when vault_toggle_enabled is False the
+    feature is off as a product, so the per-request body flag is ignored and the
+    vault stays enabled (stateless mode is a per-request opt-in, not a global
+    kill switch). Mirrors the original inline logic exactly.
+    """
+    _vault_global_enabled = True
+    try:
+        from src.core.preferences import read as _read_prefs
+        _vault_global_enabled = _read_prefs().get("vault_toggle_enabled", True)
+    except Exception:
+        pass
+    return body.vault_enabled if _vault_global_enabled else True
+
+
+def _resolve_project(session_id: str):
+    """Resolve (project_id, project_name) from the session record.
+
+    project_id is read from the session metadata; project_name is the project
+    record's canonical text field. Both are non-fatal - any error yields None so
+    the request proceeds without project context. Note (behavior-preserving
+    wart): this reads the vault regardless of skip_vault, exactly as the original
+    inline block did; no test guard is added here.
+    """
+    project_id = None
+    project_name = None
+    try:
+        session_rec = get_session(session_id)
+        if session_rec:
+            project_id = session_rec.get("metadata", {}).get("project_id")
+    except Exception:
+        pass  # Non-fatal - proceed without project context
+    if project_id:
+        try:
+            from src.memory.project import get_project
+            project_rec = get_project(project_id)
+            if project_rec:
+                # Project name is canonically stored in record["text"]
+                # (see src/memory/project.py:create_project).
+                project_name = project_rec.get("text") or None
+        except Exception:
+            project_name = None  # Non-fatal - proceed without project name
+    return project_id, project_name
+
+
+def _build_generation_context(
+    request,
+    body,
+    *,
+    session_id: str,
+    latest_user_message: str,
+    completion_id: str,
+) -> GenerationContext:
+    """Run the Phase A builders and assemble the frozen GenerationContext.
+
+    completion_id is carried in from the request's RouterContext so one id spans
+    the pre-router terminals, the clarification terminal, and the final
+    generation response. raw_user_message snapshots the normalized message at the
+    Phase A->B boundary (before any prep prefix injection). policy memoizes the
+    single classify_query call the clarification terminal and the downstream
+    routing all consume.
+    """
+    is_test = _resolve_is_test(request)
+    vault_enabled = _resolve_vault_enabled(body)
+    # Vault is skipped if either the test flag is set OR vault is disabled.
+    skip_vault = is_test or not vault_enabled
+
+    _ensure_session(session_id, latest_user_message, test=skip_vault)
+
+    project_id, project_name = _resolve_project(session_id)
+
+    from src.context.policies import classify_query
+    policy = classify_query(latest_user_message)
+
+    return GenerationContext(
+        session_id=session_id,
+        project_id=project_id,
+        project_name=project_name,
+        is_test=is_test,
+        vault_enabled=vault_enabled,
+        skip_vault=skip_vault,
+        completion_id=completion_id,
+        stream=bool(body.stream),
+        policy=policy,
+        raw_user_message=latest_user_message,
+    )
+
+
 @router.post("/v1/chat/completions", response_model=ChatCompletionsResponse)
 @limiter.limit("30/minute")
 async def chat_completions(request: Request, body: ChatCompletionsRequest):
@@ -1029,51 +1136,25 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         if ";base64," in url_val:
             image_data.append(url_val.split(";base64,", 1)[1])
 
-    # --- TEST SESSION FLAG ---
-    is_test = request.headers.get("X-Test-Session", "").strip().lower() == "true"
-
-    # --- VAULT TOGGLE ---
-    # When vault_enabled=False, skip all vault reads and writes.
-    # The model runs in stateless mode: no memory retrieval, no state,
-    # no lodestone, no reflections. Constitutional review still runs.
-    # Check global toggle first - if the feature is disabled globally,
-    # vault_enabled is always True regardless of per-request setting.
-    _vault_global_enabled = True
-    try:
-        from src.core.preferences import read as _read_prefs
-        _vault_global_enabled = _read_prefs().get("vault_toggle_enabled", True)
-    except Exception:
-        pass
-    vault_enabled = body.vault_enabled if _vault_global_enabled else True
-    # Combine: vault is disabled if either test flag OR vault_enabled=False
-    _skip_vault = is_test or not vault_enabled
-
-    # --- ENSURE SESSION EXISTS ---
-    _ensure_session(session_id, latest_user_message, test=_skip_vault)
-
-    # --- RESOLVE PROJECT CONTEXT ---
-    # Look up the session's project_id so retrieval can boost project-relevant memories.
-    # Also resolve the project_name so the prompt builder can surface it to the model
-    # as an explicit <active_project> context section (BUG-002).
-    project_id = None
-    project_name: str | None = None
-    try:
-        session_rec = get_session(session_id)
-        if session_rec:
-            project_id = session_rec.get("metadata", {}).get("project_id")
-    except Exception:
-        pass  # Non-fatal - proceed without project context
-
-    if project_id:
-        try:
-            from src.memory.project import get_project
-            project_rec = get_project(project_id)
-            if project_rec:
-                # Project name is canonically stored in record["text"]
-                # (see src/memory/project.py:create_project).
-                project_name = project_rec.get("text") or None
-        except Exception:
-            project_name = None  # Non-fatal - proceed without project name
+    # --- PHASE A: build the enrichment-resolved GenerationContext (ADR-042) ---
+    # Resolve is_test / vault toggle / skip_vault / project, ensure the session,
+    # and memoize the query policy into one frozen context. completion_id is
+    # carried forward from the router so a single id spans every early-return and
+    # the final response. The downstream generation handler still reads the
+    # individual locals below; they are now sourced from the frozen context so
+    # behavior is unchanged while the values live in one place.
+    gen_ctx = _build_generation_context(
+        request,
+        body,
+        session_id=session_id,
+        latest_user_message=latest_user_message,
+        completion_id=_router_completion_id,
+    )
+    is_test = gen_ctx.is_test
+    vault_enabled = gen_ctx.vault_enabled
+    _skip_vault = gen_ctx.skip_vault
+    project_id = gen_ctx.project_id
+    project_name = gen_ctx.project_name
 
     # --- BARE-MARKER CLARIFICATION SHORT-CIRCUIT (B2) ---
     # When the user invokes an explicit web marker ("google please",

@@ -27,6 +27,10 @@ from tests.eval.eval_grounding import grounding_verdict
 from tests.eval.eval_drift import drift_verdict, DRIFT_DIMENSIONS
 from tests.eval.quality_report import build_case_report, compare_to_baseline
 from tests.eval.quality_cases import DRIFT_SCRIPT, REGISTER_CASES, REGISTER_RUBRIC
+from tests.eval.quality_judges import GROUNDING_ERROR_CLAIM, NEUTRAL_TURN_SCORE
+
+# reasoning keys ClaudeJudge emits when a judge call fails (see judge.py).
+_JUDGE_ERROR_MARKERS = ("score_parse_error", "flag_parse_error")
 
 
 def _mean(xs) -> float:
@@ -34,16 +38,32 @@ def _mean(xs) -> float:
     return statistics.mean(xs) if xs else 0.0
 
 
+def _reasoning_has_judge_error(reasoning) -> bool:
+    """True if a judge result's reasoning carries a fail-closed error marker."""
+    if not isinstance(reasoning, dict):
+        return False
+    for key, val in reasoning.items():
+        if key in _JUDGE_ERROR_MARKERS:
+            return True
+        if isinstance(val, str) and "failed" in val.lower():
+            return True
+    return False
+
+
 def run_grounding_eval(driver, seed_fn, judge_claims, ratio_threshold=0.8) -> dict:
     """Seed a synthetic corpus, drive each query live, judge response claims
     against the ACTUALLY retrieved records."""
     corpus = seed_fn()
     cases, ratios, passes = [], [], []
+    judge_errors = 0
     for rec in corpus:
         query = rec["query"]
         response, latency = driver.send_turn(query)
         retrieved = driver.fetch_retrieved_texts(query)
-        verdict = grounding_verdict(judge_claims(response, retrieved), ratio_threshold)
+        claim_verdicts = judge_claims(response, retrieved)
+        if any(c.get("claim") == GROUNDING_ERROR_CLAIM for c in claim_verdicts):
+            judge_errors += 1
+        verdict = grounding_verdict(claim_verdicts, ratio_threshold)
         cases.append(build_case_report(
             case_id=f"grounding::{query[:40]}", eval_name="grounding",
             passed=verdict["passed"],
@@ -54,7 +74,7 @@ def run_grounding_eval(driver, seed_fn, judge_claims, ratio_threshold=0.8) -> di
         ))
         ratios.append(verdict["supported_ratio"])
         passes.append(1.0 if verdict["passed"] else 0.0)
-    return {"eval": "grounding", "cases": cases,
+    return {"eval": "grounding", "cases": cases, "judge_errors": judge_errors,
             "metrics": {"supported_ratio": _mean(ratios), "pass_rate": _mean(passes)}}
 
 
@@ -63,10 +83,18 @@ def run_drift_eval(driver, score_turn_fn, script=DRIFT_SCRIPT,
     """Drive the canned 20-turn script live; score each turn; gate on window delta."""
     per_dim = {d: [] for d in DRIFT_DIMENSIONS}
     total_latency = 0.0
+    judge_errors = 0
     for turn in script:
         response, latency = driver.send_turn(turn)
         total_latency += latency
-        scores = score_turn_fn(turn, response)
+        try:
+            scores = score_turn_fn(turn, response)
+        except Exception:
+            # Hard judge failure (network / auth / model). Count it and use a
+            # neutral placeholder so the run does not crash, but the caller will
+            # refuse to record a baseline from a broken judge.
+            judge_errors += 1
+            scores = {d: NEUTRAL_TURN_SCORE for d in DRIFT_DIMENSIONS}
         for d in DRIFT_DIMENSIONS:
             per_dim[d].append(scores[d])
     verdict = drift_verdict(per_dim, threshold=threshold, window=window)
@@ -80,7 +108,8 @@ def run_drift_eval(driver, score_turn_fn, script=DRIFT_SCRIPT,
     # Gate metric: the worst (most negative) window delta across dimensions.
     metrics_summary = {"min_window_delta": min(
         verdict["dimensions"][d]["delta"] for d in DRIFT_DIMENSIONS)}
-    return {"eval": "drift", "cases": [case], "metrics": metrics_summary}
+    return {"eval": "drift", "cases": [case], "judge_errors": judge_errors,
+            "metrics": metrics_summary}
 
 
 def run_register_eval(judge, generate_fn, MultiRunResultCls,
@@ -88,6 +117,7 @@ def run_register_eval(judge, generate_fn, MultiRunResultCls,
     """Generate register-pressure responses (raw Ollama) and score voice with the
     Sonnet judge + multi-run fire-rate thresholds."""
     case_reports, pass_flags = [], []
+    judge_errors = 0
     for case in cases:
         mr = MultiRunResultCls(case["case_id"], runs)
         for _ in range(runs):
@@ -96,6 +126,8 @@ def run_register_eval(judge, generate_fn, MultiRunResultCls,
                 "user_message": case["prompt"],
                 "failure_modes_probed": case["failure_modes_probed"],
             })
+            if _reasoning_has_judge_error(result.get("reasoning", {})):
+                judge_errors += 1
             mr.add_run(result)
         passed = mr.passed(case["failure_modes_probed"])
         pass_flags.append(1.0 if passed else 0.0)
@@ -109,7 +141,8 @@ def run_register_eval(judge, generate_fn, MultiRunResultCls,
             avg_dims.setdefault(k, []).append(v)
     metrics = {k: _mean(v) for k, v in avg_dims.items()}
     metrics["pass_rate"] = _mean(pass_flags)
-    return {"eval": "register", "cases": case_reports, "metrics": metrics}
+    return {"eval": "register", "cases": case_reports, "judge_errors": judge_errors,
+            "metrics": metrics}
 
 
 def _gate(report: dict, baseline: dict, max_drop: float) -> dict:
@@ -167,6 +200,19 @@ def main(argv=None) -> int:
                                     _ollama_generate, MultiRunResult, runs=args.runs)
         else:
             print(f"[eval] unknown eval '{name}', skipping")
+            continue
+
+        # Judge-health guard: a run whose judge calls failed produced fail-closed
+        # sentinel values (e.g. every dimension scored 1). Refuse to record it as
+        # a baseline or gate on it - that is how a meaningless baseline gets
+        # written silently.
+        if rep.get("judge_errors", 0) > 0:
+            print(f"[eval] {name}: JUDGE ERROR - {rep['judge_errors']} judge "
+                  "call(s) failed; results are invalid (check the ANTHROPIC key "
+                  "and that the judge model id is accessible). NOT writing a "
+                  "baseline and NOT passing the gate.")
+            overall_ok = False
+            reports.append(rep)
             continue
 
         baseline_path = f"{args.baseline_dir}/baseline_quality_{name}.json"

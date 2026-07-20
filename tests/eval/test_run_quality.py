@@ -110,4 +110,43 @@ def test_register_flow_aggregates_and_passes():
                             MultiRunResultCls=_FakeMultiRun, runs=2)
     assert rep["eval"] == "register"
     assert rep["metrics"]["pass_rate"] == 1.0
+    assert rep["judge_errors"] == 0
     assert SECRET not in json.dumps(rep)
+
+
+class _FailingJudge:
+    """Mimics ClaudeJudge's fail-closed fallback: score 1 + error marker."""
+
+    def evaluate(self, response, rubric, context):
+        return {"dimensions": {"directness": 1, "low_ceremony": 1,
+                               "non_therapeutic": 1, "no_ai_cliche": 1},
+                "flags": {}, "reasoning": {"score_parse_error": "Scoring call failed"}}
+
+
+def test_register_flow_counts_judge_failures():
+    # A run whose judge calls failed must be flagged, not silently recorded as a
+    # legitimate (failing) baseline. One case x 3 runs = 3 failed judge calls.
+    one_case = [{"case_id": "reg_1", "prompt": "hi", "failure_modes_probed": []}]
+    rep = run_register_eval(_FailingJudge(), generate_fn=lambda p: "resp",
+                            MultiRunResultCls=_FakeMultiRun, cases=one_case, runs=3)
+    assert rep["judge_errors"] == 3
+
+
+def test_grounding_flow_counts_judge_failures():
+    from tests.eval.quality_judges import GROUNDING_ERROR_CLAIM
+    driver = FakeDriver(response="a reply", retrieved=["some record"])
+    rep = run_grounding_eval(
+        driver, seed_fn=lambda: [{"query": "q"}],
+        judge_claims=lambda r, ret: [{"claim": GROUNDING_ERROR_CLAIM, "supported": False}])
+    assert rep["judge_errors"] == 1
+
+
+def test_drift_flow_counts_judge_failures():
+    driver = FakeDriver(response="a reply")
+
+    def failing_score(user, response):
+        raise RuntimeError("judge unreachable")
+
+    rep = run_drift_eval(driver, score_turn_fn=failing_score)
+    # every turn's judge call failed
+    assert rep["judge_errors"] == 20

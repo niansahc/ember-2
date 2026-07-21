@@ -67,6 +67,18 @@ def test_compare_to_baseline_improvement_passes():
     assert result["passed"] is True
 
 
+def test_compare_to_baseline_gates_only_specified_metrics():
+    # A noisy 1-4 dimension can swing far; gating only the stable aggregate
+    # (pass_rate) must ignore that swing.
+    baseline = {"pass_rate": 0.8, "no_ai_cliche": 1.8}
+    current = {"pass_rate": 0.8, "no_ai_cliche": 1.0}  # dimension dropped 0.8 (noise)
+    gated = compare_to_baseline(current, baseline, max_drop=0.05,
+                                metrics_to_check=["pass_rate"])
+    assert gated["passed"] is True                       # dimension drop ignored
+    # Without the restriction, the dimension drop would (wrongly) trip the gate.
+    assert compare_to_baseline(current, baseline, max_drop=0.05)["passed"] is False
+
+
 def test_compare_to_baseline_ignores_meta_provenance_key():
     # Baselines carry a _meta provenance block; it must not be treated as a
     # metric (it is not numeric and never appears in current metrics).

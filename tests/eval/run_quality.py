@@ -42,6 +42,15 @@ _JUDGE_ERROR_MARKERS = ("score_parse_error", "flag_parse_error")
 # fraction the run aborts instead of writing a baseline.
 MAX_JUDGE_ERROR_RATE = 0.34
 
+# Only the stable 0-1 aggregate metrics gate a run. The 1-4 per-dimension scores
+# are kept in the baseline as diagnostics but are too noisy (judge variance ~0.4
+# run-to-run) to gate on a tight threshold. Drift gates on its window-delta.
+GATE_METRICS = {
+    "register": ["pass_rate"],
+    "grounding": ["supported_ratio", "pass_rate"],
+    "drift": ["min_window_delta"],
+}
+
 
 def _mean(xs) -> float:
     xs = list(xs)
@@ -84,10 +93,33 @@ def _reasoning_has_judge_error(reasoning) -> bool:
     return False
 
 
+def _seed_visible(rec: dict, retrieved_texts: list) -> bool:
+    """True if a seeded record is actually retrievable through the live API.
+
+    Records are stored verbatim, so a distinctive chunk of the seed text should
+    appear in what retrieval returned. Used to catch vault misalignment (the API
+    serving a different vault than the one the corpus was seeded into).
+    """
+    needle = rec["text"][:40].strip().lower()
+    return any(needle in (t or "").lower() for t in retrieved_texts)
+
+
 def run_grounding_eval(driver, seed_fn, judge_claims, ratio_threshold=0.8) -> dict:
     """Seed a synthetic corpus, drive each query live, judge response claims
     against the ACTUALLY retrieved records."""
     corpus = seed_fn()
+
+    # Vault-alignment guard. The corpus is seeded into THIS process's vault, but
+    # the live API retrieves from ITS vault. If they differ (API not pointed at
+    # the seeded test vault), grounding would silently test the wrong corpus - or
+    # the real vault. Verify a seeded record is retrievable through the API and
+    # abort loudly if not, instead of reporting garbage.
+    if corpus:
+        probe = corpus[0]
+        if not _seed_visible(probe, driver.fetch_retrieved_texts(probe["query"])):
+            return {"eval": "grounding", "cases": [], "judge_errors": 0,
+                    "total_calls": 0, "metrics": {}, "vault_misaligned": True}
+
     cases, ratios, passes = [], [], []
     judge_errors = 0
     total_calls = 0
@@ -156,7 +188,7 @@ def run_drift_eval(driver, score_turn_fn, script=DRIFT_SCRIPT,
 
 
 def run_register_eval(judge, generate_fn, MultiRunResultCls,
-                      cases=REGISTER_CASES, runs=3) -> dict:
+                      cases=REGISTER_CASES, runs=5) -> dict:
     """Generate register-pressure responses (raw Ollama) and score voice with the
     Sonnet judge + multi-run fire-rate thresholds."""
     case_reports, pass_flags = [], []
@@ -199,8 +231,15 @@ def run_register_eval(judge, generate_fn, MultiRunResultCls,
 
 
 def _gate(report: dict, baseline: dict, max_drop: float) -> dict:
-    """Attach a baseline-regression verdict to an eval report."""
-    report["baseline_check"] = compare_to_baseline(report["metrics"], baseline, max_drop)
+    """Attach a baseline-regression verdict to an eval report.
+
+    Gates only on the eval's stable aggregate metrics (GATE_METRICS); the noisy
+    per-dimension scores are diagnostic and do not gate.
+    """
+    report["baseline_check"] = compare_to_baseline(
+        report["metrics"], baseline, max_drop,
+        metrics_to_check=GATE_METRICS.get(report["eval"]),
+    )
     return report
 
 
@@ -209,7 +248,7 @@ def main(argv=None) -> int:
     parser.add_argument("--evals", default="register,grounding,drift",
                         help="comma list: register,grounding,drift")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--runs", type=int, default=3, help="register multi-run count")
+    parser.add_argument("--runs", type=int, default=5, help="register multi-run count")
     parser.add_argument("--max-drop", type=float, default=0.05)
     parser.add_argument("--report", default="logs/eval_quality/latest.json")
     parser.add_argument("--baseline-dir", default="tests/eval")
@@ -253,6 +292,19 @@ def main(argv=None) -> int:
                                     _ollama_generate, MultiRunResult, runs=args.runs)
         else:
             print(f"[eval] unknown eval '{name}', skipping")
+            continue
+
+        # Vault-alignment guard (grounding): the seeded corpus was not retrievable
+        # through the API, so it is serving a different vault. Abort loudly rather
+        # than report garbage or touch the real vault.
+        if rep.get("vault_misaligned"):
+            print(f"[eval] {name}: VAULT MISALIGNED - the seeded corpus is not "
+                  "retrievable through the API, so it is not serving the seeded "
+                  "test vault. Point the API at PRIVATE_VAULT_PATH="
+                  "<test vault> (the same path this eval seeds into) and re-run. "
+                  "NOT writing a baseline.")
+            overall_ok = False
+            reports.append(rep)
             continue
 
         # Judge-health guard. A handful of judge calls fail transiently; those

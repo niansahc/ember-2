@@ -43,20 +43,32 @@ def build_case_report(
 
 
 def compare_to_baseline(
-    current: dict, baseline: dict, max_drop: float = 0.05
+    current: dict, baseline: dict, max_drop: float = 0.05,
+    metrics_to_check: list | None = None,
 ) -> dict:
     """Compare current scalar metrics to a baseline; fail on a drop > max_drop.
 
     A missing/empty baseline means this is a calibration run: it passes and is
     flagged `calibration` so the caller records a baseline instead of gating on
     one that does not exist yet.
+
+    metrics_to_check restricts gating to specific metric keys. This matters
+    because the metrics dict mixes scales: 0-1 aggregates (pass_rate,
+    supported_ratio) are stable and gate-worthy, while the 1-4 per-dimension
+    scores are noisy (judge variance ~0.4 run-to-run) and would false-trigger a
+    0.05 gate. The caller passes only the stable aggregates; the dimensions stay
+    in the baseline as diagnostics but do not gate. When None, all metrics gate
+    (back-compatible). Keys starting with "_" (e.g. _meta provenance) are always
+    skipped.
     """
     if not baseline:
         return {"passed": True, "calibration": True, "regressions": {}}
 
     regressions = {}
     for metric, base_val in baseline.items():
-        if metric not in current:
+        if metric.startswith("_") or metric not in current:
+            continue
+        if metrics_to_check is not None and metric not in metrics_to_check:
             continue
         drop = base_val - current[metric]
         if drop > max_drop:

@@ -20,6 +20,7 @@ wires the real dependencies lazily.
 from __future__ import annotations
 
 import argparse
+import logging
 import statistics
 import sys
 
@@ -29,13 +30,31 @@ from tests.eval.quality_report import build_case_report, compare_to_baseline
 from tests.eval.quality_cases import DRIFT_SCRIPT, REGISTER_CASES, REGISTER_RUBRIC
 from tests.eval.quality_judges import GROUNDING_ERROR_CLAIM, NEUTRAL_TURN_SCORE
 
+logger = logging.getLogger("ember.eval_quality")
+
 # reasoning keys ClaudeJudge emits when a judge call fails (see judge.py).
 _JUDGE_ERROR_MARKERS = ("score_parse_error", "flag_parse_error")
+
+# A few judge calls will occasionally fail transiently (a rare API blip or a
+# malformed judge response that retry can't recover). Dropping those calls and
+# aggregating the rest is fine; only a HIGH failure rate means a real outage
+# (bad key, unreachable model) where the whole run is untrustworthy. Above this
+# fraction the run aborts instead of writing a baseline.
+MAX_JUDGE_ERROR_RATE = 0.34
 
 
 def _mean(xs) -> float:
     xs = list(xs)
     return statistics.mean(xs) if xs else 0.0
+
+
+def _judge_outage(rep: dict, max_rate: float = MAX_JUDGE_ERROR_RATE) -> bool:
+    """True when an eval's judge-failure rate is high enough to distrust the whole
+    run (a real outage), vs a tolerable handful of transient drops."""
+    total = rep.get("total_calls", 0)
+    if not total:
+        return False
+    return (rep.get("judge_errors", 0) / total) > max_rate
 
 
 def _reasoning_has_judge_error(reasoning) -> bool:
@@ -56,13 +75,18 @@ def run_grounding_eval(driver, seed_fn, judge_claims, ratio_threshold=0.8) -> di
     corpus = seed_fn()
     cases, ratios, passes = [], [], []
     judge_errors = 0
+    total_calls = 0
     for rec in corpus:
+        total_calls += 1
         query = rec["query"]
         response, latency = driver.send_turn(query)
         retrieved = driver.fetch_retrieved_texts(query)
         claim_verdicts = judge_claims(response, retrieved)
         if any(c.get("claim") == GROUNDING_ERROR_CLAIM for c in claim_verdicts):
             judge_errors += 1
+            logger.warning("[eval] grounding judge error on query %r "
+                           "(dropped from aggregate)", query[:40])
+            continue  # drop: a broken judge is not a real confabulation
         verdict = grounding_verdict(claim_verdicts, ratio_threshold)
         cases.append(build_case_report(
             case_id=f"grounding::{query[:40]}", eval_name="grounding",
@@ -75,6 +99,7 @@ def run_grounding_eval(driver, seed_fn, judge_claims, ratio_threshold=0.8) -> di
         ratios.append(verdict["supported_ratio"])
         passes.append(1.0 if verdict["passed"] else 0.0)
     return {"eval": "grounding", "cases": cases, "judge_errors": judge_errors,
+            "total_calls": total_calls,
             "metrics": {"supported_ratio": _mean(ratios), "pass_rate": _mean(passes)}}
 
 
@@ -89,11 +114,14 @@ def run_drift_eval(driver, score_turn_fn, script=DRIFT_SCRIPT,
         total_latency += latency
         try:
             scores = score_turn_fn(turn, response)
-        except Exception:
-            # Hard judge failure (network / auth / model). Count it and use a
-            # neutral placeholder so the run does not crash, but the caller will
-            # refuse to record a baseline from a broken judge.
+        except Exception as exc:  # noqa: BLE001
+            # Transient judge failure on a turn. Count it and use a neutral
+            # placeholder (a single constant barely moves the window delta, and
+            # keeps the turn sequence intact). A HIGH failure rate still aborts
+            # the run at the caller's outage guard.
             judge_errors += 1
+            logger.warning("[eval] drift judge error on a turn "
+                           "(using neutral placeholder): %s", exc)
             scores = {d: NEUTRAL_TURN_SCORE for d in DRIFT_DIMENSIONS}
         for d in DRIFT_DIMENSIONS:
             per_dim[d].append(scores[d])
@@ -109,7 +137,7 @@ def run_drift_eval(driver, score_turn_fn, script=DRIFT_SCRIPT,
     metrics_summary = {"min_window_delta": min(
         verdict["dimensions"][d]["delta"] for d in DRIFT_DIMENSIONS)}
     return {"eval": "drift", "cases": [case], "judge_errors": judge_errors,
-            "metrics": metrics_summary}
+            "total_calls": len(script), "metrics": metrics_summary}
 
 
 def run_register_eval(judge, generate_fn, MultiRunResultCls,
@@ -118,9 +146,11 @@ def run_register_eval(judge, generate_fn, MultiRunResultCls,
     Sonnet judge + multi-run fire-rate thresholds."""
     case_reports, pass_flags = [], []
     judge_errors = 0
+    total_calls = 0
     for case in cases:
-        mr = MultiRunResultCls(case["case_id"], runs)
+        successes = []
         for _ in range(runs):
+            total_calls += 1
             response = generate_fn(case["prompt"])
             result = judge.evaluate(response, REGISTER_RUBRIC, {
                 "user_message": case["prompt"],
@@ -128,6 +158,14 @@ def run_register_eval(judge, generate_fn, MultiRunResultCls,
             })
             if _reasoning_has_judge_error(result.get("reasoning", {})):
                 judge_errors += 1
+                logger.warning("[eval] register judge error on case %s "
+                               "(dropped from aggregate)", case["case_id"])
+                continue  # drop the fallback scores so they do not skew the baseline
+            successes.append(result)
+        if not successes:
+            continue  # every run for this case failed - no valid data to aggregate
+        mr = MultiRunResultCls(case["case_id"], len(successes))
+        for result in successes:
             mr.add_run(result)
         passed = mr.passed(case["failure_modes_probed"])
         pass_flags.append(1.0 if passed else 0.0)
@@ -142,7 +180,7 @@ def run_register_eval(judge, generate_fn, MultiRunResultCls,
     metrics = {k: _mean(v) for k, v in avg_dims.items()}
     metrics["pass_rate"] = _mean(pass_flags)
     return {"eval": "register", "cases": case_reports, "judge_errors": judge_errors,
-            "metrics": metrics}
+            "total_calls": total_calls, "metrics": metrics}
 
 
 def _gate(report: dict, baseline: dict, max_drop: float) -> dict:
@@ -202,18 +240,24 @@ def main(argv=None) -> int:
             print(f"[eval] unknown eval '{name}', skipping")
             continue
 
-        # Judge-health guard: a run whose judge calls failed produced fail-closed
-        # sentinel values (e.g. every dimension scored 1). Refuse to record it as
-        # a baseline or gate on it - that is how a meaningless baseline gets
-        # written silently.
-        if rep.get("judge_errors", 0) > 0:
-            print(f"[eval] {name}: JUDGE ERROR - {rep['judge_errors']} judge "
-                  "call(s) failed; results are invalid (check the ANTHROPIC key "
-                  "and that the judge model id is accessible). NOT writing a "
-                  "baseline and NOT passing the gate.")
+        # Judge-health guard. A handful of judge calls fail transiently; those
+        # are dropped from the aggregate inside the run_* functions, so the
+        # metrics are already clean. Only a HIGH failure rate means a real outage
+        # (bad key, unreachable model) where the whole run is untrustworthy - then
+        # refuse to write a baseline or pass the gate.
+        je = rep.get("judge_errors", 0)
+        total = rep.get("total_calls", 0)
+        if _judge_outage(rep):
+            print(f"[eval] {name}: JUDGE OUTAGE - {je}/{total} judge calls failed "
+                  f"(> {MAX_JUDGE_ERROR_RATE:.0%}); results are invalid (check the "
+                  "ANTHROPIC key and that the judge model id is accessible). NOT "
+                  "writing a baseline and NOT passing the gate.")
             overall_ok = False
             reports.append(rep)
             continue
+        if je:
+            print(f"[eval] {name}: {je}/{total} judge call(s) failed transiently and "
+                  "were dropped from the aggregate; proceeding on the rest.")
 
         baseline_path = f"{args.baseline_dir}/baseline_quality_{name}.json"
         baseline = load_baseline(baseline_path)

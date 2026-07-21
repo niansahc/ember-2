@@ -40,6 +40,43 @@ def test_haiku_judge_model_env_override(monkeypatch):
     assert haiku_judge_model() == "claude-haiku-custom"
 
 
+def test_score_claims_retries_transient_failure(monkeypatch):
+    # Proves the grounding judge is wrapped in retry_call: a client that fails
+    # once (e.g. a 429) then succeeds must still yield the parsed verdict, not
+    # the error sentinel. A fake anthropic module is injected so no real SDK /
+    # network is touched (CI-safe); time.sleep is stubbed so the backoff is
+    # instant.
+    import sys
+    import types
+    from unittest.mock import MagicMock
+
+    calls = {"n": 0}
+
+    class _FakeMessages:
+        def create(self, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("429 rate limited")
+            msg = MagicMock()
+            msg.content = [MagicMock(text='{"claims": [{"claim": "x", "supported": true}]}')]
+            return msg
+
+    class _FakeAnthropic:
+        def __init__(self, **kwargs):
+            self.messages = _FakeMessages()
+
+    fake_mod = types.ModuleType("anthropic")
+    fake_mod.Anthropic = _FakeAnthropic
+    monkeypatch.setitem(sys.modules, "anthropic", fake_mod)
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    from tests.eval.quality_judges import score_claims
+    out = score_claims("Ember's response", ["a retrieved record"])
+
+    assert out == [{"claim": "x", "supported": True}]
+    assert calls["n"] == 2  # failed once, retried, succeeded
+
+
 def test_parse_claim_verdicts_happy_path():
     text = (
         '{"claims": [{"claim": "deadline is Friday", "supported": true}, '

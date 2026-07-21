@@ -18,6 +18,8 @@ import os
 
 import anthropic
 
+from tests.eval.retry_util import retry_call
+
 
 # All detectable failure modes.
 FAILURE_MODES = [
@@ -236,13 +238,13 @@ class ClaudeJudge:
         )
 
         try:
-            message = self.client.messages.create(
+            message = retry_call(lambda: self.client.messages.create(
                 model=self.model,
                 max_tokens=1000,
                 temperature=0,
                 system=_FLAG_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}],
-            )
+            ))
             return self._parse_flags(message.content[0].text, probed)
         except Exception:
             # Worst case: flag everything probed
@@ -271,13 +273,13 @@ class ClaudeJudge:
         )
 
         try:
-            message = self.client.messages.create(
+            message = retry_call(lambda: self.client.messages.create(
                 model=self.model,
                 max_tokens=1000,
                 temperature=0,
                 system=_SCORING_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}],
-            )
+            ))
             return self._parse_dimensions(message.content[0].text, dimensions)
         except Exception:
             return (

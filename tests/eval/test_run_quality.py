@@ -153,6 +153,20 @@ def test_drift_flow_counts_judge_failures():
     assert rep["total_calls"] == 20
 
 
+def test_baseline_payload_stamps_provenance():
+    from tests.eval.run_quality import _baseline_payload
+    payload = _baseline_payload({"directness": 3.2, "pass_rate": 0.5},
+                                "register", "claude-sonnet-4-5-20250929",
+                                "2026-07-21T14:36:00+00:00")
+    # metrics preserved flat (so the gate still reads them)
+    assert payload["directness"] == 3.2
+    assert payload["pass_rate"] == 0.5
+    # provenance under _meta
+    assert payload["_meta"]["eval"] == "register"
+    assert payload["_meta"]["judge_model"] == "claude-sonnet-4-5-20250929"
+    assert payload["_meta"]["generated_at"] == "2026-07-21T14:36:00+00:00"
+
+
 def test_judge_outage_helper_distinguishes_blips_from_outages():
     from tests.eval.run_quality import _judge_outage
     assert _judge_outage({"judge_errors": 1, "total_calls": 9}) is False   # 11% - blip

@@ -44,7 +44,7 @@ class EmberLiveDriver:
 
     def __init__(self, base_url: str = "http://127.0.0.1:8000",
                  api_key: str | None = None, session_id: str = "sess_eval_quality",
-                 timeout: float = 120.0):
+                 timeout: float = 300.0):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.session_id = session_id

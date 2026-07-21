@@ -250,6 +250,9 @@ def main(argv=None) -> int:
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--runs", type=int, default=5, help="register multi-run count")
     parser.add_argument("--max-drop", type=float, default=0.05)
+    parser.add_argument("--timeout", type=float, default=300.0,
+                        help="per-turn live-API timeout in seconds (grounded "
+                             "generation is slow)")
     parser.add_argument("--report", default="logs/eval_quality/latest.json")
     parser.add_argument("--baseline-dir", default="tests/eval")
     parser.add_argument("--update-baseline", action="store_true",
@@ -270,7 +273,7 @@ def main(argv=None) -> int:
     from tests.eval.quality_report import write_report, load_baseline
 
     api_key = os.environ.get("EMBER_API_KEY")
-    driver = EmberLiveDriver(base_url=args.base_url, api_key=api_key)
+    driver = EmberLiveDriver(base_url=args.base_url, api_key=api_key, timeout=args.timeout)
 
     def _ollama_generate(prompt: str) -> str:
         import requests

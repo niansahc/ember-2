@@ -16,8 +16,8 @@ class TestModelDispatch:
     """Model name prefix determines which provider is used."""
 
     def test_claude_model_is_cloud(self):
-        adapter = LLMAdapter(model="claude-sonnet-4-20250514")
-        assert adapter._is_cloud_model("claude-sonnet-4-20250514")
+        adapter = LLMAdapter(model="claude-sonnet-4-5-20250929")
+        assert adapter._is_cloud_model("claude-sonnet-4-5-20250929")
 
     def test_claude_haiku_is_cloud(self):
         adapter = LLMAdapter(model="claude-haiku-4-5-20251001")
@@ -32,7 +32,7 @@ class TestModelDispatch:
         assert not adapter._is_cloud_model("llama3.1:8b")
 
     def test_chat_dispatches_to_anthropic_for_claude(self):
-        adapter = LLMAdapter(model="claude-sonnet-4-20250514")
+        adapter = LLMAdapter(model="claude-sonnet-4-5-20250929")
         with patch.object(adapter, '_chat_anthropic', return_value="Hello from Claude") as mock:
             result = adapter._chat("system", "hello")
             mock.assert_called_once()
@@ -46,7 +46,7 @@ class TestModelDispatch:
             assert result == "Hello from Qwen"
 
     def test_stream_dispatches_to_anthropic_for_claude(self):
-        adapter = LLMAdapter(model="claude-sonnet-4-20250514")
+        adapter = LLMAdapter(model="claude-sonnet-4-5-20250929")
         with patch.object(adapter, '_chat_anthropic_stream', return_value=iter(["Hello"])) as mock:
             chunks = list(adapter._chat_stream("system", "hello"))
             mock.assert_called_once()
@@ -96,7 +96,7 @@ class TestProviderApiKey:
             assert result == "sk-env-test"
 
     def test_anthropic_chat_raises_without_key(self):
-        adapter = LLMAdapter(model="claude-sonnet-4-20250514")
+        adapter = LLMAdapter(model="claude-sonnet-4-5-20250929")
         with patch.object(LLMAdapter, '_get_provider_api_key', return_value=None):
             with pytest.raises(ValueError, match="No Anthropic API key"):
                 adapter._chat_anthropic("system", "hello")
@@ -108,7 +108,7 @@ class TestCloudModelsConfig:
     def test_anthropic_models_listed(self):
         models = get_cloud_models()
         assert "anthropic" in models
-        assert "claude-sonnet-4-20250514" in models["anthropic"]
+        assert "claude-sonnet-4-5-20250929" in models["anthropic"]
 
     def test_get_cloud_models_returns_dict(self):
         result = get_cloud_models()

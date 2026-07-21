@@ -57,6 +57,21 @@ def _judge_outage(rep: dict, max_rate: float = MAX_JUDGE_ERROR_RATE) -> bool:
     return (rep.get("judge_errors", 0) / total) > max_rate
 
 
+def _baseline_payload(metrics: dict, eval_name: str, judge_model: str,
+                      generated_at: str) -> dict:
+    """Wrap baseline metrics with provenance so each committed baseline version is
+    self-describing in git history (which model/judge/date produced it). The
+    `_meta` key is ignored by compare_to_baseline, so it does not affect gating.
+    """
+    payload = dict(metrics)
+    payload["_meta"] = {
+        "eval": eval_name,
+        "judge_model": judge_model,
+        "generated_at": generated_at,
+    }
+    return payload
+
+
 def _reasoning_has_judge_error(reasoning) -> bool:
     """True if a judge result's reasoning carries a fail-closed error marker."""
     if not isinstance(reasoning, dict):
@@ -211,7 +226,7 @@ def main(argv=None) -> int:
     from tests.eval.harness import MultiRunResult
     from tests.eval.live_driver import EmberLiveDriver
     from tests.eval.quality_judges import (
-        score_claims, score_turn, sonnet_judge_model,
+        score_claims, score_turn, sonnet_judge_model, haiku_judge_model,
     )
     from tests.eval.quality_report import write_report, load_baseline
 
@@ -263,7 +278,13 @@ def main(argv=None) -> int:
         baseline = load_baseline(baseline_path)
         _gate(rep, baseline, args.max_drop)
         if args.update_baseline:
-            write_report(baseline_path, rep["metrics"])
+            from datetime import datetime, timezone
+            judge_model = haiku_judge_model() if name == "drift" else sonnet_judge_model()
+            payload = _baseline_payload(
+                rep["metrics"], name, judge_model,
+                datetime.now(timezone.utc).isoformat(),
+            )
+            write_report(baseline_path, payload)
             print(f"[eval] {name}: baseline updated (calibration)")
         else:
             bc = rep["baseline_check"]

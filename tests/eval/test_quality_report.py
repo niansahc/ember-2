@@ -65,3 +65,13 @@ def test_compare_to_baseline_first_run_is_calibration_not_failure():
 def test_compare_to_baseline_improvement_passes():
     result = compare_to_baseline({"score": 3.9}, {"score": 3.5}, max_drop=0.05)
     assert result["passed"] is True
+
+
+def test_compare_to_baseline_ignores_meta_provenance_key():
+    # Baselines carry a _meta provenance block; it must not be treated as a
+    # metric (it is not numeric and never appears in current metrics).
+    baseline = {"score": 3.5, "_meta": {"judge_model": "claude-sonnet-4-5-20250929",
+                                        "generated_at": "2026-07-21T14:36:00+00:00"}}
+    result = compare_to_baseline({"score": 3.5}, baseline, max_drop=0.05)
+    assert result["passed"] is True
+    assert result["regressions"] == {}

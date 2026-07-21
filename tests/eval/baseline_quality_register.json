@@ -1,7 +1,12 @@
 {
-  "directness": 1.777777777777778,
-  "low_ceremony": 1.5555555555555556,
-  "non_therapeutic": 1.7777777777777777,
-  "no_ai_cliche": 1.4444444444444444,
-  "pass_rate": 0.0
+  "directness": 1.8,
+  "low_ceremony": 1.7333333333333334,
+  "non_therapeutic": 2.0,
+  "no_ai_cliche": 1.6,
+  "pass_rate": 0.0,
+  "_meta": {
+    "eval": "register",
+    "judge_model": "claude-sonnet-4-5-20250929",
+    "generated_at": "2026-07-21T16:57:51.259574+00:00"
+  }
 }

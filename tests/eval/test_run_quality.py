@@ -37,8 +37,10 @@ def test_grounding_flow_fails_on_confabulation_and_never_leaks_text():
         # Response claimed Monday; records say Friday -> unsupported.
         return [{"claim": "deadline is Monday", "supported": False}]
 
-    rep = run_grounding_eval(driver, seed_fn=lambda: [{"query": "when is the deadline?"}],
-                             judge_claims=judge_claims, ratio_threshold=0.8)
+    rep = run_grounding_eval(
+        driver,
+        seed_fn=lambda: [{"query": "when is the deadline?", "text": "the deadline is Friday"}],
+        judge_claims=judge_claims, ratio_threshold=0.8)
     assert rep["eval"] == "grounding"
     assert rep["cases"][0]["passed"] is False
     assert rep["metrics"]["supported_ratio"] == 0.0
@@ -50,11 +52,22 @@ def test_grounding_flow_passes_when_grounded():
     driver = FakeDriver(response="Your deadline is Friday.",
                         retrieved=["the deadline is Friday"])
     rep = run_grounding_eval(
-        driver, seed_fn=lambda: [{"query": "when?"}],
+        driver, seed_fn=lambda: [{"query": "when?", "text": "the deadline is Friday"}],
         judge_claims=lambda r, ret: [{"claim": "Friday", "supported": True}],
         ratio_threshold=0.8)
     assert rep["cases"][0]["passed"] is True
     assert rep["metrics"]["supported_ratio"] == 1.0
+
+
+def test_grounding_aborts_when_seed_not_retrievable_through_api():
+    # The seeded record is NOT in what the API retrieved -> the API is serving a
+    # different vault. The run must abort (vault_misaligned), not report garbage.
+    driver = FakeDriver(response="whatever", retrieved=["totally unrelated record"])
+    rep = run_grounding_eval(
+        driver, seed_fn=lambda: [{"query": "q", "text": "the seeded fact about Atlas"}],
+        judge_claims=lambda r, ret: [{"claim": "x", "supported": True}])
+    assert rep["vault_misaligned"] is True
+    assert rep["cases"] == []
 
 
 def test_drift_flow_fails_on_declining_scores():
@@ -134,9 +147,9 @@ def test_register_flow_counts_judge_failures():
 
 def test_grounding_flow_counts_judge_failures():
     from tests.eval.quality_judges import GROUNDING_ERROR_CLAIM
-    driver = FakeDriver(response="a reply", retrieved=["some record"])
+    driver = FakeDriver(response="a reply", retrieved=["some record text"])
     rep = run_grounding_eval(
-        driver, seed_fn=lambda: [{"query": "q"}],
+        driver, seed_fn=lambda: [{"query": "q", "text": "some record text"}],
         judge_claims=lambda r, ret: [{"claim": GROUNDING_ERROR_CLAIM, "supported": False}])
     assert rep["judge_errors"] == 1
 

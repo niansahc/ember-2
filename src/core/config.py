@@ -246,7 +246,7 @@ def set_ember_model_override(model: str) -> None:
 # Keys are provider names matching keyring service "ember-2-{provider}".
 CLOUD_MODELS: dict[str, list[str]] = {
     "anthropic": [
-        "claude-sonnet-4-20250514",
+        "claude-sonnet-4-5-20250929",
         "claude-haiku-4-5-20251001",
     ],
     "openai": [

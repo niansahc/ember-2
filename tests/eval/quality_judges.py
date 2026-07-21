@@ -21,6 +21,8 @@ from __future__ import annotations
 import json
 import os
 
+from tests.eval.retry_util import retry_call
+
 # Default grader model ids. These are NOT hardcoded at the call site - they are
 # resolved at call time from env vars so a model transition (or a key without
 # access to a given dated id) is a config change, not a code change. The Sonnet
@@ -159,11 +161,11 @@ def score_claims(response: str, retrieved_texts: list[str],
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=_resolve_api_key())
-        msg = client.messages.create(
+        msg = retry_call(lambda: client.messages.create(
             model=model, max_tokens=1000, temperature=0,
             system=_GROUNDING_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
-        )
+        ))
         return parse_claim_verdicts(msg.content[0].text)
     except Exception:
         return [{"claim": GROUNDING_ERROR_CLAIM, "supported": False}]
@@ -187,9 +189,9 @@ def score_turn(user_message: str, response: str,
     model = model or haiku_judge_model()
     import anthropic
     client = anthropic.Anthropic(api_key=_resolve_api_key())
-    msg = client.messages.create(
+    msg = retry_call(lambda: client.messages.create(
         model=model, max_tokens=400, temperature=0,
         system=_DRIFT_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
-    )
+    ))
     return parse_turn_scores(msg.content[0].text, dimensions)

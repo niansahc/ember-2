@@ -173,7 +173,7 @@ def main(argv=None) -> int:
     from tests.eval.harness import MultiRunResult
     from tests.eval.live_driver import EmberLiveDriver
     from tests.eval.quality_judges import (
-        score_claims, score_turn, GROUNDING_JUDGE_MODEL,
+        score_claims, score_turn, sonnet_judge_model,
     )
     from tests.eval.quality_report import write_report, load_baseline
 
@@ -196,7 +196,7 @@ def main(argv=None) -> int:
         elif name == "drift":
             rep = run_drift_eval(driver, score_turn)
         elif name == "register":
-            rep = run_register_eval(ClaudeJudge(model=GROUNDING_JUDGE_MODEL),
+            rep = run_register_eval(ClaudeJudge(model=sonnet_judge_model()),
                                     _ollama_generate, MultiRunResult, runs=args.runs)
         else:
             print(f"[eval] unknown eval '{name}', skipping")

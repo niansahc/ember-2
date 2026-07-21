@@ -10,7 +10,34 @@ from tests.eval.quality_judges import (
     parse_claim_verdicts,
     parse_turn_scores,
     NEUTRAL_TURN_SCORE,
+    sonnet_judge_model,
+    haiku_judge_model,
+    DEFAULT_SONNET_JUDGE_MODEL,
+    DEFAULT_HAIKU_JUDGE_MODEL,
 )
+
+
+def test_sonnet_judge_model_default_when_env_unset(monkeypatch):
+    monkeypatch.delenv("EMBER_EVAL_JUDGE_SONNET_MODEL", raising=False)
+    assert sonnet_judge_model() == DEFAULT_SONNET_JUDGE_MODEL
+    # The default must be a model id that broadly-provisioned keys can reach.
+    assert DEFAULT_SONNET_JUDGE_MODEL == "claude-sonnet-4-5-20250929"
+
+
+def test_sonnet_judge_model_env_override(monkeypatch):
+    monkeypatch.setenv("EMBER_EVAL_JUDGE_SONNET_MODEL", "claude-sonnet-custom")
+    assert sonnet_judge_model() == "claude-sonnet-custom"
+
+
+def test_haiku_judge_model_default_when_env_unset(monkeypatch):
+    monkeypatch.delenv("EMBER_EVAL_JUDGE_HAIKU_MODEL", raising=False)
+    assert haiku_judge_model() == DEFAULT_HAIKU_JUDGE_MODEL
+    assert DEFAULT_HAIKU_JUDGE_MODEL == "claude-haiku-4-5-20251001"
+
+
+def test_haiku_judge_model_env_override(monkeypatch):
+    monkeypatch.setenv("EMBER_EVAL_JUDGE_HAIKU_MODEL", "claude-haiku-custom")
+    assert haiku_judge_model() == "claude-haiku-custom"
 
 
 def test_parse_claim_verdicts_happy_path():

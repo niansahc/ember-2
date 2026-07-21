@@ -42,6 +42,7 @@ from tools.eval_conversations import (
     send_to_ember,
     evaluate_with_claude,
     get_ember_api_key,
+    CLAUDE_MODEL,
 )
 from tools.eval_helpers import swap_to_test_vault, restore_vault
 
@@ -261,7 +262,7 @@ def main():
     lines: list[str] = []
 
     lines.append(f"Local Model Comparison Eval — {timestamp}")
-    lines.append(f"Evaluator: claude-sonnet-4-20250514")
+    lines.append(f"Evaluator: {CLAUDE_MODEL}")
     lines.append(f"{'=' * 70}")
     lines.append("")
 

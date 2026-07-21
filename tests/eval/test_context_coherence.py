@@ -71,7 +71,9 @@ VAULT_SWAP_ENDPOINT = f"{API_BASE}/v1/developer/vault/swap"
 PREFS_ENDPOINT = f"{API_BASE}/v1/preferences"
 
 # Judge model. Sonnet is the same model used by tools/eval_conversations.py.
-JUDGE_MODEL = "claude-sonnet-4-20250514"
+# Env-configurable (same override var) so a model transition or a key without
+# access to a dated id is a config change, not a code edit.
+JUDGE_MODEL = os.getenv("EMBER_EVAL_JUDGE_SONNET_MODEL", "claude-sonnet-4-5-20250929")
 JUDGE_TEMPERATURE = 0.0  # determinism for reproducible verdicts
 JUDGE_SYSTEM = (
     "You are evaluating an AI system called Ember for conversational "

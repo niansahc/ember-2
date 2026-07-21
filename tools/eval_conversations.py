@@ -4,8 +4,9 @@ tools/eval_conversations.py
 Conversation quality evaluation harness for Ember-2.
 
 Sends test messages to the local Ember API, collects responses, then
-sends each response to Claude (claude-sonnet-4-20250514) for behavioral
-evaluation. Outputs pass/warn/fail per test case with evaluator notes.
+sends each response to a Claude judge (Sonnet; model id configurable via
+EMBER_EVAL_JUDGE_SONNET_MODEL) for behavioral evaluation. Outputs
+pass/warn/fail per test case with evaluator notes.
 
 Ember's responses are sent to Claude for evaluation but are NOT logged
 to disk or stdout — they may contain vault-grounded content. Only scores,
@@ -157,7 +158,11 @@ TEST_CASES = [
 # ---------------------------------------------------------------------------
 
 EMBER_API_URL = "http://localhost:8000/v1/chat/completions"
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
+# Judge model, env-configurable so a model transition (or a key without access
+# to a given dated id) is a config change, not a code edit. Default is the id
+# reachable by broadly-provisioned keys; the older claude-sonnet-4-20250514 404s
+# for some keys. Same override var as the response-quality eval judges.
+CLAUDE_MODEL = os.getenv("EMBER_EVAL_JUDGE_SONNET_MODEL", "claude-sonnet-4-5-20250929")
 
 EVALUATOR_SYSTEM = (
     "You are evaluating an AI system called Ember for behavioral quality. "

@@ -150,3 +150,48 @@ def test_drift_flow_counts_judge_failures():
     rep = run_drift_eval(driver, score_turn_fn=failing_score)
     # every turn's judge call failed
     assert rep["judge_errors"] == 20
+    assert rep["total_calls"] == 20
+
+
+def test_judge_outage_helper_distinguishes_blips_from_outages():
+    from tests.eval.run_quality import _judge_outage
+    assert _judge_outage({"judge_errors": 1, "total_calls": 9}) is False   # 11% - blip
+    assert _judge_outage({"judge_errors": 3, "total_calls": 9}) is False   # 33% - tolerated
+    assert _judge_outage({"judge_errors": 5, "total_calls": 9}) is True    # 56% - outage
+    assert _judge_outage({"judge_errors": 0, "total_calls": 9}) is False
+    assert _judge_outage({"judge_errors": 3, "total_calls": 0}) is False   # no data yet
+
+
+class _FlakyJudge:
+    """Fails on specific call indices, succeeds otherwise (mimics a transient
+    judge blip within an otherwise-healthy run)."""
+
+    def __init__(self, fail_on):
+        self.n = 0
+        self.fail_on = set(fail_on)
+
+    def evaluate(self, response, rubric, context):
+        i = self.n
+        self.n += 1
+        if i in self.fail_on:
+            return {"dimensions": {"directness": 1, "low_ceremony": 1,
+                                   "non_therapeutic": 1, "no_ai_cliche": 1},
+                    "flags": {}, "reasoning": {"score_parse_error": "Not valid JSON: ..."}}
+        return {"dimensions": {"directness": 4, "low_ceremony": 4,
+                               "non_therapeutic": 4, "no_ai_cliche": 4},
+                "flags": {}, "reasoning": {}}
+
+
+def test_register_drops_transient_failure_and_aggregates_good_runs():
+    # 1 of 3 runs fails; the failed (all-1) scores must NOT pollute the metrics -
+    # the baseline comes from the 2 good runs, and the run is not an outage.
+    from tests.eval.run_quality import _judge_outage
+    one_case = [{"case_id": "reg_1", "prompt": "hi", "failure_modes_probed": []}]
+    judge = _FlakyJudge(fail_on={0})  # first run fails, next two succeed
+    rep = run_register_eval(judge, generate_fn=lambda p: "resp",
+                            MultiRunResultCls=_FakeMultiRun, cases=one_case, runs=3)
+    assert rep["judge_errors"] == 1
+    assert rep["total_calls"] == 3
+    # metrics reflect the 2 good runs (all 4s), not the dropped all-1 fallback
+    assert rep["metrics"]["directness"] == 4
+    assert _judge_outage(rep) is False

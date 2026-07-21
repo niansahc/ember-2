@@ -201,3 +201,130 @@ def test_fired_router_skips_context_build_and_generation(caplog):
         mock_gen.assert_not_called()
         # The funnel executed via the override interceptor at runtime.
         assert "[EARLY-RETURN] label=override stream=True" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# PR c (ADR-042): the router is generic over context type. The same mechanism
+# runs enrichment-DEPENDENT terminals over a GenerationContext, and the frozen
+# core / mutable working carrier split is structural.
+# ---------------------------------------------------------------------------
+from src.api.pregeneration import GenerationContext, GenerationWork
+
+
+def _gen_ctx(session_id="sess_test_001", project_id=None, project_name=None,
+             is_test=False, vault_enabled=True, skip_vault=False,
+             completion_id="chatcmpl-test", stream=False, policy=None,
+             raw_user_message="hello"):
+    return GenerationContext(
+        session_id=session_id,
+        project_id=project_id,
+        project_name=project_name,
+        is_test=is_test,
+        vault_enabled=vault_enabled,
+        skip_vault=skip_vault,
+        completion_id=completion_id,
+        stream=stream,
+        policy=policy,
+        raw_user_message=raw_user_message,
+    )
+
+
+def test_router_dispatches_over_generation_context():
+    # The same router mechanism runs an enrichment-dependent interceptor over a
+    # GenerationContext, not just a RouterContext (PR c generalization).
+    seen = {}
+
+    def clarification(ctx):
+        seen["session_id"] = ctx.session_id
+        return TerminalReply("scripted", label="clarification")
+
+    reply = PreGenerationRouter([clarification]).run(_gen_ctx(session_id="sess_abc"))
+    assert reply == TerminalReply("scripted", label="clarification")
+    assert seen["session_id"] == "sess_abc"
+
+
+def test_generation_context_is_frozen():
+    # Identity/routing values are resolved once and structurally immutable, so a
+    # migrated interceptor's inputs cannot be mutated out from under it.
+    ctx = _gen_ctx()
+    with pytest.raises(Exception):
+        ctx.session_id = "mutated"
+
+
+def test_generation_work_is_mutable():
+    # The evolving message + prep-derived values live in a mutable carrier that
+    # is never an interceptor input.
+    work = GenerationWork(message="hello")
+    work.message = "hello [system-prefixed]"
+    assert work.message == "hello [system-prefixed]"
+
+
+def test_generation_work_defaults_and_prep_fields():
+    # raw_message snapshots the message at construction (the clean pre-prefix
+    # query); the confirmation-derived fields start empty.
+    work = GenerationWork(message="hello")
+    assert work.raw_message == "hello"
+    assert work.confirmation_web_items == []
+    assert work.confirmation_confirmed is False
+    assert work.confirmation_search_failed is False
+    assert work.pending_records == []
+
+
+# ---------------------------------------------------------------------------
+# Enrichment-dependent terminal: clarification (PR c migration).
+# Reads only the frozen GenerationContext; writes the two conversation turns as
+# a terminal side effect unless the vault is skipped.
+# ---------------------------------------------------------------------------
+from types import SimpleNamespace
+
+from src.api.openai_adapter import _intercept_clarification
+from src.context.policies import SCRIPTED_CLARIFICATION_RESPONSE
+
+
+def _policy(emit=True):
+    return SimpleNamespace(emit_clarification=emit)
+
+
+def test_clarification_interceptor_fires_and_writes_two_turns():
+    ctx = _gen_ctx(session_id="sess_test_c", project_id=None, skip_vault=False,
+                   policy=_policy(True), raw_user_message="google please")
+    with patch("src.api.openai_adapter.write_memory") as w:
+        reply = _intercept_clarification(ctx)
+    assert reply is not None
+    assert reply.label == "clarification"
+    assert reply.text == SCRIPTED_CLARIFICATION_RESPONSE
+    assert w.call_count == 2
+    user_call, assistant_call = w.call_args_list
+    # User turn carries the clean raw message; assistant turn carries the flags
+    # the next-turn dispatch reads.
+    assert user_call.kwargs["text"] == "google please"
+    assert user_call.kwargs["metadata"]["role"] == "user"
+    assert user_call.kwargs["metadata"]["session_id"] == "sess_test_c"
+    assert assistant_call.kwargs["text"] == SCRIPTED_CLARIFICATION_RESPONSE
+    assert assistant_call.kwargs["metadata"]["source"] == "clarification"
+    assert assistant_call.kwargs["metadata"]["awaiting_search_content"] is True
+
+
+def test_clarification_interceptor_passes_when_not_emit():
+    ctx = _gen_ctx(policy=_policy(False))
+    with patch("src.api.openai_adapter.write_memory") as w:
+        assert _intercept_clarification(ctx) is None
+    w.assert_not_called()
+
+
+def test_clarification_interceptor_skips_writes_when_skip_vault():
+    # Terminal reply still returned, but no vault writes in test/stateless mode.
+    ctx = _gen_ctx(skip_vault=True, policy=_policy(True), raw_user_message="google please")
+    with patch("src.api.openai_adapter.write_memory") as w:
+        reply = _intercept_clarification(ctx)
+    assert reply is not None and reply.label == "clarification"
+    w.assert_not_called()
+
+
+def test_clarification_interceptor_threads_project_id():
+    ctx = _gen_ctx(session_id="s", project_id="proj_9", skip_vault=False,
+                   policy=_policy(True), raw_user_message="look it up")
+    with patch("src.api.openai_adapter.write_memory") as w:
+        _intercept_clarification(ctx)
+    for call in w.call_args_list:
+        assert call.kwargs["metadata"]["project_id"] == "proj_9"

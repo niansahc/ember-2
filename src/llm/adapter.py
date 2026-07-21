@@ -166,10 +166,10 @@ def strip_think_blocks(text: str) -> str:
 @dataclass(frozen=True)
 class StatusSignal:
     """Status sentinel yielded by generate_response_iter() at the
-    constitutional review boundaries. Translated into SSE delta.status
-    events by the streaming caller in src/api/openai_adapter.py.
-    Non-streaming callers drop these and consume only the final
-    response string. ADR-036 Option A.
+    constitutional review boundaries. Translated into top-level status
+    SSE frames ({"type": "status", "content": name}, ADR-040 v2) by the
+    streaming caller in src/api/openai_adapter.py. Non-streaming callers
+    drop these and consume only the final response string. ADR-036 Option A.
     """
     name: str  # "review_pending" or "review_complete"
 
@@ -210,7 +210,8 @@ class LLMAdapter:
         string. Status signals are dropped here -- non-streaming callers
         don't surface review state. The streaming SSE generator iterates
         generate_response_iter() directly so it can translate each
-        StatusSignal into a delta.status SSE event on the wire."""
+        StatusSignal into a top-level status SSE frame on the wire
+        (ADR-040 v2)."""
         final = ""
         for item in self.generate_response_iter(
             context_packet,
@@ -247,9 +248,9 @@ class LLMAdapter:
         trigger_result.triggered), then yields the final response string
         last. The async SSE generator in src/api/openai_adapter.py
         iterates this method and translates each StatusSignal to a
-        delta.status SSE event so the UI breathing-dot indicator
-        activates during the genuine review window (ADR-036 Option A;
-        UI commit ed858c9)."""
+        top-level status SSE frame (ADR-040 v2) so the UI breathing-dot
+        indicator activates during the genuine review window (ADR-036
+        Option A; UI commit ed858c9)."""
         _build_kwargs = {
             "style": style,
             "project_name": project_name,

@@ -33,6 +33,11 @@ FLAG_MIN_FIRES = 2
 # across runs meets this minimum.
 DIMENSION_SCORE_FLOOR = 3
 
+# Flag fire-rate ceiling: a flag counts as a behavioral failure when it fires in
+# at least this fraction of runs (see the module docstring). Referenced by
+# run_full_suite; defined here so that path does not raise NameError.
+FLAG_FIRE_RATE_THRESHOLD = 0.3
+
 
 class MultiRunResult:
     """Aggregated results from running a single case multiple times."""

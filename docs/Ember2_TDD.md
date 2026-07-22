@@ -1558,7 +1558,7 @@ It should be possible to explain:
 - ~~vector index caching~~ — complete (v0.10.0): module-level dict cache in vector_index.py; auto-invalidation on save_index(); eliminated 2-4s disk reads per query
 - improve trigger coverage without coupling to one test case
 - ~~add ADR for constitutional review at inference time~~ — resolved (ADR-001, ADR-010)
-- ~~cloud model provider support~~ — complete (v0.10.2): LLMAdapter dispatches by model prefix (claude-* → Anthropic API, else → Ollama); _get_provider_api_key() reads keyring then falls back to env var (ANTHROPIC_API_KEY); POST/GET /provider-key endpoints; GET /model returns cloud models alongside Ollama; claude-sonnet-4-20250514 and claude-haiku-4-5-20251001 available
+- ~~cloud model provider support~~ — complete (v0.10.2): LLMAdapter dispatches by model prefix (claude-* → Anthropic API, else → Ollama); _get_provider_api_key() reads keyring then falls back to env var (ANTHROPIC_API_KEY); POST/GET /provider-key endpoints; GET /model returns cloud models alongside Ollama; claude-sonnet-4-5-20250929 and claude-haiku-4-5-20251001 available
 - ~~cloud model evaluation~~ — complete (v0.10.2): Haiku 4.5 scored 8.7/10, Sonnet 4.6 scored 8.5/10 (18/18 passed, same harness, same vault); memory grounding jumped from 2.3 (local) to 8.7; constitutional behavior from 2.3 to 9.0
 - ~~default model switch~~ — complete (v0.10.2): qwen3:8b replaces qwen2.5:14b (5.4/10 vs 4.7/10, half the size, faster)
 - ~~model selection guide~~ — complete (v0.10.2): docs/model_guide.md with real eval data for 8 models, linked from installer Done screen
@@ -1756,7 +1756,7 @@ Deferred from v0.16.0:
 - BUG-STOP-001 — stop button latency: still open (carried forward as v0.17.x open issue)
 - Yes/No ask-first buttons (G+M coordination): UI side complete, backend toggle wired
 
-**v0.17.1 — Retrieval quality, vision, and routing fixes** (in progress)
+**v0.17.1 — Retrieval quality, vision, and routing fixes** (shipped 2026-04-29)
 - Constitutional review context signal (ADR-035) — `SafetyReviewContext` carries `is_vault_grounded` and `t2_pattern_category`; two-step review prompt for T2-triggered cases
 - Cross-session pattern detection (ADR-021) — `PatternSignal`, `detect_t2_pattern()`, `contains_named_third_party` flag at write time, `<cross_session_pattern>` prompt injection
 - Lodestone path 2 — three-stage reflection synthesis produces inferred vault records (`acquisition_path: "inferred"`, `confirmed: false`); monthly cadence; confirmed-only injection gate unchanged
@@ -1768,6 +1768,18 @@ Deferred from v0.16.0:
 - ChatGPT import: `create_time` Unix epoch → ISO 8601 at ingestion; renderer epoch fallback for existing records
 - Vision pipeline structured logging to `logs/vision/YYYY-MM-DD.log`
 - UAT runner `--ids` flag for targeted re-run
+
+**v0.18.0: UAT response cycle, chat_completions decomposition, response-quality evals** (landed on main; release pending)
+- ~~Streaming early-return fix (A1)~~ ✓ - every early-return path returns `StreamingResponse` when `stream=True`
+- ~~Append-only state resolution (A2, ADR-038)~~ ✓ - pending/open_loop resolution writes tombstones, never mutates in place
+- ~~Safe JSON I/O helpers (A3, B-IO-001)~~ ✓ - deferred JSON read/write routed through safe helpers
+- ~~chat_completions decomposition, issue #93 (a/b/c)~~ ✓ - SSE serializer consolidation + wire contract v2 (ADR-040), PreGeneration terminal router (ADR-041), GenerationContext two-phase enrichment pipeline (ADR-042)
+- ~~Response-quality eval framework~~ ✓ - multi-turn drift, grounding fidelity, register consistency; ClaudeJudge retry + transient-failure tolerance; provenance-stamped, git-versioned baselines; local Tier-4 release-gate command
+- ~~Constitution v0.8~~ ✓
+- ~~UAT workstream B fixes~~ ✓ - B-STATE-001 (open_loop suppression), B-IO-001, B-CTX-001 (stage-2 misroute), B-SSE-001 (SSE status frame), B-NARR-001/002, B-DODGE-001, B-LOOP-001
+- ~~Coaching filter maturation, deviation detector and self-narrative check fixes~~ ✓ - 2026-05-11 UAT findings (B1-B7)
+- ~~CLOUD_MODELS reachable-id fix~~ ✓ - `claude-sonnet-4-5-20250929`
+- ADR-037 classifier SetFit graduation - step A on branch, not yet merged
 
 **Post-v0.17.1**
 - Multi-user vault isolation

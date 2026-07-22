@@ -50,6 +50,17 @@ class EmberLiveDriver:
         self.session_id = session_id
         self.timeout = timeout
 
+    def new_session(self, prefix: str = "sess_eval") -> str:
+        """Mint a fresh unique session id for this driver and return it.
+
+        Each eval run must use its own session so multi-turn conversations
+        (drift) do not accumulate across runs - otherwise run 2 turn 1 lands as
+        turn 21 of run 1's session and the window-delta math is meaningless.
+        """
+        import uuid
+        self.session_id = f"{prefix}_{uuid.uuid4().hex}"
+        return self.session_id
+
     def _headers(self) -> dict:
         # No X-Test-Session: grounding/drift need real retrieval against the
         # swapped test vault.

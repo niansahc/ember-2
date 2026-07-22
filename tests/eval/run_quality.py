@@ -107,6 +107,7 @@ def _seed_visible(rec: dict, retrieved_texts: list) -> bool:
 def run_grounding_eval(driver, seed_fn, judge_claims, ratio_threshold=0.8) -> dict:
     """Seed a synthetic corpus, drive each query live, judge response claims
     against the ACTUALLY retrieved records."""
+    driver.new_session("sess_grounding")  # fresh session per run
     corpus = seed_fn()
 
     # Vault-alignment guard. The corpus is seeded into THIS process's vault, but
@@ -153,6 +154,7 @@ def run_grounding_eval(driver, seed_fn, judge_claims, ratio_threshold=0.8) -> di
 def run_drift_eval(driver, score_turn_fn, script=DRIFT_SCRIPT,
                    threshold=0.5, window=5) -> dict:
     """Drive the canned 20-turn script live; score each turn; gate on window delta."""
+    driver.new_session("sess_drift")  # isolate this run's conversation from prior runs
     per_dim = {d: [] for d in DRIFT_DIMENSIONS}
     total_latency = 0.0
     judge_errors = 0

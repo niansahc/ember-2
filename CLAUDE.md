@@ -6,6 +6,25 @@ ADRs: `docs/adr/`
 
 ---
 
+## Response brevity
+
+Reports and status updates: facts, numbers, hashes. No narrative.
+
+No preamble. No "I'll now..." or "Let me..."
+No postamble. No "Let me know if..." or "Want me to..."
+No apology unless a real error occurred.
+No restatement of the request before answering it.
+
+Grill answers: number only unless clarification needed.
+
+Report format: what changed, the identifier (commit/PR/branch), verification result. One line per fact when possible. Prose only when explanation genuinely aids understanding.
+
+Do not narrate what you are about to do. Do it and report the result.
+
+Exceptions: real diagnoses, real trade-off explanations, and grill findings where the model of the world matters. Verbosity there is signal.
+
+---
+
 ## What This Project Is
 
 Ember-2 is a **local, private personal intelligence system** — not a chatbot. It supports reasoning grounded in real memory, pattern recognition over time, daily/weekly reflection, and long-term life and work continuity. The goal is a durable personal intelligence layer that improves with use.

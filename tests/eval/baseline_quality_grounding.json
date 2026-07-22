@@ -1,0 +1,9 @@
+{
+  "supported_ratio": 1.0,
+  "pass_rate": 1.0,
+  "_meta": {
+    "eval": "grounding",
+    "judge_model": "claude-sonnet-4-5-20250929",
+    "generated_at": "2026-07-21T18:28:06.839139+00:00"
+  }
+}

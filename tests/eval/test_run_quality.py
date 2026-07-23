@@ -28,6 +28,11 @@ class FakeDriver:
     def fetch_retrieved_texts(self, message):
         return list(self._retrieved)
 
+    def new_session(self, prefix="sess_eval"):
+        import uuid
+        self.session_id = f"{prefix}_{uuid.uuid4().hex}"
+        return self.session_id
+
 
 def test_grounding_flow_fails_on_confabulation_and_never_leaks_text():
     driver = FakeDriver(response=f"Your deadline is Monday. {SECRET}",
@@ -152,6 +157,28 @@ def test_grounding_flow_counts_judge_failures():
         driver, seed_fn=lambda: [{"query": "q", "text": "some record text"}],
         judge_claims=lambda r, ret: [{"claim": GROUNDING_ERROR_CLAIM, "supported": False}])
     assert rep["judge_errors"] == 1
+
+
+def test_new_session_mints_unique_ids():
+    from tests.eval.live_driver import EmberLiveDriver
+    d = EmberLiveDriver()
+    a = d.new_session("sess_drift")
+    b = d.new_session("sess_drift")
+    assert a != b
+    assert a.startswith("sess_drift_")
+    assert d.session_id == b
+
+
+def test_drift_isolates_session_across_runs():
+    # Each drift run must use a fresh session so run 2 does not append to run 1.
+    driver = FakeDriver(response="a reply")
+    stable = lambda u, r: {"register": 3.0, "honesty": 3.0, "self_narrative": 3.0}
+    run_drift_eval(driver, score_turn_fn=stable)
+    s1 = driver.session_id
+    run_drift_eval(driver, score_turn_fn=stable)
+    s2 = driver.session_id
+    assert s1 != s2
+    assert s1.startswith("sess_drift_") and s2.startswith("sess_drift_")
 
 
 def test_drift_flow_counts_judge_failures():

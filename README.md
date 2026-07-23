@@ -370,7 +370,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - Multi-record state categories for open_loop and next_action (capped at 5)
 - Commitment detection — post-generation detector writes open_loop state records
 - Daily, weekly, and session reflection generation
-- Constitutional review (9 principles, constitution v0.7, streaming-compatible — MVR prompt optimization)
+- Constitutional review (9 principles, constitution v0.8, streaming-compatible — MVR prompt optimization)
 - Conversation sessions with projects, rename, soft-delete, auto-title
 - Task layer — create and track tasks through conversation or direct request
 - Task sidebar tray in the UI with checkbox completion
@@ -409,7 +409,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 - Web search accuracy eval (30 questions, 5 categories, latency tracking)
 - Model selection guide with real eval data (docs/model_guide.md)
 - Vault health audit (7 checks, GREEN/YELLOW/RED health score)
-- 1733 pytest tests collected (20 deselected)
+- 2277 pytest tests collected (70 deselected)
 
 **Running the eval suite:**
 ```bash
@@ -429,7 +429,7 @@ pytest tests/eval/ -m eval --runs 3   # 3-run minimum for signal
 **v0.16.0** — Stability & UAT cycle: autonomous web search default, vision pipeline fix, vault badge fixes, constitutional review blank response fix, style pack system, self-hosted fonts, appearance tab ✓
 **v0.17.0** — Smarter search routing, anti-sycophancy, ChatGPT import fixes: ask-first intent classifier (ADR-034), StateExtractor gated to live conversation turns (ADR-033), coaching filter expansion, UAT suite rewrite (25 behavioral acceptance tests), CI pytest workflow ✓
 **v0.17.1** — Retrieval quality, vision, and routing fixes: SafetyReviewContext extension (ADR-035), cross-session pattern detection (ADR-021), Lodestone path 2 (inferred records), vision pipeline env var configurability, ask-first UI toggle re-enabled ✓
-**v0.18.0** — Coaching filter maturation, date-arithmetic bug fix, eval privacy fix, post-gen URL scanner, token-overflow guardrail, web search freshness, ADR-037 classifier migration, StateExtractor coverage, review SSE UX (in progress)
+**v0.18.0** — UAT response cycle, chat_completions decomposition, and response-quality evals: append-only state resolution (ADR-038, A2), safe JSON I/O helpers (A3), streaming early-return fix (A1); chat_completions decomposition (issue #93 a/b/c) with SSE wire contract v2 (ADR-040), PreGeneration terminal router (ADR-041), GenerationContext two-phase enrichment pipeline (ADR-042); response-quality eval framework (multi-turn drift, grounding fidelity, register consistency; judge retry and transient-failure tolerance; provenance-stamped baselines); constitution v0.8; coaching filter maturation, date-arithmetic fix, eval privacy fix, post-gen URL scanner, token-overflow guardrail, web search freshness, ADR-037 classifier migration; UAT workstream B fixes (B-STATE-001, B-IO-001, B-CTX-001, B-SSE-001, narrative/dodge/loop). Landed on main; release pending.
 **Post-v0.18.0** — Multi-user vault isolation, full platform parity
 
 ---

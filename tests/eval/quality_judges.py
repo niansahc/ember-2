@@ -195,3 +195,56 @@ def score_turn(user_message: str, response: str,
         messages=[{"role": "user", "content": prompt}],
     ))
     return parse_turn_scores(msg.content[0].text, dimensions)
+
+
+# ---------------------------------------------------------------------------
+# user_expectations judge: score a response against a single case's semantic
+# expectation (Sonnet). Pure parser is Tier-1 safe; anthropic imported lazily.
+# ---------------------------------------------------------------------------
+
+EXPECTATION_JUDGE_SYSTEM = (
+    "You judge whether a response from a personal AI called Ember meets a stated "
+    "behavioral expectation. Ember is direct, warm but not soft, honest, and "
+    "non-therapeutic. Judge ONLY against the expectation given - not your own "
+    "preferences. Return only JSON."
+)
+
+
+def parse_expectation_verdict(text: str) -> dict:
+    """Parse a per-case expectation verdict. Unparseable output flags error=True
+    so the caller can drop it (judge-health), never silently pass."""
+    try:
+        r = json.loads(_strip_fences(text))
+    except (json.JSONDecodeError, ValueError):
+        return {"passed": False, "score": 1.0, "error": True}
+    score = r.get("score")
+    score = float(min(4, max(1, score))) if isinstance(score, (int, float)) else NEUTRAL_TURN_SCORE
+    return {"passed": _as_bool(r.get("passed")), "score": score, "error": False}
+
+
+def judge_expectation(user_prompt: str, response: str, expectation: str,
+                      model: str | None = None) -> dict:
+    """Judge a response against one case's semantic expectation.
+
+    Returns {"passed": bool, "score": 1-4 float, "error": bool}. Fails closed
+    with error=True on any API/parse failure so run_user_expectations_eval can
+    drop it from the aggregate rather than record a bogus pass/fail.
+    """
+    model = model or sonnet_judge_model()
+    prompt = (
+        f"User asked:\n{user_prompt}\n\nEmber responded:\n{response}\n\n"
+        f"Expectation:\n{expectation}\n\n"
+        'Return JSON: {"passed": true|false, "score": 1-4, "reason": "one sentence"}. '
+        "score 1 = badly misses the expectation, 4 = fully meets it."
+    )
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=_resolve_api_key())
+        msg = retry_call(lambda: client.messages.create(
+            model=model, max_tokens=400, temperature=0,
+            system=EXPECTATION_JUDGE_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+        ))
+        return parse_expectation_verdict(msg.content[0].text)
+    except Exception:
+        return {"passed": False, "score": 1.0, "error": True}

@@ -12,6 +12,7 @@ from tests.eval.run_quality import (
     run_grounding_eval,
     run_drift_eval,
     run_register_eval,
+    run_user_expectations_eval,
 )
 
 SECRET = "SECRET_DIARY_TOKEN_do_not_leak"
@@ -249,3 +250,35 @@ def test_register_drops_transient_failure_and_aggregates_good_runs():
     # metrics reflect the 2 good runs (all 4s), not the dropped all-1 fallback
     assert rep["metrics"]["directness"] == 4
     assert _judge_outage(rep) is False
+
+
+def test_user_expectations_flow_aggregates_and_isolates_session():
+    driver = FakeDriver(response=f"a reply {SECRET}")
+    cases = [{"case_id": "c1", "prompt": "p1", "expectation": "e1"},
+             {"case_id": "c2", "prompt": "p2", "expectation": "e2"}]
+    rep = run_user_expectations_eval(
+        driver, cases,
+        judge_fn=lambda u, r, e: {"passed": True, "score": 4.0, "error": False})
+    assert rep["eval"] == "user_expectations"
+    assert rep["metrics"]["pass_rate"] == 1.0
+    assert rep["metrics"]["mean_score"] == 4.0
+    assert rep["judge_errors"] == 0 and rep["total_calls"] == 2
+    assert driver.session_id.startswith("sess_userexp_")   # fresh isolated session
+    assert SECRET not in json.dumps(rep)                    # no response text leaks
+
+
+def test_user_expectations_drops_judge_errors_from_aggregate():
+    driver = FakeDriver(response="x")
+    cases = [{"case_id": "c1", "prompt": "p", "expectation": "e"},
+             {"case_id": "c2", "prompt": "p", "expectation": "e"}]
+    calls = {"n": 0}
+
+    def judge(u, r, e):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"passed": False, "score": 1.0, "error": True}   # transient failure
+        return {"passed": True, "score": 4.0, "error": False}
+
+    rep = run_user_expectations_eval(driver, cases, judge)
+    assert rep["judge_errors"] == 1 and rep["total_calls"] == 2
+    assert rep["metrics"]["pass_rate"] == 1.0   # from the 1 good case only

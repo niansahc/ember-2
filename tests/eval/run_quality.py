@@ -3,7 +3,7 @@ tests/eval/run_quality.py
 
 Local release-gate orchestrator for the response-quality eval framework.
 
-    python -m tests.eval.run_quality --evals register,grounding,drift
+    python -m tests.eval.run_quality --evals register,grounding,drift,user_expectations
 
 Runs the requested evals, writes a METADATA-ONLY report, and compares each eval's
 scalar metrics to its baseline (a >max-drop regression fails the gate). This runs
@@ -49,6 +49,7 @@ GATE_METRICS = {
     "register": ["pass_rate"],
     "grounding": ["supported_ratio", "pass_rate"],
     "drift": ["min_window_delta"],
+    "user_expectations": ["pass_rate"],
 }
 
 
@@ -232,6 +233,36 @@ def run_register_eval(judge, generate_fn, MultiRunResultCls,
             "total_calls": total_calls, "metrics": metrics}
 
 
+def run_user_expectations_eval(driver, cases, judge_fn) -> dict:
+    """Drive each case through the live pipeline and judge the response against
+    its semantic expectation (Sonnet). Gates on pass_rate; mean_score is
+    diagnostic. Judge failures are dropped from the aggregate (tolerance) and
+    counted for the outage guard, matching the other evals."""
+    driver.new_session("sess_userexp")  # fresh session per run
+    case_reports, passes, scores = [], [], []
+    judge_errors = 0
+    total_calls = 0
+    for case in cases:
+        total_calls += 1
+        response, latency = driver.send_turn(case["prompt"])
+        verdict = judge_fn(case["prompt"], response, case["expectation"])
+        if verdict.get("error"):
+            judge_errors += 1
+            logger.warning("[eval] user_expectations judge error on case %s "
+                           "(dropped from aggregate)", case["case_id"])
+            continue
+        passes.append(1.0 if verdict["passed"] else 0.0)
+        scores.append(verdict["score"])
+        case_reports.append(build_case_report(
+            case_id=case["case_id"], eval_name="user_expectations",
+            passed=verdict["passed"], metrics={"score": verdict["score"]},
+            latency=latency, word_count=len(response.split()),
+        ))
+    return {"eval": "user_expectations", "cases": case_reports,
+            "judge_errors": judge_errors, "total_calls": total_calls,
+            "metrics": {"pass_rate": _mean(passes), "mean_score": _mean(scores)}}
+
+
 def _gate(report: dict, baseline: dict, max_drop: float) -> dict:
     """Attach a baseline-regression verdict to an eval report.
 
@@ -248,7 +279,7 @@ def _gate(report: dict, baseline: dict, max_drop: float) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Response-quality eval release gate")
     parser.add_argument("--evals", default="register,grounding,drift",
-                        help="comma list: register,grounding,drift")
+                        help="comma list: register,grounding,drift,user_expectations")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--runs", type=int, default=5, help="register multi-run count")
     parser.add_argument("--max-drop", type=float, default=0.05)
@@ -271,7 +302,9 @@ def main(argv=None) -> int:
     from tests.eval.live_driver import EmberLiveDriver
     from tests.eval.quality_judges import (
         score_claims, score_turn, sonnet_judge_model, haiku_judge_model,
+        judge_expectation,
     )
+    from tests.eval.user_expectation_cases import USER_EXPECTATION_CASES
     from tests.eval.quality_report import write_report, load_baseline
 
     api_key = os.environ.get("EMBER_API_KEY")
@@ -295,6 +328,9 @@ def main(argv=None) -> int:
         elif name == "register":
             rep = run_register_eval(ClaudeJudge(model=sonnet_judge_model()),
                                     _ollama_generate, MultiRunResult, runs=args.runs)
+        elif name == "user_expectations":
+            rep = run_user_expectations_eval(driver, USER_EXPECTATION_CASES,
+                                             judge_expectation)
         else:
             print(f"[eval] unknown eval '{name}', skipping")
             continue

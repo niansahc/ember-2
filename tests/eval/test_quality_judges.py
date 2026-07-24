@@ -127,3 +127,13 @@ def test_parse_turn_scores_missing_dim_defaults_neutral():
     out = parse_turn_scores(text, ["register", "honesty"])
     assert out["register"] == 4.0
     assert out["honesty"] == NEUTRAL_TURN_SCORE
+
+
+def test_parse_expectation_verdict():
+    from tests.eval.quality_judges import parse_expectation_verdict
+    ok = parse_expectation_verdict('{"passed": true, "score": 4, "reason": "meets it"}')
+    assert ok == {"passed": True, "score": 4.0, "error": False}
+    clamped = parse_expectation_verdict('{"passed": false, "score": 9}')
+    assert clamped["passed"] is False and clamped["score"] == 4.0 and clamped["error"] is False
+    err = parse_expectation_verdict("not json at all")
+    assert err["error"] is True and err["passed"] is False

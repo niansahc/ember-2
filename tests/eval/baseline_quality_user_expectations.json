@@ -1,0 +1,9 @@
+{
+  "pass_rate": 0.75,
+  "mean_score": 3.4375,
+  "_meta": {
+    "eval": "user_expectations",
+    "judge_model": "claude-sonnet-4-5-20250929",
+    "generated_at": "2026-07-24T10:34:33.917280+00:00"
+  }
+}

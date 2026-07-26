@@ -59,12 +59,15 @@ def _mean(xs) -> float:
 
 
 def _judge_outage(rep: dict, max_rate: float = MAX_JUDGE_ERROR_RATE) -> bool:
-    """True when an eval's judge-failure rate is high enough to distrust the whole
-    run (a real outage), vs a tolerable handful of transient drops."""
+    """True when an eval's failed-call rate is high enough to distrust the whole
+    run (a real outage), vs a tolerable handful of transient drops. Failed calls
+    are judge failures plus turns that never generated (e.g. the live API timed
+    out), so a slow or unhealthy API aborts cleanly instead of crashing the run."""
     total = rep.get("total_calls", 0)
     if not total:
         return False
-    return (rep.get("judge_errors", 0) / total) > max_rate
+    failed = rep.get("judge_errors", 0) + rep.get("turn_errors", 0)
+    return (failed / total) > max_rate
 
 
 def _baseline_payload(metrics: dict, eval_name: str, judge_model: str,
@@ -236,15 +239,24 @@ def run_register_eval(judge, generate_fn, MultiRunResultCls,
 def run_user_expectations_eval(driver, cases, judge_fn) -> dict:
     """Drive each case through the live pipeline and judge the response against
     its semantic expectation (Sonnet). Gates on pass_rate; mean_score is
-    diagnostic. Judge failures are dropped from the aggregate (tolerance) and
-    counted for the outage guard, matching the other evals."""
+    diagnostic. Judge failures and turns that never generated (e.g. the live API
+    timed out) are both dropped from the aggregate and counted for the outage
+    guard, matching the other evals. A single slow or failed turn must not crash
+    the whole run - it is dropped and the run continues on the remaining cases."""
     driver.new_session("sess_userexp")  # fresh session per run
     case_reports, passes, scores = [], [], []
     judge_errors = 0
+    turn_errors = 0
     total_calls = 0
     for case in cases:
         total_calls += 1
-        response, latency = driver.send_turn(case["prompt"])
+        try:
+            response, latency = driver.send_turn(case["prompt"])
+        except Exception as exc:  # noqa: BLE001 - any transport failure drops the case
+            turn_errors += 1
+            logger.warning("[eval] user_expectations turn error on case %s "
+                           "(dropped from aggregate): %s", case["case_id"], exc)
+            continue
         verdict = judge_fn(case["prompt"], response, case["expectation"])
         if verdict.get("error"):
             judge_errors += 1
@@ -259,7 +271,8 @@ def run_user_expectations_eval(driver, cases, judge_fn) -> dict:
             latency=latency, word_count=len(response.split()),
         ))
     return {"eval": "user_expectations", "cases": case_reports,
-            "judge_errors": judge_errors, "total_calls": total_calls,
+            "judge_errors": judge_errors, "turn_errors": turn_errors,
+            "total_calls": total_calls,
             "metrics": {"pass_rate": _mean(passes), "mean_score": _mean(scores)}}
 
 
@@ -354,18 +367,21 @@ def main(argv=None) -> int:
         # (bad key, unreachable model) where the whole run is untrustworthy - then
         # refuse to write a baseline or pass the gate.
         je = rep.get("judge_errors", 0)
+        te = rep.get("turn_errors", 0)
         total = rep.get("total_calls", 0)
         if _judge_outage(rep):
-            print(f"[eval] {name}: JUDGE OUTAGE - {je}/{total} judge calls failed "
-                  f"(> {MAX_JUDGE_ERROR_RATE:.0%}); results are invalid (check the "
-                  "ANTHROPIC key and that the judge model id is accessible). NOT "
-                  "writing a baseline and NOT passing the gate.")
+            print(f"[eval] {name}: RUN OUTAGE - {je + te}/{total} calls failed "
+                  f"(judge={je}, turn={te}; > {MAX_JUDGE_ERROR_RATE:.0%}); results are "
+                  "invalid (check the ANTHROPIC key and judge model id, and that the "
+                  "live API is healthy and fast enough to answer within --timeout). "
+                  "NOT writing a baseline and NOT passing the gate.")
             overall_ok = False
             reports.append(rep)
             continue
-        if je:
-            print(f"[eval] {name}: {je}/{total} judge call(s) failed transiently and "
-                  "were dropped from the aggregate; proceeding on the rest.")
+        if je or te:
+            print(f"[eval] {name}: {je + te}/{total} call(s) failed transiently "
+                  f"(judge={je}, turn={te}) and were dropped from the aggregate; "
+                  "proceeding on the rest.")
 
         baseline_path = f"{args.baseline_dir}/baseline_quality_{name}.json"
         baseline = load_baseline(baseline_path)

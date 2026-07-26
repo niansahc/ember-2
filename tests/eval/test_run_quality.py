@@ -13,6 +13,7 @@ from tests.eval.run_quality import (
     run_drift_eval,
     run_register_eval,
     run_user_expectations_eval,
+    _judge_outage,
 )
 
 SECRET = "SECRET_DIARY_TOKEN_do_not_leak"
@@ -282,3 +283,44 @@ def test_user_expectations_drops_judge_errors_from_aggregate():
     rep = run_user_expectations_eval(driver, cases, judge)
     assert rep["judge_errors"] == 1 and rep["total_calls"] == 2
     assert rep["metrics"]["pass_rate"] == 1.0   # from the 1 good case only
+
+
+class _TimingOutDriver:
+    """A live driver whose send_turn raises (mimics a per-turn API read timeout)."""
+
+    def __init__(self, fail_on_indices):
+        self._fail = set(fail_on_indices)
+        self._i = -1
+
+    def new_session(self, prefix="sess_eval"):
+        import uuid
+        self.session_id = f"{prefix}_{uuid.uuid4().hex}"
+        return self.session_id
+
+    def send_turn(self, message):
+        self._i += 1
+        if self._i in self._fail:
+            raise TimeoutError("read timed out")
+        return "a fine reply", 0.5
+
+
+def test_user_expectations_drops_timed_out_turn_without_crashing():
+    # A turn that times out must be dropped and counted, not crash the whole run.
+    driver = _TimingOutDriver(fail_on_indices={1})  # 2nd of 3 cases times out
+    cases = [{"case_id": f"c{i}", "prompt": "p", "expectation": "e"} for i in range(3)]
+    rep = run_user_expectations_eval(
+        driver, cases,
+        judge_fn=lambda u, r, e: {"passed": True, "score": 4.0, "error": False})
+    assert rep["turn_errors"] == 1
+    assert rep["total_calls"] == 3
+    assert rep["metrics"]["pass_rate"] == 1.0        # the 2 good cases still aggregate
+    assert len(rep["cases"]) == 2
+
+
+def test_judge_outage_counts_turn_errors_toward_the_rate():
+    # The outage guard must treat un-generated turns like judge failures, so a slow
+    # or unhealthy API aborts cleanly instead of silently baselining a sparse run.
+    assert _judge_outage({"turn_errors": 5, "total_calls": 9}) is True    # 56%
+    assert _judge_outage({"turn_errors": 3, "total_calls": 9}) is False   # 33% tolerated
+    assert _judge_outage({"judge_errors": 2, "turn_errors": 3,
+                          "total_calls": 9}) is True                      # 56% combined

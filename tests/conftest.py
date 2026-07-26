@@ -1,7 +1,7 @@
-"""
+r"""
 tests/conftest.py
 
-Session-scoped vault isolation fixture.
+Session-scoped vault isolation and rate-limiter fixtures.
 
 Ensures ALL tests run against a temporary test vault, never the live
 vault (C:\EmberVault). The override uses the runtime mechanism in
@@ -17,6 +17,35 @@ import pytest
 from pathlib import Path
 
 from src.core.config import set_vault_path_override, clear_vault_path_override
+
+
+@pytest.fixture(scope="session", autouse=True)
+def disable_rate_limiter():
+    """Disable the shared slowapi limiter for the whole test session.
+
+    The limiter is global (60/minute, keyed on remote address) and every
+    TestClient request presents the same synthetic address, so the entire
+    suite draws on one bucket. That makes independent test files couple
+    through a shared global: adding an endpoint test anywhere can push an
+    unrelated file over the limit and fail it with 429.
+
+    That is not hypothetical. CI runs the suite in ~83s where local runs
+    take ~14 minutes, so the bucket refills locally and does not in CI.
+    Three new endpoint tests in test_vision_failure_path.py were enough to
+    fail test_web_search_header.py in CI while the full suite passed
+    locally, which is a false signal in the direction that matters least.
+
+    Rate limiting is production behaviour worth its own targeted test
+    (see tests/test_pin_service.py for the PIN attempt limiter, which
+    manages its own state). It should not be an implicit, order-dependent
+    budget shared across every test that touches the API.
+    """
+    from src.api.limiter import limiter
+
+    previous = limiter.enabled
+    limiter.enabled = False
+    yield
+    limiter.enabled = previous
 
 
 @pytest.fixture(scope="session", autouse=True)

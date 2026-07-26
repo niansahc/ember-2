@@ -164,7 +164,7 @@ model=EMBER_MODEL_ID
 router = APIRouter()
 
 
-from src.llm.vision_service import VisionService
+from src.llm.vision_service import VisionService, VISION_UNAVAILABLE_RESPONSE
 
 memory_service = MemoryService()
 context_service = ContextService()
@@ -1637,11 +1637,37 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # best and the trigger for the trained "I can't view images" RLHF
     # refusal at worst. Clear image_data here so only the VL preprocessor
     # ever sees the raw bytes; downstream LLM calls stay text-only.
-    # When preprocessing FAILED (used_vision=False), keep image_data on
-    # the packet so the legacy vision path can still attempt direct
-    # routing if a vision-capable text model is configured.
-    if used_vision:
+    #
+    # Issue #130: image_data is now cleared on BOTH branches. Previously it
+    # was retained when preprocessing failed, so a "legacy direct routing"
+    # fallback could hand the raw images to the chat model. Nothing verified
+    # that the chat model was vision-capable and no shipped configuration
+    # uses one (the installer offers only the qwen3 text family), so in
+    # practice that path forwarded images to a text-only model, Ollama
+    # returned 400 "model does not support multimodal requests", and the
+    # exception escaped the ASGI handler after the 200 and the source badge
+    # frames had already been written. The user saw badges and no reply.
+    if image_data:
         context_packet.image_data = []
+
+    # A failed preprocess is terminal for an image-bearing turn. There is
+    # nothing left to answer from: the image is the query, and no text model
+    # downstream can read it. Short-circuit with a fixed message rather than
+    # generating a reply that would either hallucinate image content or hit
+    # the 400 above. early_return_response owns the stream-vs-JSON decision
+    # (CLAUDE.md Bug Standard #1) so a streaming client gets SSE, not a
+    # blank. The log line confirms the executed path at runtime (Standard #6).
+    if image_data and not used_vision:
+        logger.warning(
+            "[VISION] Preprocess unavailable - short-circuiting turn (images=%d)",
+            len(image_data),
+        )
+        return early_return_response(
+            VISION_UNAVAILABLE_RESPONSE,
+            _router_completion_id,
+            stream=bool(body.stream),
+            label="vision_unavailable",
+        )
 
     # Web search autonomous mode: when web_search_autonomous=True, execute
     # searches directly on thin-vault factual queries instead of telling the

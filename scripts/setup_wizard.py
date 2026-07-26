@@ -34,7 +34,12 @@ REQUIREMENTS_PATH = REPO_ROOT / "requirements.txt"
 
 DEFAULT_VAULT = r"C:\EmberVault"
 DEFAULT_MODEL = "qwen2.5:14b"
-DEFAULT_VISION = "llama3.2-vision:11b"
+# Issue #130: llama3.2-vision:11b uses the mllama architecture, which
+# Ollama's engine dropped at v0.30.0 (llama.cpp never supported it
+# upstream). It pulls and lists fine but cannot load, so it is not a
+# viable default. qwen3-vl is the current-engine equivalent and matches
+# DEFAULT_VISION_MODEL in src/llm/vision_service.py.
+DEFAULT_VISION = "qwen3-vl:8b"
 
 
 # ---------------------------------------------------------------------------

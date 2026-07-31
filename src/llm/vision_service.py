@@ -48,6 +48,19 @@ VISION_PROMPT = (
 # Maximum tokens for vision model output. Keeps preprocessing fast.
 VISION_MAX_TOKENS = 300
 
+# Emitted when images are present but VL preprocessing did not produce a
+# description (issue #130). Same trust class as SCRIPTED_CLARIFICATION_RESPONSE
+# in src/context/policies.py: a fixed string, never model-generated, so it
+# cannot itself be a hallucination.
+#
+# States the cause and the scope and stops. No apology, no closing question,
+# no offer to try again - the failure is environmental and retrying the same
+# turn will not clear it.
+VISION_UNAVAILABLE_RESPONSE: str = (
+    "I can't read that image right now. The vision model failed to load, "
+    "so image analysis is unavailable. Text conversation still works."
+)
+
 # JSON-lines structured log directory. Mirrors the pattern used by the
 # audit log and safety_reviews/coaching_filter logs — repo-local, one file
 # per UTC day. Diagnoses vision pipeline activity that the HTTP audit log

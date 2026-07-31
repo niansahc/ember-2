@@ -120,8 +120,13 @@ ollama pull qwen3:8b
 
 **Vision model** (for analyzing images in chat):
 ```
-ollama pull llama3.2-vision:11b
+ollama pull qwen3-vl:8b
 ```
+
+> Do not use `llama3.2-vision:11b`. It uses the `mllama` architecture, which
+> Ollama's engine dropped at v0.30.0. It still pulls and appears in
+> `ollama list`, but fails at load with
+> `unknown model architecture: 'mllama'`.
 
 Verify both are available:
 ```
@@ -191,7 +196,7 @@ Also set the model names (leave these as-is unless you pulled different models):
 
 ```
 EMBER_MODEL=qwen3:8b
-EMBER_VISION_MODEL=llama3.2-vision:11b
+EMBER_VISION_MODEL=qwen3-vl:8b
 ```
 
 > `.env` is gitignored. It will never be committed to the repository.

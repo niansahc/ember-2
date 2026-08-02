@@ -49,6 +49,18 @@ These decisions are locked. Do not undermine them:
 
 ---
 
+## Deployment Boundary
+
+Ember-2 ships for a single personal computer. Reference deployment: one user, local model via Ollama, default model per version.json era.
+
+Multi-user, voice, smart home, and server-class deployments are downstream consumers built outside this repo (e.g. ember-voice-gateway). The only in-repo support for such deployments is generic API capability: `caller_identity`, `access_tier`, and `modality` fields, ignorable by default.
+
+**Gate for any change: if a PC-only user's install changes at all, it does not ship in ember-2.**
+
+Nothing hardware-specific or deployment-specific enters defaults, docs, or the installer. Models are swappable components selected per release by eval, never an architectural dependency.
+
+---
+
 ## System Layers
 
 ```

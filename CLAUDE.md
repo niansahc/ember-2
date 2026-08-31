@@ -269,9 +269,13 @@ See [docs/current_state.md](docs/current_state.md).
 - ChatGPT import timestamp normalization (Unix epoch -> ISO 8601)
 - Vision pipeline structured logging
 
-**v0.18.0 - UAT Response Cycle (Workstream B)** (in final release gate)
+**v0.18.0 - UAT Response Cycle (Workstream B)** ✓ (shipped 2026-08-01)
 - Classifier, coaching filter, deviation detector, and self-narrative check fixes addressing 2026-05-11 UAT findings (B1-B7, B-CTX-001, B-NARR-001/002, B-DODGE-001, B-LOOP-001)
 - Known issues catalogued in `docs/KNOWN_ISSUES.md`
+
+**v0.19.0 — Research Graduation** (in progress)
+- ADR-037 filed (Proposed) — intent classifier SetFit graduation, formalizing the ADR-034 upgrade path. Step A (labeled example buckets) exists but is stale/unmerged; Steps B-E not started or descoped. See ADR-037 for full status.
+- Research review graduation items tracked in `docs/Ember2_TDD.md` §25.3: LightRAG architecture investigation, SWAY counterfactual CoT eval, MemMachine retrieval depth ablation, SetFit labeling session
 
 **Deferred until actively using Ember:**
 - Health ingestion (Fitbit/Apple/Garmin)
@@ -330,7 +334,7 @@ When adding new dependencies (npm or pip):
 pytest tests/
 ```
 
-2277 tests collected (70 deselected) covering: constitution loader, policy service (including relational_hedging and preference_compliance triggers), review service, vault read/write, state layer, state extractor, state staleness (and live-turn gating per ADR-033), timer service, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management, task layer, commitment detection, session reflection, PIN/passphrase service, soft-delete filtering, temporal awareness, nature loader, identity rules loader, type gating, memory tiering, SQLite migration, grounding check, JSON import, SSE events, model filter, monthly reflection, index.html cache, manual eval (multi-annotation), lodestone loader, lodestone service, lodestone resolver, lodestone API, lodestone synthesis (path 2 inferred records), deviation detector, deviation API, web search pipeline, vision pipeline, vision service logging, badge signal integrity, ChatGPT role separation and normalization, intent classifier (ADR-034), pattern detector (ADR-021), third-party flag, CSP headers, vault storage, vault swap, vault toggle, PreGeneration terminal router and enrichment-dependent interceptors (ADR-041), GenerationContext two-phase enrichment pipeline (ADR-042), SSE wire contract v2 (ADR-040), response-quality eval framework (drift/grounding/register aggregation, judge retry and transient-failure tolerance, baseline provenance).
+2292 tests collected (70 deselected) covering: constitution loader, policy service (including relational_hedging and preference_compliance triggers), review service, vault read/write, state layer, state extractor, state staleness (and live-turn gating per ADR-033), timer service, project boost, index caching, memory type enforcement, health check, ingest upload, cloud provider dispatch, provider API key management, task layer, commitment detection, session reflection, PIN/passphrase service, soft-delete filtering, temporal awareness, nature loader, identity rules loader, type gating, memory tiering, SQLite migration, grounding check, JSON import, SSE events, model filter, monthly reflection, index.html cache, manual eval (multi-annotation), lodestone loader, lodestone service, lodestone resolver, lodestone API, lodestone synthesis (path 2 inferred records), deviation detector, deviation API, web search pipeline, vision pipeline, vision service logging, badge signal integrity, ChatGPT role separation and normalization, intent classifier (ADR-034), pattern detector (ADR-021), third-party flag, CSP headers, vault storage, vault swap, vault toggle, PreGeneration terminal router and enrichment-dependent interceptors (ADR-041), GenerationContext two-phase enrichment pipeline (ADR-042), SSE wire contract v2 (ADR-040), response-quality eval framework (drift/grounding/register aggregation, judge retry and transient-failure tolerance, baseline provenance).
 Tests do not mock the filesystem vault (real path via `PRIVATE_VAULT_PATH`). Integration tests hit real storage.
 
 When adding features: unit test normalizers, filters, ranking functions, and state resolution. Integration test full pipeline paths.

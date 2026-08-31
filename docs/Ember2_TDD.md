@@ -1781,6 +1781,12 @@ Deferred from v0.16.0:
 - ~~CLOUD_MODELS reachable-id fix~~ ✓ - `claude-sonnet-4-5-20250929`
 - ADR-037 classifier SetFit graduation - step A on branch, not yet merged
 
+**v0.19.0: research graduation** (from the v0.19.0 research review; see 50.1 for the underlying watch items)
+- LightRAG architecture investigation - does dual-level entity/relationship retrieval fit a typed append-only vault under the local-first constraint, and what does indexing cost. Investigation only; outcome is an ADR or an explicit discard. Corroborating evidence: Opal (arXiv:2604.02522), +13 percentage points from KG enrichment, hardware-agnostic
+- SWAY counterfactual CoT eval - test counterfactual CoT against the current coaching filter on the manual battery (docs/eval_manual_test_battery.md). Outcome: adopt, reject, or hybridize. Was a watch item through v0.18.0; now an active eval task
+- MemMachine retrieval depth ablation - escalated from v0.18.0, where it was reviewed and deferred but never run. Note the known measurement floor: eval_retrieval.py cannot resolve improvements below 6.67% (one query verdict change), so the ablation needs a measurement plan before it starts. Evaluate RRF fusion (MemX, arXiv:2603.16171) in the same pass
+- SetFit labeling session - 150 examples per intent class from the classifier telemetry log (ADR-034), 0.85 confidence threshold for the Stage 1 / Stage 2 cascade. Threshold evidence: W5H2 + SetFit (arXiv:2602.18922), 91.1% accuracy at 22M parameters. Blocked: ADR-037 does not exist yet and must be written first
+
 **Post-v0.17.1**
 - Multi-user vault isolation
 - Windows/Mac/Linux full parity
@@ -1936,17 +1942,17 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 
   Nucleus + neighbors: No documented failure pattern in Ember's eval history or KNOWN_ISSUES.md where relevant memory was missed due to fragmentation across adjacent records. The documented failure mode is vague queries producing hallucination on plausibly-matched but wrong records, a scoring problem not a fragmentation problem.
 
-  Decision: both changes deferred. Revisit when a specific failure either change would fix is observed in production.
-  → informs: deferred (no version assigned)
-  → graduation trigger: documented retrieval failure attributable to fixed injection depth or fragmented-context recall
+  Decision (v0.18.0): both changes deferred. Revisit when a specific failure either change would fix is observed in production.
 
-- **FileGram procedural memory paradigm** (Synvo-ai, arXiv:2604.04901, April 2026) — First benchmark treating agent personalization as procedural behavioral memory (workflow traces, file-system patterns) rather than semantic retrieval over text. Relevant if Ember extends beyond conversation records to behavioral memory types.
-  → informs: post-v0.18.0 (behavioral memory types — no version assigned)
-  → graduation trigger: Ember expands memory types beyond conversation, journal, profile, reflection
+  v0.19.0 disposition: the depth ablation was reviewed and deferred in v0.18.0 but never actually run - eval_history.md records no ablation. Item stays open and the ablation is escalated to a v0.19.0 task (see 25.3). Nucleus + neighbors remains deferred on the original reasoning: still no documented fragmentation failure.
+  → informs: v0.19.0 (retrieval depth ablation)
+  → graduation trigger: ablation run and result recorded in eval_history.md
 
-- **SWAY counterfactual CoT sycophancy mitigation** (Bhalla & Gligorić, JHU, arXiv:2604.02423, April 2026) — Explicit anti-sycophancy instruction yields moderate reductions and can backfire; counterfactual CoT mitigation drives sycophancy to near-zero without suppressing genuine responsiveness. Potential upgrade to position_holding and relational_hedging intervention pattern. Conflicts with current coaching filter approach — evaluate before v0.18.0 sycophancy work.
-  → informs: v0.18.0 (sycophancy intervention evaluation)
-  → graduation trigger: counterfactual CoT tested against current coaching filter on 19-question battery
+- **SWAY counterfactual CoT sycophancy mitigation** (Bhalla & Gligorić, JHU, arXiv:2604.02423, April 2026) — Explicit anti-sycophancy instruction yields moderate reductions and can backfire; counterfactual CoT mitigation drives sycophancy to near-zero without suppressing genuine responsiveness. Potential upgrade to position_holding and relational_hedging intervention pattern. Conflicts with current coaching filter approach.
+
+  v0.19.0 disposition: moved out of watch and into an active v0.19.0 eval task - test counterfactual CoT against the coaching filter on the manual battery (see 25.3). No longer research-only.
+  → informs: v0.19.0 (active eval task, not watch)
+  → graduation trigger: eval result recorded; adopt, reject, or hybridize with the coaching filter
 
 - **Neurodivergent-aware AI co-regulation framework** (Piskala, arXiv:2507.06864, 2025) — Privacy-first on-device framework for ADHD professionals using attention-state inference, adaptive nudges, and accountability presence (body doubling). Design principles match Ember's primary deployment context.
   → informs: post-v0.18.0 (proactive/body-doubling mode — no version assigned)
@@ -1956,9 +1962,11 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
   → informs: architectural validation only
   → graduation trigger: n/a — reference only
 
-- **LightRAG graph-based RAG for vault entity linking** (HKUDS, EMNLP 2025, active March 2026 updates) — Dual-level retrieval (entity + relationship) outperforms flat vector RAG. Requires 32B+ parameters for indexing — qwen3:8b is below threshold. Viable only with GPU upgrade (RTX 4060 Ti 16GB) enabling larger model for ingest. Query-time can use smaller model.
-  → informs: post-GPU-upgrade (local model grounding — no version assigned until hardware confirmed)
-  → graduation trigger: GPU upgrade confirmed AND Qwen2.5:14b Q4 runs at acceptable latency
+- **LightRAG graph-based RAG for vault entity linking** (HKUDS, EMNLP 2025, active March 2026 updates) — Dual-level retrieval (entity + relationship) outperforms flat vector RAG. Requires 32B+ parameters for indexing — qwen3:8b is below threshold. Query-time can use a smaller model. Corroborated by Opal (arXiv:2604.02522): knowledge graph enrichment recovers 13 percentage points of retrieval accuracy over semantic search alone, and that finding is hardware-agnostic.
+
+  v0.19.0 disposition: graduated out of watch to a v0.19.0 roadmap item as an architecture investigation (see 25.3). Investigation, not implementation - the question is whether dual-level entity/relationship retrieval fits Ember's typed append-only vault at all, and what the indexing cost is under the local-first constraint.
+  → informs: v0.19.0 (architecture investigation)
+  → graduation trigger: investigation concludes with an ADR or an explicit decision to discard
 
 - **OpenJarvis Learning primitive** (Stanford, github.com/open-jarvis/OpenJarvis, March 2026) — local-first framework for on-device personal AI agents. Five primitives: Intelligence, Engine, Agents, Tools & Memory, Learning. Learning primitive uses local interaction traces to synthesize training data and refine agent behavior. MCP support, semantic indexing for local retrieval. Reference architecture for self-evaluation loops.
   → informs: post-v0.17.0 (self-evaluation and decision-memory loops — deferred until actively using Ember)
@@ -2074,8 +2082,8 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
   → graduation trigger: deliberate decision to ship 4b as a configurable tier alongside 8b
 
 - **MemX local-first memory** (Sun, arXiv:2603.16171, March 2026) — Rust/libSQL implementation with RRF (vector + keyword fusion) and low-confidence rejection gate suppressing spurious recalls. Hit@1 = 91.3% default, 100% high-confusion. RRF fusion pattern relevant to retrieval depth ablation; rejection gate validates ZERO confidence block design.
-  → informs: retrieval depth ablation (deferred, no failure pattern yet)
-  → graduation trigger: retrieval depth ablation scheduled
+  → informs: v0.19.0 retrieval depth ablation (now scheduled - see MemMachine entry and 25.3)
+  → graduation trigger: ablation run; RRF fusion evaluated as part of it
 
 - **Dynamic Affective Memory entropy-minimization** (Lu & Li, arXiv:2510.27418) — Bayesian-inspired memory update using entropy as consolidation signal. Minimizing global memory entropy as vault health metric is more principled than time-based triggers. Relevant to vault knowledge linting design.
   → informs: post-v0.18.0 vault linting
@@ -2089,7 +2097,11 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 
 - **How RLHF amplifies sycophancy** (Shapira et al., arXiv:2602.01002, January 2026) - Mathematical proof that RLHF optimization causally increases sycophancy. Strongest available citation for the commercial-design-choice argument. No implementation action. Graduation trigger: graduate immediately to paper Section 2.2.
 
-- **W5H2 + SetFit intent classification at agent scale** (arXiv:2602.18922, February 2026) - SetFit at 22M parameters achieves 91.1% accuracy at 2-5ms versus 68.8% zero-shot for a 20B LLM (700x latency advantage confirmed). The 0.85 confidence cascade threshold is now evidence-grounded. Graduation trigger: graduate to the ADR-037 implementation spec.
+- **W5H2 + SetFit intent classification at agent scale** (arXiv:2602.18922, February 2026) - SetFit at 22M parameters achieves 91.1% accuracy at 2-5ms versus 68.8% zero-shot for a 20B LLM (700x latency advantage confirmed). The 0.85 confidence cascade threshold is now evidence-grounded.
+
+  v0.19.0 disposition: the labeling session is now a tracked v0.19.0 task (see 25.3) - 150 examples per intent class, 0.85 confidence threshold for the Stage 1 / Stage 2 cascade. This citation is the evidence base for that threshold and belongs in the ADR-037 rationale; ADR-037 does not exist yet, so the citation is held here until it is written.
+  → informs: v0.19.0 (SetFit labeling session), ADR-034 upgrade path
+  → graduation trigger: ADR-037 written with this citation in the rationale
 
 - **Hybrid retrieval + local cross-encoder reranker** (arXiv:2604.01733, April 2026) - BM25 + dense + RRF + cross-encoder is the 2026 production retrieval stack; the cross-encoder adds +17.4% Recall@5 over RRF alone. Local option: cross-encoder/ms-marco-MiniLM-L-6-v2 (22M params, CPU-compatible). Informs v0.19.0 retrieval phase 2; add after the BM25 + RRF baseline lands. Graduation trigger: BM25 + RRF baseline implemented and ablation confirms improvement.
 
@@ -2110,6 +2122,7 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 - ~~**Habit-to-identity formation** (Verplanken & Sui, Frontiers in Psychology, 2019)~~ — implemented in ADR-013 reason field requirement; repetition alone does not produce identity, behavior must be noticed and valued
 - ~~**McAdams narrative identity framework**~~ — implemented in monthly reflection prompts (third-person synthesis, narrative arc)
 - ~~**Memory in the Age of AI Agents** (Hu et al., arXiv:2512.13564, Dec 2025)~~ — taxonomy validated against Ember architecture, no changes indicated; hot/warm/cold tiering maps to their Dynamics layer
+- ~~**FileGram procedural memory paradigm** (Synvo-ai, arXiv:2604.04901, April 2026)~~ — discarded at the v0.19.0 research review. Procedural behavioral memory (workflow traces, file-system patterns) got no field traction and is out of scope: Ember's memory types are conversational and reflective, and expanding into behavioral traces is not on any roadmap
 
 ---
 

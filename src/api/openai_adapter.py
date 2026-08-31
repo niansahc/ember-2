@@ -1611,7 +1611,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # assembly, identity rules, constitutional review). The legacy vision
     # path in LLMAdapter remains as a fallback for direct vision model routing.
     _vision_description: str | None = None
-    if image_data:
+    # Issue #138: vision_enabled gates the trigger below AND the failure
+    # short-circuit further down. A user who has turned vision off must not
+    # see the same VISION_UNAVAILABLE_RESPONSE shown for a genuine
+    # preprocessor failure - "skipped by choice" and "failed" are different
+    # outcomes and only the second is an error.
+    from src.core.preferences import get as _get_pref_vision
+    _vision_enabled = bool(_get_pref_vision("vision_enabled", True))
+    if image_data and _vision_enabled:
         # Structured log at the trigger point - pairs with vision_entry /
         # vision_success / vision_failure events emitted from analyze().
         # Lets logs/vision/ tell the full story even when the analyze() call
@@ -1628,6 +1635,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 logger.info("[VISION] Preprocessor returned %d chars", len(_vision_description))
         except Exception as exc:
             logger.warning("[VISION] Preprocessing failed (non-fatal): %s", exc)
+    elif image_data:
+        from src.llm.vision_service import _log_vision
+        _log_vision(
+            "vision_disabled",
+            session_id=session_id,
+            image_count=len(image_data),
+        )
+        logger.info("[VISION] Preprocessing skipped - vision_enabled=False")
 
     used_vision = bool(_vision_description)
 
@@ -1657,7 +1672,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # the 400 above. early_return_response owns the stream-vs-JSON decision
     # (CLAUDE.md Bug Standard #1) so a streaming client gets SSE, not a
     # blank. The log line confirms the executed path at runtime (Standard #6).
-    if image_data and not used_vision:
+    #
+    # Issue #138: gated on _vision_enabled too - a deliberate opt-out is not
+    # a failure, so it must fall through to normal generation instead of
+    # this short-circuit.
+    if image_data and not used_vision and _vision_enabled:
         logger.warning(
             "[VISION] Preprocess unavailable - short-circuiting turn (images=%d)",
             len(image_data),

@@ -41,6 +41,10 @@ PREFERENCE_DEFAULTS: dict = {
     # response contract — every known field always returned — is preserved.
     "context_length": None,
     "bare_mode": False,
+    # Issue #138: gates whether an attached image is sent to the vision
+    # preprocessor at all. Defaults True so existing installs keep the
+    # ADR-032 auto-trigger behavior unless a user explicitly opts out.
+    "vision_enabled": True,
 }
 
 

@@ -1616,8 +1616,17 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # see the same VISION_UNAVAILABLE_RESPONSE shown for a genuine
     # preprocessor failure - "skipped by choice" and "failed" are different
     # outcomes and only the second is an error.
+    #
+    # dict.get(key, default) only falls back to default when the key is
+    # ABSENT, not when it's present with value None - a stored
+    # {"vision_enabled": null} (found live in this vault during smoke
+    # testing; origin unclear, plausibly stray pre-#138 test data) would
+    # silently bool()-coerce to False and disable vision with no user
+    # intent behind it. Treat a non-bool stored value as "unset" and fall
+    # through to the True default instead.
     from src.core.preferences import get as _get_pref_vision
-    _vision_enabled = bool(_get_pref_vision("vision_enabled", True))
+    _vision_enabled_raw = _get_pref_vision("vision_enabled", True)
+    _vision_enabled = True if _vision_enabled_raw is None else bool(_vision_enabled_raw)
     if image_data and _vision_enabled:
         # Structured log at the trigger point - pairs with vision_entry /
         # vision_success / vision_failure events emitted from analyze().

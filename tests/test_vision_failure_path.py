@@ -295,3 +295,36 @@ def test_vision_default_unset_still_triggers_vision(client):
 
         assert resp.status_code == 200
         assert _vision.analyze.call_count == 1
+
+
+def test_vision_enabled_stored_as_none_defaults_to_enabled(client):
+    """Regression guard, found via live smoke testing: dict.get(key, default)
+    only falls back to default when the key is ABSENT, not when it's
+    present with value None. A vault whose preferences.json already has an
+    explicit {"vision_enabled": null} entry (observed live; origin
+    predates this fix) must not have vision silently disabled by that
+    stray value - it must resolve to the True default, same as if the key
+    were never set at all."""
+    from src.context.models import ContextPacket
+
+    packet = ContextPacket(user_message="what is in this image", web_items=[])
+
+    with patch("src.api.openai_adapter.context_service") as _ctx, \
+         patch("src.api.openai_adapter.llm_adapter") as _llm, \
+         patch("src.api.openai_adapter.vision_service") as _vision, \
+         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter._background_state_extraction"), \
+         patch("src.api.openai_adapter._detect_and_write_commitment"), \
+         patch("src.api.openai_adapter._detect_task_in_response"), \
+         patch("src.api.openai_adapter.onboarding_service") as _onb, \
+         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.core.preferences.get", side_effect=_prefs_get(vision_enabled=None)):
+        _onb.is_active.return_value = False
+        _ctx.build_context.return_value = packet
+        _vision.analyze.return_value = "A test image of a cat."
+        _llm.generate_response.return_value = "I see a cat."
+
+        resp = client.post("/v1/chat/completions", json=_multimodal_payload())
+
+        assert resp.status_code == 200
+        assert _vision.analyze.call_count == 1

@@ -298,13 +298,12 @@ def test_vision_default_unset_still_triggers_vision(client):
 
 
 def test_vision_enabled_stored_as_none_defaults_to_enabled(client):
-    """Regression guard, found via live smoke testing: dict.get(key, default)
-    only falls back to default when the key is ABSENT, not when it's
-    present with value None. A vault whose preferences.json already has an
-    explicit {"vision_enabled": null} entry (observed live; origin
-    predates this fix) must not have vision silently disabled by that
-    stray value - it must resolve to the True default, same as if the key
-    were never set at all."""
+    """dict.get(key, default) only falls back to default when the key is
+    ABSENT, not when it's present with value None. PATCH /v1/preferences
+    accepts arbitrary JSON, so a client can legally store
+    {"vision_enabled": null}; that must not silently disable vision - it
+    must resolve to the True default, same as if the key were never set
+    at all."""
     from src.context.models import ContextPacket
 
     packet = ContextPacket(user_message="what is in this image", web_items=[])

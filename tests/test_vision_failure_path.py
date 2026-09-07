@@ -51,6 +51,22 @@ def _multimodal_payload(text: str = "what is in this image", *, stream: bool = F
     }
 
 
+def _prefs_get(vision_enabled: bool):
+    """side_effect for patch("src.core.preferences.get", ...).
+
+    A blanket return_value=False would also resolve vision_enabled=False
+    (issue #138), silently turning failure-path tests into disabled-path
+    tests. This keeps every other key at the file's original False default
+    while pinning vision_enabled to what each test actually needs to
+    exercise.
+    """
+    def _get(key: str, default=None, *args, **kwargs):
+        if key == "vision_enabled":
+            return vision_enabled
+        return False
+    return _get
+
+
 @pytest.fixture
 def client():
     with patch("src.api.main.get_ember_api_key", return_value=None):
@@ -80,7 +96,7 @@ def test_vision_failure_does_not_forward_images_to_text_model(client):
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
          patch("src.api.openai_adapter._ensure_session"), \
-         patch("src.core.preferences.get", return_value=False):
+         patch("src.core.preferences.get", side_effect=_prefs_get(vision_enabled=True)):
         _onb.is_active.return_value = False
         _ctx.build_context.return_value = empty_packet
         # The exact failure observed in UAT: model load fails inside analyze().
@@ -120,7 +136,7 @@ def test_vision_failure_returns_sse_when_streaming(client):
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
          patch("src.api.openai_adapter._ensure_session"), \
-         patch("src.core.preferences.get", return_value=False):
+         patch("src.core.preferences.get", side_effect=_prefs_get(vision_enabled=True)):
         _onb.is_active.return_value = False
         _ctx.build_context.return_value = empty_packet
         _vision.analyze.side_effect = RuntimeError("model load failed")
@@ -160,7 +176,7 @@ def test_vision_success_path_still_generates(client):
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
          patch("src.api.openai_adapter._ensure_session"), \
-         patch("src.core.preferences.get", return_value=False):
+         patch("src.core.preferences.get", side_effect=_prefs_get(vision_enabled=True)):
         _onb.is_active.return_value = False
         _ctx.build_context.return_value = packet
         _vision.analyze.return_value = "A test image of a cat."
@@ -172,3 +188,142 @@ def test_vision_success_path_still_generates(client):
         assert _llm.generate_response.call_count == 1
         # ADR-032: only the VL preprocessor sees raw bytes.
         assert packet.image_data == []
+
+
+def test_vision_disabled_skips_preprocessor_and_still_generates(client):
+    """Issue #138: vision_enabled=False must skip the preprocessor and
+    fall through to normal generation - not the VISION_UNAVAILABLE_RESPONSE
+    short-circuit reserved for a genuine preprocessing failure.
+
+    "Skipped by choice" and "failed" are different outcomes; only the
+    second is an error.
+    """
+    from src.context.models import ContextPacket
+
+    packet = ContextPacket(user_message="what is in this image", web_items=[])
+
+    with patch("src.api.openai_adapter.context_service") as _ctx, \
+         patch("src.api.openai_adapter.llm_adapter") as _llm, \
+         patch("src.api.openai_adapter.vision_service") as _vision, \
+         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter._background_state_extraction"), \
+         patch("src.api.openai_adapter._detect_and_write_commitment"), \
+         patch("src.api.openai_adapter._detect_task_in_response"), \
+         patch("src.api.openai_adapter.onboarding_service") as _onb, \
+         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.core.preferences.get", side_effect=_prefs_get(vision_enabled=False)):
+        _onb.is_active.return_value = False
+        _ctx.build_context.return_value = packet
+        _llm.generate_response.return_value = "no image analysis happened"
+
+        resp = client.post("/v1/chat/completions", json=_multimodal_payload())
+
+        assert resp.status_code == 200
+        # The load-bearing assertion: the preprocessor is never invoked.
+        assert _vision.analyze.call_count == 0
+        # Falls through to normal generation instead of short-circuiting.
+        assert _llm.generate_response.call_count == 1
+        # ADR-032's raw-bytes rationale still applies regardless of why
+        # vision didn't run.
+        assert packet.image_data == []
+
+
+def test_vision_disabled_returns_sse_when_streaming(client):
+    """Same as above, but confirms the streaming path also falls through
+    to normal generation rather than the failure short-circuit's SSE
+    message - the disabled case has no early_return_response involved."""
+    from src.context.models import ContextPacket
+    from src.llm.vision_service import VISION_UNAVAILABLE_RESPONSE
+
+    packet = ContextPacket(user_message="what is in this image", web_items=[])
+
+    with patch("src.api.openai_adapter.context_service") as _ctx, \
+         patch("src.api.openai_adapter.llm_adapter") as _llm, \
+         patch("src.api.openai_adapter.vision_service") as _vision, \
+         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter._background_state_extraction"), \
+         patch("src.api.openai_adapter._detect_and_write_commitment"), \
+         patch("src.api.openai_adapter._detect_task_in_response"), \
+         patch("src.api.openai_adapter.onboarding_service") as _onb, \
+         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.core.preferences.get", side_effect=_prefs_get(vision_enabled=False)):
+        _onb.is_active.return_value = False
+        _ctx.build_context.return_value = packet
+
+        def _fake_stream(*args, **kwargs):
+            yield "no image analysis happened"
+
+        _llm.generate_response_iter.return_value = _fake_stream()
+
+        resp = client.post(
+            "/v1/chat/completions", json=_multimodal_payload(stream=True)
+        )
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        body = resp.text
+        assert VISION_UNAVAILABLE_RESPONSE[:30] not in body
+        assert _vision.analyze.call_count == 0
+
+
+def test_vision_default_unset_still_triggers_vision(client):
+    """Regression guard: when vision_enabled is unset (no preference file,
+    default not overridden), the preprocessor still runs. vision_enabled
+    defaults to True in PREFERENCE_DEFAULTS - this must not regress to an
+    opt-in model by accident."""
+    from src.context.models import ContextPacket
+
+    packet = ContextPacket(user_message="what is in this image", web_items=[])
+
+    with patch("src.api.openai_adapter.context_service") as _ctx, \
+         patch("src.api.openai_adapter.llm_adapter") as _llm, \
+         patch("src.api.openai_adapter.vision_service") as _vision, \
+         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter._background_state_extraction"), \
+         patch("src.api.openai_adapter._detect_and_write_commitment"), \
+         patch("src.api.openai_adapter._detect_task_in_response"), \
+         patch("src.api.openai_adapter.onboarding_service") as _onb, \
+         patch("src.api.openai_adapter._ensure_session"):
+        # No patch on src.core.preferences.get - exercises the real
+        # PREFERENCE_DEFAULTS lookup (empty/no vault preferences file).
+        _onb.is_active.return_value = False
+        _ctx.build_context.return_value = packet
+        _vision.analyze.return_value = "A test image of a cat."
+        _llm.generate_response.return_value = "I see a cat."
+
+        resp = client.post("/v1/chat/completions", json=_multimodal_payload())
+
+        assert resp.status_code == 200
+        assert _vision.analyze.call_count == 1
+
+
+def test_vision_enabled_stored_as_none_defaults_to_enabled(client):
+    """dict.get(key, default) only falls back to default when the key is
+    ABSENT, not when it's present with value None. PATCH /v1/preferences
+    accepts arbitrary JSON, so a client can legally store
+    {"vision_enabled": null}; that must not silently disable vision - it
+    must resolve to the True default, same as if the key were never set
+    at all."""
+    from src.context.models import ContextPacket
+
+    packet = ContextPacket(user_message="what is in this image", web_items=[])
+
+    with patch("src.api.openai_adapter.context_service") as _ctx, \
+         patch("src.api.openai_adapter.llm_adapter") as _llm, \
+         patch("src.api.openai_adapter.vision_service") as _vision, \
+         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter._background_state_extraction"), \
+         patch("src.api.openai_adapter._detect_and_write_commitment"), \
+         patch("src.api.openai_adapter._detect_task_in_response"), \
+         patch("src.api.openai_adapter.onboarding_service") as _onb, \
+         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.core.preferences.get", side_effect=_prefs_get(vision_enabled=None)):
+        _onb.is_active.return_value = False
+        _ctx.build_context.return_value = packet
+        _vision.analyze.return_value = "A test image of a cat."
+        _llm.generate_response.return_value = "I see a cat."
+
+        resp = client.post("/v1/chat/completions", json=_multimodal_payload())
+
+        assert resp.status_code == 200
+        assert _vision.analyze.call_count == 1

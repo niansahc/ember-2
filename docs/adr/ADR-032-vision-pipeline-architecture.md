@@ -86,3 +86,11 @@ Rejected: 16 GB VRAM is insufficient for two 8B models loaded simultaneously at 
 
 ### Manual vision trigger (button/toggle)
 Rejected: Adds friction for no benefit. If an image is attached, the user wants it analyzed. Auto-trigger is the correct default.
+
+## Amendment (v0.19.0, issue #138)
+
+`vision_enabled` (`src/core/preferences.py`, default `True`) is a global opt-out preference honored at the image gate in `src/api/openai_adapter.py`. This does not reverse the "Manual vision trigger" rejection above: that alternative was a *per-message* activation step (the user takes an action on every image before analysis runs), which is still rejected on the same friction grounds. `vision_enabled` is a *global, defaulted-on* preference — auto-trigger remains the behavior for every user who never touches the setting. It exists to let the minority of users who want vision categorically off (privacy/cost control, per issue #131) do so once, not to reintroduce per-image friction.
+
+When `vision_enabled=False`, the preprocessor is skipped and the turn proceeds to normal text generation without a `<vision_context>` section — this is a deliberate skip, not a failure, and must not trigger the `VISION_UNAVAILABLE_RESPONSE` short-circuit reserved for genuine preprocessor failures. Raw image bytes are still stripped from the context packet in both cases, per the existing rationale above (RLHF refusal trigger, issue #130).
+
+`vision_model` preference resolution (letting a user pick which vision model runs, mirroring the existing chat-model override precedence) is explicitly out of scope for this amendment — deferred to issue #131.

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.18.2](https://github.com/niansahc/ember-2/compare/v0.18.1...v0.18.2) (2026-09-07)
+
+
+### Bug Fixes
+
+* honor vision_enabled flag at image gate (closes [#138](https://github.com/niansahc/ember-2/issues/138)) ([416c525](https://github.com/niansahc/ember-2/commit/416c525425f11d3de3440f406388e15521550069))
+* honor vision_enabled flag at image gate (closes [#138](https://github.com/niansahc/ember-2/issues/138)) ([805d08c](https://github.com/niansahc/ember-2/commit/805d08c27471fa04d172b86115fcc4d48d6cf0ef))
+* treat stored vision_enabled=null as unset, not disabled ([04c7550](https://github.com/niansahc/ember-2/commit/04c75502222e56e1039297207a1d5f89e8465ed8))
+
 ## [0.18.1](https://github.com/niansahc/ember-2/compare/v0.18.0...v0.18.1) (2026-08-31)
 
 

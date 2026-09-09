@@ -270,7 +270,19 @@ When a UI change affects existing Playwright tests, M updates the tests in the s
 
 ### Test vault
 
-All eval tools run against the test vault. `eval_helpers.swap_to_test_vault()` handles the swap via `POST /v1/developer/vault/swap`. Fails closed via `sys.exit(1)` on failure. If the swap fails, the eval does not run against the real vault. Synthetic fixtures only. No real vault content ever enters the test vault. The test vault is seeded with persona-consistent synthetic records. Run /humanizer on fixture content before writing.
+Evals must run against the test vault only. Not every tool isolates itself, so how you invoke one matters.
+
+`eval_manual.py`, `eval_web_search.py`, and `eval_local_models.py` call `eval_helpers.swap_to_test_vault()`, which swaps via `POST /v1/developer/vault/swap` and fails closed with `sys.exit(1)`. If the swap fails, those evals do not run.
+
+`eval_retrieval.py` does **not** self-isolate. It imports `ContextService` in-process, so it resolves the vault through `get_private_vault_path()` and reads `PRIVATE_VAULT_PATH` from `.env`. The API's in-memory vault override lives in the uvicorn process and cannot reach a subprocess, so swapping the API has no effect on it. `.claude/hooks/post_commit_eval.py` forces `PRIVATE_VAULT_PATH=VAULT_PATH_TEST` for its invocation and skips the eval entirely if that cannot be resolved. A manual run needs the same override applied by hand:
+
+```
+PRIVATE_VAULT_PATH="$VAULT_PATH_TEST" python tools/eval_retrieval.py
+```
+
+`eval_conversations.py` and `eval_probe.py` also perform no swap of their own and inherit whatever vault the running API is serving.
+
+Synthetic fixtures only. No real vault content ever enters the test vault. The test vault is seeded with persona-consistent synthetic records. Run /humanizer on fixture content before writing.
 
 ### Eval architecture reference
 

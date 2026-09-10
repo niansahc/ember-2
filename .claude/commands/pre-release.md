@@ -16,9 +16,9 @@ A release is not complete at commit. A release is not complete at tag. A release
 ### ember-2 (backend)
 - [ ] All tests passing: pytest tests/
 - [ ] Streaming SSE regression test passing: pytest tests/test_streaming_regression.py -v
-- [ ] Retrieval eval passing: python tools/eval_retrieval.py — no regression
-- [ ] Web search eval run: python tools/eval_web_search.py --auto-search — document trigger rate
-- [ ] Conversation eval run: python tools/eval_conversations.py — document results (Tier 4, minor/major only)
+- [ ] Retrieval eval passing: `PRIVATE_VAULT_PATH="$VAULT_PATH_TEST" python tools/eval_retrieval.py` — no regression. The override is required: eval_retrieval.py resolves the vault in-process and does not self-isolate, so a bare run hits the live vault
+- [ ] Web search eval run: python tools/eval_web_search.py --auto-search — document trigger rate (self-isolates via swap_to_test_vault)
+- [ ] Conversation eval run: python tools/eval_conversations.py — document results (Tier 4, minor/major only). Before running, confirm the API is on the test vault via GET /v1/developer/vault/status. This tool performs no swap of its own and sends vault-grounded response text to a cloud judge, so a live-vault run exfiltrates personal content (issue #146)
 - [ ] CHANGELOG.md updated (release-please handles this via conventional commits)
 - [ ] version.json bumped (release-please handles this via conventional commits)
 - [ ] All changes committed and pushed to main: git push origin main

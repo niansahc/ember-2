@@ -1,22 +1,28 @@
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.core.config import get_private_vault_path
+from src.core.config import (
+    VaultWriteBlocked,
+    get_private_vault_path,
+    vault_writes_blocked,
+)
 from src.memory.storage import MemoryStorage
 from src.retrieval.embed_memory import embed_text
 from src.retrieval.sqlite_vector_store import SqliteVectorStore
+from src.retrieval.store_cache import get_store
 from src.retrieval.vector_index import VectorIndex
 
+
+logger = logging.getLogger(__name__)
 
 storage = MemoryStorage()
 vector_index = VectorIndex()
 
 # Memory types stored in SQLite (memory.db) rather than JSON indexes
 SQLITE_MEMORY_TYPES = {"conversation", "profile", "reflection", "journal"}
-
-_write_memory_store: SqliteVectorStore | None = None
 
 # Module-level guard against same-microsecond filename collisions in
 # write_memory(). Filename convention is `{timestamp}.json` so two
@@ -44,14 +50,20 @@ def _next_timestamp() -> str:
             return candidate
 
 
-def _get_write_memory_store(vault: Path) -> SqliteVectorStore:
-    """Singleton for memory.db write path."""
-    global _write_memory_store
-    if _write_memory_store is not None:
-        return _write_memory_store
-    db_path = vault / "embeddings" / "memory.db"
-    _write_memory_store = SqliteVectorStore(db_path)
-    return _write_memory_store
+def _get_write_memory_store() -> SqliteVectorStore:
+    """Store for the active vault's memory.db, on the write path.
+
+    Resolves the vault on every call. The previous version took the vault
+    as an argument and ignored it whenever its singleton was already
+    populated, so a write after a vault swap was handed the previous
+    vault's connection and the record's embedding landed in the wrong
+    vault while its JSON file landed in the right one.
+
+    Unlike the read accessors in semantic_search, this one creates the db
+    when it does not exist: a first write to a fresh vault has to.
+    """
+    db_path = get_private_vault_path() / "embeddings" / "memory.db"
+    return get_store(db_path)
 
 
 def normalize_text(text: str) -> str:
@@ -132,7 +144,17 @@ def write_memory(
     memory_type must be a valid type from VALID_MEMORY_TYPES in
     src/memory/storage.py. Invalid types will raise ValueError
     at the storage layer (get_memory_dir validation).
+
+    Raises VaultWriteBlocked when a vault swap could not be verified.
+    Refusing loudly is deliberate: a silent return would be
+    indistinguishable from a skipped write, and the record would be lost
+    without anyone noticing.
     """
+    reason = vault_writes_blocked()
+    if reason:
+        logger.error("[VAULT_BLOCK] refused memory write: %s", reason)
+        raise VaultWriteBlocked(reason)
+
     if should_skip_memory(text, memory_type=memory_type):
         return None
 
@@ -173,7 +195,7 @@ def write_memory(
 
     if memory_type in SQLITE_MEMORY_TYPES:
         # Write to SQLite (memory.db) for migrated types
-        store = _get_write_memory_store(vault)
+        store = _get_write_memory_store()
         store.insert({
             "id": memory_id,
             "text": text,

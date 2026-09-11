@@ -53,7 +53,12 @@ from src.memory.project import (
     delete_project,
 )
 from src.reflection.generate_reflection import generate_reflection
-from src.retrieval.semantic_search import semantic_search
+from src.memory.write_memory import _get_write_memory_store
+from src.retrieval.semantic_search import (
+    _get_memory_store,
+    _get_sqlite_store,
+    semantic_search,
+)
 from src.state.models import VALID_STATE_CATEGORIES
 from src.state.state_resolver import StateResolver
 from src.state.state_service import StateService
@@ -1241,6 +1246,49 @@ class VaultSwapRequest(BaseModel):
     vault_label: str
 
 
+def _verify_active_vault(expected_root: Path) -> str | None:
+    """Confirm the swap fully took effect. Returns a reason on failure.
+
+    Two things have to hold before a swap can be reported as ok: the
+    config resolver has to return the requested root, and every store the
+    read and write paths can reach has to sit under it. The second check
+    exercises the real accessors rather than inspecting the cache, so the
+    code path a request will take is the one being verified.
+
+    A read accessor returning None means that vault has no such db file
+    yet, which is a legitimate state for a fresh vault. The write
+    accessor creates memory.db when it is absent, exactly as the first
+    write would.
+    """
+    from src.core.config import get_private_vault_path
+
+    active = get_private_vault_path()
+    if active != expected_root:
+        return (
+            f"active vault path is {active}, expected {expected_root}"
+        )
+
+    accessors = (
+        ("memory store", _get_memory_store),
+        ("ingested store", _get_sqlite_store),
+        ("memory write store", _get_write_memory_store),
+    )
+    for name, accessor in accessors:
+        try:
+            store = accessor()
+        except Exception as exc:
+            return f"{name} failed to resolve: {exc}"
+        if store is None:
+            continue
+        if not store.db_path.is_relative_to(expected_root):
+            return (
+                f"{name} resolved to {store.db_path}, "
+                f"which is outside {expected_root}"
+            )
+
+    return None
+
+
 @app.post("/v1/developer/vault/swap")
 def vault_swap_endpoint(body: VaultSwapRequest):
     """Swap the active vault at runtime (developer mode only).
@@ -1254,8 +1302,11 @@ def vault_swap_endpoint(body: VaultSwapRequest):
       VAULT_PATH_LIVE, VAULT_PATH_DEMO, VAULT_PATH_TEST
     """
     from src.core.config import (
+        allow_vault_writes,
+        block_vault_writes,
         is_dev_mode,
         get_known_vault_paths,
+        get_vault_override,
         set_vault_path_override,
         clear_vault_path_override,
         get_private_vault_path,
@@ -1271,12 +1322,39 @@ def vault_swap_endpoint(body: VaultSwapRequest):
     known = get_known_vault_paths()
     label = body.vault_label.lower()
 
+    def _restore(prior: tuple[str | None, str | None]) -> None:
+        prior_path, prior_label = prior
+        if prior_path is None:
+            clear_vault_path_override()
+        else:
+            set_vault_path_override(prior_path, prior_label)
+
+    def _fail(prior: tuple[str | None, str | None], reason: str):
+        """Put the previous vault back and refuse writes until a swap verifies.
+
+        An unverified vault is the one case where losing a write is the
+        better outcome: a record written into the wrong vault is a
+        privacy problem, and a refused write is a visible one.
+        """
+        _restore(prior)
+        block_vault_writes(reason)
+        logger.error("[VAULT_SWAP] verification failed, writes blocked: %s", reason)
+        raise HTTPException(status_code=500, detail=f"Vault swap not verified: {reason}")
+
     # "default" reverts to the personal vault from PRIVATE_VAULT_PATH
     # by clearing the runtime override. No env config needed.
     if label == "default":
+        prior = get_vault_override()
         clear_vault_path_override()
         from src.retrieval.vector_index import clear_index_cache
         clear_index_cache()
+
+        reason = _verify_active_vault(get_private_vault_path())
+        if reason:
+            _fail(prior, reason)
+
+        allow_vault_writes()
+        logger.info("[VAULT_SWAP] verified default vault")
         return {
             "status": "ok",
             "active_vault": "default",
@@ -1298,11 +1376,23 @@ def vault_swap_endpoint(body: VaultSwapRequest):
             detail=f"Vault path does not exist or is not a directory: {resolved}",
         )
 
+    prior = get_vault_override()
     set_vault_path_override(str(resolved), label)
 
     # Clear all in-memory vector indexes — they belong to the previous vault.
     from src.retrieval.vector_index import clear_index_cache
     clear_index_cache()
+
+    # The SQLite stores need no reset: they are cached by resolved db path
+    # and their accessors resolve the active vault first, so the stores
+    # below are the new vault's by construction. Verify that rather than
+    # assume it.
+    reason = _verify_active_vault(resolved)
+    if reason:
+        _fail(prior, reason)
+
+    allow_vault_writes()
+    logger.info("[VAULT_SWAP] verified vault %s at %s", label, resolved)
 
     return {
         "active_vault": str(resolved),

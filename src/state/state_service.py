@@ -25,7 +25,11 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-from src.core.config import get_private_vault_path
+from src.core.config import (
+    VaultWriteBlocked,
+    get_private_vault_path,
+    vault_writes_blocked,
+)
 from src.core.jsonio import safe_write_json
 from src.state.models import VALID_STATE_CATEGORIES, StateRecord
 
@@ -195,11 +199,23 @@ class StateService:
         record : StateRecord
             The state artifact to persist.
 
+        Raises
+        ------
+        VaultWriteBlocked
+            When a vault swap could not be verified. Checked before
+            _get_state_dir(), which would otherwise mkdir into a vault
+            that has not been confirmed.
+
         Returns
         -------
         Path
             The path of the written (or already-existing) file.
         """
+        reason = vault_writes_blocked()
+        if reason:
+            logger.error("[VAULT_BLOCK] refused state write: %s", reason)
+            raise VaultWriteBlocked(reason)
+
         state_dir = self._get_state_dir()
         filename = self._filename_for(record)
         file_path = state_dir / filename

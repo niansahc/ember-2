@@ -14,12 +14,15 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from src.core.config import (
+    allow_vault_writes,
+    block_vault_writes,
     get_private_vault_path,
     set_vault_path_override,
     clear_vault_path_override,
     get_vault_label,
     get_known_vault_paths,
     is_dev_mode,
+    vault_writes_blocked,
     _vault_path_override,
 )
 
@@ -93,9 +96,11 @@ class TestVaultSwapEndpoint:
 
     def setup_method(self):
         clear_vault_path_override()
+        allow_vault_writes()
 
     def teardown_method(self):
         clear_vault_path_override()
+        allow_vault_writes()
 
     def _client(self):
         from fastapi.testclient import TestClient
@@ -152,6 +157,21 @@ class TestVaultSwapEndpoint:
         assert "demo_vault" in data["active_vault"]
         assert "indexes cleared" in data["note"]
         mock_clear.assert_called_once()
+        # A 200 means the swap verified, so vault writes are permitted.
+        assert vault_writes_blocked() is None
+
+    def test_verified_swap_lifts_a_standing_write_block(self, tmp_path):
+        """A prior failed swap must not keep writes blocked forever."""
+        vault_dir = tmp_path / "demo_vault"
+        vault_dir.mkdir()
+        block_vault_writes("earlier swap could not be verified")
+        with patch("src.core.config.is_dev_mode", return_value=True),              patch("src.core.config.get_known_vault_paths", return_value={"demo": str(vault_dir)}),              patch("src.api.main.get_ember_api_key", return_value=None),              patch("src.retrieval.vector_index.clear_index_cache"):
+            resp = self._client().post(
+                "/v1/developer/vault/swap",
+                json={"vault_label": "demo"},
+            )
+        assert resp.status_code == 200
+        assert vault_writes_blocked() is None
 
     def test_swap_clears_vector_index_cache(self, tmp_path):
         """The swap must clear ALL in-memory vector indexes so they

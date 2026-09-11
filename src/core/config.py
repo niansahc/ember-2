@@ -53,6 +53,50 @@ def get_vault_label() -> str:
     return _vault_label or "default"
 
 
+def get_vault_override() -> tuple[str | None, str | None]:
+    """Return the current (path, label) override, both None when unset.
+
+    Lets a caller capture the override before changing it and put it back
+    if the change cannot be verified, without reaching into the globals.
+    """
+    return _vault_path_override, _vault_label
+
+
+class VaultWriteBlocked(RuntimeError):
+    """Raised when a vault write is refused because the active vault
+    could not be verified. See block_vault_writes() below."""
+
+
+# Fail-closed guard for vault swaps. Set when a swap could not be verified
+# to have fully taken effect. While a reason is set, vault write paths
+# refuse to write rather than risk writing into the wrong vault. Cleared
+# by the next successfully verified swap. Memory-only, like the override
+# above, so it resets on API restart.
+_vault_write_block_reason: str | None = None
+
+
+def block_vault_writes(reason: str) -> None:
+    """Refuse all vault writes until a verified swap clears the block.
+
+    Called when a vault swap cannot be confirmed. Writing into an
+    unverified vault risks landing personal records in the wrong vault,
+    which is worse than refusing the write.
+    """
+    global _vault_write_block_reason
+    _vault_write_block_reason = reason
+
+
+def allow_vault_writes() -> None:
+    """Clear the vault write block after a verified swap."""
+    global _vault_write_block_reason
+    _vault_write_block_reason = None
+
+
+def vault_writes_blocked() -> str | None:
+    """Return the block reason, or None when vault writes are permitted."""
+    return _vault_write_block_reason
+
+
 def get_known_vault_paths() -> dict[str, str]:
     """Read known vault paths from .env (VAULT_PATH_LIVE, etc.).
 

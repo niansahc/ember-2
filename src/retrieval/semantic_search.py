@@ -3,42 +3,37 @@ import re
 from src.core.config import get_private_vault_path
 from src.retrieval.embed_memory import embed_text
 from src.retrieval.sqlite_vector_store import SqliteVectorStore
+from src.retrieval.store_cache import get_store
 from src.retrieval.vector_index import VectorIndex
 
 
 vector_index = VectorIndex()
-
-_sqlite_store: SqliteVectorStore | None = None
-_memory_store: SqliteVectorStore | None = None
 
 # Memory types stored in memory.db (migrated from JSON indexes)
 SQLITE_MEMORY_TYPES = {"conversation", "profile", "reflection", "journal"}
 
 
 def _get_sqlite_store() -> SqliteVectorStore | None:
-    """Singleton for ingested.db (ingested content)."""
-    global _sqlite_store
-    if _sqlite_store is not None:
-        return _sqlite_store
-    vault = get_private_vault_path()
-    db_path = vault / "embeddings" / "ingested.db"
+    """Store for the active vault's ingested.db (ingested content).
+
+    Resolves the vault on every call, so a runtime vault swap takes effect
+    on the next read. Returns None when the db file does not exist yet;
+    the read path has nothing to search and must not create one.
+    """
+    db_path = get_private_vault_path() / "embeddings" / "ingested.db"
     if not db_path.exists():
         return None
-    _sqlite_store = SqliteVectorStore(db_path)
-    return _sqlite_store
+    return get_store(db_path)
 
 
 def _get_memory_store() -> SqliteVectorStore | None:
-    """Singleton for memory.db (conversation, profile, reflection, journal)."""
-    global _memory_store
-    if _memory_store is not None:
-        return _memory_store
-    vault = get_private_vault_path()
-    db_path = vault / "embeddings" / "memory.db"
+    """Store for the active vault's memory.db (conversation, profile,
+    reflection, journal). Resolves the vault on every call; returns None
+    when the db file does not exist yet."""
+    db_path = get_private_vault_path() / "embeddings" / "memory.db"
     if not db_path.exists():
         return None
-    _memory_store = SqliteVectorStore(db_path)
-    return _memory_store
+    return get_store(db_path)
 
 
 def semantic_search(

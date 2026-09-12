@@ -358,7 +358,7 @@ Logs are intended to support debugging, tuning, and evaluation rather than act a
 ## Working (v0.17.1)
 
 **Core systems:**
-- Append-only JSON vault with typed memory enforcement (19 types validated at write time)
+- Append-only JSON vault with typed memory enforcement (18 types validated at write time)
 - Ingestion pipeline (ChatGPT, PDF, DOCX, CSV, TXT, GDrive, POST /ingest/upload multipart)
 - Semantic retrieval via vector indexes (cached in memory, no disk load per query)
 - Context assembly with policy-weighted ranking, diversity selection, project-scoped boost, temporal decay

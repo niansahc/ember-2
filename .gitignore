@@ -38,3 +38,12 @@ watch-cc.ps1
 Thumbs.db
 
 # Your Momgit add .
+
+# Claude Code session lock (runtime only: session id, pid, timestamp)
+.claude/scheduled_tasks.lock
+
+# Downstream-deployment design drafts. Voice, multi-user, smart home and
+# server-class deployments are built outside this repo, and these drafts
+# carry deployment-specific personal detail that the Vault Privacy Rule
+# keeps out of the codebase. Draft them here, land them in their own repo.
+docs/design/

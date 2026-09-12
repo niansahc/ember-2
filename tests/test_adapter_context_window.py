@@ -111,8 +111,8 @@ def test_get_num_ctx_sweep_candidates_match_incumbent() -> None:
         for tag in (
             "qwen3:32b",
             "qwen3.6:35b-a3b",
-            "glm-4.7-flash",
-            "gemma4:26b",
+            "glm-4.7-flash:q4_K_M",
+            "gemma4:26b-a4b-it-q4_K_M",
             "qwen3.5:9b",
         ):
             assert _bare_adapter(tag)._get_num_ctx() == incumbent, tag
@@ -120,7 +120,7 @@ def test_get_num_ctx_sweep_candidates_match_incumbent() -> None:
 
 def test_get_num_ctx_default_is_capped_for_long_context_models() -> None:
     """A 262144-declared model defaults to the ceiling, not 209715."""
-    adapter = _bare_adapter("gemma4:26b")
+    adapter = _bare_adapter("gemma4:26b-a4b-it-q4_K_M")
     with patch("src.core.preferences.get", return_value=None):
         assert adapter._get_num_ctx() == 32768
 
@@ -131,7 +131,7 @@ def test_get_num_ctx_ceiling_does_not_clamp_explicit_preference() -> None:
     A user who explicitly asks for more than the ceiling still gets it, up to
     the model's declared window — that clamp is unchanged.
     """
-    adapter = _bare_adapter("gemma4:26b")
+    adapter = _bare_adapter("gemma4:26b-a4b-it-q4_K_M")
     with patch("src.core.preferences.get", return_value=131072):
         assert adapter._get_num_ctx() == 131072
 
@@ -141,3 +141,18 @@ def test_get_num_ctx_ceiling_is_a_noop_for_the_shipped_model() -> None:
     adapter = _bare_adapter("qwen3:8b")
     with patch("src.core.preferences.get", return_value=None):
         assert adapter._get_num_ctx() == 32768
+
+
+def test_base_tags_are_not_listed_for_quant_installed_candidates() -> None:
+    """The Spark runs quant-suffixed tags, so the base names are absent.
+
+    Lookup is exact-match with no normalization. Listing a base name that is
+    not the installed tag would be a silent lie: it would resolve for a model
+    nobody runs while the tag actually in use still fell back to 6553.
+    """
+    from src.context.conversation_buffer import MODEL_CONTEXT_WINDOWS
+
+    assert "glm-4.7-flash:q4_K_M" in MODEL_CONTEXT_WINDOWS
+    assert "gemma4:26b-a4b-it-q4_K_M" in MODEL_CONTEXT_WINDOWS
+    assert "glm-4.7-flash" not in MODEL_CONTEXT_WINDOWS
+    assert "gemma4:26b" not in MODEL_CONTEXT_WINDOWS

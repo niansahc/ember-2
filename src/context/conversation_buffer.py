@@ -13,24 +13,27 @@ _HEDGED_RECORD_IDS_MAX = 50
 # Used to update context_window when the active model changes via POST /model,
 # and by LLMAdapter._get_num_ctx to size the Ollama context budget.
 #
-# Lookup is a strict exact-tag dict get in both readers, with no normalization:
-# a quantized pull such as "qwen3.6:35b-a3b-q4_K_M" does not match the entry for
-# "qwen3.6:35b-a3b" and falls back to the 8192 default. Add quantized tags
-# explicitly if you run them.
+# Lookup is a strict exact-tag dict get in both readers, with no normalization,
+# so keys must be the exact installed tag. A quantized pull such as
+# "glm-4.7-flash:q4_K_M" does not match a "glm-4.7-flash" entry and would fall
+# back to the 8192 default - two of the sweep candidates below are installed
+# under quant-suffixed tags for exactly this reason. Add the tag you actually
+# run, not the base name.
 MODEL_CONTEXT_WINDOWS: dict[str, int] = {
-    "llama3.1:8b":     8192,
-    "qwen2.5:14b":     32768,
-    "qwen3:8b":        40960,  # B-QUAL-001 / 2026-04-26: matches modelfile-declared context length (verified via `ollama show qwen3:8b`).
-    "mistral:7b":      8192,
-    "phi3:mini":       4096,
+    "llama3.1:8b":              8192,
+    "qwen2.5:14b":              32768,
+    "qwen3:8b":                 40960,   # B-QUAL-001 / 2026-04-26: matches modelfile-declared context length (verified via `ollama show qwen3:8b`).
+    "mistral:7b":               8192,
+    "phi3:mini":                4096,
     # Model-sweep candidates. These ran at the 8192 fallback (num_ctx 6553)
     # against the incumbent's 32768, so every sweep result was scored at one
-    # fifth the incumbent's context budget.
-    "qwen3.5:9b":      262144,  # 2026-09-12: matches modelfile-declared context length (verified via `ollama show qwen3.5:9b`).
-    "qwen3:32b":       40960,   # PROVISIONAL 2026-09-12: ollama.com library, displayed "40K". Not verified via `ollama show` - model lives on the Spark, not this machine.
-    "qwen3.6:35b-a3b": 262144,  # PROVISIONAL 2026-09-12: ollama.com library, displayed "256K". Not verified via `ollama show` - model lives on the Spark.
-    "gemma4:26b":      262144,  # PROVISIONAL 2026-09-12: ollama.com library, displayed "256K". Not verified via `ollama show` - model lives on the Spark.
-    "glm-4.7-flash":   196608,  # PROVISIONAL 2026-09-12: ollama.com library displays "198K", which is ambiguous - the exact declared value is unverified and may be 202752. The lower bound is used deliberately: over-declaring reproduces the B-QUAL-001 silent-truncation mode, under-declaring only trims more aggressively. Replace with the `ollama show` value from the Spark.
+    # fifth the incumbent's context budget. The four Spark tags are the exact
+    # installed strings, not the library base names.
+    "qwen3.5:9b":               262144,  # 2026-09-12: matches modelfile-declared context length (verified via `ollama show qwen3.5:9b`).
+    "qwen3:32b":                40960,   # 2026-09-12: matches modelfile-declared context length (verified via `ollama show qwen3:32b` on the Spark).
+    "qwen3.6:35b-a3b":          262144,  # 2026-09-12: matches modelfile-declared context length (verified via `ollama show qwen3.6:35b-a3b` on the Spark).
+    "gemma4:26b-a4b-it-q4_K_M": 262144,  # 2026-09-12: matches modelfile-declared context length (verified via `ollama show gemma4:26b-a4b-it-q4_K_M` on the Spark).
+    "glm-4.7-flash:q4_K_M":     202752,  # 2026-09-12: matches modelfile-declared context length (verified via `ollama show glm-4.7-flash:q4_K_M` on the Spark). The library page displays this as "198K".
 }
 
 COMPRESSION_THRESHOLD = 1500  # fixed token count — keeps context packet within budget on any model

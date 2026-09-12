@@ -484,6 +484,8 @@ Properties:
 
 ## 9.7 Proposed Type Taxonomy
 
+Canonical count: 18 types. Source of truth is `VALID_MEMORY_TYPES` in `src/memory/storage.py` — this list must match it exactly; if the two diverge, the code is authoritative and this section is stale.
+
 ```text
 profile
 journal
@@ -501,9 +503,17 @@ decision
 review_log
 evaluation
 session
+lodestone
+deviation
 ```
 
 This taxonomy may evolve, but the separation principle should remain.
+
+Not every type is exercised the same way in practice:
+
+- **No dedicated writer (7):** `summary`, `reference`, `archive`, `system_event`, `decision`, `review_log`, `evaluation`. These are valid write targets — any invalid type still raises at `get_memory_dir()` — but nothing in the system currently produces a record of these types except the generic `POST /ingest/upload` JSON-import route's arbitrary `type` field passthrough, which is an import escape hatch, not a system-generated writer.
+- **Written but never embedded (5):** `state`, `task`, `project`, `session`, `lodestone`. Each has a dedicated writer (`StateService`, `TaskService`, `src/memory/project.py`, `src/memory/session.py`, `LodestoneService`) that writes JSON directly via `storage.write_json`, bypassing `write_memory()` — the only code path that calls `embed_text()` and inserts into the SQLite vector store. These types are retrievable by direct read (e.g. `StateResolver`, `TaskResolver`) but never surface through semantic search.
+- The remaining 6 (`profile`, `journal`, `conversation`, `reflection`, `ingested`, `deviation`) have both a dedicated writer and an embedding path.
 
 ---
 
@@ -1986,7 +1996,7 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 - **Silicon Mirror** (arXiv:2604.00478, April 2026) — Generator-Critic architecture for sycophancy detection. Behavioral Access Control restricts context layer access based on real-time sycophancy risk scores. Trait Classifier detects persuasion tactics across multi-turn dialogues. Generator-Critic loop audits drafts and triggers rewrites with "Necessary Friction." Claude Sonnet baseline sycophancy 9.6% reduced to 1.4% (85.7% relative reduction). Key named failure mode: "validation-before-correction" — excessive hedging before disagreement, not overt agreement with false claims. Generator-Critic loop is architecturally adjacent to Ember's ResponseReviewService.
   → informs: v0.14.0+ (deviation engine pattern classes, ResponseReviewService, position_collapse rule)
 
-- **MemPalace** (Jovovich & Sigman, github.com/milla-jovovich/mempalace, April 2026) — open-source local-first memory system. Core finding: raw verbatim storage with good embeddings (ChromaDB default) outperforms AI-extracted summaries on LongMemEval (96.6% raw mode) because extraction loses the "why." Palace structure (+34% retrieval boost) is metadata filtering, not a novel mechanism. Temporal knowledge graph: SQLite-backed entity-relation triples with validity windows. Genuine finding: field may be over-engineering the extraction step. Open eval question for Ember: how much does the 17-type taxonomy and hot/warm/cold tiering actually add over a naive verbatim + embedding baseline? Eval required before adding further retrieval complexity.
+- **MemPalace** (Jovovich & Sigman, github.com/milla-jovovich/mempalace, April 2026) — open-source local-first memory system. Core finding: raw verbatim storage with good embeddings (ChromaDB default) outperforms AI-extracted summaries on LongMemEval (96.6% raw mode) because extraction loses the "why." Palace structure (+34% retrieval boost) is metadata filtering, not a novel mechanism. Temporal knowledge graph: SQLite-backed entity-relation triples with validity windows. Genuine finding: field may be over-engineering the extraction step. Open eval question for Ember: how much does the 18-type taxonomy and hot/warm/cold tiering actually add over a naive verbatim + embedding baseline? Eval required before adding further retrieval complexity.
   → informs: open eval question before v0.15.0 retrieval work; temporal validity window pattern relevant to state staleness gap
 
 - **Awomosu, "They Built Stepford AI and Called It Agentic"** and **"The OpenClaw Sensation"** (How Not To Use AI [Substack], February 1, 2026) — cultural analysis of sycophancy as structural design choice. OpenClaw skills corpus (700+ skills) analyzed: dominant community use case is secretary and wife functions. Harvard Business School meta-analysis: women adopt AI at 25% lower rates across 18 studies, 140k+ participants. Ember's behavioral pattern detection, position_collapse rule, relational_honesty, and flourishing_over_preference are the architectural counter to what this analysis documents.
@@ -2157,7 +2167,7 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 - **Memory staleness vs. importance are orthogonal** — STATE_STALENESS_DAYS applies a time-based penalty but importance and staleness are independent dimensions. A frequently-retrieved memory can become confidently wrong rather than just outdated. Confirmed open research problem (State of AI Agent Memory, 2026). Related to MemPalace validity window pattern (see Active Watch Items).
   → open: revisit when connector layer increases volume of external facts entering the vault (no version assigned)
 
-- **MemPalace verbatim baseline eval question** — how much does Ember's 17-type taxonomy and hot/warm/cold tiering actually add over a naive verbatim + embedding baseline? Retrieval eval with typed structure disabled required before adding further retrieval complexity.
+- **MemPalace verbatim baseline eval question** — how much does Ember's 18-type taxonomy and hot/warm/cold tiering actually add over a naive verbatim + embedding baseline? Retrieval eval with typed structure disabled required before adding further retrieval complexity.
   → open: run before next retrieval architecture change (no version assigned)
 
 ---

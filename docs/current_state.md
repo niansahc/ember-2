@@ -6,7 +6,7 @@ v0.13.x shipped embedding upgrade, memory tiering, nature layer, grounding verif
 
 ## Core Systems
 
-- Append-only JSON vault with typed memory enforcement (`VALID_MEMORY_TYPES`, 19 types)
+- Append-only JSON vault with typed memory enforcement (`VALID_MEMORY_TYPES`, 18 types)
 - Ingestion pipeline (ChatGPT, PDF, DOCX, CSV, TXT, GDrive, POST /ingest/upload multipart)
 - Semantic retrieval via vector indexes (cached in memory, no disk load per query)
 - Context assembly with policy-weighted ranking, diversity selection, project-scoped boost (ADR-007)

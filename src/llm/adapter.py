@@ -14,6 +14,14 @@ from src.core.config import get_ember_debug, get_ember_model, get_ember_vision_m
 
 logger = logging.getLogger("ember.llm")
 
+# Ceiling on the *computed* num_ctx default (the 80%-of-declared path in
+# LLMAdapter._get_num_ctx). Long-context models declare windows up to 262144;
+# 80% of that is a ~200k KV cache allocated by default on a personal machine.
+# 32768 is the value qwen3:8b already resolved to, so applying this ceiling is
+# a no-op for the shipped model. An explicit `context_length` preference is
+# not subject to it.
+DEFAULT_NUM_CTX_CEILING = 32768
+
 
 def _log_safety_trigger(trigger_result) -> None:
     """Log the constitutional review trigger evaluation. Gated by EMBER_DEBUG.
@@ -644,11 +652,19 @@ class LLMAdapter:
         prompt and the model collapsed to non-English token distribution.
 
         Resolution order:
-          1. Explicit user preference (`context_length`) wins if set.
+          1. Explicit user preference (`context_length`) is used if set.
           2. Otherwise default to 80% of the model's true context window from
-             MODEL_CONTEXT_WINDOWS, leaving headroom for response generation.
+             MODEL_CONTEXT_WINDOWS, leaving headroom for response generation,
+             capped at DEFAULT_NUM_CTX_CEILING.
           3. Unknown models fall back to a conservative 8192 base.
-        Final value is clamped to [2048, 131072].
+        Final value is clamped to [2048, declared], where `declared` is the
+        model's own context window - not a fixed upper constant. A preference
+        above the model's window therefore does not win; it clamps.
+
+        The ceiling in step 2 applies to the computed default only. Modern
+        models declare windows up to 262144, and 80% of that is a ~200k KV
+        cache allocated by default on a personal machine. A user who wants
+        that can still ask for it explicitly via `context_length`.
 
         Args:
             model: Per-call model override (matches _chat_ollama / _chat_ollama_stream
@@ -659,7 +675,7 @@ class LLMAdapter:
 
         resolved_model = model or self.model
         declared = MODEL_CONTEXT_WINDOWS.get(resolved_model, 8192)
-        model_default = int(declared * 0.8)
+        model_default = min(int(declared * 0.8), DEFAULT_NUM_CTX_CEILING)
 
         # Honor explicit user preference if set; missing falls back to
         # model-aware default.

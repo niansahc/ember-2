@@ -212,7 +212,7 @@ from src.api.pregeneration import GenerationContext, GenerationWork
 
 
 def _gen_ctx(session_id="sess_test_001", project_id=None, project_name=None,
-             is_test=False, vault_enabled=True, skip_vault=False,
+             is_test=False, vault_enabled=True, skip_vault_write=False,
              completion_id="chatcmpl-test", stream=False, policy=None,
              raw_user_message="hello"):
     return GenerationContext(
@@ -221,7 +221,8 @@ def _gen_ctx(session_id="sess_test_001", project_id=None, project_name=None,
         project_name=project_name,
         is_test=is_test,
         vault_enabled=vault_enabled,
-        skip_vault=skip_vault,
+        skip_vault_read=False,
+        skip_vault_write=skip_vault_write,
         completion_id=completion_id,
         stream=stream,
         policy=policy,
@@ -286,7 +287,7 @@ def _policy(emit=True):
 
 
 def test_clarification_interceptor_fires_and_writes_two_turns():
-    ctx = _gen_ctx(session_id="sess_test_c", project_id=None, skip_vault=False,
+    ctx = _gen_ctx(session_id="sess_test_c", project_id=None, skip_vault_write=False,
                    policy=_policy(True), raw_user_message="google please")
     with patch("src.api.openai_adapter.write_memory") as w:
         reply = _intercept_clarification(ctx)
@@ -312,9 +313,9 @@ def test_clarification_interceptor_passes_when_not_emit():
     w.assert_not_called()
 
 
-def test_clarification_interceptor_skips_writes_when_skip_vault():
+def test_clarification_interceptor_skips_writes_when_skip_vault_write():
     # Terminal reply still returned, but no vault writes in test/stateless mode.
-    ctx = _gen_ctx(skip_vault=True, policy=_policy(True), raw_user_message="google please")
+    ctx = _gen_ctx(skip_vault_write=True, policy=_policy(True), raw_user_message="google please")
     with patch("src.api.openai_adapter.write_memory") as w:
         reply = _intercept_clarification(ctx)
     assert reply is not None and reply.label == "clarification"
@@ -322,7 +323,7 @@ def test_clarification_interceptor_skips_writes_when_skip_vault():
 
 
 def test_clarification_interceptor_threads_project_id():
-    ctx = _gen_ctx(session_id="s", project_id="proj_9", skip_vault=False,
+    ctx = _gen_ctx(session_id="s", project_id="proj_9", skip_vault_write=False,
                    policy=_policy(True), raw_user_message="look it up")
     with patch("src.api.openai_adapter.write_memory") as w:
         _intercept_clarification(ctx)

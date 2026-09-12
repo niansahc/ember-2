@@ -594,8 +594,8 @@ def _intercept_clarification(ctx: GenerationContext) -> Optional[TerminalReply]:
     logger.warning("[CLARIFY] emit clarification, bypass classifier+search")
 
     # Write both turns so the next-turn handler can detect awaiting_search_content
-    # on the assistant record. Skipped in test/stateless mode (skip_vault).
-    if not ctx.skip_vault:
+    # on the assistant record. Skipped when vault writes are suppressed.
+    if not ctx.skip_vault_write:
         _user_clar_meta = {
             "role": "user",
             "content_kind": "user_content",
@@ -1048,7 +1048,7 @@ def _resolve_project(session_id: str):
     project_id is read from the session metadata; project_name is the project
     record's canonical text field. Both are non-fatal - any error yields None so
     the request proceeds without project context. Note (behavior-preserving
-    wart): this reads the vault regardless of skip_vault, exactly as the original
+    wart): this reads the vault regardless of the vault flags, exactly as the original
     inline block did; no test guard is added here.
     """
     project_id = None
@@ -1091,10 +1091,14 @@ def _build_generation_context(
     """
     is_test = _resolve_is_test(request)
     vault_enabled = _resolve_vault_enabled(body)
-    # Vault is skipped if either the test flag is set OR vault is disabled.
-    skip_vault = is_test or not vault_enabled
+    # Writes are suppressed by either flag. Reads are suppressed only by the
+    # per-conversation vault toggle: X-Test-Session exists to keep eval turns
+    # out of the personal vault, not to blind the model to it. ADR-031's
+    # all-or-nothing rule applies to vault_enabled and is preserved verbatim.
+    skip_vault_write = is_test or not vault_enabled
+    skip_vault_read = not vault_enabled
 
-    _ensure_session(session_id, latest_user_message, test=skip_vault)
+    _ensure_session(session_id, latest_user_message, test=skip_vault_write)
 
     project_id, project_name = _resolve_project(session_id)
 
@@ -1107,7 +1111,8 @@ def _build_generation_context(
         project_name=project_name,
         is_test=is_test,
         vault_enabled=vault_enabled,
-        skip_vault=skip_vault,
+        skip_vault_read=skip_vault_read,
+        skip_vault_write=skip_vault_write,
         completion_id=completion_id,
         stream=bool(body.stream),
         policy=policy,
@@ -1215,11 +1220,12 @@ def _apply_timers(gen_ctx: GenerationContext, work: GenerationWork) -> None:
     Three intent paths, each fully non-fatal: start (write a running timer),
     stop (write a stopped record for the most recent active timer), check (inject
     elapsed-time status). Prefixes work.message with the immediate confirmation
-    note. Skipped when skip_vault (timer writes are vault writes). The em dash in
+    note. Skipped when vault writes are suppressed (timer writes are vault
+    writes; the read and the prompt prefix ride along with them). The em dash in
     the stop/check notes is written as \\u2014 so the source stays ASCII while the
     runtime prompt text is byte-identical to the original.
     """
-    if not gen_ctx.skip_vault:
+    if not gen_ctx.skip_vault_write:
         try:
             from src.state.timer_service import (
                 detect_check_timer,
@@ -1357,7 +1363,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             image_data.append(url_val.split(";base64,", 1)[1])
 
     # --- PHASE A: build the enrichment-resolved GenerationContext (ADR-042) ---
-    # Resolve is_test / vault toggle / skip_vault / project, ensure the session,
+    # Resolve is_test / vault toggle / the two skip_vault flags / project,
+    # ensure the session,
     # and memoize the query policy into one frozen context. completion_id is
     # carried forward from the router so a single id spans every early-return and
     # the final response. The downstream generation handler still reads the
@@ -1372,7 +1379,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     )
     is_test = gen_ctx.is_test
     vault_enabled = gen_ctx.vault_enabled
-    _skip_vault = gen_ctx.skip_vault
+    _skip_vault_read = gen_ctx.skip_vault_read
+    _skip_vault_write = gen_ctx.skip_vault_write
     project_id = gen_ctx.project_id
     project_name = gen_ctx.project_name
 
@@ -1466,7 +1474,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # point must use this snapshot, not context_packet.image_data.
     _has_image = bool(image_data)
 
-    if _skip_vault:
+    if _skip_vault_read:
         # Stateless mode: empty context packet, no vault reads
         from src.context.models import ContextPacket
         context_packet = ContextPacket(
@@ -1830,7 +1838,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     if project_id:
         user_meta["project_id"] = project_id
         assistant_meta["project_id"] = project_id
-    if _skip_vault:
+    if _skip_vault_write:
         user_meta["test"] = True
         assistant_meta["test"] = True
 
@@ -1878,7 +1886,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
             # Skip vault writes for test sessions - prevents eval artifacts
             # from accumulating in the user's personal vault.
-            if not _skip_vault:
+            if not _skip_vault_write:
                 write_memory(
                     text=latest_user_message,
                     memory_type="conversation",
@@ -1895,7 +1903,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 )
 
             # State extraction - skip for test sessions to prevent eval leakage
-            if not _skip_vault:
+            if not _skip_vault_write:
                 threading.Thread(
                     target=_background_state_extraction,
                     args=(latest_user_message, full_reply),
@@ -1908,14 +1916,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     daemon=True,
                 ).start()
 
-            if not _skip_vault:
+            if not _skip_vault_write:
                 threading.Thread(
                     target=_detect_and_write_commitment,
                     args=(full_reply, session_id),
                     daemon=True,
                 ).start()
 
-            if not _skip_vault:
+            if not _skip_vault_write:
                 threading.Thread(
                     target=_detect_task_in_response,
                     args=(full_reply, session_id),
@@ -1927,14 +1935,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             # - the background thread was causing a race condition where the
             # user's "Yes" on the next turn arrived before the pending record
             # was written, so the confirmation path never fired.
-            if not _skip_vault:
+            if not _skip_vault_write:
                 _write_pending_confirmation(
                     full_reply, _raw_user_message, session_id,
                     existing_pending=_pending_records,
                 )
 
             # Deviation detection - async, no latency impact (ADR-026)
-            if not _skip_vault:
+            if not _skip_vault_write:
                 _prior = None
                 _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
                 if _buffer_turns and len(_buffer_turns) >= 2:
@@ -1945,7 +1953,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     daemon=True,
                 ).start()
 
-            if _skip_vault:
+            if _skip_vault_write:
                 logger.warning("[TASK] Skipped task/state/commitment detection (test session)")
 
         # Suppress source badges on ask-first PROMPT turns (Ember asking
@@ -2044,7 +2052,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     )
 
                 # 3.5. Deviation detection (ADR-026) - after grounding, before stream
-                if not _skip_vault:
+                if not _skip_vault_write:
                     _prior = None
                     _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
                     if _buffer_turns and len(_buffer_turns) >= 2:
@@ -2305,7 +2313,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         )
 
     # Skip vault writes for test sessions
-    if not _skip_vault:
+    if not _skip_vault_write:
         write_memory(
             text=latest_user_message,
             memory_type="conversation",
@@ -2323,7 +2331,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         )
 
     # Background state extraction - skip for test sessions to prevent eval leakage
-    if not _skip_vault:
+    if not _skip_vault_write:
         threading.Thread(
             target=_background_state_extraction,
             args=(latest_user_message, reply),
@@ -2337,7 +2345,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         ).start()
 
     # Commitment detection (ADR-014) - skip for test sessions
-    if not _skip_vault:
+    if not _skip_vault_write:
         threading.Thread(
             target=_detect_and_write_commitment,
             args=(reply, session_id),
@@ -2345,7 +2353,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         ).start()
 
     # Task detection - skip for test sessions
-    if not _skip_vault:
+    if not _skip_vault_write:
         threading.Thread(
             target=_detect_task_in_response,
             args=(reply, session_id),
@@ -2353,14 +2361,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         ).start()
 
     # Ask-first confirmation detection - write pending_confirmation
-    if not _skip_vault:
+    if not _skip_vault_write:
         _write_pending_confirmation(
             reply, _raw_user_message, session_id,
             existing_pending=_pending_records,
         )
 
     # Deviation detection - async, no latency impact (ADR-026)
-    if not _skip_vault:
+    if not _skip_vault_write:
         _prior = None
         _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
         if _buffer_turns and len(_buffer_turns) >= 2:
@@ -2371,7 +2379,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             daemon=True,
         ).start()
 
-    if _skip_vault:
+    if _skip_vault_write:
         logger.warning("[TASK] Skipped task detection (test session)")
 
     response_body = ChatCompletionsResponse(

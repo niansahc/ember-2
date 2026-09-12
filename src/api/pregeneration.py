@@ -90,7 +90,19 @@ class GenerationContext:
     project_name: Optional[str]
     is_test: bool
     vault_enabled: bool
-    skip_vault: bool
+    # Vault suppression is two independent concerns, not one.
+    #
+    # skip_vault_write stops anything being persisted: conversation turns,
+    # session records, state, tasks, commitments, deviations, timers.
+    # skip_vault_read stops retrieval, substituting an empty ContextPacket.
+    #
+    # They were a single fused flag, so the X-Test-Session header - which the
+    # eval tools send purely to keep eval turns out of the personal vault -
+    # also disabled retrieval, and every eval was scored against zero retrieved
+    # content. The per-conversation vault toggle (ADR-031) still sets both, as
+    # that ADR requires; only the test-session limb differs.
+    skip_vault_read: bool
+    skip_vault_write: bool
     completion_id: str
     stream: bool
     policy: "ContextPolicy"

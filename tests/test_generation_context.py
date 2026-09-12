@@ -6,7 +6,8 @@ GenerationContext (ADR-042, issue #93 PR c).
 
 These exercise _build_generation_context directly: given a request/body and the
 normalization outputs (session_id, latest_user_message, completion_id), it must
-resolve is_test / vault_enabled / skip_vault / project, ensure the session, and
+resolve is_test / vault_enabled / the two skip_vault flags / project, ensure the
+session, and
 memoize the query policy - the enrichment-resolved values the clarification
 interceptor and the generation handler consume.
 """
@@ -34,7 +35,13 @@ class _FakeBody:
         self.stream = stream
 
 
-def test_build_generation_context_resolves_test_and_skip_vault():
+def test_build_generation_context_test_session_suppresses_writes_not_reads():
+    """X-Test-Session is write hygiene, not a retrieval kill switch.
+
+    The header exists so eval turns do not land in the personal vault. It used
+    to also force an empty context packet, which scored every eval against zero
+    retrieved content.
+    """
     req = _FakeReq({"X-Test-Session": "true"})
     body = _FakeBody(vault_enabled=True, stream=True)
     with patch("src.api.openai_adapter._ensure_session") as ens, \
@@ -46,13 +53,14 @@ def test_build_generation_context_resolves_test_and_skip_vault():
             completion_id="chatcmpl-abc",
         )
     assert ctx.is_test is True
-    assert ctx.skip_vault is True          # is_test forces skip
+    assert ctx.skip_vault_write is True     # is_test still suppresses writes
+    assert ctx.skip_vault_read is False     # but retrieval now runs
     assert ctx.session_id == "sess_test_001"
     assert ctx.completion_id == "chatcmpl-abc"
     assert ctx.stream is True
     assert ctx.raw_user_message == "hello world"
     assert ctx.policy is not None          # memoized classify_query result
-    # Session ensure ran once, gated on skip_vault.
+    # Session ensure ran once, gated on the write flag (session creation is a write).
     ens.assert_called_once_with("sess_test_001", "hello world", test=True)
 
 
@@ -74,7 +82,7 @@ def test_build_generation_context_resolves_project():
     assert ctx.project_name == "Quarterly Planning"
 
 
-def test_build_generation_context_vault_disabled_sets_skip():
+def test_build_generation_context_vault_disabled_suppresses_both():
     req = _FakeReq({})
     body = _FakeBody(vault_enabled=False, stream=False)
     with patch("src.api.openai_adapter._ensure_session"), \
@@ -88,17 +96,19 @@ def test_build_generation_context_vault_disabled_sets_skip():
         )
     assert ctx.is_test is False
     assert ctx.vault_enabled is False      # per-request opt-out honored
-    assert ctx.skip_vault is True          # vault disabled forces skip
+    assert ctx.skip_vault_write is True    # vault disabled forces both
+    assert ctx.skip_vault_read is True
 
 
 # ---------------------------------------------------------------------------
 # Phase B prep builders over GenerationWork (verbatim extractions).
 # ---------------------------------------------------------------------------
 
-def _gctx(is_test=False, skip_vault=False, session_id="sess_test_b", project_id=None):
+def _gctx(is_test=False, skip_vault_write=False, session_id="sess_test_b", project_id=None):
     return GenerationContext(
         session_id=session_id, project_id=project_id, project_name=None,
-        is_test=is_test, vault_enabled=True, skip_vault=skip_vault,
+        is_test=is_test, vault_enabled=True,
+        skip_vault_read=False, skip_vault_write=skip_vault_write,
         completion_id="chatcmpl-b", stream=False, policy=None, raw_user_message="",
     )
 
@@ -141,15 +151,15 @@ def test_apply_tasks_explicit_request_prefixes_message():
     assert work.message.startswith('[System: tasks created - "call mom"]')
 
 
-def test_apply_timers_skip_vault_is_noop():
-    ctx = _gctx(skip_vault=True)
+def test_apply_timers_skip_vault_write_is_noop():
+    ctx = _gctx(skip_vault_write=True)
     work = GenerationWork(message="start a timer for tea")
     _apply_timers(ctx, work)
     assert work.message == "start a timer for tea"
 
 
 def test_apply_timers_start_prefixes_message():
-    ctx = _gctx(skip_vault=False)
+    ctx = _gctx(skip_vault_write=False)
     work = GenerationWork(message="start a timer for tea")
     with patch("src.state.timer_service.detect_start_timer", return_value="tea"), \
          patch("src.state.timer_service.start_timer"):
@@ -160,7 +170,7 @@ def test_apply_timers_start_prefixes_message():
 def test_apply_timers_stop_note_uses_real_em_dash_at_runtime():
     # The builder emits U+2014 at runtime; the note text must stay
     # contain the actual em dash (U+2014), byte-identical to the pre-refactor note.
-    ctx = _gctx(skip_vault=False)
+    ctx = _gctx(skip_vault_write=False)
     work = GenerationWork(message="stop the timer")
     active = [SimpleNamespace(text="tea", metadata={"started_at": "", "timer_id": "t1"})]
     with patch("src.state.timer_service.detect_start_timer", return_value=None), \

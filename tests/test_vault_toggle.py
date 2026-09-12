@@ -339,3 +339,50 @@ class TestGlobalToggleOverride:
         )
         assert resp.status_code == 200
         client._mock_context.build_context.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# X-Test-Session: writes suppressed, retrieval preserved
+# ---------------------------------------------------------------------------
+
+
+class TestTestSessionReadsButDoesNotWrite:
+    """X-Test-Session is write hygiene, not a retrieval kill switch.
+
+    The four eval tools send this header so their turns do not land in the
+    personal vault. It used to also force an empty ContextPacket, so the
+    "Memory grounding" and "State awareness" sweep categories were scored
+    against zero retrieved content, and two callers worked around it by
+    omitting the header entirely (tests/eval/live_driver.py, and
+    scripts/test_deviation_detection.py).
+    """
+
+    def test_test_session_still_retrieves(self, client):
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_chat_body(vault_enabled=True),
+            headers={"X-Test-Session": "true"},
+        )
+        assert resp.status_code == 200
+        client._mock_context.build_context.assert_called()
+
+    def test_test_session_writes_nothing(self, client):
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_chat_body(vault_enabled=True),
+            headers={"X-Test-Session": "true"},
+        )
+        assert resp.status_code == 200
+        client._mock_write.assert_not_called()
+
+    def test_vault_off_still_beats_test_session_for_reads(self, client):
+        """ADR-031 is unchanged: vault_enabled=False suppresses reads too,
+        regardless of the test header."""
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_chat_body(vault_enabled=False),
+            headers={"X-Test-Session": "true"},
+        )
+        assert resp.status_code == 200
+        client._mock_context.build_context.assert_not_called()
+        client._mock_write.assert_not_called()

@@ -26,9 +26,12 @@ enrichment-resolved values and shares mutable locals.
 
 - **`GenerationContext`** (frozen) carries the enrichment-resolved identity /
   routing values that are computed once and never change: `session_id`,
-  `project_id`, `project_name`, `is_test`, `vault_enabled`, `skip_vault`,
-  `completion_id`, `stream`, the memoized query `policy`, and `raw_user_message`
-  (the clean pre-prefix snapshot).
+  `project_id`, `project_name`, `is_test`, `vault_enabled`, `skip_vault_read`,
+  `skip_vault_write`, `completion_id`, `stream`, the memoized query `policy`, and
+  `raw_user_message` (the clean pre-prefix snapshot). The two vault flags were a
+  single fused `skip_vault` until 2026-09-12; they were split because the
+  `X-Test-Session` header, which exists to keep eval turns out of the personal
+  vault, was also suppressing retrieval.
 - **`GenerationWork`** (mutable) carries the evolving user message (rewritten with
   system prefixes by the prep builders) and the values those builders derive
   (`confirmation_web_items`, `confirmation_confirmed`, `confirmation_search_failed`,

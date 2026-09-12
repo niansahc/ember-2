@@ -267,13 +267,13 @@ def test_set_context_window_unknown_model_unchanged():
     assert buf.context_window == 8192
 
 
-def test_set_context_window_phi3_mini_is_smallest():
+def test_set_context_window_phi3_mini_resolves_4096():
     buf = ConversationBuffer()
     buf.set_context_window("phi3:mini")
     assert buf.context_window == 4096
 
 
-def test_set_context_window_qwen_is_largest():
+def test_set_context_window_qwen25_14b_resolves_32768():
     buf = ConversationBuffer()
     buf.set_context_window("qwen2.5:14b")
     assert buf.context_window == 32768

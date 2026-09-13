@@ -156,3 +156,74 @@ class TestUpdate:
         _write_record(vault_dir, "proposed-1", confirmed=False)
         with pytest.raises(ValueError, match="cap reached"):
             update("proposed-1", {"confirmed": True})
+
+
+class TestUpdateIsAppendOnly:
+    """Recalling Too Well Phase 1, item 6: update() must never mutate the
+    original file in place (CLAUDE.md Rule 3), despite the docstring at
+    the top of lodestone_service.py already claiming append-only."""
+
+    def test_update_writes_a_new_file(self, vault_dir):
+        lodestone_dir = vault_dir / "memory" / "lodestone"
+        before = set(lodestone_dir.glob("*.json"))
+        _write_record(vault_dir, "rec-1", confirmed=False)
+        after_write = set(lodestone_dir.glob("*.json")) - before
+
+        update("rec-1", {"confirmed": True})
+        after_update = set(lodestone_dir.glob("*.json")) - before
+
+        assert len(after_update) == 2, (
+            "update() must add a new file, not rewrite the one write() created"
+        )
+        assert after_write.issubset(after_update)
+
+    def test_original_file_is_never_mutated(self, vault_dir):
+        import json
+
+        lodestone_dir = vault_dir / "memory" / "lodestone"
+        _write_record(vault_dir, "rec-1", confirmed=False, value="original value")
+        original_path = lodestone_dir / "rec-1.json"
+        original_bytes_before = original_path.read_bytes()
+
+        update("rec-1", {"confirmed": True})
+
+        assert original_path.read_bytes() == original_bytes_before
+        original_record = json.loads(original_path.read_text(encoding="utf-8"))
+        assert original_record["confirmed"] is False, (
+            "the original physical file must still show the pre-update state"
+        )
+
+    def test_id_is_preserved_across_update(self, vault_dir):
+        _write_record(vault_dir, "rec-1", confirmed=False)
+        result = update("rec-1", {"confirmed": True})
+        assert result["id"] == "rec-1"
+
+    def test_read_active_reports_one_logical_record_after_update(self, vault_dir):
+        """Two physical files now exist for this id (old + new version),
+        but read_active() must resolve to exactly one logical record."""
+        _write_record(vault_dir, "proposed-1", confirmed=False)
+        update("proposed-1", {"confirmed": True})
+        active = read_active()
+        assert len(active) == 1
+        assert active[0]["id"] == "proposed-1"
+        assert active[0]["confirmed"] is True
+
+    def test_sequential_updates_each_build_on_the_latest_version(self, vault_dir):
+        """A second update must see the first update's changes, not the
+        original file -- proves update() reads via the deduped view."""
+        _write_record(vault_dir, "rec-1", confirmed=True)
+        update("rec-1", {"user_note": "first note"})
+        result = update("rec-1", {"flagged_as_noise": True})
+
+        assert result["metadata"]["user_note"] == "first note", (
+            "second update must preserve the first update's field, not the "
+            "original record's"
+        )
+        assert result["metadata"]["flagged_as_noise"] is True
+
+        # And the resolved view reflects only the latest version.
+        all_records = read_all()
+        matching = [r for r in all_records if r["id"] == "rec-1"]
+        assert len(matching) == 1
+        assert matching[0]["metadata"]["user_note"] == "first note"
+        assert matching[0]["metadata"]["flagged_as_noise"] is True

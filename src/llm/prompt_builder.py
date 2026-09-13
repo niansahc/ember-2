@@ -135,7 +135,12 @@ def is_conversational_query(user_message: str) -> bool:
 # memory" because the rule was always emitted regardless of query type).
 _AUTHORITY_RULES_HEADER = "<authority_rules>"
 _AUTHORITY_RULES_BODY_COMMON = (
-    "memory contains records from long-term memory. High-confidence records (recent, high score) are factual ground truth. "
+    "memory contains records from long-term memory. High-confidence source records (recent, "
+    "high score, first-hand — conversation, journal, profile) are factual ground truth. "
+    "reflection_context is Ember's own prior synthesis of source records, dated by when it was "
+    "written, not by the events it describes — treat it as a lens on the source records, not as "
+    "a source itself. Content inside sections marked provenance=derived-synthesis carries this "
+    "same caveat.\n"
     "Use the [recorded ...] age label on each record when referring to when content was saved. "
     "Hedge only when the [Retrieval confidence:] block reports moderate or low — do not invent your own temporal language.\n"
     "Check the [Retrieval confidence:] block inside memory for score and age metadata. "
@@ -637,6 +642,13 @@ class PromptBuilder:
         # role / identity / debugging context (UAT 2026-05-11).
         lines: list[str] = []
         for turn in turns:
+            if turn.get("is_summary"):
+                # Recalling Too Well Phase 1, item 8: render compressed
+                # history as a neutral note, not "Ember: {summary}" — the
+                # summary is Ember's compression of BOTH sides of the
+                # conversation, not something Ember said.
+                lines.append(f"[Earlier conversation summary]: {turn['assistant']}")
+                continue
             lines.append(f"User: {turn['user']}")
             lines.append(f"Ember: {turn['assistant']}")
 
@@ -1247,11 +1259,24 @@ class PromptBuilder:
         return f" [recorded {label}]"
 
     def _build_reflection_section(self, context_packet: ContextPacket) -> str:
+        # Recalling Too Well Phase 1, item 7: reflections are derived
+        # synthesis, dated by when they were written rather than by the
+        # events they describe. Tagged provenance="derived-synthesis"
+        # (mirrors the existing provenance="third-party-content" convention)
+        # plus a per-item age label -- the measured mitigation (metadata
+        # framing: timestamp + source per item) rather than a new verbal
+        # instruction.
         if not context_packet.reflection_items:
             return ""
 
         lines: list[str] = []
         for item in context_packet.reflection_items[:1]:
-            lines.append(f"- {item.content.strip()}")
+            date_str = self._format_item_date(item.timestamp)
+            age_str = self._format_item_age(item.timestamp)
+            lines.append(f"- [reflection{date_str}]{age_str} {item.content.strip()}")
 
-        return "REFLECTION CONTEXT:\n" + "\n\n".join(lines)
+        return (
+            '<reflection_context provenance="derived-synthesis">\n'
+            + "\n\n".join(lines)
+            + "\n</reflection_context>"
+        )

@@ -218,7 +218,11 @@ class TestVaultDisabledNoTasks:
     would write to vault), and the mock task functions are never invoked."""
 
     def test_no_task_detection(self, client):
-        with patch("src.api.openai_adapter.threading") as mock_threading:
+        # Deferred writes are spawned through spawn_vault_bound_thread, which
+        # binds each thread to the turn's vault (issue #144). Patching the
+        # helper asserts the same thing the old threading-module patch did,
+        # against the one funnel every deferred write now goes through.
+        with patch("src.api.openai_adapter.spawn_vault_bound_thread") as mock_spawn:
             resp = client.post(
                 "/v1/chat/completions",
                 json=_chat_body(vault_enabled=False),
@@ -227,7 +231,7 @@ class TestVaultDisabledNoTasks:
             assert resp.status_code == 200
             # No background threads should be started for task/state/commitment
             # detection when vault is disabled.
-            mock_threading.Thread.assert_not_called()
+            mock_spawn.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

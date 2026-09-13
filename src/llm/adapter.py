@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import re
-import threading
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -10,7 +9,12 @@ import httpx
 import ollama
 
 from src.context.models import ContextPacket
-from src.core.config import get_ember_debug, get_ember_model, get_ember_vision_model
+from src.core.config import (
+    get_ember_debug,
+    get_ember_model,
+    get_ember_vision_model,
+    spawn_vault_bound_thread,
+)
 
 logger = logging.getLogger("ember.llm")
 
@@ -213,6 +217,8 @@ class LLMAdapter:
         vision_description: str | None = None,
         ask_first_active: bool = False,
         intent_class: str | None = None,
+        vault_path=None,
+        skip_vault_write: bool = False,
     ) -> str:
         """Drain generate_response_iter() and return the final response
         string. Status signals are dropped here -- non-streaming callers
@@ -232,6 +238,8 @@ class LLMAdapter:
             vision_description=vision_description,
             ask_first_active=ask_first_active,
             intent_class=intent_class,
+            vault_path=vault_path,
+            skip_vault_write=skip_vault_write,
         ):
             if isinstance(item, str):
                 final = item
@@ -250,6 +258,8 @@ class LLMAdapter:
         ask_first_active: bool = False,
         intent_class: str | None = None,
         session_id: str | None = None,
+        vault_path=None,
+        skip_vault_write: bool = False,
     ) -> Iterator[StatusSignal | str]:
         """Generator form of generate_response. Yields StatusSignal
         sentinels around the constitutional review call (only when
@@ -432,7 +442,13 @@ class LLMAdapter:
         # (pop_oldest_half + inject_summary_turn) so there's a theoretical race
         # if two requests compress simultaneously. In practice this is single-user
         # and turns are sequential, so the risk is negligible.
-        threading.Thread(target=self._maybe_compress_buffer, daemon=True).start()
+        # Bound to the caller's vault (issue #144): this spawns at the end of
+        # generation, so the swap window it spans is the whole LLM call.
+        spawn_vault_bound_thread(
+            self._maybe_compress_buffer,
+            args=(skip_vault_write,),
+            vault=vault_path,
+        )
 
         yield final_response
 
@@ -449,6 +465,8 @@ class LLMAdapter:
         ask_first_active: bool = False,
         intent_class: str | None = None,
         session_id: str | None = None,
+        vault_path=None,
+        skip_vault_write: bool = False,
     ):
         """
         Stream a response token by token. Yields string chunks.
@@ -586,7 +604,12 @@ class LLMAdapter:
             full_response,
             session_id=session_id,
         )
-        threading.Thread(target=self._maybe_compress_buffer, daemon=True).start()
+        # Bound to the caller's vault (issue #144), same as the iter path.
+        spawn_vault_bound_thread(
+            self._maybe_compress_buffer,
+            args=(skip_vault_write,),
+            vault=vault_path,
+        )
 
     # ------------------------------------------------------------------
     # Provider dispatch
@@ -947,7 +970,7 @@ class LLMAdapter:
                 except (json.JSONDecodeError, KeyError, IndexError):
                     continue
 
-    def _maybe_compress_buffer(self) -> None:
+    def _maybe_compress_buffer(self, skip_vault_write: bool = False) -> None:
         """Summarize and compress the oldest half of the buffer when token
         count exceeds COMPRESSION_THRESHOLD (1500 buffer-tokens, ~turn 20
         at typical density).
@@ -958,6 +981,14 @@ class LLMAdapter:
         no log line, since the async daemon-thread call site swallows
         exceptions. Wrap the LLM call in try/except and re-prepend on
         failure.
+
+        skip_vault_write suppresses only the session-summary vault record.
+        Compression itself still runs: the buffer is still popped and the
+        summary still injected, so context management is identical for a
+        test session -- only the persisted record is withheld. Before this
+        parameter existed the adapter never saw the test-session flag, so a
+        test turn that tripped the threshold wrote a reflection record into
+        the user's real vault.
         """
         buf = self.prompt_builder.conversation_buffer
         if not buf.needs_compression():
@@ -996,11 +1027,16 @@ class LLMAdapter:
             )
             return
 
-        write_session_summary(
-            memory_service=self.memory_service,
-            summary=summary,
-            turns_compressed=len(oldest_turns),
-        )
+        if skip_vault_write:
+            logger.warning(
+                "[BUFFER] Skipped session summary write (test session)"
+            )
+        else:
+            write_session_summary(
+                memory_service=self.memory_service,
+                summary=summary,
+                turns_compressed=len(oldest_turns),
+            )
 
         buf.inject_summary_turn(summary)
 

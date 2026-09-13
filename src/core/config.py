@@ -1,10 +1,16 @@
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
+import logging
 import os
+import threading
 
 from dotenv import load_dotenv
 
 
 load_dotenv()
+
+logger = logging.getLogger("ember.config")
 
 
 # Runtime vault path override. Set by the developer vault-swap endpoint
@@ -14,15 +20,45 @@ _vault_path_override: str | None = None
 _vault_label: str | None = None
 
 
+# Deferred-work vault binding (issue #144). The override above is process
+# global and get_private_vault_path() re-resolves on every call, so work that
+# is queued under one vault but runs later -- a daemon thread, a streaming
+# response's post-stream cleanup -- would otherwise resolve whichever vault is
+# active when it finally executes. A swap landing mid-turn could therefore
+# route a live-vault turn's write into the test vault, or the reverse.
+#
+# A binding pins the vault for the duration of a block or a spawned thread and
+# is consulted BEFORE the override, so bound work cannot observe a later swap.
+#
+# ContextVar rather than threading.local(): isolated per thread and per async
+# task, and reset(token) restores the prior value exactly, which matters on
+# pooled threads that outlive one unit of work.
+_vault_binding: ContextVar[str | None] = ContextVar(
+    "ember_vault_binding", default=None
+)
+
+
 def get_private_vault_path():
     """
     Reads the PRIVATE_VAULT_PATH from the .env file
     and returns the absolute path to the vault.
 
-    If a runtime override has been set via set_vault_path_override(),
-    that takes precedence. The override is memory-only and reverts
-    on API restart.
+    Resolution order:
+      1. Deferred-work binding, set by vault_binding() or
+         spawn_vault_bound_thread(). Work queued under one vault keeps that
+         vault even if a swap lands while it is in flight (issue #144).
+      2. Runtime override set via set_vault_path_override() by the vault-swap
+         endpoint. Memory-only, reverts on API restart.
+      3. PRIVATE_VAULT_PATH from the environment.
+
+    This is the only vault resolution point in src/ -- nothing reads the
+    override global or the environment variable directly -- so the binding
+    check here covers every caller, including ones not yet written.
     """
+    bound = _vault_binding.get()
+    if bound is not None:
+        return Path(bound).resolve()
+
     if _vault_path_override is not None:
         return Path(_vault_path_override).resolve()
 
@@ -32,6 +68,80 @@ def get_private_vault_path():
         raise ValueError("PRIVATE_VAULT_PATH not set in environment")
 
     return Path(vault_path).resolve()
+
+
+def get_bound_vault() -> str | None:
+    """Return the vault bound to the current thread/task, or None when unbound."""
+    return _vault_binding.get()
+
+
+@contextmanager
+def vault_binding(path):
+    """Pin the vault path for the duration of this block.
+
+    Takes precedence over the swap override, so a swap landing mid-block does
+    not move the work that the block performs.
+
+    A None path is a deliberate no-op: call sites that could not resolve a
+    vault (PRIVATE_VAULT_PATH unset) then behave exactly as they did before
+    the binding existed, rather than failing in a new place.
+    """
+    if path is None:
+        yield
+        return
+
+    # Capture the ContextVar object itself rather than resolving the module
+    # global again at reset time. Test fixtures reload src.core.config, which
+    # rebinds the global to a brand new ContextVar; resetting a token against
+    # that new object raises "Token was created by a different ContextVar" and
+    # would leave the binding set. Holding the original object means the reset
+    # always matches the set that produced the token.
+    var = _vault_binding
+    token = var.set(str(path))
+    try:
+        yield
+    finally:
+        var.reset(token)
+
+
+def spawn_vault_bound_thread(target, args=(), vault=None, name=None) -> threading.Thread:
+    """Start a daemon thread bound to a vault, and return it.
+
+    The captured path travels into the thread as a plain closure value and the
+    binding is re-established inside the new thread, so this does not depend on
+    implicit ContextVar propagation through any threadpool.
+
+    Pass `vault` explicitly wherever the caller already holds the vault the
+    work belongs to (a chat turn captures one at turn start). Omitting it
+    captures whatever is effective at spawn time, which closes the
+    spawn-to-execution window but not any earlier one.
+    """
+    if vault is None:
+        try:
+            vault = get_private_vault_path()
+        except ValueError:
+            vault = None
+    bound = str(vault) if vault is not None else None
+
+    def _run() -> None:
+        with vault_binding(bound):
+            # Fires only when a swap actually landed between spawn and here --
+            # the race this binding exists to close. Silent on every normal
+            # turn, so it is signal rather than noise, and it is the runtime
+            # confirmation that the bound path executed (issue #144).
+            if bound is not None and _vault_path_override is not None:
+                if Path(_vault_path_override).resolve() != Path(bound).resolve():
+                    logger.warning(
+                        "[VAULT_BIND] vault swapped mid-flight; holding deferred "
+                        "write to its queue-time vault %s (active is now %s)",
+                        bound,
+                        _vault_path_override,
+                    )
+            target(*args)
+
+    thread = threading.Thread(target=_run, daemon=True, name=name)
+    thread.start()
+    return thread
 
 
 def set_vault_path_override(path: str, label: str) -> None:

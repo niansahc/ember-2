@@ -413,17 +413,26 @@ def _cascade_soft_delete(session_id: str) -> None:
 def delete_conversation_endpoint(session_id: str):
     """Soft-delete a conversation session. Append-only: writes a new record with deleted: true.
     Triggers session reflection if buffer has 3+ turns (ADR-009)."""
+    # Both background writers below are bound to the vault active when this
+    # request arrived, so a swap landing while they are in flight cannot move
+    # their writes into another vault (issue #144).
+    from src.core.config import get_private_vault_path, spawn_vault_bound_thread
+
+    try:
+        _request_vault = get_private_vault_path()
+    except ValueError:
+        _request_vault = None
+
     # Auto-trigger session reflection before delete (non-fatal)
     try:
         buffer = llm_adapter.prompt_builder.conversation_buffer.get_recent()
         if buffer and len(buffer) >= 3:
-            import threading
             from src.reflection.session_reflection import generate_session_reflection
-            threading.Thread(
-                target=generate_session_reflection,
+            spawn_vault_bound_thread(
+                generate_session_reflection,
                 args=(buffer, session_id),
-                daemon=True,
-            ).start()
+                vault=_request_vault,
+            )
     except Exception as exc:
         logger.warning("[SESSION_REFLECT] Auto-trigger on delete failed (non-fatal): %s", exc)
 
@@ -438,12 +447,11 @@ def delete_conversation_endpoint(session_id: str):
     # current open loops. Runs in a background thread — non-blocking,
     # non-fatal.
     try:
-        import threading
-        threading.Thread(
-            target=_cascade_soft_delete,
+        spawn_vault_bound_thread(
+            _cascade_soft_delete,
             args=(session_id,),
-            daemon=True,
-        ).start()
+            vault=_request_vault,
+        )
     except Exception as exc:
         logger.warning("[CASCADE_DELETE] Failed to start cascade (non-fatal): %s", exc)
 

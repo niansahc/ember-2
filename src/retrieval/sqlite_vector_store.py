@@ -115,7 +115,12 @@ class SqliteVectorStore:
         insert is silently skipped (INSERT OR IGNORE).
 
         Required keys: id, text, embedding
-        Optional keys: source, memory_type, created_at, metadata
+        Optional keys: source, memory_type, created_at, metadata, authorship
+
+        authorship defaults to 'unknown' (the column default) when absent,
+        matching the read path's fallback. _migrate_authorship_column()
+        runs in __init__ before any insert() call, so the column always
+        exists by the time this executes.
         """
         embedding: list[float] = record["embedding"]
         n = len(embedding)
@@ -127,9 +132,9 @@ class SqliteVectorStore:
         self._conn.execute(
             """
             INSERT OR IGNORE INTO vectors
-                (id, text, embedding, source, memory_type, created_at, metadata)
+                (id, text, embedding, source, memory_type, created_at, metadata, authorship)
             VALUES
-                (?, ?, ?, ?, ?, ?, ?)
+                (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record["id"],
@@ -139,6 +144,7 @@ class SqliteVectorStore:
                 record.get("memory_type"),
                 record.get("created_at"),
                 metadata_str,
+                record.get("authorship", "unknown"),
             ),
         )
         self._conn.commit()

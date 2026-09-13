@@ -687,7 +687,7 @@ class TestContextPacketOrdering:
             "nature":              "Ember's nature:",
             "current_state":       "<current_state>",
             "tasks":               "ACTIVE TASKS:",
-            "reflection":          "REFLECTION CONTEXT:",
+            "reflection":          '<reflection_context provenance="derived-synthesis">',
             "conversation":        "<conversation_history>",
             "web_search":          "<web_search_results>",
             "authority_rules":     "<authority_rules>",
@@ -795,3 +795,84 @@ def test_retrieval_confidence_keeps_oldest_age_for_confidence_level() -> None:
     # Confidence string is derived from low score + old age; should land
     # in the "low" bucket (avg_score < 0.4 and oldest_age > 30).
     assert "low" in block.lower()
+
+
+# ---------------------------------------------------------------------------
+# Recalling Too Well Phase 1, item 7: derived-record carve-out + metadata
+# framing on REFLECTION CONTEXT
+# ---------------------------------------------------------------------------
+
+
+class TestReflectionContextProvenance:
+    def _make_reflection_item(self, content: str, id: str = "r1") -> ContextItem:
+        return ContextItem(
+            id=id, content=content, source="reflection", item_type="reflection",
+            memory_type="reflection", score=0.5,
+        )
+
+    def test_ground_truth_claim_is_scoped_to_source_records(self) -> None:
+        """The 'factual ground truth' claim must name source records
+        explicitly and carve reflections out, not apply unconditionally."""
+        from src.llm.prompt_builder import _render_authority_rules
+
+        rules = _render_authority_rules(is_conversational=False)
+        assert "factual ground truth" in rules
+        assert "High-confidence source records" in rules
+        assert "own prior synthesis" in rules
+        assert "not as a source itself" in rules
+
+    def test_reflection_section_is_tagged_derived_synthesis(self) -> None:
+        pb = PromptBuilder()
+        packet = ContextPacket(
+            user_message="test",
+            reflection_items=[self._make_reflection_item("Recent themes: pacing improved.")],
+        )
+        section = pb._build_reflection_section(packet)
+        assert '<reflection_context provenance="derived-synthesis">' in section
+        assert section.strip().endswith("</reflection_context>")
+
+    def test_reflection_section_carries_per_item_age_label(self) -> None:
+        pb = PromptBuilder()
+        item = self._make_reflection_item("Recent themes: pacing improved.")
+        item.timestamp = _ts_days_ago(3)
+        packet = ContextPacket(user_message="test", reflection_items=[item])
+        section = pb._build_reflection_section(packet)
+        assert "[recorded" in section
+
+    def test_empty_reflection_items_yields_empty_section(self) -> None:
+        pb = PromptBuilder()
+        packet = ContextPacket(user_message="test", reflection_items=[])
+        assert pb._build_reflection_section(packet) == ""
+
+
+# ---------------------------------------------------------------------------
+# Recalling Too Well Phase 1, item 8: compressed-history summary must not
+# render as Ember's own turn
+# ---------------------------------------------------------------------------
+
+
+class TestConversationSummaryAttribution:
+    def test_summary_turn_does_not_render_as_ember(self) -> None:
+        from src.context.conversation_buffer import ConversationBuffer
+
+        buffer = ConversationBuffer()
+        buffer.inject_summary_turn("The user was frustrated about a deploy that failed twice.")
+
+        pb = PromptBuilder()
+        pb.conversation_buffer = buffer
+        section = pb._build_conversation_section()
+
+        assert "Ember: The user was frustrated" not in section
+        assert "[Earlier conversation summary]: The user was frustrated" in section
+
+    def test_regular_turns_still_render_as_ember(self) -> None:
+        from src.context.conversation_buffer import ConversationBuffer
+
+        buffer = ConversationBuffer()
+        buffer.add_turn("hello", "hi there")
+
+        pb = PromptBuilder()
+        pb.conversation_buffer = buffer
+        section = pb._build_conversation_section()
+
+        assert "Ember: hi there" in section

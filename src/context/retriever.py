@@ -144,14 +144,19 @@ class ContextRetriever:
         return items
 
     def get_reflection_items(self, user_message: str) -> list[ContextItem]:
+        # Recalling Too Well Phase 1, items 4-5: MemoryService.search() is
+        # keyword-overlap matching (search_memory.py) and returns no score
+        # of its own, so reflections were hardcoded to score=1.0 -- higher
+        # than any cosine-derived memory item could reach. A Jaccard score
+        # against the user message gives reflections a real, comparable
+        # score instead. No unconditional "most recent reflection" fallback
+        # when search comes back empty -- an empty result means no
+        # reflection_items, matching get_memory_items()/get_profile_items().
         results = self.memory_service.search(
             user_message,
             memory_type="reflection",
             limit=3,
         )
-
-        if not results:
-            results = self.memory_service.read(memory_type="reflection", limit=1)
 
         items: list[ContextItem] = []
 
@@ -161,6 +166,11 @@ class ContextRetriever:
             if self._should_exclude_content(content, user_message):
                 continue
 
+            score = self._jaccard_similarity(
+                self._tokenize(self._normalize_text(content)),
+                self._tokenize(self._normalize_text(user_message)),
+            )
+
             items.append(
                 ContextItem(
                     id=result.get("id", ""),
@@ -168,7 +178,7 @@ class ContextRetriever:
                     source="reflection",
                     item_type="reflection",
                     memory_type="reflection",
-                    score=1.0,
+                    score=score,
                     timestamp=result.get("timestamp"),
                     tags=result.get("tags", []),
                     metadata=result,

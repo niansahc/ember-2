@@ -344,6 +344,9 @@ def synthesize_lodestone_candidates(
         source="reflection_synthesis",
         supporting_evidence="\n".join(f"- {line}" for line in evidence),
         confirmed=False,
+        metadata={
+            "source_record_ids": [r.get("id") for r in reflections if r.get("id")],
+        },
     )
     # Vault Privacy Rule: log category + length only, not the value text.
     logger.info(

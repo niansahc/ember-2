@@ -43,6 +43,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tools.eval_helpers import pin_model, read_model_state
+
 
 # ---------------------------------------------------------------------------
 # Test battery — 18 cases across 6 categories
@@ -416,22 +418,18 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
 # ---------------------------------------------------------------------------
 
 def _switch_model(model: str) -> str | None:
-    """Switch active model via API. Returns previous model or None on failure."""
+    """Pin the active model via API (ADR-043). Returns the previous model
+    name, or None on failure.
+
+    Delegates to pin_model rather than posting directly: a persisting
+    POST /model would leave model_override.json changed by a one-off eval
+    run and would route the intent classifier, coaching filter, deviation
+    detector and reflection paths onto the candidate too, instead of
+    moving only the generation model in memory.
+    """
     try:
-        from src.core.config import get_ember_api_key
-        api_key = get_ember_api_key() or ""
-        resp = httpx.get(
-            "http://localhost:8000/model",
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=10.0,
-        )
-        previous = resp.json().get("model", "")
-        httpx.post(
-            "http://localhost:8000/model",
-            json={"model": model},
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            timeout=10.0,
-        )
+        previous = read_model_state().get("model")
+        pin_model(model)
         print(f"Switched model to: {model}")
         return previous
     except Exception as exc:
@@ -473,31 +471,35 @@ def main():
     print(f"This sends 18 test messages to Ember and evaluates each response with Claude.")
     print(f"Estimated time: 5-10 minutes (depends on Ember response speed).\n")
 
-    results, summary = run_eval(verbose=verbose)
+    try:
+        results, summary = run_eval(verbose=verbose)
 
-    # Print to stdout
-    print(summary)
+        # Print to stdout
+        print(summary)
 
-    # Write to log file
-    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    log_dir = REPO_ROOT / "logs" / "eval_conversations"
-    log_dir.mkdir(parents=True, exist_ok=True)
+        # Write to log file
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        log_dir = REPO_ROOT / "logs" / "eval_conversations"
+        log_dir.mkdir(parents=True, exist_ok=True)
 
-    log_file = log_dir / f"eval_{timestamp}.log"
-    log_file.write_text(summary, encoding="utf-8")
-    print(f"\nLog written to: {log_file}")
+        log_file = log_dir / f"eval_{timestamp}.log"
+        log_file.write_text(summary, encoding="utf-8")
+        print(f"\nLog written to: {log_file}")
 
-    # Also write JSON for programmatic access
-    json_file = log_dir / "latest.json"
-    json_file.write_text(
-        json.dumps(results, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-    # Restore original model if we switched
-    if original_model and target_model:
-        _switch_model(original_model)
-        print(f"Restored model to: {original_model}")
+        # Also write JSON for programmatic access
+        json_file = log_dir / "latest.json"
+        json_file.write_text(
+            json.dumps(results, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    finally:
+        # Runs on interrupt too. A pinned swap moves llm_adapter.model in
+        # memory without touching model_override.json, so a Ctrl-C mid-eval
+        # would otherwise leave the API answering as target_model with
+        # nothing on disk to reveal it.
+        if original_model and target_model:
+            _switch_model(original_model)
+            print(f"Restored model to: {original_model}")
 
 
 if __name__ == "__main__":

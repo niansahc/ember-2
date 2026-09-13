@@ -44,7 +44,12 @@ from tools.eval_conversations import (
     get_ember_api_key,
     CLAUDE_MODEL,
 )
-from tools.eval_helpers import swap_to_test_vault, restore_vault
+from tools.eval_helpers import (
+    swap_to_test_vault,
+    restore_vault,
+    pin_model,
+    restore_model,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -58,8 +63,6 @@ MODELS_TO_TEST = [
     "gemma2:9b",
     "llama3.1:8b",
 ]
-
-ORIGINAL_MODEL = "qwen3:8b"
 
 CATEGORIES = [
     "Preference expression",
@@ -89,20 +92,20 @@ def get_installed_models() -> set[str]:
 
 
 def switch_model(model: str) -> bool:
-    """Switch Ember's active model via POST /model."""
-    try:
-        api_key = get_ember_api_key()
-        headers = {"Content-Type": "application/json"}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+    """Pin Ember's generation model to `model` for this sweep.
 
-        resp = httpx.post(
-            "http://localhost:8000/model",
-            json={"model": model},
-            headers=headers,
-            timeout=30.0,
-        )
-        return resp.status_code == 200
+    Pins rather than persists (ADR-043): the candidate reaches the generation
+    path only, so the intent classifier, coaching filter, deviation detector
+    and reflection paths keep using the reference model and the candidate is
+    not the router selecting its own test path. model_override.json is never
+    written, so the user's persisted choice survives the sweep.
+
+    pin_model validates the tag and verifies the pin took effect, so a False
+    here means the candidate must be skipped, not retried blindly.
+    """
+    try:
+        pin_model(model)
+        return True
     except Exception as exc:
         print(f"  Failed to switch model: {exc}")
         return False
@@ -256,124 +259,127 @@ def main():
     print(f"Current model: {original}")
     print()
 
-    # Run evals
-    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    all_results: list[dict] = []
-    lines: list[str] = []
+    try:
+        # Run evals
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        all_results: list[dict] = []
+        lines: list[str] = []
 
-    lines.append(f"Local Model Comparison Eval — {timestamp}")
-    lines.append(f"Evaluator: {CLAUDE_MODEL}")
-    lines.append(f"{'=' * 70}")
-    lines.append("")
+        lines.append(f"Local Model Comparison Eval — {timestamp}")
+        lines.append(f"Evaluator: {CLAUDE_MODEL}")
+        lines.append(f"{'=' * 70}")
+        lines.append("")
 
-    for model in MODELS_TO_TEST:
-        print(f"{'─' * 60}")
-        print(f"MODEL: {model}")
-        print(f"{'─' * 60}")
+        for model in MODELS_TO_TEST:
+            print(f"{'─' * 60}")
+            print(f"MODEL: {model}")
+            print(f"{'─' * 60}")
 
-        # Check if installed
-        if model not in installed:
-            print(f"  ⏭️  Not installed, skipping.")
-            lines.append(f"{model:20s} | SKIPPED — not installed")
-            all_results.append({"model": model, "overall": None, "skipped": True})
+            # Check if installed
+            if model not in installed:
+                print(f"  ⏭️  Not installed, skipping.")
+                lines.append(f"{model:20s} | SKIPPED — not installed")
+                all_results.append({"model": model, "overall": None, "skipped": True})
+                print()
+                continue
+
+            # Switch model
+            print(f"  Switching to {model}...")
+            if not switch_model(model):
+                print(f"  ❌ Failed to switch model, skipping.")
+                lines.append(f"{model:20s} | SKIPPED — switch failed")
+                all_results.append({"model": model, "overall": None, "skipped": True})
+                print()
+                continue
+
+            # Wait for model to load
+            print(f"  Waiting 3 seconds for model to load...")
+            time.sleep(3)
+
+            # Run eval
+            print(f"  Running 18-question eval...")
+            result = run_eval_for_model(model, verbose=verbose)
+            all_results.append(result)
+
+            print(f"\n  Overall: {result['overall']}/10")
+            print(f"  Passed: {result['counts']['pass']}  Warned: {result['counts']['warn']}  Failed: {result['counts']['fail']}  Errors: {result['counts']['error']}")
             print()
-            continue
 
-        # Switch model
-        print(f"  Switching to {model}...")
-        if not switch_model(model):
-            print(f"  ❌ Failed to switch model, skipping.")
-            lines.append(f"{model:20s} | SKIPPED — switch failed")
-            all_results.append({"model": model, "overall": None, "skipped": True})
-            print()
-            continue
 
-        # Wait for model to load
-        print(f"  Waiting 3 seconds for model to load...")
-        time.sleep(3)
+        # Build comparison table
+        lines.append("")
+        header = f"{'Model':20s} | {'Overall':>7} | {'Prefer':>6} | {'Const':>5} | {'Memory':>6} | {'Self-A':>6} | {'State':>5} | {'Tone':>4} | {'Latency':>7}"
+        separator = "─" * len(header)
+        lines.append(header)
+        lines.append(separator)
 
-        # Run eval
-        print(f"  Running 18-question eval...")
-        result = run_eval_for_model(model, verbose=verbose)
-        all_results.append(result)
+        print("=" * 80)
+        print("COMPARISON TABLE")
+        print("=" * 80)
+        print(header)
+        print(separator)
 
-        print(f"\n  Overall: {result['overall']}/10")
-        print(f"  Passed: {result['counts']['pass']}  Warned: {result['counts']['warn']}  Failed: {result['counts']['fail']}  Errors: {result['counts']['error']}")
-        print()
+        best_model = None
+        best_score = -1
 
-    # Restore original model
-    print(f"Restoring original model: {ORIGINAL_MODEL}...")
-    switch_model(ORIGINAL_MODEL)
-    print()
+        for r in all_results:
+            if r.get("skipped"):
+                row = f"{r['model']:20s} | {'SKIP':>7} |   —    |  —    |   —    |   —    |  —    |  —   |    —"
+            else:
+                cats = r["categories"]
+                lat = r.get("avg_latency", 0)
+                row = (
+                    f"{r['model']:20s} | "
+                    f"{r['overall']:>5.1f}/10 | "
+                    f"{cats.get('Preference expression', 0):>5.1f} | "
+                    f"{cats.get('Constitutional behavior', 0):>5.1f} | "
+                    f"{cats.get('Memory grounding', 0):>5.1f} | "
+                    f"{cats.get('Self-attribution', 0):>5.1f} | "
+                    f"{cats.get('State awareness', 0):>5.1f} | "
+                    f"{cats.get('Tone and presence', 0):>4.1f} | "
+                    f"{lat:>5.1f}s"
+                )
+                if r["overall"] > best_score:
+                    best_score = r["overall"]
+                    best_model = r["model"]
 
-    # Build comparison table
-    lines.append("")
-    header = f"{'Model':20s} | {'Overall':>7} | {'Prefer':>6} | {'Const':>5} | {'Memory':>6} | {'Self-A':>6} | {'State':>5} | {'Tone':>4} | {'Latency':>7}"
-    separator = "─" * len(header)
-    lines.append(header)
-    lines.append(separator)
+            lines.append(row)
+            print(row)
 
-    print("=" * 80)
-    print("COMPARISON TABLE")
-    print("=" * 80)
-    print(header)
-    print(separator)
+        lines.append(separator)
+        print(separator)
 
-    best_model = None
-    best_score = -1
+        if best_model:
+            winner_line = f"\n🏆 Winner: {best_model} ({best_score}/10)"
+            lines.append(winner_line)
+            print(winner_line)
 
-    for r in all_results:
-        if r.get("skipped"):
-            row = f"{r['model']:20s} | {'SKIP':>7} |   —    |  —    |   —    |   —    |  —    |  —   |    —"
-        else:
-            cats = r["categories"]
-            lat = r.get("avg_latency", 0)
-            row = (
-                f"{r['model']:20s} | "
-                f"{r['overall']:>5.1f}/10 | "
-                f"{cats.get('Preference expression', 0):>5.1f} | "
-                f"{cats.get('Constitutional behavior', 0):>5.1f} | "
-                f"{cats.get('Memory grounding', 0):>5.1f} | "
-                f"{cats.get('Self-attribution', 0):>5.1f} | "
-                f"{cats.get('State awareness', 0):>5.1f} | "
-                f"{cats.get('Tone and presence', 0):>4.1f} | "
-                f"{lat:>5.1f}s"
-            )
-            if r["overall"] > best_score:
-                best_score = r["overall"]
-                best_model = r["model"]
+        # Write log
+        full_log = "\n".join(lines)
+        log_dir = REPO_ROOT / "logs" / "model_eval"
+        log_dir.mkdir(parents=True, exist_ok=True)
 
-        lines.append(row)
-        print(row)
+        log_file = log_dir / f"eval_{timestamp}.log"
+        log_file.write_text(full_log, encoding="utf-8")
+        print(f"\nLog written to: {log_file}")
 
-    lines.append(separator)
-    print(separator)
+        # Write JSON
+        json_file = log_dir / "latest.json"
+        json_file.write_text(
+            json.dumps(all_results, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+        print(f"JSON written to: {json_file}")
 
-    if best_model:
-        winner_line = f"\n🏆 Winner: {best_model} ({best_score}/10)"
-        lines.append(winner_line)
-        print(winner_line)
-
-    # Write log
-    full_log = "\n".join(lines)
-    log_dir = REPO_ROOT / "logs" / "model_eval"
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    log_file = log_dir / f"eval_{timestamp}.log"
-    log_file.write_text(full_log, encoding="utf-8")
-    print(f"\nLog written to: {log_file}")
-
-    # Write JSON
-    json_file = log_dir / "latest.json"
-    json_file.write_text(
-        json.dumps(all_results, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    print(f"JSON written to: {json_file}")
-
-    # Restore live vault via the API endpoint. Best-effort: prints a
-    # warning on failure but does not exit (eval is done at this point).
-    restore_vault(previous_vault)
+    finally:
+        # Both restores run on interrupt too. A pinned swap writes nothing
+        # to disk, but it does move the in-memory generation model, so a
+        # Ctrl-C mid-sweep would otherwise leave the API answering as the
+        # last candidate with nothing on disk to reveal it.
+        print(f"Restoring original model: {original}...")
+        restore_model(original)
+        # Best-effort: warns on failure rather than exiting.
+        restore_vault(previous_vault)
 
 
 if __name__ == "__main__":

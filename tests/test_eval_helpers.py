@@ -277,6 +277,20 @@ class TestVaultIsolation:
         assert "swap_to_test_vault" in source
         assert "restore_vault" in source
 
+    def test_eval_conversations_swaps_vault(self):
+        """Issue #146: eval_conversations.py ships response text to a
+        cloud judge and must isolate to the test vault first."""
+        source = (REPO_ROOT / "tools" / "eval_conversations.py").read_text(encoding="utf-8")
+        assert "swap_to_test_vault" in source
+        assert "restore_vault" in source
+
+    def test_eval_probe_swaps_vault_standalone(self):
+        """eval_probe.py's standalone main() has no caller to inherit
+        isolation from (unlike the eval_manual.py --probe path)."""
+        source = (REPO_ROOT / "tools" / "eval_probe.py").read_text(encoding="utf-8")
+        assert "swap_to_test_vault" in source
+        assert "restore_vault" in source
+
 
 class TestModelPinning:
     """Verify that all three model-switching eval tools delegate to

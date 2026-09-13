@@ -9,11 +9,17 @@ EMBER_EVAL_JUDGE_SONNET_MODEL) for behavioral evaluation. Outputs
 pass/warn/fail per test case with evaluator notes.
 
 Ember's responses are sent to Claude for evaluation but are NOT logged
-to disk or stdout — they may contain vault-grounded content. Only scores,
-notes, and red flags are persisted. Test vaults may be used and are configurable. 
+to disk or stdout - they may contain vault-grounded content. Only scores,
+notes, and red flags are persisted.
+
+Isolation: this harness swaps the running API to the test vault (via
+tools.eval_helpers.swap_to_test_vault) before sending any request, and
+fails closed (exit 1) if the swap does not succeed. Vault-grounded
+response text must never leave the machine to the cloud judge.
 
 Requirements:
     - Ember API running at http://localhost:8000
+    - VAULT_PATH_TEST set in environment (test vault isolation)
     - ANTHROPIC_API_KEY set in environment
     - pip install anthropic
 
@@ -43,7 +49,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.eval_helpers import pin_model, read_model_state
+from tools.eval_helpers import pin_model, read_model_state, restore_vault, swap_to_test_vault
 
 
 # ---------------------------------------------------------------------------
@@ -462,6 +468,13 @@ def main():
         print("Install with: pip install anthropic")
         sys.exit(1)
 
+    # Isolate to the test vault before any request is sent. Ember's
+    # responses are shipped to a cloud judge (Claude); if the API is
+    # serving the live vault, vault-grounded response text would leave
+    # the machine. swap_to_test_vault() exits 1 on any failure path, so
+    # the eval never proceeds against the live vault.
+    previous_vault = swap_to_test_vault()
+
     # Switch model if requested
     if target_model:
         original_model = _switch_model(target_model)
@@ -500,6 +513,7 @@ def main():
         if original_model and target_model:
             _switch_model(original_model)
             print(f"Restored model to: {original_model}")
+        restore_vault(previous_vault)
 
 
 if __name__ == "__main__":

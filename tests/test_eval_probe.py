@@ -604,3 +604,70 @@ def test_console_summary_is_ascii_only():
     results = [_make_result("GROUNDED")]
     out = render_console_summary(results)
     assert all(ord(c) < 128 for c in out)
+
+
+# ---------------------------------------------------------------------------
+# Standalone vault isolation (issue #146 follow-up)
+# ---------------------------------------------------------------------------
+
+
+class TestStandaloneVaultIsolation:
+    """Standalone `python tools/eval_probe.py` has no caller to isolate the
+    vault for it. main() must swap to the test vault before fetching any
+    packet or answer, and fail closed if the swap does not succeed."""
+
+    def test_main_exits_before_any_request_when_swap_fails(self, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv", ["eval_probe.py"],
+        )
+        import tools.eval_probe as ep
+
+        with patch("tools.eval_helpers.swap_to_test_vault", side_effect=SystemExit(1)), \
+             patch("tools.eval_probe.run_probe_for_question") as mock_run:
+            with pytest.raises(SystemExit) as exc_info:
+                ep.main([])
+            assert exc_info.value.code == 1
+
+        mock_run.assert_not_called()
+
+    def test_main_swaps_before_questions_and_restores_after(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("sys.argv", ["eval_probe.py"])
+        import tools.eval_probe as ep
+
+        call_order: list[str] = []
+
+        def _fake_swap():
+            call_order.append("swap")
+            return "test"
+
+        def _fake_restore(previous):
+            call_order.append("restore")
+
+        def _fake_run(question, api_base, api_key):
+            call_order.append(f"question:{question}")
+            return ProbeResult(
+                question=question,
+                verdict="GROUNDED",
+                anchored_sentence_count=0,
+                fabricated_sentence_count=0,
+                grounded_sentence_count=0,
+                packet_record_count=0,
+                flagged_sentences=[],
+                records=[],
+            )
+
+        with patch("tools.eval_helpers.swap_to_test_vault", side_effect=_fake_swap), \
+             patch("tools.eval_helpers.restore_vault", side_effect=_fake_restore), \
+             patch("tools.eval_probe.run_probe_for_question", side_effect=_fake_run), \
+             patch("tools.eval_probe.write_probe_log", return_value=tmp_path):
+            exit_code = ep.main([])
+
+        assert exit_code == 0
+        assert call_order[0] == "swap"
+        assert call_order[-1] == "restore"
+        assert any(c.startswith("question:") for c in call_order)
+
+    def test_source_imports_swap_and_restore(self):
+        source = (Path(__file__).resolve().parents[1] / "tools" / "eval_probe.py").read_text(encoding="utf-8")
+        assert "swap_to_test_vault" in source
+        assert "restore_vault" in source

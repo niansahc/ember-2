@@ -9,6 +9,7 @@ from src.core.config import (
     get_private_vault_path,
     vault_writes_blocked,
 )
+from src.memory.authorship import classify_authorship
 from src.memory.storage import MemoryStorage
 from src.retrieval.embed_memory import embed_text
 from src.retrieval.sqlite_vector_store import SqliteVectorStore
@@ -203,6 +204,7 @@ def write_memory(
             "source": source,
             "memory_type": memory_type,
             "created_at": timestamp,
+            "authorship": classify_authorship(memory_type, source, clean_metadata),
             "metadata": {
                 **clean_metadata,
                 "file_path": str(file_path),

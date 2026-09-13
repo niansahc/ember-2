@@ -35,10 +35,12 @@ def _record_ts(days_ago: int = 0) -> str:
 
 
 def _reflection_record(text: str, days_ago: int = 0) -> dict:
+    ts = _record_ts(days_ago)
     return {
+        "id": ts,
         "type": "reflection",
         "text": text,
-        "timestamp": _record_ts(days_ago),
+        "timestamp": ts,
         "metadata": {"cadence": "weekly"},
     }
 
@@ -240,6 +242,34 @@ def test_stage3_produces_record_when_all_stages_pass(temp_vault) -> None:
     assert result["supporting_evidence"]
     assert "declined to soften" in result["supporting_evidence"]
     assert "lose ease" in result["value"]
+
+
+def test_written_record_carries_source_record_ids(temp_vault) -> None:
+    """Recalling Too Well Phase 1, item 1: the written lodestone record
+    must trace back to the reflection records it was synthesized from."""
+    reflections = [_reflection_record(f"reflection {i}", days_ago=i) for i in range(6)]
+    svc = _stub_memory_service(reflections)
+
+    with patch(
+        "src.reflection.lodestone_synthesis.ollama.chat",
+        side_effect=_stub_chat([
+            "the user keeps returning to direct conversation over comfort",
+            "character",
+            (
+                "VALUE: I would rather lose ease than skip a hard conversation\n"
+                "EVIDENCE:\n"
+                "- declined to soften feedback in three sessions\n"
+                "- noted resistance to performative pleasantness\n"
+                "- chose a hard conversation over a comfortable one this month"
+            ),
+        ]),
+    ):
+        result = synthesize_lodestone_candidates(memory_service=svc)
+
+    assert result is not None
+    source_ids = result["metadata"]["source_record_ids"]
+    assert source_ids, "source_record_ids should not be empty"
+    assert set(source_ids) == {r["id"] for r in reflections}
 
 
 def test_inferred_record_does_not_appear_in_read_active(temp_vault) -> None:

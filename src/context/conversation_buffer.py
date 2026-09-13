@@ -173,10 +173,18 @@ class ConversationBuffer:
         return oldest
 
     def inject_summary_turn(self, summary: str) -> None:
-        """Prepend a synthetic turn representing the compressed conversation history."""
+        """Prepend a synthetic turn representing the compressed conversation history.
+
+        is_summary=True: Recalling Too Well Phase 1, item 8. Without this
+        flag the prompt builder rendered this turn as "Ember: {summary}",
+        misattributing user misconceptions from the compressed half of the
+        conversation to Ember, and feeding the "use the most recent
+        assistant response as primary reference" instruction rule.
+        """
         self.buffer.insert(0, {
             "user": "[Earlier conversation summary]",
             "assistant": summary,
+            "is_summary": True,
         })
 
     def set_context_window(self, model: str) -> None:

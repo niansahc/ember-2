@@ -59,6 +59,7 @@ def generate_reflection(
         seen.add(normalized)
         candidates.append(
             {
+                "id": memory.get("id"),
                 "text": text,
                 "normalized": normalized,
                 "score": score,
@@ -106,6 +107,12 @@ def generate_reflection(
                 "cadence": cadence,
                 "source_type": source_label,
                 "memory_count": len(selected),
+                # Recalling Too Well Phase 1, item 1: provenance trail back to
+                # the source records this reflection compressed, so a stale
+                # source can be traced past the derived record that summarized it.
+                "source_record_ids": [
+                    item["id"] for item in selected if item.get("id")
+                ],
             },
         )
 

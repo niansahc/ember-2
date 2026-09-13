@@ -45,14 +45,31 @@ def _load_record(file_path: Path) -> dict[str, Any] | None:
 
 
 def _all_records() -> list[dict[str, Any]]:
-    """Load all lodestone records from vault, newest first."""
+    """Load all lodestone records from vault, deduped to the latest
+    physical version per logical id, newest first.
+
+    update() writes a new file per edit rather than mutating the original
+    (append-only, Rule 3). Sorted by file mtime rather than filename: id
+    and timestamp are caller-controlled strings (tests write synthetic
+    ids like "rec-1" as filenames, which do not sort correctly against
+    real timestamp-named files), while mtime always reflects real write
+    order regardless of what the filename or record fields contain.
+    Mirrors StateResolver._latest_per_category's latest-wins pattern,
+    keyed on id instead of category.
+    """
     ldir = _lodestone_dir()
-    files = sorted(ldir.glob("*.json"), reverse=True)
+    files = sorted(ldir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
     records = []
+    seen_ids: set[str] = set()
     for f in files:
         rec = _load_record(f)
-        if rec and rec.get("type") == "lodestone":
-            records.append(rec)
+        if not rec or rec.get("type") != "lodestone":
+            continue
+        rec_id = rec.get("id")
+        if rec_id in seen_ids:
+            continue
+        seen_ids.add(rec_id)
+        records.append(rec)
     return records
 
 
@@ -110,6 +127,9 @@ def write(
             "user_note": extra_meta.get("user_note"),
             "taxonomy_category": taxonomy_category,
             "flagged_as_noise": False,
+            # Recalling Too Well Phase 1, item 1: which reflection records
+            # this lodestone value was synthesized from, if any.
+            "source_record_ids": extra_meta.get("source_record_ids") or [],
         },
     }
 
@@ -130,22 +150,24 @@ def update(record_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
     """
     Update a lodestone record (confirm, dismiss, add user_note).
 
-    Writes a new version of the record (append-only — original preserved
-    by timestamp, updated version has new timestamp in filename).
+    Append-only (Rule 3): writes a NEW file carrying a new timestamp,
+    built from the current (already-deduped) version of the record.
+    The "id" field is left unchanged -- it is the stable identifier
+    callers PATCH against across repeated updates. The original file is
+    never mutated or removed; _all_records() dedups to the newest
+    physical version per id on read.
     """
-    ldir = _lodestone_dir()
-    target_file = None
     target_record = None
-
-    for f in ldir.glob("*.json"):
-        rec = _load_record(f)
-        if rec and rec.get("id") == record_id:
-            target_file = f
+    for rec in _all_records():
+        if rec.get("id") == record_id:
             target_record = rec
             break
 
     if target_record is None:
         return None
+
+    updated_record = dict(target_record)
+    updated_record["metadata"] = dict(target_record.get("metadata") or {})
 
     # Apply allowed updates
     if "confirmed" in updates:
@@ -156,21 +178,20 @@ def update(record_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
                 raise ValueError(
                     f"Lodestone cap reached ({MAX_ACTIVE_RECORDS} active records)."
                 )
-        target_record["confirmed"] = new_confirmed
+        updated_record["confirmed"] = new_confirmed
 
     if "user_note" in updates:
-        if "metadata" not in target_record:
-            target_record["metadata"] = {}
-        target_record["metadata"]["user_note"] = updates["user_note"]
+        updated_record["metadata"]["user_note"] = updates["user_note"]
 
     if "flagged_as_noise" in updates:
-        if "metadata" not in target_record:
-            target_record["metadata"] = {}
-        target_record["metadata"]["flagged_as_noise"] = bool(updates["flagged_as_noise"])
+        updated_record["metadata"]["flagged_as_noise"] = bool(updates["flagged_as_noise"])
 
-    # Write updated record back to same file (in-place update is acceptable
-    # for lodestone confirmation — the original record id is preserved)
-    storage.write_json(target_file, target_record)
+    new_timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
+    updated_record["timestamp"] = new_timestamp
 
-    logger.info("[LODESTONE] Updated record %s", record_id)
-    return target_record
+    ldir = _lodestone_dir()
+    file_path = ldir / f"{new_timestamp}.json"
+    storage.write_json(file_path, updated_record)
+
+    logger.info("[LODESTONE] Updated record %s (append-only, new version %s)", record_id, new_timestamp)
+    return updated_record

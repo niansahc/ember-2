@@ -248,7 +248,7 @@ def test_run_compare_produces_comparison_log(tmp_path, monkeypatch):
     def mock_send(msg, key):
         return "Mock response."
 
-    def mock_switch(model, key):
+    def mock_switch(model):
         switch_calls.append(model)
         return "previous-model"
 

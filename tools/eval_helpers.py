@@ -166,3 +166,133 @@ def run_cleanup() -> None:
             print(f"Cleaned up {moved} eval artifact(s) from vault.")
     except Exception as exc:
         print(f"WARNING: Cleanup failed (non-fatal): {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Model pinning (ADR-043)
+#
+# A sweep must move the generation model without persisting it. POST /model
+# with persist=false leaves model_override.json alone, so every call-time role
+# -- intent classifier, coaching filter, deviation detector, reflection --
+# keeps resolving the reference model. Without this the candidate becomes the
+# router that selects its own test path, and the ranking measures routing as
+# much as quality.
+#
+# Note that persist=false still moves llm_adapter.model, so a sweep must
+# restore it or the running API keeps generating with the last candidate.
+# Nothing on disk changes, so that failure is invisible.
+# ---------------------------------------------------------------------------
+
+_MODEL_PATH = "/model"
+
+
+class ModelPinError(RuntimeError):
+    """A pin could not be established or verified. Always fatal to a sweep:
+    continuing would score results under an unknown model."""
+
+
+def read_model_state() -> dict:
+    """Return GET /model. Includes reference_model and pinned (ADR-043)."""
+    resp = httpx.get(
+        f"{_api_base()}{_MODEL_PATH}",
+        headers=_swap_headers(),
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _installed_and_cloud_models(state: dict) -> set:
+    """Every model name the server will accept, local tags plus cloud ids.
+
+    Beats shelling out to `ollama list`: it is one round trip to the server
+    actually being driven, and it includes cloud ids, which a local tag list
+    cannot.
+    """
+    names = set(state.get("available") or [])
+    cloud = state.get("cloud") or {}
+    if isinstance(cloud, dict):
+        for entry in cloud.values():
+            if isinstance(entry, (list, tuple, set)):
+                names.update(entry)
+            elif isinstance(entry, str):
+                names.add(entry)
+    elif isinstance(cloud, (list, tuple, set)):
+        names.update(cloud)
+    return names
+
+
+def pin_model(model: str) -> dict:
+    """Pin the generation model to `model` without persisting it.
+
+    Implements both harness obligations from ADR-043:
+
+    Validation before posting -- POST /model accepts any string, and under
+    persist=false a typo leaves no trace on disk at all, so a mistyped tag
+    would otherwise produce a full sweep scored against a model that was never
+    loaded.
+
+    Re-assertion after posting -- the pin is in-memory only, and a --reload
+    uvicorn reverts it silently, which would relabel reference results as
+    candidate results. Verify rather than assume.
+
+    Returns the verified post-pin state. Raises ModelPinError on any failure.
+    """
+    state = read_model_state()
+
+    if "pinned" not in state:
+        raise ModelPinError(
+            "server does not report `pinned` on GET /model, so it predates "
+            "ADR-043. A persist=false swap would be silently ignored and the "
+            "model would still be written to model_override.json."
+        )
+
+    known = _installed_and_cloud_models(state)
+    # An empty `available` means Ollama was unreachable (the handler's own
+    # except yields []), not that no models exist. Treat that as inconclusive
+    # and let the POST decide, rather than rejecting every candidate.
+    if known and model not in known:
+        raise ModelPinError(
+            f"{model!r} is not available on the target server. "
+            f"Known: {', '.join(sorted(known))}"
+        )
+
+    resp = httpx.post(
+        f"{_api_base()}{_MODEL_PATH}",
+        json={"model": model, "persist": False},
+        headers=_swap_headers(),
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+
+    verified = read_model_state()
+    if verified.get("model") != model:
+        raise ModelPinError(
+            f"pin did not take: asked for {model!r}, server reports "
+            f"{verified.get('model')!r}"
+        )
+    if not verified.get("pinned"):
+        raise ModelPinError(
+            f"{model!r} is active but not pinned -- it matches the reference "
+            f"model {verified.get('reference_model')!r}, so this sweep would "
+            f"not be isolating the candidate."
+        )
+    return verified
+
+
+def restore_model(model: str) -> None:
+    """Put the generation model back, without persisting.
+
+    Best-effort and never raises: this runs in a finally block, where a raise
+    would mask the original failure. The override was never written, so the
+    worst case is an API left on the last candidate until it restarts.
+    """
+    try:
+        httpx.post(
+            f"{_api_base()}{_MODEL_PATH}",
+            json={"model": model, "persist": False},
+            headers=_swap_headers(),
+            timeout=30.0,
+        )
+    except Exception as exc:
+        print(f"WARNING: Could not restore model to {model}: {exc}")

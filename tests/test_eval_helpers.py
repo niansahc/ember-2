@@ -276,3 +276,26 @@ class TestVaultIsolation:
         source = (REPO_ROOT / "tools" / "eval_local_models.py").read_text(encoding="utf-8")
         assert "swap_to_test_vault" in source
         assert "restore_vault" in source
+
+
+class TestModelPinning:
+    """Verify that all three model-switching eval tools delegate to
+    pin_model (ADR-043) rather than posting a persisting swap inline.
+
+    A persisting POST /model writes model_override.json, which routes
+    the intent classifier, coaching filter, deviation detector and
+    reflection paths onto the candidate too, and clobbers the user's
+    persisted model choice mid-sweep. Guards against regression back to
+    an inline swap."""
+
+    def test_eval_local_models_pins(self):
+        source = (REPO_ROOT / "tools" / "eval_local_models.py").read_text(encoding="utf-8")
+        assert "pin_model" in source
+
+    def test_eval_conversations_pins(self):
+        source = (REPO_ROOT / "tools" / "eval_conversations.py").read_text(encoding="utf-8")
+        assert "pin_model" in source
+
+    def test_eval_manual_pins(self):
+        source = (REPO_ROOT / "tools" / "eval_manual.py").read_text(encoding="utf-8")
+        assert "pin_model" in source

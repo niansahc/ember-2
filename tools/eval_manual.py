@@ -30,6 +30,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tools.eval_helpers import pin_model, read_model_state
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 API_BASE = "http://localhost:8000"
@@ -113,21 +115,19 @@ def _get_api_key() -> str:
     return os.getenv("EMBER_API_KEY", "")
 
 
-def _switch_model(model: str, api_key: str) -> str | None:
-    """Switch model, return previous model name."""
+def _switch_model(model: str) -> str | None:
+    """Pin the active model via API (ADR-043). Returns the previous model
+    name, or None on failure.
+
+    Delegates to pin_model rather than posting directly: a persisting
+    POST /model would leave model_override.json changed by a one-off eval
+    run and would route the intent classifier, coaching filter, deviation
+    detector and reflection paths onto the candidate too, instead of
+    moving only the generation model in memory.
+    """
     try:
-        resp = httpx.get(
-            f"{API_BASE}/model",
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=10.0,
-        )
-        previous = resp.json().get("model", "")
-        httpx.post(
-            f"{API_BASE}/model",
-            json={"model": model},
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            timeout=10.0,
-        )
+        previous = read_model_state().get("model")
+        pin_model(model)
         return previous
     except Exception as exc:
         print(f"WARNING: Could not switch model: {exc}")
@@ -281,18 +281,18 @@ def _run_compare(api_key: str, local_model: str) -> None:
     print(f"\n{'=' * 60}")
     print(f"  COMPARE — Pass 1: {local_model}")
     print(f"{'=' * 60}")
-    _switch_model(local_model, api_key)
+    _switch_model(local_model)
     local_results = _run_auto_battery_collect(local_model, api_key)
 
     # --- Run 2: cloud model ---
     print(f"\n{'=' * 60}")
     print(f"  COMPARE — Pass 2: {COMPARE_CLOUD_MODEL}")
     print(f"{'=' * 60}")
-    _switch_model(COMPARE_CLOUD_MODEL, api_key)
+    _switch_model(COMPARE_CLOUD_MODEL)
     cloud_results = _run_auto_battery_collect(COMPARE_CLOUD_MODEL, api_key)
 
     # Restore local model
-    _switch_model(local_model, api_key)
+    _switch_model(local_model)
 
     # --- Side-by-side summary ---
     local_label = local_model.replace(":", "-")[:15]
@@ -496,7 +496,7 @@ def main():
     original_model = None
 
     if args.model:
-        original_model = _switch_model(args.model, api_key)
+        original_model = _switch_model(args.model)
         if original_model:
             print(f"Switched to: {args.model}")
 
@@ -509,8 +509,6 @@ def main():
             print(f"\nCompare Battery — {target_model} vs {COMPARE_CLOUD_MODEL}")
             print("=" * 60)
             _run_compare(api_key, target_model)
-            if original_model and args.model:
-                _switch_model(original_model, api_key)
             run_cleanup()
             print("\nDone.")
             return
@@ -526,8 +524,6 @@ def main():
                 probe=args.probe,
                 log_sentences=not args.no_log_sentences,
             )
-            if original_model and args.model:
-                _switch_model(original_model, api_key)
             run_cleanup()
             print("\nDone.")
             if flagged_count:
@@ -617,13 +613,16 @@ def main():
         if cleanup == "y":
             run_cleanup()
 
-        # Restore model
-        if original_model and args.model:
-            _switch_model(original_model, api_key)
-            print(f"  Restored model to: {original_model}")
-
         print("\nDone.")
     finally:
+        # Runs on interrupt too, and on the early returns above. A pinned
+        # swap moves llm_adapter.model in memory without touching
+        # model_override.json, so a Ctrl-C mid-battery would otherwise
+        # leave the API answering as target_model with nothing on disk
+        # to reveal it.
+        if original_model and args.model:
+            _switch_model(original_model)
+            print(f"Restored model to: {original_model}")
         restore_vault(previous_vault)
 
 

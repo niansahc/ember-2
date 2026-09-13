@@ -1,6 +1,5 @@
 import json
 import logging
-import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -21,7 +20,12 @@ from src.api.pregeneration import (
     PreGenerationRouter,
 )
 from src.api.sse import sse_chunk, sse_done, sse_sources, sse_status, sse_vault_sources
-from src.core.config import get_ember_debug
+from src.core.config import (
+    get_ember_debug,
+    get_private_vault_path,
+    spawn_vault_bound_thread,
+    vault_binding,
+)
 from src.memory.service import MemoryService
 from src.memory.read_memory import read_memories
 from src.memory.write_memory import write_memory
@@ -1294,6 +1298,22 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # --- SESSION ID ---
     session_id = _extract_session_id(request)
 
+    # --- TURN VAULT (issue #144) ---
+    # Every write this turn performs -- inline, post-stream, or from a
+    # background thread -- belongs to the vault that was active when the turn
+    # started. Captured here and bound at each deferred site, so a vault swap
+    # landing mid-turn cannot move this turn's records into another vault.
+    # Capturing at turn start rather than at thread-spawn time is deliberate:
+    # _post_stream_cleanup runs from inside the SSE generator, after the
+    # handler has returned, so by the time it spawns anything a swap may
+    # already have landed.
+    # Defensive: an unset PRIVATE_VAULT_PATH yields None, and every binding
+    # site treats None as "behave exactly as before this existed".
+    try:
+        _turn_vault = get_private_vault_path()
+    except ValueError:
+        _turn_vault = None
+
     # (2) Only the last user message is used - Ember's ConversationBuffer
     #     handles conversation history. All prior messages from the request
     #     are intentionally ignored.
@@ -1864,7 +1884,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         _needs_grounding = True
 
         def _post_stream_cleanup(full_reply: str) -> None:
-            """Shared post-stream cleanup: write memories, extract state, detect tasks."""
+            """Shared post-stream cleanup: write memories, extract state, detect tasks.
+
+            Runs from inside the SSE generator, so it executes after the
+            handler has returned and a vault swap may already have landed.
+            Everything it writes -- inline and deferred -- is bound to the
+            turn's vault (issue #144).
+            """
             # B3 self-narrative class-based audit. Pure regex pass, no
             # vault read, no LLM call. Runs synchronously - no user
             # latency contribution. Audit-only: flags are logged to
@@ -1884,74 +1910,75 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     "[SELF_NARRATIVE] Audit pass failed (non-fatal): %s", exc,
                 )
 
-            # Skip vault writes for test sessions - prevents eval artifacts
-            # from accumulating in the user's personal vault.
-            if not _skip_vault_write:
-                write_memory(
-                    text=latest_user_message,
-                    memory_type="conversation",
-                    source="chat",
-                    tags=["conversation"],
-                    metadata=user_meta,
-                )
-                write_memory(
-                    text=full_reply,
-                    memory_type="conversation",
-                    source="chat",
-                    tags=["conversation"],
-                    metadata=assistant_meta,
-                )
+            with vault_binding(_turn_vault):
+                # Skip vault writes for test sessions - prevents eval artifacts
+                # from accumulating in the user's personal vault.
+                if not _skip_vault_write:
+                    write_memory(
+                        text=latest_user_message,
+                        memory_type="conversation",
+                        source="chat",
+                        tags=["conversation"],
+                        metadata=user_meta,
+                    )
+                    write_memory(
+                        text=full_reply,
+                        memory_type="conversation",
+                        source="chat",
+                        tags=["conversation"],
+                        metadata=assistant_meta,
+                    )
 
-            # State extraction - skip for test sessions to prevent eval leakage
-            if not _skip_vault_write:
-                threading.Thread(
-                    target=_background_state_extraction,
-                    args=(latest_user_message, full_reply),
-                    daemon=True,
-                ).start()
-                # BUG-009: resolve open_loops for declined topics
-                threading.Thread(
-                    target=_background_topic_decline_resolution,
-                    args=(latest_user_message,),
-                    daemon=True,
-                ).start()
+                # State extraction - skip for test sessions to prevent eval leakage
+                if not _skip_vault_write:
+                    spawn_vault_bound_thread(
+                        _background_state_extraction,
+                        args=(latest_user_message, full_reply),
+                        vault=_turn_vault,
+                    )
+                    # BUG-009: resolve open_loops for declined topics
+                    spawn_vault_bound_thread(
+                        _background_topic_decline_resolution,
+                        args=(latest_user_message,),
+                        vault=_turn_vault,
+                    )
 
-            if not _skip_vault_write:
-                threading.Thread(
-                    target=_detect_and_write_commitment,
-                    args=(full_reply, session_id),
-                    daemon=True,
-                ).start()
+                if not _skip_vault_write:
+                    spawn_vault_bound_thread(
+                        _detect_and_write_commitment,
+                        args=(full_reply, session_id),
+                        vault=_turn_vault,
+                    )
 
-            if not _skip_vault_write:
-                threading.Thread(
-                    target=_detect_task_in_response,
-                    args=(full_reply, session_id),
-                    daemon=True,
-                ).start()
+                if not _skip_vault_write:
+                    spawn_vault_bound_thread(
+                        _detect_task_in_response,
+                        args=(full_reply, session_id),
+                        vault=_turn_vault,
+                    )
 
-            # Ask-first confirmation detection - write pending_confirmation
-            # state when Ember offers to search for the user. SYNCHRONOUS
-            # - the background thread was causing a race condition where the
-            # user's "Yes" on the next turn arrived before the pending record
-            # was written, so the confirmation path never fired.
-            if not _skip_vault_write:
-                _write_pending_confirmation(
-                    full_reply, _raw_user_message, session_id,
-                    existing_pending=_pending_records,
-                )
+                # Ask-first confirmation detection - write pending_confirmation
+                # state when Ember offers to search for the user. SYNCHRONOUS
+                # - the background thread was causing a race condition where the
+                # user's "Yes" on the next turn arrived before the pending record
+                # was written, so the confirmation path never fired.
+                if not _skip_vault_write:
+                    _write_pending_confirmation(
+                        full_reply, _raw_user_message, session_id,
+                        existing_pending=_pending_records,
+                    )
 
-            # Deviation detection - async, no latency impact (ADR-026)
-            if not _skip_vault_write:
-                _prior = None
-                _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
-                if _buffer_turns and len(_buffer_turns) >= 2:
-                    _prior = _buffer_turns[-2].get("assistant")
-                threading.Thread(
-                    target=_background_deviation_detection,
-                    args=(full_reply, _intent_class, latest_user_message, _prior),
-                    daemon=True,
-                ).start()
+                # Deviation detection - async, no latency impact (ADR-026)
+                if not _skip_vault_write:
+                    _prior = None
+                    _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
+                    if _buffer_turns and len(_buffer_turns) >= 2:
+                        _prior = _buffer_turns[-2].get("assistant")
+                    spawn_vault_bound_thread(
+                        _background_deviation_detection,
+                        args=(full_reply, _intent_class, latest_user_message, _prior),
+                        vault=_turn_vault,
+                    )
 
             if _skip_vault_write:
                 logger.warning("[TASK] Skipped task/state/commitment detection (test session)")
@@ -2015,6 +2042,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     ask_first_active=_ask_first_active,
                     intent_class=_intent_class,
                     session_id=session_id,
+                    vault_path=_turn_vault,
+                    skip_vault_write=_skip_vault_write,
                 ):
                     if isinstance(_item, StatusSignal):
                         yield _status_event(_item.name)
@@ -2057,11 +2086,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
                     if _buffer_turns and len(_buffer_turns) >= 2:
                         _prior = _buffer_turns[-2].get("assistant")
-                    threading.Thread(
-                        target=_background_deviation_detection,
+                    spawn_vault_bound_thread(
+                        _background_deviation_detection,
                         args=(full_reply, _intent_class, latest_user_message, _prior),
-                        daemon=True,
-                    ).start()
+                        vault=_turn_vault,
+                    )
 
                 # 3.6. Coaching-frame filter - post-generation, pre-stream.
                 # Skip when the response is a constitutional refusal - refusal
@@ -2179,6 +2208,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     ask_first_active=_ask_first_active,
                     intent_class=_intent_class,
                     session_id=session_id,
+                    vault_path=_turn_vault,
+                    skip_vault_write=_skip_vault_write,
                 ):
                     filtered = think_filter.filter(chunk)
                     if filtered:
@@ -2259,6 +2290,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         vision_description=_vision_description,
         ask_first_active=_ask_first_active,
         intent_class=_intent_class,
+        vault_path=_turn_vault,
+        skip_vault_write=_skip_vault_write,
     )
 
     # Coaching-frame filter - post-generation, pre-return.
@@ -2312,72 +2345,75 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             "[SELF_NARRATIVE] Audit pass failed (non-fatal): %s", exc,
         )
 
-    # Skip vault writes for test sessions
-    if not _skip_vault_write:
-        write_memory(
-            text=latest_user_message,
-            memory_type="conversation",
-            source="chat",
-            tags=["conversation"],
-            metadata=user_meta,
-        )
+    # Every write below belongs to the vault this turn started in, whether it
+    # runs inline or in a spawned thread (issue #144).
+    with vault_binding(_turn_vault):
+        # Skip vault writes for test sessions
+        if not _skip_vault_write:
+            write_memory(
+                text=latest_user_message,
+                memory_type="conversation",
+                source="chat",
+                tags=["conversation"],
+                metadata=user_meta,
+            )
 
-        write_memory(
-            text=reply,
-            memory_type="conversation",
-            source="chat",
-            tags=["conversation"],
-            metadata=assistant_meta,
-        )
+            write_memory(
+                text=reply,
+                memory_type="conversation",
+                source="chat",
+                tags=["conversation"],
+                metadata=assistant_meta,
+            )
 
-    # Background state extraction - skip for test sessions to prevent eval leakage
-    if not _skip_vault_write:
-        threading.Thread(
-            target=_background_state_extraction,
-            args=(latest_user_message, reply),
-            daemon=True,
-        ).start()
-        # BUG-009: resolve open_loops for declined topics
-        threading.Thread(
-            target=_background_topic_decline_resolution,
-            args=(latest_user_message,),
-            daemon=True,
-        ).start()
+        # Background state extraction - skip for test sessions to prevent eval leakage
+        if not _skip_vault_write:
+            spawn_vault_bound_thread(
+                _background_state_extraction,
+                args=(latest_user_message, reply),
+                vault=_turn_vault,
+            )
+            # BUG-009: resolve open_loops for declined topics
+            spawn_vault_bound_thread(
+                _background_topic_decline_resolution,
+                args=(latest_user_message,),
+                vault=_turn_vault,
+            )
 
-    # Commitment detection (ADR-014) - skip for test sessions
-    if not _skip_vault_write:
-        threading.Thread(
-            target=_detect_and_write_commitment,
-            args=(reply, session_id),
-            daemon=True,
-        ).start()
+        # Commitment detection (ADR-014) - skip for test sessions
+        if not _skip_vault_write:
+            spawn_vault_bound_thread(
+                _detect_and_write_commitment,
+                args=(reply, session_id),
+                vault=_turn_vault,
+            )
 
-    # Task detection - skip for test sessions
-    if not _skip_vault_write:
-        threading.Thread(
-            target=_detect_task_in_response,
-            args=(reply, session_id),
-            daemon=True,
-        ).start()
+        # Task detection - skip for test sessions
+        if not _skip_vault_write:
+            spawn_vault_bound_thread(
+                _detect_task_in_response,
+                args=(reply, session_id),
+                vault=_turn_vault,
+            )
 
-    # Ask-first confirmation detection - write pending_confirmation
-    if not _skip_vault_write:
-        _write_pending_confirmation(
-            reply, _raw_user_message, session_id,
-            existing_pending=_pending_records,
-        )
+        # Ask-first confirmation detection - write pending_confirmation
+        if not _skip_vault_write:
+            _write_pending_confirmation(
+                reply, _raw_user_message, session_id,
+                existing_pending=_pending_records,
+            )
 
-    # Deviation detection - async, no latency impact (ADR-026)
-    if not _skip_vault_write:
-        _prior = None
-        _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
-        if _buffer_turns and len(_buffer_turns) >= 2:
-            _prior = _buffer_turns[-2].get("assistant")
-        threading.Thread(
-            target=_background_deviation_detection,
-            args=(reply, _intent_class, latest_user_message, _prior),
-            daemon=True,
-        ).start()
+        # Deviation detection - async, no latency impact (ADR-026)
+        if not _skip_vault_write:
+            _prior = None
+            _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
+            if _buffer_turns and len(_buffer_turns) >= 2:
+                _prior = _buffer_turns[-2].get("assistant")
+            spawn_vault_bound_thread(
+                _background_deviation_detection,
+                args=(reply, _intent_class, latest_user_message, _prior),
+                vault=_turn_vault,
+            )
 
     if _skip_vault_write:
         logger.warning("[TASK] Skipped task detection (test session)")

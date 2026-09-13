@@ -128,3 +128,63 @@ def test_compression_skips_when_below_threshold() -> None:
     adapter._maybe_compress_buffer()
 
     assert len(buf.get_recent()) == 1
+
+
+# ---------------------------------------------------------------------------
+# Test-session gate (issue #144 adjacent): the adapter never received the
+# skip_vault_write flag, so a test-session turn that tripped the compression
+# threshold persisted a session-summary record into the user's real vault.
+# Compression itself must still run -- only the vault record is withheld.
+# ---------------------------------------------------------------------------
+
+
+def test_skip_vault_write_suppresses_the_summary_record(monkeypatch) -> None:
+    """skip_vault_write=True: no session summary is persisted, but the buffer
+    is still compressed and the summary turn still injected."""
+    adapter = _adapter_with_real_buffer()
+    buf = adapter.prompt_builder.conversation_buffer
+    _fill_buffer_past_threshold(buf)
+
+    monkeypatch.setattr(
+        adapter,
+        "_summarize_with_plain_prompt",
+        lambda _prompt: "synthetic summary text",
+    )
+
+    writes: list[dict] = []
+    monkeypatch.setattr(
+        "src.llm.adapter.write_session_summary",
+        lambda **kwargs: writes.append(kwargs),
+    )
+
+    adapter._maybe_compress_buffer(skip_vault_write=True)
+
+    assert writes == [], "test session must not persist a session summary"
+    # Context management is unchanged: the buffer still compressed.
+    turns = buf.get_recent()
+    assert turns[0]["user"] == "[Earlier conversation summary]"
+    assert turns[0]["assistant"] == "synthetic summary text"
+
+
+def test_default_still_writes_the_summary_record(monkeypatch) -> None:
+    """The gate is opt-in: a normal turn still persists the summary."""
+    adapter = _adapter_with_real_buffer()
+    buf = adapter.prompt_builder.conversation_buffer
+    _fill_buffer_past_threshold(buf)
+
+    monkeypatch.setattr(
+        adapter,
+        "_summarize_with_plain_prompt",
+        lambda _prompt: "synthetic summary text",
+    )
+
+    writes: list[dict] = []
+    monkeypatch.setattr(
+        "src.llm.adapter.write_session_summary",
+        lambda **kwargs: writes.append(kwargs),
+    )
+
+    adapter._maybe_compress_buffer()
+
+    assert len(writes) == 1
+    assert writes[0]["summary"] == "synthetic summary text"

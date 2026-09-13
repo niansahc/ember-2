@@ -32,6 +32,12 @@ Threshold:
 
 Standalone use (without the eval_manual.py wrapper):
   python tools/eval_probe.py
+
+Isolation: standalone invocation swaps the running API to the test vault
+(tools.eval_helpers.swap_to_test_vault) before fetching any packet or
+answer, and fails closed (exit 1) if the swap does not succeed. When run
+via eval_manual.py --probe, isolation is inherited from that caller's
+swap instead (same process, no second swap).
 """
 
 from __future__ import annotations
@@ -607,19 +613,30 @@ def main(argv: list[str] | None = None) -> int:
     api_key = os.getenv("EMBER_API_KEY", "")
     api_base = _api_base()
 
-    results: list[ProbeResult] = []
-    for question in PROBE_QUESTIONS:
-        results.append(run_probe_for_question(question, api_base, api_key))
+    # Standalone invocation has no caller to isolate the vault for it
+    # (eval_manual.py --probe swaps before calling run_probe_for_question
+    # directly, in-process). Fetches answers from the live API otherwise,
+    # so isolate here too. Fails closed (exit 1) if the swap does not
+    # succeed.
+    from tools.eval_helpers import restore_vault, swap_to_test_vault
+    previous_vault = swap_to_test_vault()
 
-    log_dir = write_probe_log(
-        results,
-        log_sentences=not args.no_log_sentences,
-    )
-    print(render_console_summary(results))
-    print(f"\nLog: {log_dir}")
+    try:
+        results: list[ProbeResult] = []
+        for question in PROBE_QUESTIONS:
+            results.append(run_probe_for_question(question, api_base, api_key))
 
-    has_flags = any(r.verdict == "FABRICATED" for r in results)
-    return 2 if has_flags else 0
+        log_dir = write_probe_log(
+            results,
+            log_sentences=not args.no_log_sentences,
+        )
+        print(render_console_summary(results))
+        print(f"\nLog: {log_dir}")
+
+        has_flags = any(r.verdict == "FABRICATED" for r in results)
+        return 2 if has_flags else 0
+    finally:
+        restore_vault(previous_vault)
 
 
 if __name__ == "__main__":

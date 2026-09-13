@@ -215,6 +215,14 @@ class StateRequest(BaseModel):
 
 class ModelRequest(BaseModel):
     model: str
+    # When False, the model reaches the generation path only and is not
+    # persisted to model_override.json, so every call-time role that resolves
+    # get_ember_model() -- intent classifier, coaching filter, deviation
+    # detector, reflection, onboarding -- keeps using the reference model.
+    # That is how an eval sweep tests a candidate as the generator without it
+    # also becoming the router that selects its own test path (ADR-043).
+    # Defaults True: every existing caller behaves exactly as it does today.
+    persist: bool = True
 
 
 class ConversationUpdateRequest(BaseModel):
@@ -1679,15 +1687,29 @@ def get_model_endpoint():
     except Exception:
         available = []
     cloud = get_cloud_models()
-    return {"model": llm_adapter.model, "available": available, "cloud": cloud}
+    from src.core.config import get_ember_model
+
+    # model is the adapter's active generation model; reference_model is what
+    # every call-time role resolves. They are identical in production and
+    # diverge only under a non-persisted swap (ADR-043), so `pinned` lets an
+    # eval harness confirm the pin actually took effect -- a --reload uvicorn
+    # reverts an in-memory pin silently.
+    reference_model = get_ember_model()
+    return {
+        "model": llm_adapter.model,
+        "available": available,
+        "cloud": cloud,
+        "reference_model": reference_model,
+        "pinned": llm_adapter.model != reference_model,
+    }
 
 
 @app.post("/model")
 def set_model_endpoint(request: ModelRequest):
     from src.core.config import set_ember_model_override
     llm_adapter.set_model(request.model)
-    llm_adapter.prompt_builder.conversation_buffer.set_context_window(request.model)
-    set_ember_model_override(request.model)
+    if request.persist:
+        set_ember_model_override(request.model)
     return {"model": llm_adapter.model}
 
 

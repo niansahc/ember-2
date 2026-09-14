@@ -2185,6 +2185,8 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 9. Tool integration
 10. Agent orchestration
 
+Read `docs/what-replacement-means.md` before step 9 design work begins.
+
 This order reduces the chance of building “smart features” on top of unstable substrate.
 
 ---

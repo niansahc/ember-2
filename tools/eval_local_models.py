@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import time
 from datetime import datetime
@@ -49,6 +48,8 @@ from tools.eval_helpers import (
     restore_vault,
     pin_model,
     restore_model,
+    read_model_state,
+    _installed_and_cloud_models,
 )
 
 
@@ -79,15 +80,21 @@ CATEGORIES = [
 # ---------------------------------------------------------------------------
 
 def get_installed_models() -> set[str]:
-    """Get set of installed Ollama model names."""
+    """Model names the server's generation path can actually reach.
+
+    Asks the running API rather than shelling out to `ollama list`. The local
+    CLI reports this machine's models, so with a remote generation host
+    configured every remote candidate looked "not installed" and the sweep
+    skipped all of them -- pinning them correctly would not have been enough on
+    its own.
+
+    Returns an empty set when the API is unreachable, which the caller reports
+    as every model skipped rather than treating as a hard failure.
+    """
     try:
-        result = subprocess.run(
-            ["ollama", "list"],
-            capture_output=True, text=True, timeout=10,
-        )
-        lines = result.stdout.strip().split("\n")[1:]  # skip header
-        return {line.split()[0] for line in lines if line.strip()}
-    except Exception:
+        return _installed_and_cloud_models(read_model_state())
+    except Exception as exc:
+        print(f"  Could not read model list from the API: {exc}")
         return set()
 
 

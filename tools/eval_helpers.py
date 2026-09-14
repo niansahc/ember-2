@@ -208,8 +208,14 @@ def _installed_and_cloud_models(state: dict) -> set:
     Beats shelling out to `ollama list`: it is one round trip to the server
     actually being driven, and it includes cloud ids, which a local tag list
     cannot.
+
+    Prefers `generation_available` when the server reports it. `available` is
+    the default client's models, which under a remote generation host are the
+    models generation CANNOT reach -- validating against it rejected every
+    remote candidate. Falls back to `available` for the unset path and for a
+    server that predates the split.
     """
-    names = set(state.get("available") or [])
+    names = set(state.get("generation_available") or state.get("available") or [])
     cloud = state.get("cloud") or {}
     if isinstance(cloud, dict):
         for entry in cloud.values():

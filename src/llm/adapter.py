@@ -55,6 +55,26 @@ def _generation_client():
         return ollama
     return _client_for_host(host)
 
+
+def list_generation_models() -> list[str]:
+    """Model tags the generation host actually serves.
+
+    GET /model builds its `available` list from the default client, so under a
+    split config it reports models generation cannot reach -- which made the
+    eval harness reject every remote candidate (issue flagged in #169). This is
+    the list a caller needs to validate a candidate against.
+
+    Returns [] when the host cannot be reached, matching the endpoint's existing
+    fail-soft contract for ollama.list(): an unreachable host yields an empty
+    list rather than an error, and pin_model treats empty as inconclusive rather
+    than as "rejected".
+    """
+    try:
+        return [m["model"] for m in _generation_client().list()["models"]]
+    except Exception as exc:
+        logger.warning("[GENERATION_HOST] Could not list models: %s", exc)
+        return []
+
 # Ceiling on the *computed* num_ctx default (the 80%-of-declared path in
 # LLMAdapter._get_num_ctx). Long-context models declare windows up to 262144;
 # 80% of that is a ~200k KV cache allocated by default on a personal machine.

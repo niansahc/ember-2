@@ -1093,6 +1093,7 @@ class LLMAdapter:
                 memory_service=self.memory_service,
                 summary=summary,
                 turns_compressed=len(oldest_turns),
+                session_id=buf.current_session_id,
             )
 
         buf.inject_summary_turn(summary)

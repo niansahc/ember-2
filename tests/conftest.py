@@ -113,6 +113,7 @@ _RESOLVER_BINDING_MODULES = (
     "src.memory.write_memory",
     "src.memory.read_memory",
     "src.memory.search_memory",
+    "src.memory.resolve_memory",
     "src.memory.session",
     "src.memory.project",
     "src.memory.lodestone_service",

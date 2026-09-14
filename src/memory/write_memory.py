@@ -114,6 +114,15 @@ def should_skip_memory(text: str, memory_type: str = "journal") -> bool:
     return False
 
 
+# Metadata list keys exempt from the 20-item truncation below. ADR-015
+# amendment (PR #180): source-bounding a derived record's tier needs its
+# FULL source set, not an arbitrary first-20 subset. lodestone_synthesis.py's
+# reflections list is not pre-capped at write time the way
+# generate_reflection.py's 8-item selection is, so silently truncating this
+# key would drop the sources a tier bound needs without anyone noticing.
+_UNTRUNCATED_LIST_KEYS = frozenset({"source_record_ids"})
+
+
 def flatten_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     metadata = metadata or {}
 
@@ -123,9 +132,14 @@ def flatten_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
         if isinstance(value, (str, int, float, bool)) or value is None:
             flattened[key] = value
         elif isinstance(value, list):
-            flattened[key] = [
+            primitives = [
                 item for item in value if isinstance(item, (str, int, float, bool))
-            ][:20]
+            ]
+            flattened[key] = (
+                primitives
+                if key in _UNTRUNCATED_LIST_KEYS
+                else primitives[:20]
+            )
         else:
             flattened[key] = str(value)
 

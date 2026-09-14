@@ -20,6 +20,7 @@ from datetime import datetime
 import ollama
 
 from src.core.config import get_ember_model
+from src.memory.resolve_memory import find_conversation_ids_for_session
 from src.memory.write_memory import write_memory
 
 logger = logging.getLogger("ember.session_reflection")
@@ -116,6 +117,17 @@ def generate_session_reflection(
     metadata = {"cadence": "session"}
     if session_id:
         metadata["session_id"] = session_id
+        # ADR-015 amendment (PR #180), implementation step 1: this reflection
+        # has no per-turn record ids in scope -- buffer_turns are ephemeral
+        # {"user", "assistant"} text pairs that never carry one (see
+        # ConversationBuffer.add_turn). session_id is the correlator that
+        # exists, so it is resolved against the conversation records that
+        # were actually persisted with matching metadata.session_id. When
+        # session_id is None there is no correlator, and source_record_ids
+        # is correctly empty rather than guessed at.
+        metadata["source_record_ids"] = find_conversation_ids_for_session(session_id)
+    else:
+        metadata["source_record_ids"] = []
 
     write_memory(
         text=reflection_text,

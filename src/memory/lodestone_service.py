@@ -130,6 +130,16 @@ def write(
             # Recalling Too Well Phase 1, item 1: which reflection records
             # this lodestone value was synthesized from, if any.
             "source_record_ids": extra_meta.get("source_record_ids") or [],
+            # ADR-015 amendment (PR #180), implementation step 2: lodestone
+            # has no SQLite row and no nightly heat computation, so this is
+            # computed once by the caller at synthesis time (see
+            # lodestone_synthesis.py) and passed through here rather than
+            # assigned by TieringService, which never scans this store.
+            # Defaults to cold, not hot: unlike reflection's SQL-level
+            # backward-compat default, there is no legacy lodestone corpus
+            # to be lenient toward, and "no independent standing" argues
+            # for the conservative default when nothing was computed.
+            "tier": extra_meta.get("tier") or "cold",
         },
     }
 

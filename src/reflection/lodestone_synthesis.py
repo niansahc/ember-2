@@ -16,13 +16,15 @@ inject them into the prompt (read_active() filters confirmed-only).
 from __future__ import annotations
 
 import logging
+import sqlite3
 from datetime import datetime, timedelta
 
 import ollama
 
-from src.core.config import get_ember_model
+from src.core.config import get_ember_model, get_private_vault_path
 from src.memory import lodestone_service
 from src.memory.service import MemoryService
+from src.tiering.source_bound import bound_tier
 
 logger = logging.getLogger("ember.lodestone_synthesis")
 
@@ -255,6 +257,37 @@ def _stage3_record_draft(
     return parsed
 
 
+def _tier_index_for_ids(ids: list[str]) -> dict[str, str]:
+    """id -> tier for the given reflection ids, read from memory.db.
+
+    ADR-015 amendment (PR #180), implementation step 2: lodestone has no
+    SQLite row of its own and is never scanned by TieringService, so its
+    tier is computed once, here, at synthesis time -- against whatever
+    tier its reflection sources currently hold. Reflection is the only
+    type lodestone is synthesized from (see _recent_reflections), and
+    reflection always lives in memory.db (SQLITE_MEMORY_TYPES), so this
+    does not need ingested.db the way TieringService's cross-database
+    index does.
+    """
+    if not ids:
+        return {}
+    vault = get_private_vault_path()
+    db_path = vault / "embeddings" / "memory.db"
+    if not db_path.exists():
+        return {}
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    try:
+        placeholders = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            f"SELECT id, tier FROM vectors WHERE id IN ({placeholders})",
+            ids,
+        )
+        return {row["id"]: row["tier"] or "hot" for row in rows}
+    finally:
+        conn.close()
+
+
 def _recent_reflections(memory_service: MemoryService) -> list[dict]:
     """Return reflection records timestamped within the last
     SYNTHESIS_WINDOW_DAYS, sorted ascending by timestamp.
@@ -334,6 +367,25 @@ def synthesize_lodestone_candidates(
         return None
 
     value, evidence = parsed
+    source_record_ids = [r.get("id") for r in reflections if r.get("id")]
+    # ADR-015 amendment (PR #180), implementation step 2: bound the
+    # lodestone's tier at the max tier among its reflection sources,
+    # computed once here (see _tier_index_for_ids' docstring for why this
+    # cannot be done nightly the way reflection's bound is). There is no
+    # natural_tier of lodestone's own to start from, so "hot" (the top of
+    # TIER_RANK) is passed as the starting ceiling -- bound_tier() then
+    # always returns exactly the source max, since nothing outranks "hot".
+    # Passing "cold" here instead would be wrong: bound_tier() only ever
+    # narrows a tier DOWN to the source bound, and cold's rank (0) is
+    # already <= every possible source bound, so it would short-circuit to
+    # "cold" unconditionally regardless of what the sources actually are.
+    # The empty/unresolvable-sources floor still applies before this
+    # comparison runs either way, so the legacy rule is unaffected.
+    lodestone_tier = bound_tier(
+        "hot",
+        source_record_ids,
+        _tier_index_for_ids(source_record_ids),
+    )
     # TODO (v0.18.0+): set recurrence_count from len(evidence) once the UI
     # surfaces "this came up N times this month" on the confirmation queue.
     # MVP keeps the lodestone_service default of 1.
@@ -345,7 +397,8 @@ def synthesize_lodestone_candidates(
         supporting_evidence="\n".join(f"- {line}" for line in evidence),
         confirmed=False,
         metadata={
-            "source_record_ids": [r.get("id") for r in reflections if r.get("id")],
+            "source_record_ids": source_record_ids,
+            "tier": lodestone_tier,
         },
     )
     # Vault Privacy Rule: log category + length only, not the value text.

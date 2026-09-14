@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Iterator
 
 import httpx
@@ -11,12 +12,48 @@ import ollama
 from src.context.models import ContextPacket
 from src.core.config import (
     get_ember_debug,
+    get_ember_generation_ollama_host,
     get_ember_model,
     get_ember_vision_model,
     spawn_vault_bound_thread,
 )
 
 logger = logging.getLogger("ember.llm")
+
+
+@lru_cache(maxsize=None)
+def _client_for_host(host: str) -> ollama.Client:
+    """One Ollama client per host, cached for the process.
+
+    Cached by host string and never evicted, the same shape as
+    src/retrieval/store_cache.py: a client cannot be handed out for a host it
+    does not belong to, and an httpx connection pool is not rebuilt per call.
+    """
+    logger.info("[GENERATION_HOST] Using remote Ollama host for generation: %s", host)
+    return ollama.Client(host=host)
+
+
+def _generation_client():
+    """Return the client that RESPONSE GENERATION should call.
+
+    Unset config returns the `ollama` module itself. Its module-level `chat` is
+    the same bound method with the same signature as `Client.chat`, so the
+    default single-PC path executes exactly the code it did before this setting
+    existed -- the boundary rule holds structurally, not by inspection. It also
+    means `patch("src.llm.adapter.ollama.chat")` still intercepts generation.
+
+    Resolved per call rather than memoised at import. OLLAMA_HOST binds when
+    the ollama package is imported, which is why it cannot be changed without a
+    restart; reading here costs one getenv against a multi-second model call and
+    leaves the door open to runtime switching without rewriting this seam.
+
+    Generation only -- see get_ember_generation_ollama_host() for why
+    embeddings, vision, and the auxiliary callers stay local.
+    """
+    host = get_ember_generation_ollama_host()
+    if not host:
+        return ollama
+    return _client_for_host(host)
 
 # Ceiling on the *computed* num_ctx default (the 80%-of-declared path in
 # LLMAdapter._get_num_ctx). Long-context models declare windows up to 262144;
@@ -740,7 +777,7 @@ class LLMAdapter:
         if assistant_prefix:
             messages.append({"role": "assistant", "content": assistant_prefix})
 
-        response = ollama.chat(
+        response = _generation_client().chat(
             model=model,
             messages=messages,
             options={
@@ -779,7 +816,7 @@ class LLMAdapter:
             messages.append({"role": "assistant", "content": assistant_prefix})
             yield assistant_prefix
 
-        stream = ollama.chat(
+        stream = _generation_client().chat(
             model=model,
             messages=messages,
             options={

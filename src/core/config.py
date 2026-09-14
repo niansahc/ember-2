@@ -363,6 +363,66 @@ def get_ember_vision_model() -> str | None:
     return os.getenv("EMBER_VISION_MODEL") or None
 
 
+def get_ember_generation_ollama_host() -> str | None:
+    """
+    Returns the Ollama host that RESPONSE GENERATION should use, or None to use
+    the local default like every other caller.
+
+      EMBER_GENERATION_OLLAMA_HOST=100.83.127.52:11434
+
+    Generation only. Embeddings, vision, and the auxiliary LLM callers (intent
+    classifier, coaching filter, prompt guardrail, reflection, state extractor,
+    deviation detector, grounding check) stay on the local instance.
+
+    That split is the point of this setting. The ollama package exposes one
+    module-level client built at import, so OLLAMA_HOST moves every caller at
+    once -- which breaks embeddings, because a remote generation box is unlikely
+    to host nomic-embed-text, and vision for the same reason. Each of those
+    small auxiliary calls would also pay a network round trip.
+
+    Distinct from EMBER_HOST, which is the FastAPI bind address.
+
+    Unset is the single-PC default and leaves behaviour unchanged.
+    """
+    return os.getenv("EMBER_GENERATION_OLLAMA_HOST") or None
+
+
+def get_ollama_base_url() -> str:
+    """
+    Returns the base URL of the LOCAL Ollama instance -- the one the ollama
+    package's default client talks to, and therefore the one every caller that
+    is not response generation uses.
+
+    Mirrors the library's own resolution: OLLAMA_HOST when set, otherwise
+    http://127.0.0.1:11434, filling in a missing scheme and a missing port.
+    Needed because src/safety/grounding_check.py speaks raw HTTP rather than
+    going through the package, so it cannot inherit that resolution for free.
+    tests/test_generation_host.py pins this against the library's own parser so
+    the two cannot drift.
+    """
+    host = (os.getenv("OLLAMA_HOST") or "").strip()
+    if not host:
+        return "http://127.0.0.1:11434"
+
+    # Whether a scheme was given decides the default port, so check before
+    # normalising it in: the library gives a bare "1.2.3.4" Ollama's 11434,
+    # but an explicit "http://1.2.3.4" the scheme's own 80.
+    scheme, separator, remainder = host.partition("://")
+    if not separator:
+        scheme, remainder = "http", host
+        default_port = "11434"
+    else:
+        default_port = "443" if scheme == "https" else "80"
+
+    remainder = remainder.rstrip("/")
+    if ":" not in remainder.split("/")[0]:
+        remainder = f"{remainder}:{default_port}"
+    # A port-only value (":11434") is a documented form and means localhost.
+    if remainder.startswith(":"):
+        remainder = f"127.0.0.1{remainder}"
+    return f"{scheme}://{remainder}"
+
+
 def get_ember_model() -> str:
     """
     Returns the model name to use for Ember-2.

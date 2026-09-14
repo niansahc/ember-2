@@ -20,6 +20,8 @@ from pathlib import Path
 
 import httpx
 
+from src.core.config import get_ollama_base_url
+
 logger = logging.getLogger("ember.grounding_check")
 
 GROUNDING_CHECK_INTENTS = {
@@ -84,9 +86,14 @@ async def run_grounding_check(
         response=response,
     )
     try:
+        # Local instance, deliberately: the grounding check is an auxiliary
+        # call and stays where embeddings and vision are, even when generation
+        # is pointed at a remote host via EMBER_GENERATION_OLLAMA_HOST.
+        # Resolved rather than hardcoded so it follows OLLAMA_HOST like every
+        # other local caller instead of silently diverging from it.
         async with httpx.AsyncClient(timeout=30.0) as client:
             result = await client.post(
-                "http://localhost:11434/api/chat",
+                f"{get_ollama_base_url()}/api/chat",
                 json={
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
@@ -120,9 +127,10 @@ async def run_revision_pass(
         unsupported_claims=unsupported_claims,
     )
     try:
+        # Local instance, same reasoning as run_grounding_check above.
         async with httpx.AsyncClient(timeout=60.0) as client:
             result = await client.post(
-                "http://localhost:11434/api/chat",
+                f"{get_ollama_base_url()}/api/chat",
                 json={
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],

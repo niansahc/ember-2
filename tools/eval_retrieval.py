@@ -422,9 +422,31 @@ def run_integrity_eval() -> tuple[list[dict], str]:
     return results, summary
 
 
+def run_ablation(verbose: bool = False) -> int:
+    """Retrieval-architecture ablation (TDD 50.1 / 25.3).
+
+    Delegates to tools/retrieval_ablation/runner.py, which resolves the TEST
+    vault fail-closed and refuses to run without it. Kept as a separate entry
+    point rather than folded into the benchmark: the ablation runs one
+    subprocess per arm and takes minutes, so it must not fire from the
+    post-commit hook that calls this module's default path.
+    """
+    from tools.retrieval_ablation.runner import main as ablation_main
+
+    argv = sys.argv
+    sys.argv = [argv[0]] + (["--verbose"] if verbose else [])
+    try:
+        return ablation_main()
+    finally:
+        sys.argv = argv
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     verbose = "--verbose" in sys.argv
+
+    if "--ablation" in sys.argv:
+        sys.exit(run_ablation(verbose=verbose))
 
     print("Running retrieval evaluation...\n")
     results, summary = run_eval(verbose=verbose)

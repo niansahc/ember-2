@@ -22,11 +22,8 @@ import pytest
 from src.core.config import (
     VaultWriteBlocked,
     allow_vault_writes,
-    clear_vault_path_override,
-    get_vault_override,
     set_vault_path_override,
 )
-from src.retrieval.store_cache import clear_store_cache
 
 
 def patch_dev_mode(label, vault_dir):
@@ -47,21 +44,10 @@ def make_vault(root):
     return root
 
 
-@pytest.fixture(autouse=True)
-def restore_vault_state():
-    """Snapshot and restore vault override and store cache around each test.
-
-    The session-scoped isolate_to_test_vault fixture sets one override for
-    the whole run; these tests move it deliberately and must put it back.
-    """
-    prior_path, prior_label = get_vault_override()
-    clear_store_cache()
-    yield
-    clear_store_cache()
-    if prior_path is None:
-        clear_vault_path_override()
-    else:
-        set_vault_path_override(prior_path, prior_label)
+# The snapshot-and-restore fixture that used to live here now applies to the
+# whole suite as `restore_process_state` in tests/conftest.py. It guarded this
+# file only, while every other file that moved the override went unguarded --
+# which is how the cross-file leak survived.
 
 
 class TestAccessorFollowsActiveVault:

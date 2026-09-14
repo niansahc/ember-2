@@ -237,6 +237,12 @@ def _make_adapter_with_mock_chat(chat_response: str = "mock response"):
     mock_builder = MagicMock(spec=PromptBuilder)
     mock_builder.build_prompt.return_value = "system prompt"
     mock_builder.conversation_buffer = MagicMock()
+    # A bare MagicMock returns a truthy needs_compression(), so every test
+    # using this adapter spawned a real buffer-compression thread that called
+    # the same patched ollama.chat. That call could land in the NEXT test's
+    # mock and take call_args_list[0], which is not the generation call these
+    # tests assert against. None of them intend to exercise compression.
+    mock_builder.conversation_buffer.needs_compression.return_value = False
 
     mock_policy = MagicMock(spec=SafetyPolicyService)
     mock_policy.evaluate_trigger.return_value = SafetyTriggerResult(triggered=False, triggered_by=[])

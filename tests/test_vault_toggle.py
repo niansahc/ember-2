@@ -84,6 +84,17 @@ def client(tmp_path):
     mock_onboarding = MagicMock()
     mock_onboarding.is_active.return_value = False
 
+    # Imported OUTSIDE the patch block below. Importing the app graph while
+    # src.core.config.get_private_vault_path is patched lets every module that
+    # does `from src.core.config import get_private_vault_path` copy the Mock,
+    # and unpatching cannot reach those copies -- the whole session then
+    # resolves the vault through a dead Mock. conftest's
+    # import_app_graph_before_any_patch already imports the graph first, so
+    # this is belt and braces; it is here so the pattern is not copied into the
+    # next test file that needs a client.
+    from src.api.main import app
+    from fastapi.testclient import TestClient
+
     with patch("src.core.config.get_private_vault_path", return_value=tmp_path), \
          patch("src.core.preferences.get_private_vault_path", return_value=tmp_path), \
          patch("src.core.preferences.read", side_effect=_read_prefs), \
@@ -103,8 +114,6 @@ def client(tmp_path):
          patch("src.api.openai_adapter._detect_task_in_response", return_value=None), \
          patch("src.api.openai_adapter._write_pending_confirmation", return_value=None):
 
-        from src.api.main import app
-        from fastapi.testclient import TestClient
         _client = TestClient(app)
 
         # Expose mocks for assertions

@@ -1686,12 +1686,18 @@ def write_state_endpoint(request: StateRequest):
 # ── Model endpoints ────────────────────────────────────────────────────
 
 
+def _chat_models_only(models: list[str]) -> list[str]:
+    """Drop embedding models -- not chat models, should not appear in a selector.
+
+    Shared by both lists below so the two cannot drift apart.
+    """
+    return [m for m in models if not any(p in m.lower() for p in ("embed", "embedding"))]
+
+
 @app.get("/model")
 def get_model_endpoint():
     try:
-        all_models = [m["model"] for m in ollama.list()["models"]]
-        # Filter out embedding models — not chat models, should not appear in selector
-        available = [m for m in all_models if not any(p in m.lower() for p in ("embed", "embedding"))]
+        available = _chat_models_only([m["model"] for m in ollama.list()["models"]])
     except Exception:
         available = []
     cloud = get_cloud_models()
@@ -1703,13 +1709,33 @@ def get_model_endpoint():
     # eval harness confirm the pin actually took effect -- a --reload uvicorn
     # reverts an in-memory pin silently.
     reference_model = get_ember_model()
-    return {
+    response = {
         "model": llm_adapter.model,
         "available": available,
         "cloud": cloud,
         "reference_model": reference_model,
         "pinned": llm_adapter.model != reference_model,
     }
+
+    # `available` is the DEFAULT client's models, and stays that way: the UI
+    # splits that one list into a vision selector and a text selector, and
+    # vision always runs locally. Reporting the generation host's models there
+    # would offer vision models the vision service cannot reach -- moving the
+    # ambiguity rather than removing it.
+    #
+    # So when generation runs elsewhere, say so in its own fields. Omitted
+    # entirely when unset, which keeps the single-PC response byte-identical
+    # and makes the key's presence the signal that a split is active.
+    from src.core.config import get_ember_generation_ollama_host
+
+    generation_host = get_ember_generation_ollama_host()
+    if generation_host:
+        from src.llm.adapter import list_generation_models
+
+        response["generation_available"] = _chat_models_only(list_generation_models())
+        response["generation_host"] = generation_host
+
+    return response
 
 
 @app.post("/model")

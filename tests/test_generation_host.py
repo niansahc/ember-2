@@ -182,3 +182,121 @@ def _read_source(*parts) -> str:
     from pathlib import Path
 
     return Path(__file__).resolve().parents[1].joinpath(*parts).read_text(encoding="utf-8")
+
+
+class TestModelEndpointReportsGenerationModels:
+    """GET /model must let a caller see what generation can actually reach.
+
+    `available` is built from the default client. Under a split config those
+    are the models generation CANNOT use, which is what made the eval harness
+    reject every remote candidate.
+    """
+
+    LOCAL = {"models": [{"model": "qwen3:8b"}, {"model": "nomic-embed-text:latest"}]}
+    REMOTE = {"models": [{"model": "qwen3:32b"}, {"model": "gemma4:26b-a4b-it-q4_K_M"}]}
+
+    def test_unset_response_has_exactly_todays_keys(self, monkeypatch):
+        """The byte-identical claim, asserted rather than argued."""
+        import src.api.main as main
+
+        monkeypatch.setattr(main.ollama, "list", lambda: self.LOCAL)
+        result = main.get_model_endpoint()
+
+        assert set(result) == {"model", "available", "cloud", "reference_model", "pinned"}
+        assert "generation_available" not in result
+        assert "generation_host" not in result
+
+    def test_configured_host_reports_its_own_models(self, monkeypatch):
+        import src.api.main as main
+        import src.llm.adapter as adapter
+
+        monkeypatch.setenv("EMBER_GENERATION_OLLAMA_HOST", REMOTE)
+        monkeypatch.setattr(main.ollama, "list", lambda: self.LOCAL)
+        monkeypatch.setattr(adapter, "list_generation_models",
+                            lambda: [m["model"] for m in self.REMOTE["models"]])
+
+        result = main.get_model_endpoint()
+
+        # The two lists are deliberately disjoint, so neither assertion can
+        # pass by coincidence.
+        assert result["generation_available"] == ["qwen3:32b", "gemma4:26b-a4b-it-q4_K_M"]
+        assert result["available"] == ["qwen3:8b"]
+        assert result["generation_host"] == REMOTE
+
+    def test_embedding_filter_applies_to_the_generation_list_too(self, monkeypatch):
+        import src.api.main as main
+        import src.llm.adapter as adapter
+
+        monkeypatch.setenv("EMBER_GENERATION_OLLAMA_HOST", REMOTE)
+        monkeypatch.setattr(main.ollama, "list", lambda: self.LOCAL)
+        monkeypatch.setattr(adapter, "list_generation_models",
+                            lambda: ["qwen3:32b", "nomic-embed-text:latest"])
+
+        result = main.get_model_endpoint()
+        assert result["generation_available"] == ["qwen3:32b"]
+
+    def test_unreachable_generation_host_yields_an_empty_list(self, monkeypatch):
+        """Fail soft: pin_model treats empty as inconclusive, not as rejected,
+        so an unreachable host does not hard-fail a sweep."""
+        import src.api.main as main
+        import src.llm.adapter as adapter
+
+        monkeypatch.setenv("EMBER_GENERATION_OLLAMA_HOST", REMOTE)
+        monkeypatch.setattr(main.ollama, "list", lambda: self.LOCAL)
+        monkeypatch.setattr(adapter, "list_generation_models", lambda: [])
+
+        assert main.get_model_endpoint()["generation_available"] == []
+
+    def test_list_generation_models_returns_empty_on_failure(self, monkeypatch):
+        import src.llm.adapter as adapter
+
+        def _boom():
+            raise ConnectionError("host unreachable")
+
+        monkeypatch.setattr(adapter, "_generation_client",
+                            lambda: type("C", (), {"list": staticmethod(_boom)})())
+        assert adapter.list_generation_models() == []
+
+
+class TestHarnessValidatesAgainstGenerationModels:
+    """The rejection this change removes."""
+
+    def test_remote_candidate_is_accepted_when_generation_list_is_present(self):
+        from tools.eval_helpers import _installed_and_cloud_models
+
+        state = {
+            "available": ["qwen3:8b", "qwen3:4b"],          # local, cannot generate
+            "generation_available": ["qwen3:32b"],           # what generation reaches
+            "cloud": {},
+        }
+        names = _installed_and_cloud_models(state)
+
+        assert "qwen3:32b" in names, "the remote candidate must validate"
+        assert "qwen3:8b" not in names, "the local list must not mask it"
+
+    def test_falls_back_to_available_when_absent(self):
+        """Unset host, and servers that predate this change."""
+        from tools.eval_helpers import _installed_and_cloud_models
+
+        names = _installed_and_cloud_models({"available": ["qwen3:8b"], "cloud": {}})
+        assert names == {"qwen3:8b"}
+
+    def test_cloud_ids_still_merge_in(self):
+        from tools.eval_helpers import _installed_and_cloud_models
+
+        state = {
+            "available": ["qwen3:8b"],
+            "generation_available": ["qwen3:32b"],
+            "cloud": {"anthropic": ["claude-haiku-4-5-20251001"]},
+        }
+        names = _installed_and_cloud_models(state)
+        assert "qwen3:32b" in names
+        assert "claude-haiku-4-5-20251001" in names
+
+    def test_sweep_reads_the_api_not_the_local_cli(self):
+        """tools/eval_local_models.py gated on `ollama list`, so a remote
+        candidate was skipped even after pin_model accepted it."""
+        source = _read_source("tools", "eval_local_models.py")
+        assert "ollama\", \"list\"" not in source
+        assert "subprocess" not in source
+        assert "read_model_state()" in source

@@ -7,8 +7,13 @@ Computes a composite heat score for each record in memory.db and
 ingested.db, assigns a tier, and writes the updated tier and heat_score
 only where values have changed. Logs transition counts.
 
-Heat score formula:
-    heat = (recency_score * 0.5) + (access_score * 0.3) + (importance_score * 0.2)
+Heat score formula (ADR-015 amendment, implementation step 4):
+    heat = (recency_score * 0.625) + (access_score * 0.375)
+
+The importance term is gone -- see "Importance ladder flattened" below.
+access_score is now derived from a decayed frequency accumulator
+(frequency_score), not a monotonic retrieval_count -- see "Activation
+model" below.
 
 Tier thresholds:
     hot:  heat >= TIER_HOT_THRESHOLD  (default 0.5)
@@ -34,6 +39,30 @@ Source-bound (ADR-015 amendment, PR #180, implementation step 2):
       a source's tier already reflects ITS OWN bound from the previous
       night. See source_bound.py's docstring for the full rationale.
 
+Importance ladder flattened (ADR-015 amendment, implementation step 4):
+    IMPORTANCE_BY_TYPE contributed nothing to heat -- its maximum
+    contribution (0.2 x 1.0 = 0.20) was exactly TIER_WARM_THRESHOLD, so
+    it could never lift a record above cold. Reflection longevity is now
+    governed by source-bounding (above) instead of a type constant, and
+    type may still affect ranking elsewhere -- it no longer affects
+    decay. The two remaining terms (recency, access) are renormalized to
+    sum to 1.0, preserving their original 5:3 relative weight.
+
+Activation model (ADR-015 amendment, implementation step 4):
+    Base-level activation is recency plus a *decaying* frequency term,
+    both on the same decay curve (same halflife), computed nightly here.
+    Context conditioning -- the second half of the ACT-R structure this
+    ADR cites -- is ADR-007's existing project boost
+    (ContextRanker.apply_project_boost, +0.15), applied per-query at
+    retrieval rather than baked into the nightly tier. This amendment
+    does not add a second context-conditioning mechanism.
+
+    The frequency term is a decayed accumulator (frequency_score),
+    updated at retrieval time by SqliteVectorStore.update_retrieval_stats
+    -- not the old monotonic retrieval_count, which installed a
+    permanent floor once a record was retrieved four times. See that
+    method's docstring for the decay-then-increment logic.
+
 Run nightly via daemon thread, or manually via POST /tiering/run.
 """
 
@@ -53,25 +82,10 @@ from src.core.config import (
     get_tier_recency_halflife_days,
     get_tier_warm_threshold,
 )
+from src.core.timestamps import parse_vault_timestamp
 from src.tiering.source_bound import bound_tier
 
 logger = logging.getLogger("ember.tiering")
-
-# Importance score heuristic by memory_type (ADR-015)
-IMPORTANCE_BY_TYPE: dict[str, float] = {
-    "profile": 1.0,
-    "state": 0.9,
-    "reflection": 0.7,
-    "journal": 0.6,
-    "conversation": 0.4,
-    "ingested": 0.3,
-}
-DEFAULT_IMPORTANCE = 0.5
-
-
-def _importance_for_type(memory_type: str | None) -> float:
-    """Return importance_score heuristic for a memory_type."""
-    return IMPORTANCE_BY_TYPE.get(memory_type or "", DEFAULT_IMPORTANCE)
 
 
 def _recency_score(
@@ -83,23 +97,22 @@ def _recency_score(
     Exponential decay based on days since last retrieval (or creation).
 
     Returns 0.0-1.0. Halflife = the number of days at which score = 0.5.
+
+    Parses vault-canonical hyphenated timestamps, ISO 8601, and Unix
+    epoch strings via parse_vault_timestamp -- previously this only
+    handled the hyphenated/date-prefix form, so every epoch-stamped
+    record (e.g. ChatGPT imports) silently scored 0.0.
     """
     reference = last_retrieved_at or created_at
     if not reference:
         return 0.0
 
-    try:
-        # Handle hyphenated Ember timestamps: 2026-04-03T16-53-55
-        clean = reference.replace("Z", "").split("+")[0]
-        if "T" in clean:
-            date_part = clean.split("T")[0]
-        else:
-            date_part = clean[:10]
-        ref_date = datetime.strptime(date_part, "%Y-%m-%d")
-    except (ValueError, TypeError):
+    ref_dt = parse_vault_timestamp(reference)
+    if ref_dt is None:
         return 0.0
 
-    days_ago = max((datetime.now() - ref_date).days, 0)
+    now = datetime.now(ref_dt.tzinfo)
+    days_ago = max((now - ref_dt).days, 0)
 
     if halflife_days <= 0:
         return 1.0 if days_ago == 0 else 0.0
@@ -108,18 +121,29 @@ def _recency_score(
     return math.pow(2, -days_ago / halflife_days)
 
 
-def _access_score(retrieval_count: int, ceiling: int) -> float:
-    """Normalized retrieval count. Saturates at 1.0 when count >= ceiling."""
+def _access_score(frequency_score: float, ceiling: int) -> float:
+    """Normalized decayed-frequency accumulator. Saturates at 1.0 when
+    frequency_score >= ceiling.
+
+    frequency_score is the already-decayed accumulator written by
+    SqliteVectorStore.update_retrieval_stats -- not a raw count -- so no
+    further decay is applied here.
+    """
     if ceiling <= 0:
         return 0.0
-    return min(retrieval_count / ceiling, 1.0)
+    return min(frequency_score / ceiling, 1.0)
 
 
-def _compute_heat(
-    recency: float, access: float, importance: float
-) -> float:
-    """Composite heat score (ADR-015)."""
-    return (recency * 0.5) + (access * 0.3) + (importance * 0.2)
+def _compute_heat(recency: float, access: float) -> float:
+    """Composite heat score (ADR-015 amendment, implementation step 4).
+
+    Weights (0.625 / 0.375) preserve the original recency:access ratio
+    (5:3) from the pre-amendment formula (0.5 : 0.3 : 0.2), renormalized
+    to sum to 1.0 now that the importance term is gone. Max heat is still
+    1.0, so TIER_HOT_THRESHOLD/TIER_WARM_THRESHOLD remain meaningful
+    without a .env change.
+    """
+    return (recency * 0.625) + (access * 0.375)
 
 
 def _tier_from_heat(heat: float, hot_threshold: float, warm_threshold: float) -> str:
@@ -205,29 +229,28 @@ class TieringService:
 
             cursor = conn.execute(
                 "SELECT id, memory_type, created_at, last_retrieved_at, "
-                "retrieval_count, importance_score, tier, heat_score, metadata "
+                "frequency_score, tier, heat_score, metadata "
                 "FROM vectors"
             )
 
-            updates: list[tuple[str, float, str, str]] = []
+            updates: list[tuple[str, float, str]] = []
 
             for row in cursor:
                 record_id = row["id"]
                 memory_type = row["memory_type"] or ""
                 created_at = row["created_at"]
                 last_retrieved = row["last_retrieved_at"]
-                retrieval_count = row["retrieval_count"] or 0
-                old_importance = row["importance_score"]
+                frequency_score = row["frequency_score"] or 0.0
                 old_tier = row["tier"] or "hot"
                 old_heat = row["heat_score"] or 1.0
 
-                # Compute importance from type heuristic
-                importance = _importance_for_type(memory_type)
-
-                # Compute component scores
+                # Compute component scores. Frequency decays on the same
+                # curve as recency (same reference timestamp, same
+                # halflife) -- see module docstring's "Activation model".
                 recency = _recency_score(last_retrieved, created_at, halflife)
-                access = _access_score(retrieval_count, ceiling)
-                heat = _compute_heat(recency, access, importance)
+                freq_decayed = frequency_score * recency
+                access = _access_score(freq_decayed, ceiling)
+                heat = _compute_heat(recency, access)
 
                 # Hard overrides
                 if memory_type == "profile":
@@ -255,8 +278,8 @@ class TieringService:
                 transitions["total"] += 1
 
                 # Only write if changed
-                if new_tier != old_tier or abs(heat - old_heat) > 0.01 or abs(importance - (old_importance or 0.5)) > 0.01:
-                    updates.append((new_tier, heat, importance, record_id))
+                if new_tier != old_tier or abs(heat - old_heat) > 0.01:
+                    updates.append((new_tier, heat, record_id))
 
                     if old_tier != new_tier:
                         key = f"{old_tier}_to_{new_tier}"
@@ -269,7 +292,7 @@ class TieringService:
             # Batch write updates
             if updates:
                 conn.executemany(
-                    "UPDATE vectors SET tier = ?, heat_score = ?, importance_score = ? WHERE id = ?",
+                    "UPDATE vectors SET tier = ?, heat_score = ? WHERE id = ?",
                     updates,
                 )
                 conn.commit()

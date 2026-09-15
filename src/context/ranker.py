@@ -19,6 +19,26 @@ from datetime import datetime, timezone
 from src.context.models import ContextItem
 from src.state.models import StateItem
 
+# ADR-015 amendment (PR #180), implementation step 3: cold is a reduced
+# weight, not exclusion. Was `score = 0.0` -- collapsing every cold item to
+# one indistinguishable value and erasing relative relevance across most of
+# the corpus (measured: unresolved tie-band fraction 0.178 with tiering on
+# vs 0.015 with it off, roughly 12x -- see the ADR amendment's "Cold is a
+# weight, not exclusion" section).
+#
+# 0.3, not a smaller value: warm's 0.7 discount is a single, moderate step
+# down; matching that same ratio again for cold (0.7 * 0.7 = 0.49) would
+# leave cold too close to warm and blur the three-tier separation the
+# design wants. Going near-zero (0.05-0.1) stays too close to the old
+# behavior it replaces and undersells "reduced weight" as a real signal
+# rather than a technicality. 0.3 is a clear third band below warm, while
+# still leaving enough headroom that a highly relevant cold record can
+# outrank a weakly relevant hot one when that is genuinely the better
+# answer -- context conditioning and direct addressing are the amendment's
+# named recovery paths, not automatic fallback, so ranking has to be able
+# to do this on its own sometimes.
+COLD_MULTIPLIER = 0.3
+
 
 class ContextRanker:
     """Applies policy-based scoring adjustments and ranks context items.
@@ -76,17 +96,28 @@ class ContextRanker:
                 score += queryish_bonus
 
             # ADR-015: Tier scoring modifier.
-            # Profile bypasses tier scoring entirely.
+            # Profile bypasses tier scoring entirely. Structurally
+            # unreachable today -- TieringService hard-overrides profile to
+            # hot on every nightly run, the SQLite tier column defaults to
+            # 'hot', and get_profile_items() never even reads a stored tier
+            # into the ContextItem -- but kept explicit anyway. ADR-015's
+            # original decision states "Profile memory: always Hot, no
+            # exceptions" three separate times; that is worth an explicit,
+            # self-documenting guard rather than depending on three other
+            # pieces of code never changing.
             tier = getattr(item, "tier", "hot") or "hot"
             mem_type = getattr(item, "memory_type", "")
 
             if mem_type == "profile":
                 pass  # profile bypasses tier scoring
             elif tier == "cold":
-                # Cold items are suppressed entirely — they scored below the
-                # warm threshold in the tiering service and should not compete
-                # for context slots.
-                score = 0.0
+                # ADR-015 amendment step 3: reduced weight, not exclusion.
+                # Ordering within cold is preserved -- a nonzero multiplier
+                # is strictly order-preserving on its own input, applied
+                # uniformly here, so two cold items that differ before this
+                # line still differ after it. See COLD_MULTIPLIER's module
+                # comment for the value rationale.
+                score *= COLD_MULTIPLIER
             elif tier == "warm":
                 # 0.7 multiplier: warm items are retained but disadvantaged.
                 # They represent content that was once relevant but has not

@@ -2,7 +2,7 @@
 Tests for memory tiering (ADR-015).
 
 Covers: tier assignment, profile exemption, resolved state,
-cold exclusion in ranker, retrieval stats, config thresholds,
+cold-tier weighting in ranker, retrieval stats, config thresholds,
 schema migration safety.
 """
 
@@ -135,14 +135,18 @@ def _make_item(memory_type="conversation", score=0.5, tier="hot"):
     )
 
 
-def test_ranker_cold_scores_zero():
+def test_ranker_cold_applies_0_3_multiplier():
+    """ADR-015 amendment step 3: cold is a reduced weight (0.3), not
+    exclusion (0.0)."""
+    from src.context.ranker import COLD_MULTIPLIER
     from src.context.policies import ContextPolicy
     ranker = ContextRanker()
-    policy = ContextPolicy(name="test")
+    policy = ContextPolicy(name="test", memory_weight=1.0)
 
     items = [_make_item(tier="cold", score=0.8)]
     result = ranker.apply_policy(items, policy)
-    assert result[0].score == 0.0
+    assert result[0].score == pytest.approx(0.8 * COLD_MULTIPLIER)
+    assert result[0].score > 0.0
 
 
 def test_ranker_warm_applies_0_7_multiplier():
@@ -174,7 +178,8 @@ def test_ranker_profile_bypasses_tier():
 
     items = [_make_item(memory_type="profile", tier="cold", score=0.5)]
     result = ranker.apply_policy(items, policy)
-    assert result[0].score > 0.0  # cold would be 0.0 but profile bypasses
+    # profile bypasses tier scoring entirely -- unaffected by COLD_MULTIPLIER
+    assert result[0].score == pytest.approx(0.5)
 
 
 # ── Retrieval stats ─────────────────────────────────────────────────────

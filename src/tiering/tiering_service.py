@@ -19,6 +19,21 @@ Hard overrides:
     - Profile memory: always hot
     - Unresolved state records: always hot (detected by memory_type)
 
+Source-bound (ADR-015 amendment, PR #180, implementation step 2):
+    - A reflection's tier is capped at the max tier among its
+      metadata.source_record_ids. Derived content has no independent
+      standing -- it may end up colder than its sources, never hotter.
+    - No resolvable source_record_ids floors the record at cold (the
+      legacy/unprovenanced rule). Partial resolution bounds against
+      whatever DOES resolve; see src/tiering/source_bound.py.
+    - Bound is computed against IMMEDIATE sources only, using each
+      source's CURRENT tier at the start of this run -- not resolved
+      transitively. Correctness across a derivation chain (e.g. a
+      monthly reflection sourcing a daily reflection) is a convergence
+      property across nightly runs, not something computed in one pass:
+      a source's tier already reflects ITS OWN bound from the previous
+      night. See source_bound.py's docstring for the full rationale.
+
 Run nightly via daemon thread, or manually via POST /tiering/run.
 """
 
@@ -38,6 +53,7 @@ from src.core.config import (
     get_tier_recency_halflife_days,
     get_tier_warm_threshold,
 )
+from src.tiering.source_bound import bound_tier
 
 logger = logging.getLogger("ember.tiering")
 
@@ -115,6 +131,30 @@ def _tier_from_heat(heat: float, hot_threshold: float, warm_threshold: float) ->
     return "cold"
 
 
+def _source_record_ids_from_row(row: sqlite3.Row) -> list[str]:
+    """Parse metadata.source_record_ids off a `vectors` row.
+
+    Malformed or missing metadata is treated as "no provenance" (empty
+    list), which bound_tier() floors at cold -- the same outcome as a
+    record that genuinely has no source_record_ids, and the correct one:
+    a row this service cannot read the provenance of gets no benefit of
+    the doubt either.
+    """
+    raw_metadata = row["metadata"]
+    if not raw_metadata:
+        return []
+    try:
+        metadata = json.loads(raw_metadata)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(metadata, dict):
+        return []
+    source_ids = metadata.get("source_record_ids")
+    if not isinstance(source_ids, list):
+        return []
+    return [sid for sid in source_ids if isinstance(sid, str) and sid]
+
+
 class TieringService:
     """Compute and assign tiers for all records in SQLite stores."""
 
@@ -142,6 +182,18 @@ class TieringService:
             "total": 0,
         }
 
+        # Source-bound needs an id -> tier lookup that spans BOTH databases,
+        # because a reflection's sources can live in either one
+        # (conversation/journal/reflection in memory.db, ingested in
+        # ingested.db). tier is a SQLite-only column -- it is never
+        # mirrored into the vault JSON body -- so this snapshot has to come
+        # from SQLite directly rather than from resolve_source_records().
+        # Built once, before either database is processed for reassignment,
+        # so every reflection in this run is bounded against the SAME
+        # snapshot (last night's settled tiers), not a mix of settled and
+        # already-updated-this-run values depending on iteration order.
+        tier_index = self._build_tier_index(vault)
+
         # Process each database
         for db_name in ["memory.db", "ingested.db"]:
             db_path = vault / "embeddings" / db_name
@@ -153,7 +205,7 @@ class TieringService:
 
             cursor = conn.execute(
                 "SELECT id, memory_type, created_at, last_retrieved_at, "
-                "retrieval_count, importance_score, tier, heat_score "
+                "retrieval_count, importance_score, tier, heat_score, metadata "
                 "FROM vectors"
             )
 
@@ -191,6 +243,15 @@ class TieringService:
                 else:
                     new_tier = _tier_from_heat(heat, hot_threshold, warm_threshold)
 
+                if memory_type == "reflection":
+                    # Source-bound (ADR-015 amendment step 2): a reflection
+                    # may be colder than its sources, never hotter.
+                    new_tier = bound_tier(
+                        new_tier,
+                        _source_record_ids_from_row(row),
+                        tier_index,
+                    )
+
                 transitions["total"] += 1
 
                 # Only write if changed
@@ -223,6 +284,28 @@ class TieringService:
         self._log_transitions(transitions, vault)
 
         return transitions
+
+    def _build_tier_index(self, vault: Path) -> dict[str, str]:
+        """id -> current tier, merged across memory.db and ingested.db.
+
+        A lightweight, separate pass (id + tier only) rather than folding
+        into the main per-row loop below, so every reflection processed in
+        this run bounds against one consistent snapshot instead of a mix
+        of pre- and post-update values that would depend on row order.
+        """
+        tier_index: dict[str, str] = {}
+        for db_name in ["memory.db", "ingested.db"]:
+            db_path = vault / "embeddings" / db_name
+            if not db_path.exists():
+                continue
+            conn = sqlite3.connect(str(db_path), check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            try:
+                for row in conn.execute("SELECT id, tier FROM vectors"):
+                    tier_index[row["id"]] = row["tier"] or "hot"
+            finally:
+                conn.close()
+        return tier_index
 
     def _log_transitions(self, transitions: dict, vault: Path) -> None:
         """Write transition counts to logs/tiering/YYYY-MM-DD.log."""

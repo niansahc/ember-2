@@ -10,6 +10,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".venv/Scripts/python.exe .claude/hooks/secret_dump_guard.py",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [

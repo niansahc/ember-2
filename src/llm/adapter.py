@@ -1105,8 +1105,19 @@ class LLMAdapter:
 
     def _summarize_with_plain_prompt(self, prompt: str) -> str:
         """Plain summarization call — neutral system message, no JSON instruction.
-        Used for buffer compression to avoid leaking JSON into conversation context."""
+        Used for buffer compression to avoid leaking JSON into conversation context.
+
+        Local auxiliary call -- uses get_ember_auxiliary_model(), never
+        self.model (which may be a generation-host-only tag). Previously
+        this call passed no model kwarg at all, which is not a safe
+        fallback -- it fails a client-side validation error in 0.0s, every
+        time, independent of any config. Buffer compression has never
+        actually run; this is the fix.
+        """
+        from src.core.config import get_ember_auxiliary_model
+
         response = ollama.chat(
+            model=get_ember_auxiliary_model(),
             messages=[
                 {
                     "role": "system",
@@ -1121,7 +1132,14 @@ class LLMAdapter:
         return response["message"]["content"]
 
     def _call_model_with_prompt(self, prompt: str) -> str:
+        """Local auxiliary call backing constitutional review
+        (ResponseReviewService's llm_callable). Same fix and same prior
+        defect as _summarize_with_plain_prompt above: no model kwarg meant
+        this never actually ran."""
+        from src.core.config import get_ember_auxiliary_model
+
         response = ollama.chat(
+            model=get_ember_auxiliary_model(),
             messages=[
                 {
                     "role": "system",

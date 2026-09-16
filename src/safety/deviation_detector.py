@@ -218,7 +218,7 @@ def _run_second_pass(
             )
 
     import ollama
-    from src.core.config import get_ember_model
+    from src.core.config import get_ember_auxiliary_model
 
     markers = pattern_class.get("markers", [])
     markers_text = "\n".join(f"- {m}" for m in markers)
@@ -241,7 +241,7 @@ def _run_second_pass(
 
     try:
         result = ollama.chat(
-            model=get_ember_model(),
+            model=get_ember_auxiliary_model(),
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0, "num_predict": 50},
             think=False,

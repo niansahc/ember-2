@@ -128,7 +128,7 @@ def _llm_synthesize(selected: list[dict], prompt_template: str, source_label: st
     """
     import random
     import ollama
-    from src.core.config import get_ember_model
+    from src.core.config import get_ember_auxiliary_model
 
     # Shuffle to counteract recency bias (CLAUDE.md prompt writing standards)
     shuffled = list(selected)
@@ -162,7 +162,7 @@ def _llm_synthesize(selected: list[dict], prompt_template: str, source_label: st
     # Call the LLM
     try:
         response = ollama.chat(
-            model=get_ember_model(),
+            model=get_ember_auxiliary_model(),
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0.4, "num_predict": 800},
         )

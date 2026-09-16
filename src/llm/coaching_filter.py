@@ -342,7 +342,7 @@ def _rewrite(text: str, matches: list[dict]) -> str:
     """
     try:
         import ollama
-        from src.core.config import get_ember_model
+        from src.core.config import get_ember_auxiliary_model
 
         pattern_descriptions = "; ".join(
             f"{m['pattern']}: \"{m['match']}\"" for m in matches if not m["deletable"]
@@ -359,7 +359,7 @@ def _rewrite(text: str, matches: list[dict]) -> str:
         )
 
         response = ollama.chat(
-            model=get_ember_model(),
+            model=get_ember_auxiliary_model(),
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0.3, "num_predict": 500},
         )
@@ -522,7 +522,7 @@ def _check_semantic_identity_collapse(text: str) -> bool:
     """
     try:
         import ollama
-        from src.core.config import get_ember_model
+        from src.core.config import get_ember_auxiliary_model
 
         prompt = (
             "Does this response deny having a character, opinions, perspective, "
@@ -535,7 +535,7 @@ def _check_semantic_identity_collapse(text: str) -> bool:
         )
 
         response = ollama.chat(
-            model=get_ember_model(),
+            model=get_ember_auxiliary_model(),
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0, "num_predict": 10},
         )
@@ -555,7 +555,7 @@ def _rewrite_identity_collapse(text: str) -> str:
     """
     try:
         import ollama
-        from src.core.config import get_ember_model
+        from src.core.config import get_ember_auxiliary_model
 
         prompt = (
             "This response contains an identity collapse — the AI denied having "
@@ -568,7 +568,7 @@ def _rewrite_identity_collapse(text: str) -> str:
         )
 
         response = ollama.chat(
-            model=get_ember_model(),
+            model=get_ember_auxiliary_model(),
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0.3, "num_predict": 500},
         )

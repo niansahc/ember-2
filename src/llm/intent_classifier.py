@@ -31,9 +31,9 @@ import numpy as np
 import ollama
 
 from src.core.config import (
+    get_ember_auxiliary_model,
     get_ember_classifier_telemetry,
     get_ember_debug,
-    get_ember_model,
     get_intent_classifier_timeout_ms,
 )
 from src.retrieval.embed_memory import embed_text, embed_texts
@@ -275,7 +275,7 @@ def _stage3_llm_call(query: str) -> str:
     """
     try:
         response = ollama.chat(
-            model=get_ember_model(),
+            model=get_ember_auxiliary_model(),
             messages=[
                 {"role": "system", "content": _STAGE3_SYSTEM_PROMPT},
                 {"role": "user", "content": query[:500]},

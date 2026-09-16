@@ -71,7 +71,7 @@ class TestSessionReflectionGenerator:
 
     def test_handles_llm_failure_gracefully(self):
         with patch("src.reflection.session_reflection.ollama") as mock_ollama, \
-             patch("src.reflection.session_reflection.get_ember_model", return_value="qwen3:8b"):
+             patch("src.reflection.session_reflection.get_ember_auxiliary_model", return_value="qwen3:8b"):
             mock_ollama.chat.side_effect = Exception("Connection refused")
             result = generate_session_reflection(MOCK_BUFFER)
             assert result is None

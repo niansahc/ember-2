@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 
 import ollama
 
-from src.core.config import get_ember_model, get_private_vault_path
+from src.core.config import get_ember_auxiliary_model, get_private_vault_path
 from src.memory import lodestone_service
 from src.memory.service import MemoryService
 from src.tiering.source_bound import bound_tier
@@ -161,7 +161,7 @@ def _ollama_text(prompt: str, num_predict: int) -> str | None:
     error so callers short-circuit cleanly."""
     try:
         result = ollama.chat(
-            model=get_ember_model(),
+            model=get_ember_auxiliary_model(),
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0.0, "num_predict": num_predict},
             think=False,

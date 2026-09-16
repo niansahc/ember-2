@@ -29,6 +29,16 @@ class ContextItem:
     # Defaults to "unknown" — the ranker's authorship multiplier falls
     # back to a conservative 0.5x for unknown items on relational queries.
     authorship: str = "unknown"
+    # ADR-015 amendment, implementation step 4: the record's actual
+    # primary key in whichever SQLite store it came from (memory.db or
+    # ingested.db) -- distinct from `id`, which is a different identifier
+    # for a different job (path/chunk_id, used for session-scoped hedge
+    # tracking in conversation_buffer.was_hedged). Deliberately a separate
+    # field rather than overloading `id`: service._update_retrieval_stats
+    # needs the real vectors.id to write retrieval stats back, and `id`
+    # was never that value for most memory types (a file path, not the
+    # row's primary key), which is why retrieval stats never updated.
+    store_id: str | None = None
 
 
 @dataclass

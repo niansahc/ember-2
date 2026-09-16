@@ -138,6 +138,10 @@ class ContextRetriever:
                     # SQLite index. Missing column returns "unknown" via
                     # the store's fallback — safe default.
                     authorship=result.get("authorship", "unknown"),
+                    # ADR-015 amendment step 4: the real vectors.id, distinct
+                    # from `id` above (path/chunk_id, a different identity
+                    # contract). Needed so retrieval stats actually update.
+                    store_id=result.get("id"),
                 )
             )
 
@@ -182,6 +186,14 @@ class ContextRetriever:
                     timestamp=result.get("timestamp"),
                     tags=result.get("tags", []),
                     metadata=result,
+                    # This path already returns the vault-canonical id
+                    # (which equals vectors.id -- see write_memory.py),
+                    # unlike get_memory_items()'s SQLite path. Set
+                    # explicitly anyway (ADR-015 amendment step 4) so
+                    # reflection stops being the one type that "happens to
+                    # work" through `id` and is on the same explicit
+                    # contract as everything else.
+                    store_id=result.get("id"),
                 )
             )
 
@@ -256,6 +268,11 @@ class ContextRetriever:
                     timestamp=result.get("timestamp"),
                     tags=result.get("tags", []),
                     metadata=result,
+                    # ADR-015 amendment step 4: profile goes through the
+                    # same SQLite semantic_search() path as
+                    # get_memory_items(), so it has the same store_id
+                    # (vectors.id) vs id (path/chunk_id) mismatch.
+                    store_id=result.get("id"),
                 )
             )
 

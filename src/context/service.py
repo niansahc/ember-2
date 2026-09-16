@@ -242,7 +242,8 @@ class ContextService:
 
         # ADR-015: Update retrieval stats on selected records only.
         # Only records that made it into the final context packet get
-        # their retrieval_count incremented and last_retrieved_at set.
+        # their frequency_score decayed-then-incremented and
+        # last_retrieved_at set.
         self._update_retrieval_stats(selected_memory + selected_reflections)
 
         packet = self.formatter.format(
@@ -285,7 +286,13 @@ class ContextService:
 
     def _update_retrieval_stats(self, items: list) -> None:
         """
-        ADR-015: Update retrieval_count and last_retrieved_at for selected records.
+        ADR-015 amendment, implementation step 4: update frequency_score and
+        last_retrieved_at for selected records, keyed by ContextItem.store_id
+        (the real vectors.id) -- not `.id`, which is a different identifier
+        (path/chunk_id) used for session-scoped hedge tracking and, for most
+        memory types, never matched any vectors row. Keying off `.id` here
+        was the reason retrieval stats never updated: this is intentionally
+        not a fallback to `.id` for that same reason.
 
         Only called on records that made it into the final context packet.
         Runs in a try/except so retrieval stat failures never crash context building.
@@ -298,7 +305,7 @@ class ContextService:
             ingested_ids = []
 
             for item in items:
-                record_id = getattr(item, "id", "")
+                record_id = getattr(item, "store_id", None) or ""
                 mem_type = getattr(item, "memory_type", "")
                 if not record_id:
                     continue

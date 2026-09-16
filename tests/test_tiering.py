@@ -19,7 +19,6 @@ from src.tiering.tiering_service import (
     TieringService,
     _access_score,
     _compute_heat,
-    _importance_for_type,
     _recency_score,
     _tier_from_heat,
 )
@@ -51,31 +50,53 @@ def test_recency_score_none_returns_zero():
     assert _recency_score(None, None, halflife_days=30) == 0.0
 
 
-def test_access_score_zero_count():
-    assert _access_score(0, 10) == 0.0
+def test_recency_score_epoch_float_string():
+    """ADR-015 amendment step 4: _recency_score previously parsed only a
+    %Y-%m-%d prefix, so an epoch-float timestamp (e.g. ChatGPT imports)
+    silently scored 0.0. Regression test for the parser gap fix."""
+    from datetime import datetime, timezone
+    epoch = datetime.now(timezone.utc).timestamp()
+    score = _recency_score(str(epoch), None, halflife_days=30)
+    assert score > 0.95
+
+
+def test_recency_score_epoch_float_string_at_halflife():
+    from datetime import datetime, timedelta, timezone
+    past = datetime.now(timezone.utc) - timedelta(days=30)
+    score = _recency_score(str(past.timestamp()), None, halflife_days=30)
+    assert 0.45 <= score <= 0.55
+
+
+def test_access_score_zero_frequency():
+    assert _access_score(0.0, 10) == 0.0
 
 
 def test_access_score_at_ceiling():
-    assert _access_score(10, 10) == 1.0
+    assert _access_score(10.0, 10) == 1.0
 
 
 def test_access_score_above_ceiling():
-    assert _access_score(20, 10) == 1.0
+    assert _access_score(20.0, 10) == 1.0
 
 
 def test_access_score_partial():
-    assert _access_score(5, 10) == 0.5
+    assert _access_score(5.0, 10) == 0.5
 
 
 def test_heat_formula():
-    heat = _compute_heat(recency=1.0, access=1.0, importance=1.0)
+    """ADR-015 amendment step 4: importance term removed, recency:access
+    renormalized to 0.625:0.375 (preserving the original 5:3 ratio)."""
+    heat = _compute_heat(recency=1.0, access=1.0)
     assert heat == 1.0
 
-    heat = _compute_heat(recency=0.0, access=0.0, importance=0.0)
+    heat = _compute_heat(recency=0.0, access=0.0)
     assert heat == 0.0
 
-    heat = _compute_heat(recency=1.0, access=0.0, importance=0.0)
-    assert heat == 0.5
+    heat = _compute_heat(recency=1.0, access=0.0)
+    assert heat == pytest.approx(0.625)
+
+    heat = _compute_heat(recency=0.0, access=1.0)
+    assert heat == pytest.approx(0.375)
 
 
 # ── Tier thresholds ─────────────────────────────────────────────────────
@@ -99,25 +120,6 @@ def test_tier_from_heat_boundary_hot():
 
 def test_tier_from_heat_boundary_warm():
     assert _tier_from_heat(0.2, hot_threshold=0.5, warm_threshold=0.2) == "warm"
-
-
-# ── Importance by type ──────────────────────────────────────────────────
-
-
-def test_importance_profile():
-    assert _importance_for_type("profile") == 1.0
-
-
-def test_importance_conversation():
-    assert _importance_for_type("conversation") == 0.4
-
-
-def test_importance_ingested():
-    assert _importance_for_type("ingested") == 0.3
-
-
-def test_importance_unknown():
-    assert _importance_for_type("unknown_type") == 0.5
 
 
 # ── Ranker tier modifier ───────────────────────────────────────────────
@@ -186,6 +188,8 @@ def test_ranker_profile_bypasses_tier():
 
 
 def test_update_retrieval_stats(tmp_path: Path):
+    """ADR-015 amendment step 4: frequency_score, not retrieval_count, is
+    the live accumulator now."""
     db_path = tmp_path / "memory.db"
     store = SqliteVectorStore(db_path)
 
@@ -203,14 +207,15 @@ def test_update_retrieval_stats(tmp_path: Path):
 
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
-    row = conn.execute("SELECT retrieval_count, last_retrieved_at FROM vectors WHERE id = 'test-1'").fetchone()
-    assert row["retrieval_count"] == 1
+    row = conn.execute("SELECT frequency_score, last_retrieved_at FROM vectors WHERE id = 'test-1'").fetchone()
+    assert row["frequency_score"] == pytest.approx(1.0)
     assert row["last_retrieved_at"] is not None
 
-    # Second update increments
+    # Second update, immediately after the first: elapsed time ~0 days, so
+    # decay ~1.0 and frequency accumulates (old * ~1.0 + 1 ~= 2.0).
     store.update_retrieval_stats(["test-1"])
-    row = conn.execute("SELECT retrieval_count FROM vectors WHERE id = 'test-1'").fetchone()
-    assert row["retrieval_count"] == 2
+    row = conn.execute("SELECT frequency_score FROM vectors WHERE id = 'test-1'").fetchone()
+    assert row["frequency_score"] == pytest.approx(2.0, abs=0.01)
 
     conn.close()
     store.close()
@@ -238,14 +243,155 @@ def test_update_retrieval_stats_only_selected(tmp_path: Path):
     conn.row_factory = sqlite3.Row
 
     for i in range(3):
-        row = conn.execute(f"SELECT retrieval_count FROM vectors WHERE id = 'rec-{i}'").fetchone()
+        row = conn.execute(f"SELECT frequency_score FROM vectors WHERE id = 'rec-{i}'").fetchone()
         if i in (0, 2):
-            assert row["retrieval_count"] == 1
+            assert row["frequency_score"] == pytest.approx(1.0)
         else:
-            assert row["retrieval_count"] == 0
+            assert row["frequency_score"] == pytest.approx(0.0)
 
     conn.close()
     store.close()
+
+
+def test_update_retrieval_stats_decays_after_long_gap(tmp_path: Path):
+    """The frequency accumulator must decay, not just accumulate.
+
+    A record retrieved once long ago (well past the halflife), then
+    retrieved again now, should show its old contribution mostly decayed
+    away rather than a simple +1 on top of the stale value.
+    """
+    from datetime import datetime, timedelta
+
+    db_path = tmp_path / "memory.db"
+    store = SqliteVectorStore(db_path)
+    store.insert({
+        "id": "stale-1",
+        "text": "test content",
+        "embedding": [0.1] * 768,
+        "source": "test",
+        "memory_type": "conversation",
+        "created_at": "2026-01-01",
+        "metadata": {},
+    })
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    # Simulate a prior retrieval 90 days ago (3x the default 30-day
+    # halflife) that had already accumulated frequency_score = 5.0.
+    stale_retrieval = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%dT%H-%M-%S")
+    conn.execute(
+        "UPDATE vectors SET frequency_score = 5.0, last_retrieved_at = ? WHERE id = 'stale-1'",
+        (stale_retrieval,),
+    )
+    conn.commit()
+
+    store.update_retrieval_stats(["stale-1"])
+
+    row = conn.execute("SELECT frequency_score FROM vectors WHERE id = 'stale-1'").fetchone()
+    # 5.0 * 2^(-90/30) + 1.0 = 5.0 * 0.125 + 1.0 = 1.625
+    assert row["frequency_score"] == pytest.approx(1.625, abs=0.05)
+    # Far less than the monotonic-counter behavior this replaces (5 + 1 = 6).
+    assert row["frequency_score"] < 2.0
+
+    conn.close()
+    store.close()
+
+
+def test_legacy_high_retrieval_count_goes_cold_when_stale(tmp_path: Path):
+    """Regression test for the exact defect ADR-015's amendment names: a
+    record with a legacy retrieval_count >= 4 (the old permanent-floor
+    threshold) that has NOT been retrieved recently must still be able to
+    go cold under the new frequency_score-driven model.
+    """
+    from datetime import datetime, timedelta
+    import math
+    from src.tiering.tiering_service import _recency_score, _access_score, _compute_heat
+
+    old_created_at = (datetime.now() - timedelta(days=400)).strftime("%Y-%m-%dT%H-%M-%S")
+    old_last_retrieved = (datetime.now() - timedelta(days=200)).strftime("%Y-%m-%dT%H-%M-%S")
+
+    # Legacy retrieval_count=10 (old ceiling-saturating value) is inert now;
+    # frequency_score reflects long-decayed history instead.
+    recency = _recency_score(old_last_retrieved, old_created_at, halflife_days=30)
+    freq_decayed = 0.4 * recency  # some small leftover accumulator, itself decayed
+    access = _access_score(freq_decayed, ceiling=10)
+    heat = _compute_heat(recency, access)
+
+    assert heat < 0.2  # cold, per default TIER_WARM_THRESHOLD
+
+
+def test_search_results_include_id(tmp_path: Path):
+    """ADR-015 amendment step 4: search() must surface the row's real
+    primary key so callers can address it again for retrieval stats."""
+    db_path = tmp_path / "memory.db"
+    store = SqliteVectorStore(db_path)
+
+    embedding = [0.5] * 768
+    store.insert({
+        "id": "2026-04-03T16-53-55",
+        "text": "a record with a real id",
+        "embedding": embedding,
+        "source": "test",
+        "memory_type": "conversation",
+        "created_at": "2026-04-03",
+        "metadata": {},
+    })
+
+    results = store.search(embedding, limit=5, memory_type="conversation")
+    assert len(results) == 1
+    assert results[0]["id"] == "2026-04-03T16-53-55"
+    store.close()
+
+
+def test_service_update_retrieval_stats_uses_store_id():
+    """End-to-end regression test for the identity fix: ContextService
+    must key retrieval-stat writes off ContextItem.store_id (the real
+    vectors.id), not `.id` (a file path for most memory types). Before
+    this fix, `.id` was passed to update_retrieval_stats and matched zero
+    rows, so retrieval_count/frequency_score never moved for anything but
+    reflections.
+    """
+    from src.context.service import ContextService
+    from src.core.config import get_private_vault_path
+
+    vault = get_private_vault_path()
+    db_path = vault / "embeddings" / "memory.db"
+    store = SqliteVectorStore(db_path)
+    store.insert({
+        "id": "2026-05-01T09-00-00",
+        "text": "a conversation record long enough to pass filters",
+        "embedding": [0.2] * 768,
+        "source": "test",
+        "memory_type": "conversation",
+        "created_at": "2026-05-01T09-00-00",
+        "metadata": {},
+    })
+    store.close()
+
+    item = ContextItem(
+        id="/some/file/path/that/is/not/the/vectors/id.json",
+        content="a conversation record long enough to pass filters",
+        source="conversation",
+        item_type="conversation",
+        memory_type="conversation",
+        store_id="2026-05-01T09-00-00",
+    )
+
+    service = ContextService()
+    service._update_retrieval_stats([item])
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT frequency_score, last_retrieved_at FROM vectors WHERE id = ?",
+        ("2026-05-01T09-00-00",),
+    ).fetchone()
+    conn.close()
+
+    assert row is not None
+    assert row["frequency_score"] == pytest.approx(1.0)
+    assert row["last_retrieved_at"] is not None
 
 
 # ── Schema migration safety ────────────────────────────────────────────

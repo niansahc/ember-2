@@ -95,7 +95,13 @@ class ContextRanker:
                     queryish_bonus += 0.03
                 score += queryish_bonus
 
-            # ADR-015: Tier scoring modifier.
+            # ADR-015: Tier scoring modifier. This is the base-activation
+            # half of the amendment's activation model (recency + decaying
+            # frequency, computed nightly in TieringService) reaching
+            # ranking as a stored tier. The per-query context-conditioning
+            # half is apply_project_boost() below -- ADR-007's existing
+            # +0.15 project boost, declared the context term rather than a
+            # second mechanism added alongside this one.
             # Profile bypasses tier scoring entirely. Structurally
             # unreachable today -- TieringService hard-overrides profile to
             # hot on every nightly run, the SQLite tier column defaults to
@@ -218,6 +224,14 @@ class ContextRanker:
         whose metadata.project_id matches the active project get a score
         increase of 0.15. This is meaningful enough to promote project-relevant
         memories without overwhelming general recall.
+
+        ADR-015 amendment, implementation step 4: this boost IS the
+        activation model's context-conditioning term -- the per-query half
+        of ACT-R's recency+frequency-then-context structure, applied here
+        rather than baked into the nightly tier because context is
+        necessarily per-query while tier is one nightly value per record.
+        The amendment does not add a second context-conditioning mechanism;
+        this existing boost is declared to be it.
 
         If project_id is None (no active project), items are returned unchanged.
         """

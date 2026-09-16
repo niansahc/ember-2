@@ -34,9 +34,13 @@ store.close()
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import struct
+from datetime import datetime
 from pathlib import Path
+
+from src.core.timestamps import parse_vault_timestamp
 
 
 class SqliteVectorStore:
@@ -169,14 +173,24 @@ class SqliteVectorStore:
         If memory_type is provided, only rows matching that type are
         searched.
 
-        Each result dict matches the format returned by VectorIndex.search():
+        Each result dict matches the format returned by VectorIndex.search(),
+        plus "id":
             {
+                "id":          str,   # the row's primary key -- see note below
                 "content":     str,
                 "score":       float,
                 "path":        str | None,
                 "memory_type": str | None,
                 "metadata":    dict,
             }
+
+        "id" is the actual `vectors.id` primary key (ADR-015 amendment,
+        implementation step 4). Callers previously had no way to address
+        this row again -- ContextItem.id (populated from metadata.get(
+        "chunk_id", path)) is a different identifier for a different job
+        (session-scoped hedge tracking) and does not match this column, so
+        update_retrieval_stats() calls keyed off it matched zero rows. See
+        ContextItem.store_id.
         """
         quality_filter = " AND (quality IS NULL OR quality != 'suppressed')" if self._has_quality_column else ""
 
@@ -227,6 +241,7 @@ class SqliteVectorStore:
 
             results.append(
                 {
+                    "id": row["id"],
                     "content": row["text"],
                     "score": score,
                     "path": metadata.get("file_path"),
@@ -292,8 +307,20 @@ class SqliteVectorStore:
         for col_def in [
             "ALTER TABLE vectors ADD COLUMN tier TEXT DEFAULT 'hot'",
             "ALTER TABLE vectors ADD COLUMN last_retrieved_at TEXT",
+            # retrieval_count and importance_score are legacy (ADR-015
+            # amendment, implementation step 4): retrieval_count was a
+            # monotonic counter that installed a permanent floor once a
+            # record was retrieved four times, and importance_score's
+            # heuristic-by-type ladder never contributed to heat (max
+            # contribution 0.2 was exactly the warm threshold). Neither
+            # column is dropped -- SQLite DROP COLUMN support is
+            # version-dependent and nothing reads either column anymore,
+            # so they are inert rather than removed. frequency_score
+            # replaces retrieval_count as a decayed accumulator; see
+            # update_retrieval_stats().
             "ALTER TABLE vectors ADD COLUMN retrieval_count INTEGER DEFAULT 0",
             "ALTER TABLE vectors ADD COLUMN importance_score REAL DEFAULT 0.5",
+            "ALTER TABLE vectors ADD COLUMN frequency_score REAL DEFAULT 0.0",
             "ALTER TABLE vectors ADD COLUMN heat_score REAL DEFAULT 1.0",
         ]:
             try:
@@ -323,24 +350,69 @@ class SqliteVectorStore:
 
     def update_retrieval_stats(self, record_ids: list[str]) -> None:
         """
-        Increment retrieval_count and set last_retrieved_at for selected records.
+        Decay-then-increment frequency_score and set last_retrieved_at for
+        selected records (ADR-015 amendment, implementation step 4).
 
         Called after final context packet assembly — only records that were
         actually selected for the prompt get their stats updated.
+
+        frequency_score is a decayed accumulator, not a monotonic count.
+        Each retrieval decays the existing value by the time elapsed since
+        it was last touched (same halflife as recency, so the two terms
+        share one decay curve per the ADR), then adds 1:
+
+            new_frequency = old_frequency * 2^(-elapsed_days/halflife) + 1
+
+        This can't be a single batched SQL statement (SQLite has no
+        builtin exponentiation reachable from parameterized SQL), so this
+        does a per-record read-then-write. Acceptable: record_ids here is
+        always the small, bounded set selected into one context packet,
+        never a corpus-wide scan.
+
+        A record retrieved regularly (within one halflife of the last
+        retrieval each time) approaches a bounded steady-state frequency
+        rather than growing without limit, and one that stops being
+        retrieved decays back toward 0 like recency does -- unlike the
+        old retrieval_count, which could only ever go up, permanently
+        flooring any record retrieved 4+ times at warm-or-hotter.
         """
         if not record_ids:
             return
-        from datetime import datetime
-        now = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        from src.core.config import get_tier_recency_halflife_days
+
+        halflife = get_tier_recency_halflife_days()
+        now_dt = datetime.now()
+        now_str = now_dt.strftime("%Y-%m-%dT%H-%M-%S")
+
         for record_id in record_ids:
+            row = self._conn.execute(
+                "SELECT frequency_score, last_retrieved_at, created_at "
+                "FROM vectors WHERE id = ?",
+                (record_id,),
+            ).fetchone()
+            if row is None:
+                continue
+
+            old_frequency = row["frequency_score"] or 0.0
+            reference = row["last_retrieved_at"] or row["created_at"]
+            ref_dt = parse_vault_timestamp(reference) if reference else None
+
+            if ref_dt is None or halflife <= 0:
+                decay = 0.0
+            else:
+                elapsed_days = max((now_dt.replace(tzinfo=ref_dt.tzinfo) - ref_dt).days, 0)
+                decay = math.pow(2, -elapsed_days / halflife)
+
+            new_frequency = old_frequency * decay + 1.0
+
             self._conn.execute(
                 """
                 UPDATE vectors
-                SET retrieval_count = COALESCE(retrieval_count, 0) + 1,
+                SET frequency_score = ?,
                     last_retrieved_at = ?
                 WHERE id = ?
                 """,
-                (now, record_id),
+                (new_frequency, now_str, record_id),
             )
         self._conn.commit()
 

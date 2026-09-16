@@ -112,11 +112,113 @@ class TestEverythingElseStaysLocal:
 
     def test_only_the_two_generation_sites_moved(self):
         source = _read_source("src", "llm", "adapter.py")
-        # _summarize_with_plain_prompt and _call_model_with_prompt stay on the
-        # default client: both call ollama.chat with no model= at all, so
-        # neither depends on the pinned model.
+        # _summarize_with_plain_prompt and _call_model_with_prompt stay on
+        # the default (local) client, but DO pass model=get_ember_auxiliary_model()
+        # -- omitting model= entirely was never a safe fallback, it failed a
+        # client-side validation error in 0.0s every time, independent of
+        # any config. See TestAuxiliaryModelIndependentOfGeneration below.
         assert source.count("_generation_client().chat(") == 2
         assert source.count("ollama.chat(") == 2
+
+
+class TestAuxiliaryModelIndependentOfGeneration:
+    """The bug this class guards against, found live: the UI model switcher
+    persisted a generation-host-only tag as get_ember_model()'s override.
+    Every local auxiliary caller below passed that same tag to LOCAL Ollama
+    (never _generation_client()) and 404d in milliseconds, silently --
+    identity-collapse detection, deviation detection, state extraction,
+    reflection generation, and buffer compression all stopped working at
+    once. Fix: a separate get_ember_auxiliary_model(), which these callers
+    must use instead of get_ember_model().
+    """
+
+    AUXILIARY_CALLER_FILES = (
+        ("src", "llm", "coaching_filter.py"),
+        ("src", "safety", "deviation_detector.py"),
+        ("src", "state", "state_extractor.py"),
+        ("src", "reflection", "generate_reflection.py"),
+        ("src", "reflection", "session_reflection.py"),
+        ("src", "reflection", "lodestone_synthesis.py"),
+        ("src", "llm", "intent_classifier.py"),
+        ("src", "llm", "adapter.py"),
+    )
+
+    def test_no_auxiliary_caller_uses_get_ember_model(self):
+        for parts in self.AUXILIARY_CALLER_FILES:
+            source = _read_source(*parts)
+            if parts == ("src", "llm", "adapter.py"):
+                # adapter.py legitimately keeps exactly one get_ember_model()
+                # call -- LLMAdapter.__init__'s self.model, the actual
+                # generation model. Its two LOCAL auxiliary calls
+                # (_call_model_with_prompt, _summarize_with_plain_prompt)
+                # must use get_ember_auxiliary_model() instead, checked by
+                # exact count so a stray reintroduction is still caught.
+                assert source.count("get_ember_model()") == 1, (
+                    "expected exactly the self.model generation call"
+                )
+                assert source.count("model=get_ember_auxiliary_model()") == 2
+                continue
+            assert "get_ember_model" not in source, parts
+
+    def test_every_auxiliary_caller_uses_get_ember_auxiliary_model(self):
+        for parts in self.AUXILIARY_CALLER_FILES:
+            source = _read_source(*parts)
+            assert "get_ember_auxiliary_model" in source, parts
+
+    def test_resolution_default(self, monkeypatch):
+        monkeypatch.delenv("EMBER_AUXILIARY_MODEL", raising=False)
+        assert cfg.get_ember_auxiliary_model() == "qwen3:8b"
+
+    def test_resolution_honors_env_override(self, monkeypatch):
+        monkeypatch.setenv("EMBER_AUXILIARY_MODEL", "qwen3:4b")
+        assert cfg.get_ember_auxiliary_model() == "qwen3:4b"
+
+    def test_ignores_generation_host(self, monkeypatch):
+        monkeypatch.delenv("EMBER_AUXILIARY_MODEL", raising=False)
+        monkeypatch.setenv("EMBER_GENERATION_OLLAMA_HOST", REMOTE)
+        assert cfg.get_ember_auxiliary_model() == "qwen3:8b"
+
+    def test_ignores_persisted_model_override(self, monkeypatch, tmp_path):
+        """The exact regression: a UI-persisted model_override.json must
+        not leak into the auxiliary model. get_ember_model() honors that
+        file; get_ember_auxiliary_model() must not even look at it."""
+        import json
+
+        monkeypatch.delenv("EMBER_AUXILIARY_MODEL", raising=False)
+        override_path = tmp_path / "model_override.json"
+        override_path.write_text(json.dumps({"model": "gemma4:26b-a4b-it-q4_K_M"}))
+        monkeypatch.setattr(cfg, "get_private_vault_path", lambda: tmp_path)
+
+        # get_ember_model() WOULD pick up the override (sanity check the
+        # fixture is real) ...
+        assert cfg.get_ember_model() == "gemma4:26b-a4b-it-q4_K_M"
+        # ... but get_ember_auxiliary_model() must not.
+        assert cfg.get_ember_auxiliary_model() == "qwen3:8b"
+
+    def test_coaching_filter_identity_check_uses_auxiliary_model(self, monkeypatch):
+        """Reproduces the live failure mode directly: with get_ember_model()
+        pointed at a generation-only tag, the identity-collapse check must
+        still request the auxiliary model, not that tag."""
+        from src.llm import coaching_filter
+
+        monkeypatch.setattr(cfg, "get_ember_model", lambda: "gemma4:26b-a4b-it-q4_K_M")
+        monkeypatch.setenv("EMBER_AUXILIARY_MODEL", "qwen3:8b")
+
+        seen = {}
+
+        def fake_chat(**kwargs):
+            seen.update(kwargs)
+            return {"message": {"content": "NO"}}
+
+        # coaching_filter.py does `import ollama` locally inside the
+        # function, not at module level -- it still resolves to this same
+        # module object via sys.modules, so patching it here reaches the
+        # function's call.
+        monkeypatch.setattr(ollama, "chat", fake_chat)
+
+        coaching_filter._check_semantic_identity_collapse("I'm here and I have opinions.")
+
+        assert seen.get("model") == "qwen3:8b"
 
 
 class TestLocalBaseUrlMatchesTheLibrary:

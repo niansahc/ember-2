@@ -19,7 +19,7 @@ from datetime import datetime
 
 import ollama
 
-from src.core.config import get_ember_model
+from src.core.config import get_ember_auxiliary_model
 from src.memory.resolve_memory import find_conversation_ids_for_session
 from src.memory.write_memory import write_memory
 
@@ -59,7 +59,7 @@ def generate_session_reflection(
     session_id : str | None
         Session ID to attach to the reflection record metadata.
     model : str | None
-        Model to use for generation. Defaults to get_ember_model().
+        Model to use for generation. Defaults to get_ember_auxiliary_model().
 
     Returns
     -------
@@ -70,7 +70,7 @@ def generate_session_reflection(
         logger.info("[SESSION_REFLECT] Skipped - %d turns (minimum %d)", len(buffer_turns), MIN_TURNS_FOR_REFLECTION)
         return None
 
-    model = model or get_ember_model()
+    model = model or get_ember_auxiliary_model()
 
     # Format turns into readable text
     turns_text = ""

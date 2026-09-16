@@ -387,6 +387,41 @@ def get_ember_generation_ollama_host() -> str | None:
     return os.getenv("EMBER_GENERATION_OLLAMA_HOST") or None
 
 
+def get_ember_auxiliary_model() -> str:
+    """
+    Returns the Ollama model name for LOCAL auxiliary LLM callers: intent
+    classifier (Stage 3), coaching filter (identity-collapse detection and
+    rewrite), constitutional review, buffer-compression summarization,
+    reflection generation, state extraction, and deviation detection.
+
+      EMBER_AUXILIARY_MODEL=qwen3:8b
+
+    Deliberately NOT get_ember_model(). That getter resolves a persisted
+    UI override (vault/model_override.json) before EMBER_MODEL -- and since
+    the generation host split (get_ember_generation_ollama_host), the model
+    a user picks in the UI can legitimately be a tag that only exists on the
+    remote generation host. Every caller above talks to the LOCAL ollama
+    client directly (never _generation_client()), so a model name resolved
+    from that same override 404s against local Ollama in milliseconds --
+    this happened in practice: the persisted override was a generation-only
+    Spark tag, and every one of these callers failed silently, disabling
+    identity-collapse detection, deviation detection, state extraction,
+    reflection generation, and buffer compression at once.
+
+    Also deliberately not EMBER_MODEL: get_ember_model() already treats that
+    as "the model to use for Ember" generally, and a permanent split setup
+    could reasonably set EMBER_MODEL itself to a generation-host tag to make
+    it the default chat model without touching the UI. A separate variable
+    makes "always local, independent of generation" structural rather than
+    a convention that only holds by accident of today's values.
+
+    Default "qwen3:8b" matches src/safety/grounding_check.py's existing
+    hardcoded local-safe default (the one caller in this class that was
+    already correct) and EMBER_MODEL's own .env.example default.
+    """
+    return os.getenv("EMBER_AUXILIARY_MODEL") or "qwen3:8b"
+
+
 def get_ollama_base_url() -> str:
     """
     Returns the base URL of the LOCAL Ollama instance -- the one the ollama

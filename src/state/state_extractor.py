@@ -25,7 +25,7 @@ from datetime import datetime
 
 import ollama
 
-from src.core.config import get_ember_model
+from src.core.config import get_ember_auxiliary_model
 from src.state.models import VALID_STATE_CATEGORIES, StateRecord
 
 logger = logging.getLogger("ember.state_extractor")
@@ -90,7 +90,7 @@ class StateExtractor:
     """
 
     def __init__(self, model: str | None = None) -> None:
-        self.model = model or get_ember_model()
+        self.model = model or get_ember_auxiliary_model()
 
     def extract(
         self,

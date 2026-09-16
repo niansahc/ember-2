@@ -13,6 +13,8 @@ KeyboardInterrupt, or crash, the override is cleared and the system
 reverts to the .env vault path.
 """
 
+import os
+
 import pytest
 from pathlib import Path
 
@@ -78,6 +80,145 @@ def isolate_to_test_vault(tmp_path_factory):
     yield test_vault
 
     clear_vault_path_override()
+
+
+# ---------------------------------------------------------------------------
+# Config env-var isolation contract (issue #195)
+#
+# src.core.config calls load_dotenv() unconditionally at import time, so the
+# moment any test module imports it (nearly immediate -- it's pulled in
+# transitively by almost everything), the real ember-2/.env file's values
+# land in process-global os.environ. Every config.py getter re-reads
+# os.getenv() fresh on every call (no module-level caching), so clearing the
+# polluted keys once per session, before any test body runs, would be
+# sufficient ON ITS OWN -- EXCEPT for a second mechanism, below, that a
+# clear-once fixture cannot survive.
+#
+# This has already been hit and locally patched three separate times, once
+# per variable, in three different files, before this fixture existed:
+#   - test_generation_host.py::clear_generation_host --
+#     monkeypatch.delenv("EMBER_GENERATION_OLLAMA_HOST", ...), scoped to
+#     that one file.
+#   - test_vision.py::test_vision_model_returns_none_when_unset -- patches
+#     os.getenv directly, with a comment naming load_dotenv() as the cause.
+#   - test_deviation_detector.py -- os.environ.pop("EMBER_DEVIATION_DETECTION",
+#     None) inline in the test body.
+# Three independent rediscoveries of the same root cause is the signal that
+# the fix belongs here, session-wide and autouse, not in a fourth file.
+#
+# A clear-once-at-session-start fixture is NOT enough by itself: at least
+# six test files (test_write_memory_authorship.py,
+# test_generate_reflection_provenance.py, test_third_party_flag.py,
+# test_lodestone_synthesis.py x3, and test_vault_bound_threads.py x4 --
+# the latter a DELIBERATE regression test for reload survival, see
+# TestBindingSurvivesModuleReload there, and must keep reloading) call
+# importlib.reload(src.core.config) mid-session, for reasons unrelated to
+# this issue. Every reload re-executes config.py's module body, including
+# `from dotenv import load_dotenv` followed by `load_dotenv()` -- which
+# re-populates every cleared key straight back out of the real .env file,
+# with nothing to re-clear before whichever test runs next. Confirmed
+# empirically: the five affected test files pass in isolation and fail
+# again in the full suite, because some other file's legitimate reload
+# runs first and silently undoes the session-start clear.
+#
+# The fix is to neuter dotenv.load_dotenv itself (the function `from dotenv
+# import load_dotenv` resolves against, fresh, on every reload -- patching
+# src.core.config's own bound copy would just get overwritten by the next
+# reload's fresh import), not just its output. This makes every reload's
+# load_dotenv() call a no-op for the rest of the session, so reload keeps
+# doing everything it legitimately does (rebind globals, reset ContextVars
+# for test_vault_bound_threads.py) without being able to leak .env again.
+#
+# One documented exception this fixture cannot close: plain OLLAMA_HOST (the
+# ollama package's own env var, distinct from EMBER_GENERATION_OLLAMA_HOST)
+# binds when the `ollama` package is first imported, not per-call -- see
+# src/llm/adapter.py::_client_for_host's docstring. A fixture runs after that
+# import has already happened, so it cannot retroactively unbind an
+# already-cached module-level client if OLLAMA_HOST was present in the
+# ambient shell before pytest started. Not part of today's known failures
+# (not set in this project's .env), but a real limit, not an oversight.
+#
+# A separate, out-of-scope leak channel, noted for completeness:
+# get_ember_api_key()/get_provider_api_key() check the OS keyring before
+# falling back to the env var, so clearing ANTHROPIC_API_KEY here does not
+# stop a test from reaching a real stored key via Credential Manager if one
+# exists. Different mechanism than .env/os.environ; not fixed here.
+#
+# Explicit, audited list -- not runtime-discovered -- matching
+# _RESOLVER_BINDING_MODULES' own philosophy below: the list is the audit,
+# and a variable added to it should be a deliberate act. Enumerated from
+# every os.getenv()/os.environ call site in src/. PRIVATE_VAULT_PATH is
+# deliberately excluded -- isolate_to_test_vault's override mechanism
+# already takes precedence over it; duplicating it here would be
+# redundant, not additive.
+# ---------------------------------------------------------------------------
+
+_LEAK_PRONE_ENV_VARS: tuple[str, ...] = (
+    # src/core/config.py
+    "EMBER_DEV_MODE",
+    "EMBER_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "EMBER_EMBED_MODEL",
+    "TIER_RECENCY_HALFLIFE_DAYS",
+    "TIER_ACCESS_CEILING",
+    "TIER_HOT_THRESHOLD",
+    "TIER_WARM_THRESHOLD",
+    "STATE_STALENESS_DAYS",
+    "RETRIEVAL_MIN_RAW_SCORE",
+    "INTENT_CLASSIFIER_TIMEOUT_MS",
+    "EMBER_DEBUG",
+    "EMBER_CLASSIFIER_TELEMETRY",
+    "EMBER_VISION_MODEL",
+    "EMBER_GENERATION_OLLAMA_HOST",
+    "EMBER_AUXILIARY_MODEL",
+    "OLLAMA_HOST",
+    "EMBER_MODEL",
+    "EMBER_HOST",
+    "VAULT_PATH_DEMO",
+    "VAULT_PATH_TEST",
+    # src/retrieval/vector_index.py
+    "MAX_INDEX_SIZE_MB",
+    # src/safety/deviation_detector.py
+    "EMBER_DEVIATION_DETECTION",
+    "EMBER_DEVIATION_ENTROPY_THRESHOLD",
+    "EMBER_DEVIATION_JACCARD_THRESHOLD",
+    # src/state/state_resolver.py
+    "EMBER_STATE_DEBUG",
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def isolate_config_env():
+    """Clear every leak-prone env var for the whole session AND neuter
+    dotenv.load_dotenv so no later importlib.reload(src.core.config) can
+    repopulate them from the real .env file. Restores both on session end.
+
+    A test that wants a specific value sets it itself via monkeypatch/
+    patch.dict inside that test; teardown of that per-test override lands
+    back on "absent" (this fixture's baseline), never back on the live
+    .env value -- so a future test file cannot opt out of this by
+    omission, including by reloading config.py. See the module comment
+    above for why both halves are necessary.
+    """
+    import dotenv
+
+    saved = {k: os.environ.get(k) for k in _LEAK_PRONE_ENV_VARS}
+    for k in _LEAK_PRONE_ENV_VARS:
+        os.environ.pop(k, None)
+
+    real_load_dotenv = dotenv.load_dotenv
+    dotenv.load_dotenv = lambda *args, **kwargs: False
+
+    yield
+
+    dotenv.load_dotenv = real_load_dotenv
+
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
 
 
 # ---------------------------------------------------------------------------

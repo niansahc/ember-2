@@ -24,28 +24,26 @@ from src.context.formatter import ContextFormatter
 # get_ember_vision_model()
 # ---------------------------------------------------------------------------
 
-def test_vision_model_returns_value_when_set():
-    with patch.dict("os.environ", {"EMBER_VISION_MODEL": "llama3.2-vision:11b"}):
-        from importlib import reload
-        import src.core.config as cfg
-        reload(cfg)
-        assert cfg.get_ember_vision_model() == "llama3.2-vision:11b"
+def test_vision_model_returns_value_when_set(monkeypatch):
+    monkeypatch.setenv("EMBER_VISION_MODEL", "llama3.2-vision:11b")
+    from src.core.config import get_ember_vision_model
+    assert get_ember_vision_model() == "llama3.2-vision:11b"
 
 
-def test_vision_model_returns_none_when_unset():
-    # Patch os.getenv directly — reloading config re-runs load_dotenv() which
-    # would pick up EMBER_VISION_MODEL from the .env file on disk.
-    with patch("src.core.config.os.getenv", return_value=None):
-        from src.core.config import get_ember_vision_model
-        assert get_ember_vision_model() is None
+def test_vision_model_returns_none_when_unset(monkeypatch):
+    # EMBER_VISION_MODEL is already absent from os.environ for the whole
+    # session (conftest.py::isolate_config_env, issue #195) -- no reload,
+    # no getenv patch needed. get_ember_vision_model() reads os.getenv()
+    # fresh on every call; it was never cached at import.
+    monkeypatch.delenv("EMBER_VISION_MODEL", raising=False)
+    from src.core.config import get_ember_vision_model
+    assert get_ember_vision_model() is None
 
 
-def test_vision_model_returns_none_when_empty_string():
-    with patch.dict("os.environ", {"EMBER_VISION_MODEL": ""}):
-        from importlib import reload
-        import src.core.config as cfg
-        reload(cfg)
-        assert cfg.get_ember_vision_model() is None
+def test_vision_model_returns_none_when_empty_string(monkeypatch):
+    monkeypatch.setenv("EMBER_VISION_MODEL", "")
+    from src.core.config import get_ember_vision_model
+    assert get_ember_vision_model() is None
 
 
 # ---------------------------------------------------------------------------

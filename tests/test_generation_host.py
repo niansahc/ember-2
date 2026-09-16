@@ -11,8 +11,6 @@ box confirmed the consequence: generation worked, and the turn still died with
 it. These tests pin the split, and pin the unset default to today's behaviour.
 """
 
-import os
-
 import ollama
 import pytest
 
@@ -21,9 +19,14 @@ import src.llm.adapter as adapter
 
 
 @pytest.fixture(autouse=True)
-def clear_generation_host(monkeypatch):
-    """Every test states its own host explicitly, and none leaks."""
-    monkeypatch.delenv("EMBER_GENERATION_OLLAMA_HOST", raising=False)
+def clear_generation_host():
+    """Every test states its own host explicitly, and none leaks.
+
+    EMBER_GENERATION_OLLAMA_HOST itself is cleared session-wide by
+    conftest.py::isolate_config_env (issue #195) -- this fixture now
+    only owns _client_for_host's lru_cache, which that session fixture
+    doesn't and shouldn't know about.
+    """
     adapter._client_for_host.cache_clear()
     yield
     adapter._client_for_host.cache_clear()

@@ -30,9 +30,10 @@ from src.safety.deviation_detector import (
 
 class TestIsEnabled:
     def test_default_is_false(self):
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ.pop("EMBER_DEVIATION_DETECTION", None)
-            assert is_enabled() is False
+        # EMBER_DEVIATION_DETECTION is already absent from os.environ for
+        # the whole session (conftest.py::isolate_config_env, issue #195);
+        # no env manipulation needed here at all.
+        assert is_enabled() is False
 
     def test_true_when_set(self):
         with patch.dict(os.environ, {"EMBER_DEVIATION_DETECTION": "true"}):

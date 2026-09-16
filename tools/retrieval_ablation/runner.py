@@ -12,12 +12,19 @@ that structurally impossible rather than merely unlikely.
 Snapshot and restore of memory.db and ingested.db around every arm is
 mandatory. `ContextService.build_context` calls `_update_retrieval_stats`
 unconditionally on the read path, inside a bare `except`, and that writes
-`last_retrieved_at` and `retrieval_count` -- the inputs the tiering job reads.
-An arm can therefore promote the records it surfaced and change the next arm's
-treatment assignment. Fixture ids do not match any row today so the writes are
-no-ops, but the guarantee must not rest on that coincidence. Note also that
-`_recency_score` parses only the DATE, so same-day ordering does not separate
-arms: restoring the files is the only thing that does.
+`last_retrieved_at` and `frequency_score` (ADR-015 amendment step 4 --
+`retrieval_count` is legacy and no longer written) -- the inputs the
+tiering job reads. An arm can therefore promote the records it surfaced
+and change the next arm's treatment assignment. Fixture ids do not match
+any row in this ablation's synthetic corpus, so the writes are still
+no-ops here, but the guarantee must not rest on that coincidence --
+ContextItem.store_id now carries the real vectors primary key (the
+identity mismatch that made this a coincidence rather than a structural
+fact is itself fixed), so a fixture id that DID collide with a real row
+would now actually be written. Note also that `_recency_score` parses
+epoch/ISO/hyphenated timestamps via the shared helper now, not only a
+date prefix: restoring the files is still the only thing that separates
+arms, since same-day ordering alone no longer fails to parse.
 
 Vault resolution is fail-closed, copied from .claude/hooks/post_commit_eval.py.
 There is no real-vault arm and no fallback path to one.

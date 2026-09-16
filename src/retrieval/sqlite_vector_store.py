@@ -81,6 +81,7 @@ class SqliteVectorStore:
         self._create_table()
         self._migrate_tiering_columns()
         self._migrate_authorship_column()
+        self._migrate_quality_column()
         self._has_quality_column = self._check_column_exists("quality")
         self._has_authorship_column = self._check_column_exists("authorship")
 
@@ -344,6 +345,30 @@ class SqliteVectorStore:
             self._conn.execute(
                 "ALTER TABLE vectors ADD COLUMN authorship TEXT DEFAULT 'unknown'"
             )
+        except _sqlite3.OperationalError:
+            pass  # column already exists
+        self._conn.commit()
+
+    def _migrate_quality_column(self) -> None:
+        """Add the quality column for suppression filtering.
+
+        Previously added outside committed code (ad hoc, ingested.db
+        only) -- the reclassify_prior_substrate_conversation.py migration
+        (ADR-015 amendment step 5) is the first committed writer of
+        quality-flagged rows into memory.db, and those rows are now a
+        permanent part of that database. Self-migrating here, matching
+        _migrate_tiering_columns/_migrate_authorship_column, means any
+        future SqliteVectorStore(memory_db) -- a rebuilt vault, a test
+        fixture, a different machine -- gets the column the same way it
+        already gets tier/authorship, instead of depending on a one-off
+        script having run first.
+
+        Values: 'ok' (default-equivalent), 'suppressed'. NULL (unset) is
+        treated the same as 'ok' by search()'s quality_filter.
+        """
+        import sqlite3 as _sqlite3
+        try:
+            self._conn.execute("ALTER TABLE vectors ADD COLUMN quality TEXT")
         except _sqlite3.OperationalError:
             pass  # column already exists
         self._conn.commit()

@@ -10,7 +10,6 @@ Covers:
 - needs_compression() threshold logic
 - pop_oldest_half() — correct split, correct remainder
 - inject_summary_turn() — prepended, structure preserved
-- set_context_window() — known and unknown models
 - format_for_prompt() — empty and populated
 - end-to-end compression cycle (pop → inject → buffer state)
 """
@@ -19,7 +18,6 @@ import pytest
 
 from src.context.conversation_buffer import (
     ConversationBuffer,
-    MODEL_CONTEXT_WINDOWS,
     COMPRESSION_THRESHOLD,
     _estimate_tokens,
 )
@@ -242,41 +240,6 @@ def test_inject_summary_turn_structure():
     assert "user" in turn
     assert "assistant" in turn
     assert turn["assistant"] == "key facts here"
-
-
-# ---------------------------------------------------------------------------
-# set_context_window
-# ---------------------------------------------------------------------------
-
-def test_set_context_window_known_model():
-    buf = ConversationBuffer(context_window=8192)
-    buf.set_context_window("qwen2.5:14b")
-    assert buf.context_window == MODEL_CONTEXT_WINDOWS["qwen2.5:14b"]
-
-
-def test_set_context_window_all_known_models():
-    for model, window in MODEL_CONTEXT_WINDOWS.items():
-        buf = ConversationBuffer()
-        buf.set_context_window(model)
-        assert buf.context_window == window
-
-
-def test_set_context_window_unknown_model_unchanged():
-    buf = ConversationBuffer(context_window=8192)
-    buf.set_context_window("some-unknown-model:99b")
-    assert buf.context_window == 8192
-
-
-def test_set_context_window_phi3_mini_resolves_4096():
-    buf = ConversationBuffer()
-    buf.set_context_window("phi3:mini")
-    assert buf.context_window == 4096
-
-
-def test_set_context_window_qwen25_14b_resolves_32768():
-    buf = ConversationBuffer()
-    buf.set_context_window("qwen2.5:14b")
-    assert buf.context_window == 32768
 
 
 # ---------------------------------------------------------------------------

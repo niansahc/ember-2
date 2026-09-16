@@ -33,6 +33,17 @@ counts and structural metadata to stdout. No literal query or
 response text is ever written to the output. Vault privacy rule
 preserved.
 
+Accepted limitation (#151, closed): review_logger.py no longer writes
+user_message/draft_response text into new log entries at all -- only
+lengths, SHA-256 hashes, and session_id. .get("user_message")/
+.get("draft_response") below degrade to "" on those entries (no
+match, no crash), so this script's keyword-substring analysis is
+permanently bounded to logs written before that fix (the newest is
+2026-05-11). A future keyword-tuning question needs an explicit,
+human-approved, ephemeral capture -- not a permanent log -- the same
+pattern already used elsewhere in this project for vault-sensitive
+diagnosis.
+
 Usage:
     python tools/eval/policy_trigger_audit.py
     python tools/eval/policy_trigger_audit.py --days 7

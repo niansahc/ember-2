@@ -23,6 +23,16 @@ def load_logs(limit: int = 10):
 
 
 def print_logs(limit: int = 10):
+    """Print governance summaries for the most recent safety review logs.
+
+    No response or message text is ever printed -- logs written after
+    the #151 fix carry only lengths/hashes/session_id, never content
+    (see src/safety/review_logger.py). Older logs may still carry
+    user_message/draft_response/final_response on disk; this tool does
+    not read or display those fields even when present, so it can't
+    become a second place that reprints text the log itself should not
+    hold.
+    """
     logs = load_logs(limit)
 
     if not logs:
@@ -53,7 +63,7 @@ def print_logs(limit: int = 10):
 
         print("=" * 60)
         print(f"Time: {log.get('timestamp', 'unknown')}")
-        print(f"User: {log.get('user_message', '')}")
+        print(f"Session: {log.get('session_id', 'unknown')}")
         print(f"Triggered: {trigger.get('triggered', False)}")
         print(f"Signals: {trigger.get('triggered_by', [])}")
         print(f"Review Outcome: {review.get('outcome', 'unknown')}")
@@ -61,13 +71,12 @@ def print_logs(limit: int = 10):
 
         if critique:
             print(f"Severity: {critique.get('severity', 'none')}")
-            print(f"Issues: {critique.get('issues_found', [])}")
+            print(f"Triggered rules: {critique.get('triggered_rules', [])}")
+            print(f"Issue count: {critique.get('issue_count', 0)}")
 
-        print("\nDraft Response:")
-        print(log.get("draft_response", ""))
-
-        print("\nFinal Response:")
-        print(log.get("final_response", ""))
+        print(f"User message length: {log.get('user_message_length', 'n/a')}")
+        print(f"Draft response length: {log.get('draft_response_length', 'n/a')}")
+        print(f"Final response length: {log.get('final_response_length', 'n/a')}")
         print()
 
 

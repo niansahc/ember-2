@@ -456,6 +456,7 @@ class LLMAdapter:
                 draft_response=draft_response,
                 trigger_result=trigger_result,
                 review_result=review_result,
+                session_id=session_id,
             )
 
             _log_safety_review_path(log_path)
@@ -643,6 +644,7 @@ class LLMAdapter:
                 draft_response=full_response,
                 trigger_result=trigger_result,
                 review_result=review_result,
+                session_id=session_id,
             )
 
             if review_result.outcome == "revise" and review_result.reviewed_text:

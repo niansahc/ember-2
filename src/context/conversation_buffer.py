@@ -10,8 +10,7 @@ logger = logging.getLogger("ember.conversation_buffer")
 _HEDGED_RECORD_IDS_MAX = 50
 
 # Approximate token counts for common Ollama models.
-# Used to update context_window when the active model changes via POST /model,
-# and by LLMAdapter._get_num_ctx to size the Ollama context budget.
+# Used by LLMAdapter._get_num_ctx to size the Ollama context budget.
 #
 # Lookup is a strict exact-tag dict get in both readers, with no normalization,
 # so keys must be the exact installed tag. A quantized pull such as
@@ -81,10 +80,9 @@ TOPIC_DECLINE_MARKERS: tuple[str, ...] = (
 
 
 class ConversationBuffer:
-    def __init__(self, max_turns: int = 20, context_window: int = 8192) -> None:
+    def __init__(self, max_turns: int = 20) -> None:
         self.buffer: list[dict] = []
         self.max_turns = max_turns
-        self.context_window = context_window
         # Session-sticky flags. Set when the user objects to a behavior.
         # Persist for the lifetime of this buffer (= one API process).
         self.question_suppressed: bool = False
@@ -186,11 +184,6 @@ class ConversationBuffer:
             "assistant": summary,
             "is_summary": True,
         })
-
-    def set_context_window(self, model: str) -> None:
-        """Update the context window size when the active model changes."""
-        if model in MODEL_CONTEXT_WINDOWS:
-            self.context_window = MODEL_CONTEXT_WINDOWS[model]
 
     def mark_hedge_emitted(self, record_ids: list[str]) -> None:
         """Mark these record IDs as having been hedged this session.

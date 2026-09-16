@@ -132,13 +132,16 @@ class TestGetModelReportsThePin:
             assert key in data
 
 
-def test_post_model_no_longer_touches_context_window(client):
-    """set_context_window wrote state nothing in src/ reads, and no-opped
-    silently on an unlisted model, carrying the previous candidate's value
-    across a sweep. See issue #155.
+def test_post_model_does_not_touch_the_conversation_buffer(client):
+    """ConversationBuffer no longer tracks a context window at all (issue
+    #155 removed set_context_window() and the attribute it wrote, since
+    the real budget was always LLMAdapter._get_num_ctx). This asserts the
+    buffer's observable state is untouched by a model swap.
     """
     _set_reference()
     buffer = llm_adapter.prompt_builder.conversation_buffer
-    with patch.object(buffer, "set_context_window") as mock_scw:
-        client.post("/model", json={"model": CANDIDATE, "persist": False})
-    mock_scw.assert_not_called()
+    before = list(buffer.buffer)
+
+    client.post("/model", json={"model": CANDIDATE, "persist": False})
+
+    assert buffer.buffer == before

@@ -124,22 +124,11 @@ def _ensure_memory_db_columns(memory_db: Path) -> None:
     """Guarantee memory.db has every column this migration writes.
 
     tier/last_retrieved_at/retrieval_count/importance_score/heat_score/
-    frequency_score/authorship are created by SqliteVectorStore's own
-    migrations -- opening it once is enough. `quality` is not managed by
-    that class anywhere in the codebase (it's added ad hoc by suppression
-    tooling), so it's ensured here explicitly.
+    frequency_score/authorship/quality are all created by
+    SqliteVectorStore's own migrations now -- opening it once is enough.
     """
     store = SqliteVectorStore(memory_db)
     store.close()
-
-    conn = sqlite3.connect(str(memory_db))
-    try:
-        conn.execute("ALTER TABLE vectors ADD COLUMN quality TEXT")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass  # column already exists
-    finally:
-        conn.close()
 
 
 def _row_has_column(conn: sqlite3.Connection, column: str) -> bool:

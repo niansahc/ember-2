@@ -1666,7 +1666,7 @@ Infrastructure:
 
 **v0.13.0 — Memory Tiering + Embedding Upgrade**
 - nomic-embed-text embedding upgrade via Ollama — ships first; required before tiering; full reindex pass; run retrieval eval before and after
-- Hot/warm/cold memory tiering by recency and relevance (ADR-015) — tier assigned during reindex; nightly TieringService; cold excluded by default, accessible via include_cold flag; append-only contract unchanged
+- Hot/warm/cold memory tiering by recency and relevance (ADR-015) — tier assigned during reindex; nightly TieringService; append-only contract unchanged. Amended (v0.19.0): cold is a reduced retrieval weight, not exclusion — the originally planned `include_cold` fallback-search flag was never built and is retired by the amendment, not implemented.
 - Index migration for remaining JSON indexes to SQLite — conversation, profile, reflection, journal; aligned with reindex to avoid double-scan
 - Monthly/thematic reflection
 - Generic CSV/JSON import — JSON importer is the delta (CSV already exists)

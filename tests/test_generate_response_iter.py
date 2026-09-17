@@ -155,6 +155,44 @@ def test_generate_response_wrapper_drains_iterator_returns_final_string() -> Non
     assert result == "reviewed text"
 
 
+def test_generate_response_threads_session_id_to_buffer_reset() -> None:
+    """Regression: generate_response() (non-streaming) had no session_id
+    parameter, so it always called generate_response_iter() with
+    session_id=None. add_turn() only resets the buffer on a non-None
+    session_id change (ConversationBuffer.add_turn), so two back-to-back
+    sessions on the non-streaming path never triggered the cross-session
+    reset and turns silently accumulated across sessions.
+
+    Uses a real ConversationBuffer (not a mock) so the actual reset
+    logic in conversation_buffer.py runs and is what's being verified."""
+    from src.context.conversation_buffer import ConversationBuffer
+
+    adapter = _bare_adapter()
+    real_buffer = ConversationBuffer()
+    adapter.prompt_builder.conversation_buffer = real_buffer
+    adapter.policy_service.evaluate_trigger.return_value = SafetyTriggerResult(
+        triggered=False
+    )
+
+    adapter.generate_response(
+        ContextPacket(user_message="session one message"),
+        session_id="session-1",
+    )
+    assert real_buffer.current_session_id == "session-1"
+    assert len(real_buffer.buffer) == 1
+
+    adapter.generate_response(
+        ContextPacket(user_message="session two message"),
+        session_id="session-2",
+    )
+
+    # The session change must have reset the buffer -- only session
+    # two's turn should be present, not both.
+    assert real_buffer.current_session_id == "session-2"
+    assert len(real_buffer.buffer) == 1
+    assert real_buffer.buffer[0]["user"] == "session two message"
+
+
 def test_status_signal_is_frozen_dataclass() -> None:
     """StatusSignal must be hashable and immutable -- it's a value
     object, not a mutable record. Equality is by name."""

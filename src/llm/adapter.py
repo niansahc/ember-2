@@ -274,6 +274,7 @@ class LLMAdapter:
         vision_description: str | None = None,
         ask_first_active: bool = False,
         intent_class: str | None = None,
+        session_id: str | None = None,
         vault_path=None,
         skip_vault_write: bool = False,
     ) -> str:
@@ -295,6 +296,7 @@ class LLMAdapter:
             vision_description=vision_description,
             ask_first_active=ask_first_active,
             intent_class=intent_class,
+            session_id=session_id,
             vault_path=vault_path,
             skip_vault_write=skip_vault_write,
         ):

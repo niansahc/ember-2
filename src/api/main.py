@@ -1645,7 +1645,12 @@ def reflect_monthly_endpoint(request: Request):
 
 @app.get("/debug-context")
 def debug_context_endpoint(message: str):
-    context_packet = context_service.build_context(message)
+    # read_only=True: this endpoint exists to inspect what retrieval would
+    # deliver, so it must not also count as a delivery. Without it, every
+    # investigative call wrote last_retrieved_at and frequency_score to the
+    # records it reported on, which under ADR-015 promotes them to hot and
+    # feeds the tier multiplier they are being inspected for (issue #206).
+    context_packet = context_service.build_context(message, read_only=True)
     return clean_context_packet(asdict(context_packet))
 
 

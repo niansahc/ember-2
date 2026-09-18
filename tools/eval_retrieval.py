@@ -159,7 +159,11 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
     lines.append("")
 
     for case in EVAL_CASES:
-        packet = context_service.build_context(case.query)
+        # read_only: an eval that records a delivery perturbs the tier and
+        # heat it is measuring. This runs on every commit touching
+        # src/context/ via the post-commit hook, so without the flag each
+        # run biased the next one (issue #206).
+        packet = context_service.build_context(case.query, read_only=True)
         packet_dict = clean_context_packet(asdict(packet))
 
         # Get top memory result for scoring
@@ -384,7 +388,7 @@ def run_integrity_eval() -> tuple[list[dict], str]:
             return [], [], mem, ref, None
 
         with patch.object(context_service.retriever, "retrieve", side_effect=_mock_retrieve):
-            packet = context_service.build_context(case.query)
+            packet = context_service.build_context(case.query, read_only=True)
 
         # Check if tagged record content appears in the final packet
         all_content = [item.content for item in packet.memory_items + packet.reflection_items]

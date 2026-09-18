@@ -122,7 +122,24 @@ class ContextService:
         image_data: list[str] | None = None,
         project_id: str | None = None,
         skip_web_search: bool = False,
+        read_only: bool = False,
     ) -> ContextPacket:
+        """Assemble the context packet for one turn.
+
+        read_only suppresses the retrieval-stats write at the end of
+        assembly, and nothing else -- the packet returned is identical
+        either way. It exists because delivery is the only input to a
+        record's heat under ADR-015's activation model, so any caller that
+        builds a packet in order to LOOK at retrieval rather than to answer
+        a turn is, by default, changing the thing it is measuring. An
+        investigative read that promotes 6 records to hot is not a
+        measurement; it is an intervention with a report attached.
+
+        Callers that answer a real user turn must leave this False. The
+        activation model depends on genuine deliveries being recorded, and
+        a chat path that silently stopped writing would look identical to
+        this fix while quietly disabling tiering's only upward path.
+        """
         policy = classify_query(user_message)
 
         web_items: list[dict] = []
@@ -245,7 +262,17 @@ class ContextService:
         # Only records that made it into the final context packet get
         # their frequency_score decayed-then-incremented and
         # last_retrieved_at set.
-        self._update_retrieval_stats(selected_memory + selected_reflections)
+        #
+        # Skipped entirely under read_only. This is the sole write in
+        # build_context, so gating it here is what makes the flag's name
+        # true rather than aspirational (issue #206).
+        if not read_only:
+            self._update_retrieval_stats(selected_memory + selected_reflections)
+        elif self.debug:
+            logger.info(
+                "[CONTEXT] read_only: skipped retrieval-stats write for %d record(s)",
+                len(selected_memory) + len(selected_reflections),
+            )
 
         packet = self.formatter.format(
             user_message=user_message,

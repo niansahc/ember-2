@@ -51,7 +51,9 @@ def print_items(label: str, items: list) -> None:
 
 def inspect_query(user_message: str) -> int:
     service = ContextService()
-    packet = service.build_context(user_message)
+    # read_only: a diagnostic that inspects retrieval must not also count as
+    # a delivery (issue #206).
+    packet = service.build_context(user_message, read_only=True)
 
     print("\n" + "=" * 80)
     print(f"QUERY: {user_message}")

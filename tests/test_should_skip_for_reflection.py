@@ -22,9 +22,10 @@ Covers every filter branch:
 - def statements
 
 Includes regression tests for the five additions made in v0.7.x:
-- "shorter messages please"
-- "shorter responses"
-- "that's a long response"
+- response-style feedback, in both word orders (adjective-then-noun and
+  noun-then-complaint). Originally three verbatim user utterances in
+  skip_markers; now pattern-matched by src/context/low_value.py so the
+  behaviour generalises and no vault text sits in the codebase.
 - Unicode box-drawing characters (├──, │)
 - short https:// URLs
 - multi-turn exchanges starting with "user:"
@@ -86,21 +87,34 @@ def test_pipeline_word_does_not_trigger_line_marker():
 # skip_markers — formatting complaints (regression: added in v0.7.x)
 # ---------------------------------------------------------------------------
 
-def test_shorter_messages_please_is_skipped():
-    assert _should_skip_for_reflection("user: shorter messages please. i've reminded you 5 times in this conversation.") is True
+def test_style_feedback_adjective_before_noun_is_skipped():
+    assert _should_skip_for_reflection("user: shorter replies please. these blocks are hard to read.") is True
 
 
-def test_shorter_responses_is_skipped():
-    assert _should_skip_for_reflection("user: shorter responses. i've asked for concise answers and long blocks are hard to read.") is True
+def test_style_feedback_with_intervening_words_is_skipped():
+    assert _should_skip_for_reflection("user: give me shorter bullet-point answers from now on.") is True
 
 
-def test_thats_a_long_response_is_skipped():
-    assert _should_skip_for_reflection("user: that's a long response again. please respond with bullet points first.") is True
+def test_style_feedback_noun_before_complaint_is_skipped():
+    assert _should_skip_for_reflection("user: your answers are too long. use bullet points instead.") is True
 
 
-def test_shorter_messages_mid_sentence_is_skipped():
-    # marker match is substring — catches it anywhere in the text
-    assert _should_skip_for_reflection("i keep saying shorter messages please but it never sticks.") is True
+def test_style_feedback_mid_sentence_is_skipped():
+    # Pattern match, not a fixed phrase — it fires anywhere in the text.
+    assert _should_skip_for_reflection("i keep asking for briefer answers and it never sticks.") is True
+
+
+def test_substantive_text_mentioning_a_long_response_is_not_skipped():
+    # The length bound is what separates commentary about the conversation
+    # from content that merely mentions it. A substantive record carries
+    # enough surrounding text to exceed MAX_META_LENGTH.
+    text = (
+        "i spent the afternoon drafting a long response to the architecture "
+        "review, working through each of the reviewer's objections in turn, "
+        "and by the end i had changed my mind about the storage layer and "
+        "decided to rewrite the proposal from scratch tomorrow morning."
+    )
+    assert _should_skip_for_reflection(text) is False
 
 
 # ---------------------------------------------------------------------------

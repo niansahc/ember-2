@@ -95,6 +95,7 @@ def _quarantine_ai_docs(
             safe.append(item)
 
     return safe, quarantined
+from src.context.low_value import is_low_value_content
 from src.context.models import ContextPacket
 from src.context.policies import classify_query
 from src.context.ranker import ContextRanker
@@ -413,22 +414,14 @@ class ContextService:
         if len(content) < 40:
             return True
 
-        low_value_exact = (
-            "user: yes, tell me all the things you see",
-            "user: what have i been working on today?",
-        )
-        if content in low_value_exact:
-            return True
-
-        low_value_markers = (
-            "as an ai, i don't have personal experiences or memories",
-            "tell me all the things you see",
-            "do you think i am doing okay or struggling",
-            "shorter responses",
-            "shorter messages please",
-            "that's a long response again",
-        )
-        if any(marker in content for marker in low_value_markers):
+        # Previously an exact-match list plus a marker list, both built from
+        # verbatim user utterances copied out of one install's conversation
+        # history -- a Vault Privacy Rule violation, and dead weight on every
+        # other install since an exact-match list cannot fire on sentences
+        # nobody there has written. Replaced by patterns over the same three
+        # classes: model boilerplate, response-style feedback, and the user's
+        # own meta-prompts to the assistant. See src/context/low_value.py.
+        if is_low_value_content(content):
             return True
 
         if metadata.get("content_kind") == "question" and len(content) < 120:

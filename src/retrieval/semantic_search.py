@@ -297,8 +297,9 @@ def lexical_relevance_bonus(
     # appears verbatim in the record content adds _ENTITY_NAME_BOOST to the
     # record's score, capped at _ENTITY_NAME_CAP across all entity matches.
     # Strong enough to overcome typical embedding-cosine variance (0.3-0.5)
-    # so the record about "Balor" surfaces above semantically similar but
-    # name-mismatched records about other entities.
+    # so that a record naming the entity the query names surfaces above
+    # semantically similar records about a different entity of the same kind,
+    # which dense similarity alone does not distinguish.
     if raw_query:
         entity_names = _extract_entity_names(raw_query)
         if entity_names:

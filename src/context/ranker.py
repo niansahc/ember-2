@@ -353,11 +353,16 @@ class ContextRanker:
         if token_count < 5:
             score -= 0.05
 
-        # -0.18 low-value prompts: specific phrases that surfaced repeatedly
-        # in retrieval during testing and added no useful context. These are
-        # meta-questions that the user asked Ember, not substantive content.
-        if self._looks_like_low_value_prompt(content):
-            score -= 0.18
+        # A -0.18 low-value-prompt penalty used to sit here, triggered by an
+        # exact-match list of three verbatim user utterances copied from one
+        # install (CLAUDE.md Vault Privacy Rule). It is removed rather than
+        # rewritten as a pattern: the class it targeted -- the user's own
+        # meta-prompts retrieved back as evidence -- is handled by
+        # ContextService._is_low_value_memory, which drops those records
+        # outright, so a score penalty on top of a hard filter was redundant
+        # for two of the three literals. The third was an ordinary question
+        # about the user's own work, which is not low value; penalising it
+        # was overfitting to one corpus. See src/context/low_value.py.
 
         score += self._recency_boost(item.timestamp)
 
@@ -550,14 +555,6 @@ class ContextRanker:
         if age_days <= 365:
             return 0.02
         return -0.03
-
-    def _looks_like_low_value_prompt(self, content: str) -> bool:
-        markers = (
-            "what have i been working on today?",
-            "yes, tell me all the things you see",
-            "do you think i am doing okay or struggling?",
-        )
-        return any(marker in content for marker in markers)
 
     def _looks_like_experience(self, content: str) -> bool:
         markers = (

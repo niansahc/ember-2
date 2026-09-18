@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 
+from src.context.low_value import is_style_feedback
 from src.memory.service import MemoryService
 
 
@@ -256,9 +257,9 @@ def _reflection_priority_score(memory: dict, normalized_text: str) -> float:
     elif content_kind == "answer":
         score -= 0.1
 
-    # Only grant experience bonus for substantive texts — short repetitive
-    # instructions like "Shorter messages please. I've reminded you 5 times"
-    # match "i've" but are not meaningful experiences.
+    # Only grant experience bonus for substantive texts. Short repetitive
+    # instructions to the assistant match a first-person contraction such as
+    # "i've" without being meaningful experiences, so length gates the bonus.
     if len(normalized_text) > 100 and _looks_like_concrete_experience(normalized_text):
         score += 0.4
 
@@ -300,9 +301,6 @@ def _should_skip_for_reflection(text: str) -> bool:
         "started server process",
         "started reloader process",
         "waiting for application startup",
-        "shorter messages please",
-        "shorter responses",
-        "that's a long response",
         # Assistant filler that leaked into reflections
         "there is no earlier conversation",
         "no conversation summary",
@@ -318,6 +316,14 @@ def _should_skip_for_reflection(text: str) -> bool:
     )
 
     if any(marker in text for marker in skip_markers):
+        return True
+
+    # Response-style feedback ("shorter replies", "that answer was too long")
+    # is commentary on the conversation, not material about the user, so it
+    # is never meaningful reflection input. This used to be three verbatim
+    # user utterances in skip_markers above, which both violated the Vault
+    # Privacy Rule and could not fire on any other install.
+    if is_style_feedback(text):
         return True
 
     # File trees and directory listings use Unicode box-drawing characters.

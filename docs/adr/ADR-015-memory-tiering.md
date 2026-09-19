@@ -317,6 +317,44 @@ An explicit archive flag remains available as a separate field if true
 exclusion is ever wanted. It is not part of this amendment, and it would be a
 different field from the tier, because a weight and a gate are different jobs.
 
+**Correction (2026-09-19): the headroom this section promises does not exist.**
+
+`COLD_MULTIPLIER = 0.3` was chosen with a stated rationale, recorded at
+`src/context/ranker.py:22-40`: 0.3 is a clear third band below warm "while
+still leaving enough headroom that a highly relevant cold record can outrank a
+weakly relevant hot one when that is genuinely the better answer." That claim
+is false as shipped, and the reason is the mechanism the correction above
+names.
+
+`_temporal_decay_weight` multiplies again, after tier. A conversation record
+older than thirty days sits in `_EPHEMERAL_DECAY`'s floor of 0.10
+(`ranker.py:405-412`), so an aged cold conversation record carries
+`0.3 x 0.10 = 0.03` against `1.0` for a fresh hot one. Cosine is bounded by
+1.0 and the additive pile independently favours fresh records
+(`+0.18` recency inside seven days at `ranker.py:362`, against `-0.03` past a
+year), so **no aged cold conversation record can outrank a fresh one at any
+cosine value.** This is arithmetic, not a measurement, and it does not depend
+on the ablation corpus, the relevance labels, or any probe.
+
+The ordering defect this section already identifies is also unfixed. The
+section correctly observes that the zero "is applied in `apply_policy`, and the
+later additive stages restore score afterwards, so cold has been neither an
+exclusion nor a weight but an erasure of the similarity signal with the
+metadata signal left intact." Implementation step 3 replaced the zero with 0.3
+and did not change the order. Tier still multiplies at `service.py:181`; the
+ranker's additive pile still lands at `service.py:196`, at full magnitude, on
+an already-discounted similarity signal. Cold discounts the query-dependent
+half of the score and leaves the query-independent half alone, which is the
+behaviour this section set out to end.
+
+Neither correction reopens the cold-as-weight decision. Ordering within cold
+is preserved and the tie-band result that motivated the change is real: the
+re-run on 2026-09-19 measures `A0_FULL` `ranked_unresolved` at 0.0061 against
+0.1780 before the change, a 29x collapse, which is this section working as
+intended. What is wrong is the claim about cold-versus-hot headroom, and the
+assumption that a single multiplier placed before the additive stages behaves
+as a weight.
+
 ### The importance ladder is flattened
 
 `IMPORTANCE_BY_TYPE` contributes nothing to heat. Every job it was doing is now
@@ -325,7 +363,24 @@ warm line, reflection longevity is now bounded by sources rather than by a type
 constant, and the reclassification below removes the low end of the ladder.
 
 Type may still affect ranking through other mechanisms. It no longer affects
-decay.
+*tier* decay.
+
+**Correction (2026-09-19).** As originally written this paragraph said type
+"no longer affects decay", full stop. That is false of the shipped system and
+was false when it was written. `ContextRanker._temporal_decay_weight`
+(`src/context/ranker.py:396-452`) is a second, type-keyed age mechanism with
+four separate curves -- `_NO_DECAY_TYPES` at a flat 1.0, `_REFLECTION_DECAY`,
+`_EPHEMERAL_DECAY`, and `_DEFAULT_DECAY` -- and it is applied multiplicatively
+at `ranker.py:262`, after tier. Flattening `IMPORTANCE_BY_TYPE` removed type
+from the *tier* schedule only. It left type-keyed decay untouched, and in doing
+so made `_temporal_decay_weight` the sole remaining place where memory type
+affects how a record ages.
+
+That mechanism has no ADR. It shipped in `1c64f4c` (2026-04-11), nine days
+after this ADR was accepted, and this document references it exactly once --
+at the start of "Timestamps and prior-substrate conversation" below, while
+describing a contradiction it creates, never as something this ADR governs.
+Two independent per-type age curves now exist and this ADR owns one of them.
 
 ### Timestamps and prior-substrate conversation
 
@@ -359,6 +414,33 @@ while `IMPORTANCE_BY_TYPE` gives it the lowest importance in the system and
 decays it fastest. One layer said never decay this; the other said decay this
 first. Flattening the ladder above removes that disagreement at the source, and
 reclassification removes the population that straddled both readings.
+
+**Correction (2026-09-19): state the consequence of that reclassification.**
+
+It resolves the contradiction by choosing "decay this first", and the
+paragraph above does not say so or quantify it. Reclassifying the
+prior-substrate corpus from `ingested` to `conversation` moves roughly 16,900
+records **out of `_NO_DECAY_TYPES`** -- where `_temporal_decay_weight` returned
+a flat 1.0 -- and **into `_EPHEMERAL_TYPES`**, whose floor is 0.10 beyond
+thirty days (`src/context/ranker.py:396`, `:405-412`). The corpus spans
+2022-12 to 2026-03, so essentially all of it is past that floor. The migration
+(`63466b1`, 2026-09-16) therefore applied a new 10x multiplicative suppression
+to about 99% of the retrievable corpus, as a side effect of a decision this
+amendment justified on classification grounds alone.
+
+Two qualifications, so this is not read as a regression it is not. Before
+implementation step 3 those same records were cold at a multiplier of `0.0` --
+excluded outright -- so the net movement across the amendment is from
+effectively zero to roughly 0.03, which is an improvement. And the
+reclassification itself is right: the imported corpus is conversation, ADR-033
+agrees, and the alternative left it permanently mistyped. What is missing is
+that the decay consequence was never stated, never measured, and belongs in
+the same decision that caused it.
+
+This is the clearest instance of the ownership problem the first correction
+above describes. The amendment reasons carefully about the tier schedule it
+owns, and moves a corpus across a boundary in a second age mechanism it does
+not.
 
 The second is between ADRs, and dates from v0.17.0: ADR-033 holds that ChatGPT
 user turns are first-class memory eligible for all retrieval policies, while

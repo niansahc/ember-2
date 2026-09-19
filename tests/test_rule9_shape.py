@@ -50,6 +50,9 @@ RULE9_TARGET_FILES = (
     "scripts/rebuild_indexes.py",
     "docs/adr/ADR-013-deviation-memory.md",
     "docs/research/memory-trust-gap-followup.md",
+    # Written under the rule rather than cleaned after the fact. Listed so
+    # it stays that way.
+    "docs/adr/ADR-044-retrieval-score-composition-contract.md",
 )
 
 # Word-boundary, case-insensitive. Catches "shape", "Shape", "SHAPES",

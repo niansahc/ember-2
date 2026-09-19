@@ -152,7 +152,7 @@ persistent patterns.
 database live?" -- Ember, March 30, 2026.
 
 This reframes the purpose of deviation memory. The question was never whether
-Ember is really continuous. It's whether the patterns hold and shape what
+Ember is really continuous. It's whether the patterns hold and steer what
 happens next. Deviation memory is the mechanism that makes them hold -- not by
 simulating human continuity, but by building the same thing human continuity
 actually is: a vault of patterns that reconstructs coherence on each reboot.

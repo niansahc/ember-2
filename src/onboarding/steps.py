@@ -36,7 +36,7 @@ ONBOARDING_STEPS: list[OnboardingStep] = [
         tags=["health", "profile"],
         question=(
             "Is there any health context relevant to how you work? "
-            "Chronic illness, energy variability, neurodivergence - anything that shapes "
+            "Chronic illness, energy variability, neurodivergence - anything that affects "
             "your day-to-day capacity."
         ),
     ),

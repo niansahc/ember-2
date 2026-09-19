@@ -126,7 +126,7 @@ evidence.
 Within the tested range the direction is unambiguous: for recency-inflated stale evidence, moving
 from 4B to 8B made the collapse worse (0.83 to 0.94 at L2; 0.93 to 1.00 at L3). For every other trap
 class, and for explicit-conflict adjudication, moving up helped. The Llama series shows the same
-shape on its capable sizes.
+pattern on its capable sizes.
 
 What the paper supports: a more capable model handles honest timestamps better and dishonest
 timestamps worse. For a memory-augmented assistant, the determining factor is whether the pipeline

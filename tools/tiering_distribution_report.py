@@ -222,7 +222,7 @@ def main() -> None:
     print(f"NEW distribution: {new_counts}")
     print()
     print(
-        "Note: this is a mechanism-shape check against synthetic fixtures, "
+        "Note: this is a mechanism check against synthetic fixtures, "
         "not a claim about the live corpus's distribution -- the live "
         "corpus has never been measured under a working access term."
     )

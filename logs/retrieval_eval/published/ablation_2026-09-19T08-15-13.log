@@ -1,0 +1,181 @@
+==============================================================================
+RETRIEVAL-ARCHITECTURE ABLATION
+==============================================================================
+Run:   2026-09-19T08-15-13
+Vault: C:\DEVEmberVault\test_vault
+Corpus: 8 strata, 42 fixtures, graded 0-3 by construction, cosines measured
+
+Question (TDD 50.1 / 25.3): how much does the memory-type taxonomy and
+hot/warm/cold tiering add over a naive verbatim + embedding baseline?
+
+------------------------------------------------------------------------------
+DELIVERED -- what the model actually sees
+------------------------------------------------------------------------------
+arm                     nDCG@6       d  nDCG@4       d  contam@4       d
+A0_FULL                  0.226  +0.000   0.198  +0.000     0.833  +0.000
+A_T-off_scoring          0.226  +0.000   0.198  +0.000     0.833  +0.000
+A_T-off_policy           0.266  +0.040   0.208  +0.010     0.812  -0.021
+A_H-off                  0.226  +0.000   0.198  +0.000     0.833  +0.000
+A_decay-off              0.226  +0.000   0.198  +0.000     0.833  +0.000
+A_recency-off            0.226  +0.000   0.198  +0.000     0.833  +0.000
+A_lexical-off            0.215  -0.011   0.167  -0.031     0.833  +0.000
+A_quality-off            0.226  +0.000   0.198  +0.000     0.833  +0.000
+A_T-off_H-off            0.226  +0.000   0.198  +0.000     0.833  +0.000
+A_NAIVE_cosine           0.515  +0.289   0.367  +0.169     0.562  -0.271
+A_NAIVE_plus_lexical     0.426  +0.200   0.258  +0.060     0.615  -0.219
+
+------------------------------------------------------------------------------
+RANKED -- the ranker's verdict, before the limit and profile slots
+------------------------------------------------------------------------------
+arm                     nDCG@6       d  contam@4       d
+A0_FULL                  0.251  +0.000     0.812  +0.000
+A_T-off_scoring          0.250  -0.002     0.812  +0.000
+A_T-off_policy           0.269  +0.017     0.812  +0.000
+A_H-off                  0.251  +0.000     0.812  +0.000
+A_decay-off              0.256  +0.004     0.844  +0.031
+A_recency-off            0.255  +0.004     0.812  +0.000
+A_lexical-off            0.222  -0.029     0.812  +0.000
+A_quality-off            0.280  +0.028     0.812  +0.000
+A_T-off_H-off            0.250  -0.002     0.812  +0.000
+A_NAIVE_cosine           0.522  +0.270     0.531  -0.281
+A_NAIVE_plus_lexical     0.432  +0.181     0.625  -0.188
+
+------------------------------------------------------------------------------
+QUERY-INDEPENDENCE -- mean pairwise Jaccard across the 8 queries
+------------------------------------------------------------------------------
+How much the delivered set stays the same as the query changes.
+Within-arm, not against the reference. High means delivery is being
+decided by something other than the query. Read against the arms
+below, not against zero: the strata were authored with largely
+disjoint relevant sets, so a correct retriever scores low HERE for
+reasons that do not transfer to a vault where concerns recur.
+
+arm                     delivered       d   ranked@6       d
+A0_FULL                     0.596  +0.000      0.732  +0.000
+A_T-off_scoring             0.596  +0.000      0.722  -0.010
+A_T-off_policy              0.656  +0.060      0.707  -0.026
+A_H-off                     0.596  +0.000      0.702  -0.031
+A_decay-off                 0.580  -0.017      0.639  -0.093
+A_recency-off               0.596  +0.000      0.722  -0.010
+A_lexical-off               0.628  +0.031      0.732  +0.000
+A_quality-off               0.531  -0.065      0.629  -0.103
+A_T-off_H-off               0.596  +0.000      0.676  -0.056
+A_NAIVE_cosine              0.088  -0.508      0.096  -0.636
+A_NAIVE_plus_lexical        0.081  -0.515      0.082  -0.651
+
+------------------------------------------------------------------------------
+MOVEMENT -- masked vs inert
+------------------------------------------------------------------------------
+An arm that moves `ranked` but not `delivered` is masked by slot
+allocation, not inert. The delivered set alone cannot tell them apart.
+
+arm                     strata changed               displacement
+                         deliv  ranked        deliv        ranked
+A_T-off_scoring              0/8     8/8        0.000         1.516
+A_T-off_policy               8/8     8/8        3.083         3.048
+A_H-off                      0/8     8/8        0.000         2.296
+A_decay-off                  3/8     8/8        0.000         3.718
+A_recency-off                0/8     8/8        0.000         1.298
+A_lexical-off                3/8     7/8        0.198         0.262
+A_quality-off                4/8     8/8        0.198         1.115
+A_T-off_H-off                0/8     8/8        0.000         3.288
+A_NAIVE_cosine               8/8     8/8        1.488        11.460
+A_NAIVE_plus_lexical         8/8     8/8        1.595        11.759
+
+------------------------------------------------------------------------------
+DISTRACTOR LEAKAGE (delivered, by targeted mechanism)
+------------------------------------------------------------------------------
+A0_FULL                total=6   recency_bait=3, type_boost_bait=3
+A_T-off_scoring        total=6   recency_bait=3, type_boost_bait=3
+A_T-off_policy         total=11  recency_bait=7, type_boost_bait=4
+A_H-off                total=6   recency_bait=3, type_boost_bait=3
+A_decay-off            total=4   recency_bait=3, type_boost_bait=1
+A_recency-off          total=6   recency_bait=3, type_boost_bait=3
+A_lexical-off          total=6   recency_bait=4, type_boost_bait=2
+A_quality-off          total=6   recency_bait=3, type_boost_bait=3
+A_T-off_H-off          total=6   recency_bait=3, type_boost_bait=3
+A_NAIVE_cosine         total=12  decay_bait=1, entity_bait=1, experience_bait=1, lexical_bait=4, recency_bait=2, type_boost_bait=3
+A_NAIVE_plus_lexical   total=16  decay_bait=2, entity_bait=1, experience_bait=1, lexical_bait=5, recency_bait=3, tier_bait=1, type_boost_bait=3
+
+------------------------------------------------------------------------------
+LEAKAGE ATTRIBUTION -- measured, not assumed
+------------------------------------------------------------------------------
+A distractor class names the lever it was BUILT to bait. That label is a
+design intention. The column that matters is the measured one: which
+lever actually carries the bait above the records it displaces. Where
+they differ, read the leakage count above as naming the DOMINANT lever,
+not the class name.
+
+bait                             class                   labelled     dominant lever   swing
+d10_reflection_weight_bait       reflection_weight_bait    +0.621    A_T-off_scoring  +0.621
+d07_lexical_overlap_bait         lexical_bait              +0.033            A_H-off  +0.143
+d03_decay_old_recipe             decay_bait                +0.000      A_quality-off  +0.050
+d04_decay_old_travel             decay_bait                +0.000      A_quality-off  +0.050
+d02_typeboost_weather            type_boost_bait           +0.230        A_decay-off  +0.858
+d06_recency_today_plant          recency_bait              +0.309        A_decay-off  +0.720 *
+d12_lexical_overlap_bait_recent  lexical_bait              +0.060      A_quality-off  +0.212
+d08_entity_name_bait             entity_bait               +0.124            A_H-off  +0.151
+d01_typeboost_grocery            type_boost_bait           +0.179            A_H-off  +0.445
+
+  * recency and decay are NOT separable by construction, and no corpus
+    can make them so. Both key on the same input -- the record's age --
+    but act on opposite sides of the pair: the additive freshness bonus
+    lifts the fresh distractor, and the multiplicative decay penalty
+    pushes down the older relevant record it displaces. A fresh bait is
+    helped twice by two mechanisms a minimal pair cannot tell apart,
+    because holding age constant disables both at once. That is a
+    property of the pipeline, not a limit of these fixtures, and it is
+    printed rather than tuned away.
+
+------------------------------------------------------------------------------
+SEPARABILITY
+------------------------------------------------------------------------------
+  typing, scoring only      ranked nDCG cost of removing:   +0.002   moves ranking, masked by slot allocation
+  typing, incl. gating      ranked nDCG cost of removing:   -0.017   moves ranking and delivery
+  tiering                   ranked nDCG cost of removing:   +0.000   moves ranking, masked by slot allocation
+  temporal decay            ranked nDCG cost of removing:   -0.004   moves ranking and delivery
+  recency bonus             ranked nDCG cost of removing:   -0.004   moves ranking, masked by slot allocation
+  lexical and entity terms  ranked nDCG cost of removing:   +0.029   moves ranking and delivery
+  source quality            ranked nDCG cost of removing:   -0.028   moves ranking and delivery
+
+------------------------------------------------------------------------------
+READING THIS RESULT
+------------------------------------------------------------------------------
+1. As of the ADR-015 amendment (v0.19.0, steps 4-5), the three defects
+   this caveat used to describe are fixed: ContextItem.store_id now
+   carries the real vectors primary key, so update_retrieval_stats
+   actually matches rows; _recency_score parses epoch/ISO/hyphenated
+   timestamps via the shared helper instead of returning 0.0 for
+   float-epoch created_at; and the importance-by-type ladder is
+   removed, so heat no longer has a TYPE-lookup term at all. Measured
+   directly against the live vault post-fix: still ~99.9% cold, zero
+   warm -- but now because the (reclassified, formerly-ingested)
+   corpus is genuinely old with zero retrieval history, not because
+   heat was being computed from broken or type-only inputs. A
+   `tiering does not help` reading from THIS run is still a statement
+   about synthetic fixtures, not the deployed system -- read it as
+   measuring the MECHANISM, and cross-check against a fresh live-vault
+   tier distribution if the production claim matters.
+
+2. Profile records take three guaranteed slots on every query because
+   get_profile_items' min_score floor is dead on the SQLite path. Under
+   the reflective policy that leaves ONE non-profile slot. This masks
+   other mechanisms from the delivered set and is why the ranked window
+   is reported as a first-class metric rather than a diagnostic.
+
+3. Diversity selection is forced off in every arm as a controlled
+   variable: it is a hard round-robin quota that would clamp composition
+   identically everywhere. The residual is recorded per stratum.
+
+4. This measures RETRIEVAL, not generation. Type still reaches the model
+   through prompt-layer labels even when scoring is ablated.
+
+5. Base cosine is MEASURED with nomic-embed-text over the fixture texts and
+   frozen, not stipulated. The first build of this eval hand-assigned it and
+   made it agree with the grades -- cosine alone scored nDCG@6 0.937, so the
+   naive baseline held the answer key, the pipeline had nothing to fix, and
+   every ablation read as an improvement. The corpus tests now pin the
+   headroom: naive-cosine nDCG must stay under 0.80, some relevant records
+   must start below the cut, and some baits must start above it.
+
+Tiering databases unchanged by the run: True

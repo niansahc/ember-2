@@ -234,6 +234,46 @@ def selection_jaccard(
     return len(a_ids & b_ids) / len(union)
 
 
+def mean_pairwise_jaccard(id_sets: Sequence[Sequence[str]]) -> float | None:
+    """Mean Jaccard over every unordered pair of delivered id sets.
+
+    This is a WITHIN-arm metric and the only one here that is: every other
+    comparison in this module is one arm against the reference. It answers a
+    different question -- how much does this arm's delivered set change when
+    the query changes -- and a high value means delivery is being decided by
+    something other than the query.
+
+    It exists because that number has been cited repeatedly without being
+    computed anywhere. Issue #204's headline table reports it for seven arms;
+    only the two endpoints were reproducible from the committed artifact,
+    because the artifact carries selection_jaccard (arm vs reference), which
+    is a different quantity that happens to share a name.
+
+    Read it against a reference value, not against zero. An IDEAL retriever
+    on this corpus scores near the uniform-random value, because the strata
+    were authored with largely disjoint relevant sets -- so "low" is what
+    correctness looks like HERE, and does not generalise to a real vault
+    where a user's concerns recur across questions. Bare cosine and a random
+    permutation are both available as reference points in the same run.
+
+    Returns None for fewer than two sets, where the metric is undefined
+    rather than zero.
+    """
+    sets = [set(ids) for ids in id_sets]
+    if len(sets) < 2:
+        return None
+
+    scores: list[float] = []
+    for i in range(len(sets)):
+        for j in range(i + 1, len(sets)):
+            union = sets[i] | sets[j]
+            # Two empty deliveries agree completely about delivering nothing.
+            # Scoring that 0.0 would read as maximal diversity.
+            scores.append(1.0 if not union else len(sets[i] & sets[j]) / len(union))
+
+    return sum(scores) / len(scores)
+
+
 def rank_displacement(
     a: Sequence[Delivered],
     b: Sequence[Delivered],

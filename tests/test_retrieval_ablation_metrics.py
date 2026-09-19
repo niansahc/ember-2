@@ -27,6 +27,7 @@ from tools.retrieval_ablation.metrics import (
     ideal_dcg,
     leakage_by_class,
     mean_ignoring_none,
+    mean_pairwise_jaccard,
     ndcg_at_k,
     rank_displacement,
     selection_jaccard,
@@ -282,3 +283,59 @@ class TestMeanIgnoringNone:
 
     def test_empty_is_none(self):
         assert mean_ignoring_none([]) is None
+
+
+class TestMeanPairwiseJaccard:
+    """Within-arm query-independence. Hand-computed, not read off the impl.
+
+    This metric was cited in issue #204 for seven arms while existing in no
+    tool, which is why five of those rows were never reproducible. The values
+    below are worked by hand so the implementation is pinned to arithmetic
+    rather than to itself.
+    """
+
+    def test_identical_sets_score_one(self):
+        sets = [["a", "b", "c"], ["a", "b", "c"], ["c", "b", "a"]]
+        assert mean_pairwise_jaccard(sets) == 1.0
+
+    def test_disjoint_sets_score_zero(self):
+        assert mean_pairwise_jaccard([["a", "b"], ["c", "d"], ["e", "f"]]) == 0.0
+
+    def test_order_is_ignored(self):
+        assert mean_pairwise_jaccard([["a", "b"], ["b", "a"]]) == 1.0
+
+    def test_hand_computed_three_way(self):
+        # pairs: {a,b}v{b,c} = 1/3 ; {a,b}v{c,d} = 0 ; {b,c}v{c,d} = 1/3
+        # mean = (1/3 + 0 + 1/3) / 3 = 2/9
+        result = mean_pairwise_jaccard([["a", "b"], ["b", "c"], ["c", "d"]])
+        assert result == pytest.approx(2 / 9)
+
+    def test_partial_overlap_two_sets(self):
+        # {a,b,c} v {b,c,d} -> intersection 2, union 4
+        assert mean_pairwise_jaccard([["a", "b", "c"], ["b", "c", "d"]]) == pytest.approx(0.5)
+
+    def test_duplicates_within_a_set_do_not_inflate(self):
+        assert mean_pairwise_jaccard([["a", "a", "b"], ["a", "b"]]) == 1.0
+
+    def test_two_empty_sets_agree_completely(self):
+        # Both arms delivered nothing; that is agreement, not diversity.
+        # Scoring 0.0 here would read as a maximally query-responsive arm.
+        assert mean_pairwise_jaccard([[], []]) == 1.0
+
+    def test_one_empty_against_one_populated_scores_zero(self):
+        assert mean_pairwise_jaccard([[], ["a"]]) == 0.0
+
+    def test_undefined_below_two_sets(self):
+        assert mean_pairwise_jaccard([]) is None
+        assert mean_pairwise_jaccard([["a", "b"]]) is None
+
+    def test_distinct_from_selection_jaccard(self):
+        # selection_jaccard compares two arms; this compares queries within
+        # one arm. Conflating them is the error that made the #204 table
+        # unreproducible from an artifact that reports the former.
+        from tools.retrieval_ablation.metrics import selection_jaccard
+
+        a = [_d("x", 1.0), _d("y", 0.9)]
+        b = [_d("x", 1.0), _d("y", 0.9)]
+        assert selection_jaccard(a, b) == 1.0
+        assert mean_pairwise_jaccard([["x", "y"], ["p", "q"]]) == 0.0

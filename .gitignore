@@ -4,7 +4,20 @@ private_vault/**
 
 # Local AI artifacts
 models/
-logs/
+# logs/* rather than logs/ -- git does not descend into an excluded
+# directory, so a negation inside logs/ would be inert. Excluding the
+# entries instead leaves the directory itself traversable.
+logs/*
+# Narrow exception: published ablation artifacts. The retrieval-architecture
+# ablation is cited in ADRs and issues, and an uncommitted artifact cannot be
+# reviewed, reproduced, or checked against the code that produced it -- five
+# of seven rows in issue #204's headline table were unverifiable for exactly
+# that reason. Only the registry and deliberately published runs are tracked.
+!logs/retrieval_eval/
+logs/retrieval_eval/*
+!logs/retrieval_eval/README.md
+!logs/retrieval_eval/published/
+!logs/retrieval_eval/published/**
 cache/
 
 # UAT runner output (history of automated runs)

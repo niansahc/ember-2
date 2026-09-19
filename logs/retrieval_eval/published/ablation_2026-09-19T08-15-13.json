@@ -1,0 +1,5360 @@
+{
+  "generated": "2026-09-19T08:15:13.737456",
+  "vault": "C:\\DEVEmberVault\\test_vault",
+  "databases_unchanged": true,
+  "reference_arm": "A0_FULL",
+  "arms": {
+    "A0_FULL": {
+      "arm": "A0_FULL",
+      "label": "full pipeline (reference)",
+      "aggregates": {
+        "delivered_ndcg_at_6": 0.22601572675551757,
+        "delivered_ndcg_at_4": 0.19794436345608107,
+        "delivered_contamination_at_4": 0.8333333333333334,
+        "delivered_unresolved": 0.0,
+        "ranked_ndcg_at_6": 0.2514967078547846,
+        "ranked_contamination_at_4": 0.8125,
+        "ranked_unresolved": 0.006097560975609756,
+        "delivered_cross_query_jaccard": 0.5961734693877551,
+        "ranked_cross_query_jaccard_at_6": 0.7321428571428571
+      },
+      "leakage_total": {
+        "type_boost_bait": 3,
+        "recency_bait": 3
+      },
+      "per_stratum": {
+        "reflective_work_patterns": {
+          "delivered": {
+            "delivered_count": 4,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 1
+              },
+              "by_tier": {
+                "hot": 4
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d02_typeboost_weather"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.20896629745670361,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "reflection_weight_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 1,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          }
+        },
+        "factual_recall_retrieval_theory": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f13_state_open_threads",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 26,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          }
+        },
+        "status_state_current_focus": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2065539701415984,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f01_work_decay_trace"
+            ]
+          },
+          "ranked": {
+            "count": 19,
+            "ndcg_at_6": 0.6651394137117136,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          }
+        },
+        "task_status_migration": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2731050877137724,
+            "ndcg_at_4_model_visible": 0.5982318540006005,
+            "contamination_at_4": 0.3333333333333333,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f12_state_current_focus"
+            ]
+          },
+          "ranked": {
+            "count": 27,
+            "ndcg_at_6": 0.5685011081815152,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          }
+        },
+        "recent_activity_this_week": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d05_recency_today_errand",
+              "f13_state_open_threads",
+              "d02_typeboost_weather"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.10118946028003772,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          }
+        },
+        "recent_tooling_change": {
+          "delivered": {
+            "delivered_count": 5,
+            "ndcg_at_6": 0.08645638423810884,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 5
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "d02_typeboost_weather",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.04878048780487805
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 2,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          }
+        },
+        "activity_pipeline_work": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2685155072834339,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.4681773832083067,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          }
+        },
+        "default_identity_question": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.973494864667227,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 4,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f27_profile_preference",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "f13_state_open_threads",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 42,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          }
+        }
+      }
+    },
+    "A_T-off_scoring": {
+      "arm": "A_T-off_scoring",
+      "label": "typed scoring off, typed gating held",
+      "aggregates": {
+        "delivered_ndcg_at_6": 0.22601572675551757,
+        "delivered_ndcg_at_4": 0.19794436345608107,
+        "delivered_contamination_at_4": 0.8333333333333334,
+        "delivered_unresolved": 0.0,
+        "ranked_ndcg_at_6": 0.24977342782714476,
+        "ranked_contamination_at_4": 0.8125,
+        "ranked_unresolved": 0.012049941927990708,
+        "delivered_cross_query_jaccard": 0.5961734693877551,
+        "ranked_cross_query_jaccard_at_6": 0.7219387755102041,
+        "delivered_jaccard_vs_ref": 1.0,
+        "ranked_jaccard_vs_ref": 1.0,
+        "delivered_displacement_vs_ref": 0.0,
+        "ranked_displacement_vs_ref": 1.5164891656387165,
+        "delivered_changed_strata": 0,
+        "ranked_changed_strata": 8
+      },
+      "leakage_total": {
+        "type_boost_bait": 3,
+        "recency_bait": 3
+      },
+      "per_stratum": {
+        "reflective_work_patterns": {
+          "delivered": {
+            "delivered_count": 4,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 1
+              },
+              "by_tier": {
+                "hot": 4
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d02_typeboost_weather"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.10151306679962219,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 1,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 2.4878048780487805
+            }
+          }
+        },
+        "factual_recall_retrieval_theory": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f13_state_open_threads",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 26,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 1.5384615384615385
+            }
+          }
+        },
+        "status_state_current_focus": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2065539701415984,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f01_work_decay_trace"
+            ]
+          },
+          "ranked": {
+            "count": 19,
+            "ndcg_at_6": 0.6651394137117136,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.9473684210526315
+            }
+          }
+        },
+        "task_status_migration": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2731050877137724,
+            "ndcg_at_4_model_visible": 0.5982318540006005,
+            "contamination_at_4": 0.3333333333333333,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f12_state_current_focus"
+            ]
+          },
+          "ranked": {
+            "count": 27,
+            "ndcg_at_6": 0.5685011081815152,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 1.4074074074074074
+            }
+          }
+        },
+        "recent_activity_this_week": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d05_recency_today_errand",
+              "f13_state_open_threads",
+              "d02_typeboost_weather"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.19485645071600038,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "recency_bait": 2,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 1.1219512195121952
+            }
+          }
+        },
+        "recent_tooling_change": {
+          "delivered": {
+            "delivered_count": 5,
+            "ndcg_at_6": 0.08645638423810884,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 5
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "d02_typeboost_weather",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.04878048780487805
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 2,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.9024390243902439
+            }
+          }
+        },
+        "activity_pipeline_work": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2685155072834339,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.4681773832083067,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 1.5121951219512195
+            }
+          }
+        },
+        "default_identity_question": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.973494864667227,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 4,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f27_profile_preference",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "f13_state_open_threads",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 42,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.047619047619047616
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 2.2142857142857144
+            }
+          }
+        }
+      }
+    },
+    "A_T-off_policy": {
+      "arm": "A_T-off_policy",
+      "label": "typed scoring, typed gating and profile privilege all off",
+      "aggregates": {
+        "delivered_ndcg_at_6": 0.26554801866123273,
+        "delivered_ndcg_at_4": 0.20789374879760306,
+        "delivered_contamination_at_4": 0.8125,
+        "delivered_unresolved": 0.0,
+        "ranked_ndcg_at_6": 0.2687822282144087,
+        "ranked_contamination_at_4": 0.8125,
+        "ranked_unresolved": 0.012049941927990708,
+        "delivered_cross_query_jaccard": 0.6564625850340136,
+        "ranked_cross_query_jaccard_at_6": 0.7066326530612245,
+        "delivered_jaccard_vs_ref": 0.2824404761904762,
+        "ranked_jaccard_vs_ref": 0.8485772357723578,
+        "delivered_displacement_vs_ref": 3.0833333333333335,
+        "ranked_displacement_vs_ref": 3.0477719666583596,
+        "delivered_changed_strata": 8,
+        "ranked_changed_strata": 8
+      },
+      "leakage_total": {
+        "type_boost_bait": 4,
+        "recency_bait": 7
+      },
+      "per_stratum": {
+        "reflective_work_patterns": {
+          "delivered": {
+            "delivered_count": 4,
+            "ndcg_at_6": 0.0756393903742143,
+            "ndcg_at_4_model_visible": 0.07959508273217593,
+            "contamination_at_4": 0.5,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "conversation": 3,
+                "journal": 1
+              },
+              "by_tier": {
+                "hot": 4
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "d02_typeboost_weather",
+              "f01_work_decay_trace",
+              "f07_health_sleep_slip",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.10151306679962219,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 1
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.14285714285714285,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 3.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 2.4878048780487805
+            }
+          }
+        },
+        "factual_recall_retrieval_theory": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "conversation": 4,
+                "journal": 2
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f13_state_open_threads",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand",
+              "f12_state_current_focus",
+              "f07_health_sleep_slip",
+              "f06_work_migration_progress"
+            ]
+          },
+          "ranked": {
+            "count": 39,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.3333333333333333,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 3.0
+            },
+            "ranked": {
+              "selection_jaccard": 0.6666666666666666,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 4.769230769230769
+            }
+          }
+        },
+        "status_state_current_focus": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.6504416680695996,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.75,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 2
+            },
+            "composition": {
+              "by_type": {
+                "conversation": 5,
+                "journal": 1
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "d06_recency_today_plant",
+              "f01_work_decay_trace",
+              "d02_typeboost_weather",
+              "f12_state_current_focus"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.6504416680695996,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 2
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.3333333333333333,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 2.6666666666666665
+            },
+            "ranked": {
+              "selection_jaccard": 0.4634146341463415,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 5.2631578947368425
+            }
+          }
+        },
+        "task_status_migration": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.7352692569217408,
+            "ndcg_at_4_model_visible": 0.5982318540006005,
+            "contamination_at_4": 0.5,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "conversation": 5,
+                "journal": 1
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f12_state_current_focus",
+              "d02_typeboost_weather",
+              "f01_work_decay_trace",
+              "f06_work_migration_progress"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.7352692569217408,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.3333333333333333,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 3.0
+            },
+            "ranked": {
+              "selection_jaccard": 0.6585365853658537,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 6.111111111111111
+            }
+          }
+        },
+        "recent_activity_this_week": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.19485645071600038,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 2,
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "conversation": 4,
+                "journal": 2
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "d05_recency_today_errand",
+              "f13_state_open_threads",
+              "d02_typeboost_weather",
+              "d06_recency_today_plant",
+              "f07_health_sleep_slip",
+              "f12_state_current_focus"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.19485645071600038,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "recency_bait": 2,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 4,
+              "ingested": 0,
+              "other": 2
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.3333333333333333,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 3.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 1.1219512195121952
+            }
+          }
+        },
+        "recent_tooling_change": {
+          "delivered": {
+            "delivered_count": 5,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "conversation": 5
+              },
+              "by_tier": {
+                "hot": 5
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "d02_typeboost_weather",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f01_work_decay_trace",
+              "f12_state_current_focus"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.04878048780487805
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 5,
+              "ingested": 0,
+              "other": 0
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.25,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 3.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.9024390243902439
+            }
+          }
+        },
+        "activity_pipeline_work": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.4681773832083067,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.75,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "conversation": 5,
+                "journal": 1
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f01_work_decay_trace",
+              "d05_recency_today_errand",
+              "f13_state_open_threads",
+              "f12_state_current_focus",
+              "d02_typeboost_weather",
+              "f07_health_sleep_slip"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.4681773832083067,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 5,
+              "ingested": 0,
+              "other": 1
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.3333333333333333,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 3.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 1.5121951219512195
+            }
+          }
+        },
+        "default_identity_question": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "conversation": 5,
+                "journal": 1
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f01_work_decay_trace",
+              "d02_typeboost_weather",
+              "f12_state_current_focus",
+              "f07_health_sleep_slip"
+            ]
+          },
+          "ranked": {
+            "count": 42,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.047619047619047616
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.2,
+              "selection_jaccard_at_4": 0.0,
+              "rank_displacement": 4.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 2.2142857142857144
+            }
+          }
+        }
+      }
+    },
+    "A_H-off": {
+      "arm": "A_H-off",
+      "label": "tiering off (one-channel: only get_memory_items carries tier)",
+      "aggregates": {
+        "delivered_ndcg_at_6": 0.22601572675551757,
+        "delivered_ndcg_at_4": 0.19794436345608107,
+        "delivered_contamination_at_4": 0.8333333333333334,
+        "delivered_unresolved": 0.0,
+        "ranked_ndcg_at_6": 0.2514967078547846,
+        "ranked_contamination_at_4": 0.8125,
+        "ranked_unresolved": 0.015356820234869015,
+        "delivered_cross_query_jaccard": 0.5961734693877551,
+        "ranked_cross_query_jaccard_at_6": 0.701530612244898,
+        "delivered_jaccard_vs_ref": 1.0,
+        "ranked_jaccard_vs_ref": 1.0,
+        "delivered_displacement_vs_ref": 0.0,
+        "ranked_displacement_vs_ref": 2.2963910584257183,
+        "delivered_changed_strata": 0,
+        "ranked_changed_strata": 8
+      },
+      "leakage_total": {
+        "type_boost_bait": 3,
+        "recency_bait": 3
+      },
+      "per_stratum": {
+        "reflective_work_patterns": {
+          "delivered": {
+            "delivered_count": 4,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 1
+              },
+              "by_tier": {
+                "hot": 4
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d02_typeboost_weather"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.20896629745670361,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "reflection_weight_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 1,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 2.1951219512195124
+            }
+          }
+        },
+        "factual_recall_retrieval_theory": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f13_state_open_threads",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 26,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 3.769230769230769
+            }
+          }
+        },
+        "status_state_current_focus": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2065539701415984,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f01_work_decay_trace"
+            ]
+          },
+          "ranked": {
+            "count": 19,
+            "ndcg_at_6": 0.6651394137117136,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.631578947368421
+            }
+          }
+        },
+        "task_status_migration": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2731050877137724,
+            "ndcg_at_4_model_visible": 0.5982318540006005,
+            "contamination_at_4": 0.3333333333333333,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f12_state_current_focus"
+            ]
+          },
+          "ranked": {
+            "count": 27,
+            "ndcg_at_6": 0.5685011081815152,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.07407407407407407
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.8518518518518519
+            }
+          }
+        },
+        "recent_activity_this_week": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d05_recency_today_errand",
+              "f13_state_open_threads",
+              "d02_typeboost_weather"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.10118946028003772,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 2.3902439024390243
+            }
+          }
+        },
+        "recent_tooling_change": {
+          "delivered": {
+            "delivered_count": 5,
+            "ndcg_at_6": 0.08645638423810884,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 5
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "d02_typeboost_weather",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.04878048780487805
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 2,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 2.4878048780487805
+            }
+          }
+        },
+        "activity_pipeline_work": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2685155072834339,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.4681773832083067,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 3.902439024390244
+            }
+          }
+        },
+        "default_identity_question": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.973494864667227,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 4,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f27_profile_preference",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "f13_state_open_threads",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 42,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 2.142857142857143
+            }
+          }
+        }
+      }
+    },
+    "A_decay-off": {
+      "arm": "A_decay-off",
+      "label": "temporal decay off (second type-keyed age mechanism)",
+      "aggregates": {
+        "delivered_ndcg_at_6": 0.22601572675551757,
+        "delivered_ndcg_at_4": 0.19794436345608107,
+        "delivered_contamination_at_4": 0.8333333333333334,
+        "delivered_unresolved": 0.0,
+        "ranked_ndcg_at_6": 0.2558833041782185,
+        "ranked_contamination_at_4": 0.84375,
+        "ranked_unresolved": 0.006097560975609756,
+        "delivered_cross_query_jaccard": 0.5795068027210883,
+        "ranked_cross_query_jaccard_at_6": 0.6394557823129252,
+        "delivered_jaccard_vs_ref": 0.8785714285714286,
+        "ranked_jaccard_vs_ref": 1.0,
+        "delivered_displacement_vs_ref": 0.0,
+        "ranked_displacement_vs_ref": 3.7183389341605,
+        "delivered_changed_strata": 3,
+        "ranked_changed_strata": 8
+      },
+      "leakage_total": {
+        "recency_bait": 3,
+        "type_boost_bait": 1
+      },
+      "per_stratum": {
+        "reflective_work_patterns": {
+          "delivered": {
+            "delivered_count": 4,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 1
+              },
+              "by_tier": {
+                "hot": 4
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d01_typeboost_grocery"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.033441241657736195,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "reflection_weight_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 1,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.6,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 3.8048780487804876
+            }
+          }
+        },
+        "factual_recall_retrieval_theory": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f13_state_open_threads",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 26,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 1.8461538461538463
+            }
+          }
+        },
+        "status_state_current_focus": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2065539701415984,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "d01_typeboost_grocery"
+            ]
+          },
+          "ranked": {
+            "count": 19,
+            "ndcg_at_6": 0.47960346638230267,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.7142857142857143,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 2.526315789473684
+            }
+          }
+        },
+        "task_status_migration": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2731050877137724,
+            "ndcg_at_4_model_visible": 0.5982318540006005,
+            "contamination_at_4": 0.3333333333333333,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f12_state_current_focus"
+            ]
+          },
+          "ranked": {
+            "count": 27,
+            "ndcg_at_6": 0.5685011081815152,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 1.2592592592592593
+            }
+          }
+        },
+        "recent_activity_this_week": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d05_recency_today_errand",
+              "f13_state_open_threads",
+              "d01_typeboost_grocery"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.09645382063463742,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.7142857142857143,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 4.878048780487805
+            }
+          }
+        },
+        "recent_tooling_change": {
+          "delivered": {
+            "delivered_count": 5,
+            "ndcg_at_6": 0.08645638423810884,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 5
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "d02_typeboost_weather",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.23412126462102406,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.04878048780487805
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 2,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 4.975609756097561
+            }
+          }
+        },
+        "activity_pipeline_work": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2685155072834339,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.6349455319485322,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "lexical_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 5.170731707317073
+            }
+          }
+        },
+        "default_identity_question": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.973494864667227,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 4,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f27_profile_preference",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "f13_state_open_threads",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 42,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 5.285714285714286
+            }
+          }
+        }
+      }
+    },
+    "A_recency-off": {
+      "arm": "A_recency-off",
+      "label": "additive freshness bonus off (distinct from temporal decay)",
+      "aggregates": {
+        "delivered_ndcg_at_6": 0.22601572675551757,
+        "delivered_ndcg_at_4": 0.19794436345608107,
+        "delivered_contamination_at_4": 0.8333333333333334,
+        "delivered_unresolved": 0.0,
+        "ranked_ndcg_at_6": 0.25534625603440797,
+        "ranked_contamination_at_4": 0.8125,
+        "ranked_unresolved": 0.006097560975609756,
+        "delivered_cross_query_jaccard": 0.5961734693877551,
+        "ranked_cross_query_jaccard_at_6": 0.7219387755102041,
+        "delivered_jaccard_vs_ref": 1.0,
+        "ranked_jaccard_vs_ref": 1.0,
+        "delivered_displacement_vs_ref": 0.0,
+        "ranked_displacement_vs_ref": 1.297735753287743,
+        "delivered_changed_strata": 0,
+        "ranked_changed_strata": 8
+      },
+      "leakage_total": {
+        "type_boost_bait": 3,
+        "recency_bait": 3
+      },
+      "per_stratum": {
+        "reflective_work_patterns": {
+          "delivered": {
+            "delivered_count": 4,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 1
+              },
+              "by_tier": {
+                "hot": 4
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d02_typeboost_weather"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.20896629745670361,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "reflection_weight_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 1,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.8780487804878049
+            }
+          }
+        },
+        "factual_recall_retrieval_theory": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f13_state_open_threads",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 26,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 1.0769230769230769
+            }
+          }
+        },
+        "status_state_current_focus": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2065539701415984,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f01_work_decay_trace"
+            ]
+          },
+          "ranked": {
+            "count": 19,
+            "ndcg_at_6": 0.6651394137117136,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.9473684210526315
+            }
+          }
+        },
+        "task_status_migration": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2731050877137724,
+            "ndcg_at_4_model_visible": 0.5982318540006005,
+            "contamination_at_4": 0.3333333333333333,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f12_state_current_focus"
+            ]
+          },
+          "ranked": {
+            "count": 27,
+            "ndcg_at_6": 0.5685011081815152,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 1.037037037037037
+            }
+          }
+        },
+        "recent_activity_this_week": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d05_recency_today_errand",
+              "f13_state_open_threads",
+              "d02_typeboost_weather"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.10118946028003772,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 1.4634146341463414
+            }
+          }
+        },
+        "recent_tooling_change": {
+          "delivered": {
+            "delivered_count": 5,
+            "ndcg_at_6": 0.08645638423810884,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 5
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "d02_typeboost_weather",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.030796385436987095,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.04878048780487805
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 2,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 1.4634146341463414
+            }
+          }
+        },
+        "activity_pipeline_work": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2685155072834339,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.4681773832083067,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 1.6585365853658536
+            }
+          }
+        },
+        "default_identity_question": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.973494864667227,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 4,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f27_profile_preference",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "f13_state_open_threads",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 42,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 1.8571428571428572
+            }
+          }
+        }
+      }
+    },
+    "A_lexical-off": {
+      "arm": "A_lexical-off",
+      "label": "lexical and entity terms off, ranker otherwise intact",
+      "aggregates": {
+        "delivered_ndcg_at_6": 0.21479746544383596,
+        "delivered_ndcg_at_4": 0.16715301802957955,
+        "delivered_contamination_at_4": 0.8333333333333334,
+        "delivered_unresolved": 0.0,
+        "ranked_ndcg_at_6": 0.22223562140426545,
+        "ranked_contamination_at_4": 0.8125,
+        "ranked_unresolved": 0.012049941927990708,
+        "delivered_cross_query_jaccard": 0.6275510204081634,
+        "ranked_cross_query_jaccard_at_6": 0.7321428571428571,
+        "delivered_jaccard_vs_ref": 0.9583333333333334,
+        "ranked_jaccard_vs_ref": 1.0,
+        "delivered_displacement_vs_ref": 0.19791666666666666,
+        "ranked_displacement_vs_ref": 0.26204595813068216,
+        "delivered_changed_strata": 3,
+        "ranked_changed_strata": 7
+      },
+      "leakage_total": {
+        "type_boost_bait": 2,
+        "recency_bait": 4
+      },
+      "per_stratum": {
+        "reflective_work_patterns": {
+          "delivered": {
+            "delivered_count": 4,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 1
+              },
+              "by_tier": {
+                "hot": 4
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d02_typeboost_weather"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.20896629745670361,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "reflection_weight_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 1,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.04878048780487805
+            }
+          }
+        },
+        "factual_recall_retrieval_theory": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f13_state_open_threads",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 26,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.38461538461538464
+            }
+          }
+        },
+        "status_state_current_focus": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2065539701415984,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f01_work_decay_trace"
+            ]
+          },
+          "ranked": {
+            "count": 19,
+            "ndcg_at_6": 0.6651394137117136,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.21052631578947367
+            }
+          }
+        },
+        "task_status_migration": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2731050877137724,
+            "ndcg_at_4_model_visible": 0.5982318540006005,
+            "contamination_at_4": 0.3333333333333333,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f12_state_current_focus"
+            ]
+          },
+          "ranked": {
+            "count": 27,
+            "ndcg_at_6": 0.5685011081815152,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.14814814814814814
+            }
+          }
+        },
+        "recent_activity_this_week": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d05_recency_today_errand",
+              "f13_state_open_threads",
+              "d02_typeboost_weather"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.10118946028003772,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            }
+          }
+        },
+        "recent_tooling_change": {
+          "delivered": {
+            "delivered_count": 5,
+            "ndcg_at_6": 0.08645638423810884,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 5
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f13_state_open_threads",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.04878048780487805
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 2,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.6666666666666666,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 0.25
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.24390243902439024
+            }
+          }
+        },
+        "activity_pipeline_work": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2336506320556979,
+            "ndcg_at_4_model_visible": 0.246330763412012,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f01_work_decay_trace"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.23408869160415335,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 0.6666666666666666
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.5365853658536586
+            }
+          }
+        },
+        "default_identity_question": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.9186136494015101,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 4,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f13_state_open_threads",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 42,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.047619047619047616
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.6666666666666666
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.5238095238095238
+            }
+          }
+        }
+      }
+    },
+    "A_quality-off": {
+      "arm": "A_quality-off",
+      "label": "source-quality (role and content-kind) scoring off",
+      "aggregates": {
+        "delivered_ndcg_at_6": 0.22601572675551757,
+        "delivered_ndcg_at_4": 0.19794436345608107,
+        "delivered_contamination_at_4": 0.8333333333333334,
+        "delivered_unresolved": 0.0,
+        "ranked_ndcg_at_6": 0.27985184706666466,
+        "ranked_contamination_at_4": 0.8125,
+        "ranked_unresolved": 0.012195121951219513,
+        "delivered_cross_query_jaccard": 0.5311224489795918,
+        "ranked_cross_query_jaccard_at_6": 0.6292517006802721,
+        "delivered_jaccard_vs_ref": 0.8333333333333334,
+        "ranked_jaccard_vs_ref": 1.0,
+        "delivered_displacement_vs_ref": 0.19791666666666666,
+        "ranked_displacement_vs_ref": 1.1145586631786888,
+        "delivered_changed_strata": 4,
+        "ranked_changed_strata": 8
+      },
+      "leakage_total": {
+        "type_boost_bait": 3,
+        "recency_bait": 3
+      },
+      "per_stratum": {
+        "reflective_work_patterns": {
+          "delivered": {
+            "delivered_count": 4,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 1
+              },
+              "by_tier": {
+                "hot": 4
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d02_typeboost_weather"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.2697048491098475,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "reflection_weight_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 1,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 1.170731707317073
+            }
+          }
+        },
+        "factual_recall_retrieval_theory": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f27_profile_preference",
+              "f28_profile_working_style",
+              "f01_work_decay_trace",
+              "d02_typeboost_weather",
+              "f12_state_current_focus"
+            ]
+          },
+          "ranked": {
+            "count": 26,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.5,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 0.75
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 1.6153846153846154
+            }
+          }
+        },
+        "status_state_current_focus": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2065539701415984,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f01_work_decay_trace"
+            ]
+          },
+          "ranked": {
+            "count": 19,
+            "ndcg_at_6": 0.6651394137117136,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.631578947368421
+            }
+          }
+        },
+        "task_status_migration": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2731050877137724,
+            "ndcg_at_4_model_visible": 0.5982318540006005,
+            "contamination_at_4": 0.3333333333333333,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f12_state_current_focus"
+            ]
+          },
+          "ranked": {
+            "count": 27,
+            "ndcg_at_6": 0.5685011081815152,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.5185185185185185
+            }
+          }
+        },
+        "recent_activity_this_week": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d05_recency_today_errand",
+              "d02_typeboost_weather",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.09645382063463742,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "recency_bait": 2,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.04878048780487805
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.3333333333333333
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 1.048780487804878
+            }
+          }
+        },
+        "recent_tooling_change": {
+          "delivered": {
+            "delivered_count": 5,
+            "ndcg_at_6": 0.08645638423810884,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 5
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "d02_typeboost_weather",
+              "f01_work_decay_trace"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.04878048780487805
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 2,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.6666666666666666,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.8048780487804879
+            }
+          }
+        },
+        "activity_pipeline_work": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2685155072834339,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.4681773832083067,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 1.3170731707317074
+            }
+          }
+        },
+        "default_identity_question": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.973494864667227,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 4,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f27_profile_preference",
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "f01_work_decay_trace",
+              "d02_typeboost_weather"
+            ]
+          },
+          "ranked": {
+            "count": 42,
+            "ndcg_at_6": 0.1708382016872969,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.5,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.5
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 1.8095238095238095
+            }
+          }
+        }
+      }
+    },
+    "A_T-off_H-off": {
+      "arm": "A_T-off_H-off",
+      "label": "typed scoring and tiering both off",
+      "aggregates": {
+        "delivered_ndcg_at_6": 0.22601572675551757,
+        "delivered_ndcg_at_4": 0.19794436345608107,
+        "delivered_contamination_at_4": 0.8333333333333334,
+        "delivered_unresolved": 0.0,
+        "ranked_ndcg_at_6": 0.24977342782714476,
+        "ranked_contamination_at_4": 0.8125,
+        "ranked_unresolved": 0.021309201187249965,
+        "delivered_cross_query_jaccard": 0.5961734693877551,
+        "ranked_cross_query_jaccard_at_6": 0.6760204081632654,
+        "delivered_jaccard_vs_ref": 1.0,
+        "ranked_jaccard_vs_ref": 1.0,
+        "delivered_displacement_vs_ref": 0.0,
+        "ranked_displacement_vs_ref": 3.287947040835359,
+        "delivered_changed_strata": 0,
+        "ranked_changed_strata": 8
+      },
+      "leakage_total": {
+        "type_boost_bait": 3,
+        "recency_bait": 3
+      },
+      "per_stratum": {
+        "reflective_work_patterns": {
+          "delivered": {
+            "delivered_count": 4,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 1
+              },
+              "by_tier": {
+                "hot": 4
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d02_typeboost_weather"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.10151306679962219,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 1,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 4.2439024390243905
+            }
+          }
+        },
+        "factual_recall_retrieval_theory": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f13_state_open_threads",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 26,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 5.3076923076923075
+            }
+          }
+        },
+        "status_state_current_focus": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2065539701415984,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f01_work_decay_trace"
+            ]
+          },
+          "ranked": {
+            "count": 19,
+            "ndcg_at_6": 0.6651394137117136,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.631578947368421
+            }
+          }
+        },
+        "task_status_migration": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2731050877137724,
+            "ndcg_at_4_model_visible": 0.5982318540006005,
+            "contamination_at_4": 0.3333333333333333,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f28_profile_working_style",
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f13_state_open_threads",
+              "d05_recency_today_errand",
+              "f12_state_current_focus"
+            ]
+          },
+          "ranked": {
+            "count": 27,
+            "ndcg_at_6": 0.5685011081815152,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.07407407407407407
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 1.7777777777777777
+            }
+          }
+        },
+        "recent_activity_this_week": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.0,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "d05_recency_today_errand",
+              "f13_state_open_threads",
+              "d02_typeboost_weather"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.19485645071600038,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "recency_bait": 2,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 3.2195121951219514
+            }
+          }
+        },
+        "recent_tooling_change": {
+          "delivered": {
+            "delivered_count": 5,
+            "ndcg_at_6": 0.08645638423810884,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 5
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f29_profile_tooling_pref",
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "d02_typeboost_weather",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "type_boost_bait": 1,
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.04878048780487805
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 2,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 2.926829268292683
+            }
+          }
+        },
+        "activity_pipeline_work": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.2685155072834339,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f28_profile_working_style",
+              "f27_profile_preference",
+              "f01_work_decay_trace",
+              "d05_recency_today_errand",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.4681773832083067,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "lexical_bait": 1
+            },
+            "unresolved_fraction": 0.0
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.6,
+              "rank_displacement": 4.2439024390243905
+            }
+          }
+        },
+        "default_identity_question": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.973494864667227,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "profile": 4,
+                "conversation": 2
+              },
+              "by_tier": {
+                "hot": 6
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f26_profile_role",
+              "f27_profile_preference",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style",
+              "f13_state_open_threads",
+              "d05_recency_today_errand"
+            ]
+          },
+          "ranked": {
+            "count": 42,
+            "ndcg_at_6": 0.0,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.047619047619047616
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 0.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 1.0,
+              "rank_displacement": 3.9523809523809526
+            }
+          }
+        }
+      }
+    },
+    "A_NAIVE_cosine": {
+      "arm": "A_NAIVE_cosine",
+      "label": "bare cosine, no ranker",
+      "aggregates": {
+        "delivered_ndcg_at_6": 0.5146522096899899,
+        "delivered_ndcg_at_4": 0.36680180521215117,
+        "delivered_contamination_at_4": 0.5625,
+        "delivered_unresolved": 0.0,
+        "ranked_ndcg_at_6": 0.5217359674227893,
+        "ranked_contamination_at_4": 0.53125,
+        "ranked_unresolved": 0.15781068524970965,
+        "delivered_cross_query_jaccard": 0.08831297670583385,
+        "ranked_cross_query_jaccard_at_6": 0.09621212121212121,
+        "delivered_jaccard_vs_ref": 0.2202922077922078,
+        "ranked_jaccard_vs_ref": 0.8445121951219512,
+        "delivered_displacement_vs_ref": 1.488095238095238,
+        "ranked_displacement_vs_ref": 11.459758977650505,
+        "delivered_changed_strata": 8,
+        "ranked_changed_strata": 8
+      },
+      "leakage_total": {
+        "lexical_bait": 4,
+        "type_boost_bait": 3,
+        "decay_bait": 1,
+        "recency_bait": 2,
+        "entity_bait": 1,
+        "experience_bait": 1
+      },
+      "per_stratum": {
+        "reflective_work_patterns": {
+          "delivered": {
+            "delivered_count": 4,
+            "ndcg_at_6": 0.2953870410153468,
+            "ndcg_at_4_model_visible": 0.31083481571321947,
+            "contamination_at_4": 0.75,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "lexical_bait": 1,
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "journal": 2,
+                "conversation": 1,
+                "ingested": 1
+              },
+              "by_tier": {
+                "warm": 2,
+                "hot": 1,
+                "cold": 1
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "d07_lexical_overlap_bait",
+              "f08_health_morning_pattern",
+              "d02_typeboost_weather",
+              "f17_ref_hybrid_retrieval"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.32126071744075463,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "lexical_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.1951219512195122
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 1,
+              "ingested": 1,
+              "other": 2
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.14285714285714285,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 1.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 11.829268292682928
+            }
+          }
+        },
+        "factual_recall_retrieval_theory": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.7612196132387782,
+            "ndcg_at_4_model_visible": 0.7448266984546873,
+            "contamination_at_4": 0.25,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "decay_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "ingested": 5,
+                "conversation": 1
+              },
+              "by_tier": {
+                "cold": 4,
+                "warm": 2
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f17_ref_hybrid_retrieval",
+              "f04_work_design_note",
+              "d03_decay_old_recipe",
+              "f05_work_assistant_summary",
+              "f21_ref_chunking_note",
+              "f20_ref_tiering_theory"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.7612196132387782,
+            "contamination_at_4": 0.25,
+            "leakage_by_class": {
+              "decay_bait": 1
+            },
+            "unresolved_fraction": 0.0975609756097561
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.0,
+              "selection_jaccard_at_4": 0.0,
+              "rank_displacement": null
+            },
+            "ranked": {
+              "selection_jaccard": 0.6341463414634146,
+              "selection_jaccard_at_4": 0.0,
+              "rank_displacement": 14.615384615384615
+            }
+          }
+        },
+        "status_state_current_focus": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.5528198385340013,
+            "ndcg_at_4_model_visible": 0.492661526824024,
+            "contamination_at_4": 0.75,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "conversation": 3,
+                "journal": 3
+              },
+              "by_tier": {
+                "hot": 4,
+                "cold": 1,
+                "warm": 1
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f13_state_open_threads",
+              "d06_recency_today_plant",
+              "f16_state_old_priority",
+              "f02_work_index_backlog",
+              "d05_recency_today_errand",
+              "f06_work_migration_progress"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.5528198385340013,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1
+            },
+            "unresolved_fraction": 0.14634146341463414
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.2,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 1.5
+            },
+            "ranked": {
+              "selection_jaccard": 0.4634146341463415,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 8.578947368421053
+            }
+          }
+        },
+        "task_status_migration": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.7259180825819206,
+            "ndcg_at_4_model_visible": 0.5732937258708001,
+            "contamination_at_4": 0.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "conversation": 3,
+                "journal": 3
+              },
+              "by_tier": {
+                "hot": 3,
+                "cold": 2,
+                "warm": 1
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f12_state_current_focus",
+              "f25_tool_old_migration",
+              "f02_work_index_backlog",
+              "f06_work_migration_progress",
+              "f13_state_open_threads",
+              "f16_state_old_priority"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.7259180825819206,
+            "contamination_at_4": 0.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.1951219512195122
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.2,
+              "selection_jaccard_at_4": 0.0,
+              "rank_displacement": 3.0
+            },
+            "ranked": {
+              "selection_jaccard": 0.6585365853658537,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 8.0
+            }
+          }
+        },
+        "recent_activity_this_week": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.14301768099565063,
+            "ndcg_at_4_model_visible": 0.1332149210199512,
+            "contamination_at_4": 0.75,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "lexical_bait": 1,
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "journal": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 4,
+                "warm": 2
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "d06_recency_today_plant",
+              "f23_tool_backup_routine",
+              "d07_lexical_overlap_bait",
+              "d02_typeboost_weather",
+              "d05_recency_today_errand",
+              "f08_health_morning_pattern"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.14301768099565063,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "lexical_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.1951219512195122
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.2,
+              "selection_jaccard_at_4": 0.0,
+              "rank_displacement": 1.5
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 11.024390243902438
+            }
+          }
+        },
+        "recent_tooling_change": {
+          "delivered": {
+            "delivered_count": 5,
+            "ndcg_at_6": 0.25337569858241155,
+            "ndcg_at_4_model_visible": 0.22107421973476202,
+            "contamination_at_4": 0.5,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 1,
+                "conversation": 2,
+                "journal": 2
+              },
+              "by_tier": {
+                "hot": 3,
+                "warm": 1,
+                "cold": 1
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f29_profile_tooling_pref",
+              "d02_typeboost_weather",
+              "f22_tool_editor_setup",
+              "f25_tool_old_migration",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.28417208401939864,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0975609756097561
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 2,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.42857142857142855,
+              "selection_jaccard_at_4": 0.3333333333333333,
+              "rank_displacement": 0.6666666666666666
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 9.731707317073171
+            }
+          }
+        },
+        "activity_pipeline_work": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.5133427448483385,
+            "ndcg_at_4_model_visible": 0.4585085340797652,
+            "contamination_at_4": 0.5,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "lexical_bait": 1,
+              "entity_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "conversation": 4,
+                "journal": 2
+              },
+              "by_tier": {
+                "warm": 4,
+                "hot": 2
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "d12_lexical_overlap_bait_recent",
+              "d08_entity_name_bait",
+              "f01_work_decay_trace",
+              "f03_work_scoring_journal",
+              "f05_work_assistant_summary",
+              "d07_lexical_overlap_bait"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.5133427448483385,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "lexical_bait": 1,
+              "entity_bait": 1
+            },
+            "unresolved_fraction": 0.0975609756097561
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 4,
+              "ingested": 0,
+              "other": 2
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.09090909090909091,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 1.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 13.731707317073171
+            }
+          }
+        },
+        "default_identity_question": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.8721369777234717,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "experience_bait": 1,
+              "lexical_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 4,
+                "journal": 2
+              },
+              "by_tier": {
+                "hot": 4,
+                "cold": 1,
+                "warm": 1
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f27_profile_preference",
+              "d11_experience_kind_bait",
+              "f26_profile_role",
+              "d07_lexical_overlap_bait",
+              "f29_profile_tooling_pref",
+              "f28_profile_working_style"
+            ]
+          },
+          "ranked": {
+            "count": 42,
+            "ndcg_at_6": 0.8721369777234717,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "experience_bait": 1,
+              "lexical_bait": 1
+            },
+            "unresolved_fraction": 0.23809523809523808
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.5,
+              "selection_jaccard_at_4": 0.3333333333333333,
+              "rank_displacement": 1.75
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.0,
+              "rank_displacement": 14.166666666666666
+            }
+          }
+        }
+      }
+    },
+    "A_NAIVE_plus_lexical": {
+      "arm": "A_NAIVE_plus_lexical",
+      "label": "cosine plus lexical and entity terms, no typing",
+      "aggregates": {
+        "delivered_ndcg_at_6": 0.4256405521482887,
+        "delivered_ndcg_at_4": 0.25759011467641146,
+        "delivered_contamination_at_4": 0.6145833333333334,
+        "delivered_unresolved": 0.0,
+        "ranked_ndcg_at_6": 0.4324681029839876,
+        "ranked_contamination_at_4": 0.625,
+        "ranked_unresolved": 0.11570847851335656,
+        "delivered_cross_query_jaccard": 0.08094336219336219,
+        "ranked_cross_query_jaccard_at_6": 0.08160173160173159,
+        "delivered_jaccard_vs_ref": 0.19945887445887445,
+        "ranked_jaccard_vs_ref": 0.8445121951219512,
+        "delivered_displacement_vs_ref": 1.5952380952380951,
+        "ranked_displacement_vs_ref": 11.759098274663101,
+        "delivered_changed_strata": 8,
+        "ranked_changed_strata": 8
+      },
+      "leakage_total": {
+        "lexical_bait": 5,
+        "type_boost_bait": 3,
+        "decay_bait": 2,
+        "recency_bait": 3,
+        "tier_bait": 1,
+        "entity_bait": 1,
+        "experience_bait": 1
+      },
+      "per_stratum": {
+        "reflective_work_patterns": {
+          "delivered": {
+            "delivered_count": 4,
+            "ndcg_at_6": 0.2953870410153468,
+            "ndcg_at_4_model_visible": 0.31083481571321947,
+            "contamination_at_4": 0.75,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "lexical_bait": 1,
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "journal": 2,
+                "conversation": 1,
+                "ingested": 1
+              },
+              "by_tier": {
+                "warm": 2,
+                "hot": 1,
+                "cold": 1
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "d07_lexical_overlap_bait",
+              "f08_health_morning_pattern",
+              "d02_typeboost_weather",
+              "f20_ref_tiering_theory"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.3192110622639504,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "lexical_bait": 1,
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.1951219512195122
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 1,
+              "ingested": 1,
+              "other": 2
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.14285714285714285,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 1.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 11.829268292682928
+            }
+          }
+        },
+        "factual_recall_retrieval_theory": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.40407436320336804,
+            "ndcg_at_4_model_visible": 0.36316246790842005,
+            "contamination_at_4": 0.5,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "decay_bait": 2
+            },
+            "composition": {
+              "by_type": {
+                "ingested": 5,
+                "conversation": 1
+              },
+              "by_tier": {
+                "cold": 5,
+                "warm": 1
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "d03_decay_old_recipe",
+              "d04_decay_old_travel",
+              "f17_ref_hybrid_retrieval",
+              "f20_ref_tiering_theory",
+              "f04_work_design_note",
+              "f05_work_assistant_summary"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.40407436320336804,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "decay_bait": 2
+            },
+            "unresolved_fraction": 0.14634146341463414
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.0,
+              "selection_jaccard_at_4": 0.0,
+              "rank_displacement": null
+            },
+            "ranked": {
+              "selection_jaccard": 0.6341463414634146,
+              "selection_jaccard_at_4": 0.0,
+              "rank_displacement": 14.23076923076923
+            }
+          }
+        },
+        "status_state_current_focus": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.3758124690083017,
+            "ndcg_at_4_model_visible": 0.31083481571321947,
+            "contamination_at_4": 0.75,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "tier_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "journal": 3,
+                "conversation": 3
+              },
+              "by_tier": {
+                "hot": 5,
+                "cold": 1
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "d06_recency_today_plant",
+              "f13_state_open_threads",
+              "d09_tier_hot_irrelevant",
+              "f16_state_old_priority",
+              "d05_recency_today_errand",
+              "f06_work_migration_progress"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.3758124690083017,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "recency_bait": 1,
+              "tier_bait": 1
+            },
+            "unresolved_fraction": 0.14634146341463414
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.2,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 1.0
+            },
+            "ranked": {
+              "selection_jaccard": 0.4634146341463415,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 8.736842105263158
+            }
+          }
+        },
+        "task_status_migration": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.7259180825819206,
+            "ndcg_at_4_model_visible": 0.5732937258708001,
+            "contamination_at_4": 0.0,
+            "abstention_correct": null,
+            "leakage_by_class": {},
+            "composition": {
+              "by_type": {
+                "conversation": 3,
+                "journal": 3
+              },
+              "by_tier": {
+                "hot": 3,
+                "cold": 2,
+                "warm": 1
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f12_state_current_focus",
+              "f25_tool_old_migration",
+              "f02_work_index_backlog",
+              "f06_work_migration_progress",
+              "f13_state_open_threads",
+              "f16_state_old_priority"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.7259180825819206,
+            "contamination_at_4": 0.0,
+            "leakage_by_class": {},
+            "unresolved_fraction": 0.0975609756097561
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.2,
+              "selection_jaccard_at_4": 0.0,
+              "rank_displacement": 3.0
+            },
+            "ranked": {
+              "selection_jaccard": 0.6585365853658537,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 9.148148148148149
+            }
+          }
+        },
+        "recent_activity_this_week": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.07380197256102222,
+            "ndcg_at_4_model_visible": 0.0,
+            "contamination_at_4": 1.0,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "recency_bait": 2,
+              "type_boost_bait": 1,
+              "lexical_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "journal": 2,
+                "conversation": 3,
+                "reflection": 1
+              },
+              "by_tier": {
+                "hot": 4,
+                "warm": 1,
+                "cold": 1
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "d06_recency_today_plant",
+              "d05_recency_today_errand",
+              "d02_typeboost_weather",
+              "d07_lexical_overlap_bait",
+              "f23_tool_backup_routine",
+              "f11_health_older_reflection"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.07380197256102222,
+            "contamination_at_4": 1.0,
+            "leakage_by_class": {
+              "recency_bait": 2,
+              "type_boost_bait": 1,
+              "lexical_bait": 1
+            },
+            "unresolved_fraction": 0.14634146341463414
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 3,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.2,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 2.5
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.3333333333333333,
+              "rank_displacement": 11.463414634146341
+            }
+          }
+        },
+        "recent_tooling_change": {
+          "delivered": {
+            "delivered_count": 5,
+            "ndcg_at_6": 0.25337569858241155,
+            "ndcg_at_4_model_visible": 0.22107421973476202,
+            "contamination_at_4": 0.5,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 1,
+                "conversation": 2,
+                "journal": 2
+              },
+              "by_tier": {
+                "hot": 3,
+                "warm": 1,
+                "cold": 1
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f29_profile_tooling_pref",
+              "d02_typeboost_weather",
+              "f22_tool_editor_setup",
+              "f25_tool_old_migration",
+              "f13_state_open_threads"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.28417208401939864,
+            "contamination_at_4": 0.5,
+            "leakage_by_class": {
+              "type_boost_bait": 1
+            },
+            "unresolved_fraction": 0.0975609756097561
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 2,
+              "ingested": 0,
+              "other": 3
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.42857142857142855,
+              "selection_jaccard_at_4": 0.3333333333333333,
+              "rank_displacement": 0.6666666666666666
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 9.829268292682928
+            }
+          }
+        },
+        "activity_pipeline_work": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.4866764903278195,
+            "ndcg_at_4_model_visible": 0.246330763412012,
+            "contamination_at_4": 0.75,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "entity_bait": 1,
+              "lexical_bait": 2
+            },
+            "composition": {
+              "by_type": {
+                "conversation": 4,
+                "journal": 2
+              },
+              "by_tier": {
+                "warm": 4,
+                "hot": 2
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "d08_entity_name_bait",
+              "d12_lexical_overlap_bait_recent",
+              "f01_work_decay_trace",
+              "d07_lexical_overlap_bait",
+              "f03_work_scoring_journal",
+              "f05_work_assistant_summary"
+            ]
+          },
+          "ranked": {
+            "count": 41,
+            "ndcg_at_6": 0.4866764903278195,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "entity_bait": 1,
+              "lexical_bait": 2
+            },
+            "unresolved_fraction": 0.04878048780487805
+          },
+          "residual_quota": {
+            "quota_normally_active": true,
+            "delivered_group_split": {
+              "conversation": 4,
+              "ingested": 0,
+              "other": 2
+            },
+            "quota_would_force": "round-robin conversation/ingested/other, one per pass"
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.09090909090909091,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 1.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.14285714285714285,
+              "rank_displacement": 14.073170731707316
+            }
+          }
+        },
+        "default_identity_question": {
+          "delivered": {
+            "delivered_count": 6,
+            "ndcg_at_6": 0.7900782999061196,
+            "ndcg_at_4_model_visible": 0.03519010905885886,
+            "contamination_at_4": 0.6666666666666666,
+            "abstention_correct": null,
+            "leakage_by_class": {
+              "experience_bait": 1,
+              "lexical_bait": 1
+            },
+            "composition": {
+              "by_type": {
+                "profile": 3,
+                "journal": 3
+              },
+              "by_tier": {
+                "hot": 3,
+                "cold": 1,
+                "warm": 2
+              }
+            },
+            "unresolved_fraction": 0.0,
+            "boundary_ties_at_4": 0,
+            "boundary_ties_at_6": 0,
+            "delivered_ids": [
+              "f27_profile_preference",
+              "d11_experience_kind_bait",
+              "d07_lexical_overlap_bait",
+              "f26_profile_role",
+              "f29_profile_tooling_pref",
+              "f08_health_morning_pattern"
+            ]
+          },
+          "ranked": {
+            "count": 42,
+            "ndcg_at_6": 0.7900782999061196,
+            "contamination_at_4": 0.75,
+            "leakage_by_class": {
+              "experience_bait": 1,
+              "lexical_bait": 1
+            },
+            "unresolved_fraction": 0.047619047619047616
+          },
+          "residual_quota": {
+            "quota_normally_active": false
+          },
+          "vs_reference": {
+            "delivered": {
+              "selection_jaccard": 0.3333333333333333,
+              "selection_jaccard_at_4": 0.3333333333333333,
+              "rank_displacement": 2.0
+            },
+            "ranked": {
+              "selection_jaccard": 1.0,
+              "selection_jaccard_at_4": 0.0,
+              "rank_displacement": 14.761904761904763
+            }
+          }
+        }
+      }
+    }
+  }
+}

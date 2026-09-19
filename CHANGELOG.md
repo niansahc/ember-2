@@ -1,5 +1,71 @@
 # Changelog
 
+## [0.18.2](https://github.com/niansahc/ember-2/compare/v0.18.1...v0.18.2) (2026-09-19)
+
+
+### Features
+
+* bound derived-record tier by source tier (ADR-015 amendment) ([c954166](https://github.com/niansahc/ember-2/commit/c95416692d5c1750ed4d0fdbaf30050d2730ae71))
+* bound derived-record tier by source tier (ADR-015 amendment) ([d0f2c6c](https://github.com/niansahc/ember-2/commit/d0f2c6c44371d28cc016f4c99c7f354e9fd17b93))
+* cold tier is a weight, not exclusion (ADR-015 amendment) ([b50d37d](https://github.com/niansahc/ember-2/commit/b50d37dd64344fb4ea10cc10e2facdca4181a1ea))
+* cold tier is a weight, not exclusion (ADR-015 amendment) ([4a5db9f](https://github.com/niansahc/ember-2/commit/4a5db9f94a28dba8500666da1a60b1d9e4fe896d))
+* flatten importance ladder, ship the activation model (ADR-015 amendment, step 4) ([6f49a97](https://github.com/niansahc/ember-2/commit/6f49a97b1f33bb0a6ded914fec8bf7c0263ab788))
+* flatten importance ladder, ship the activation model (ADR-015 amendment, step 4) ([86a0f4c](https://github.com/niansahc/ember-2/commit/86a0f4cd715b4735ca0717d9e5da0279e0d692ad))
+* generation-only Ollama host, local embeddings and vision ([1450cd5](https://github.com/niansahc/ember-2/commit/1450cd550d987005dfee7fbb6b9412e53d32182d))
+* generation-only Ollama host, local embeddings and vision ([28104bc](https://github.com/niansahc/ember-2/commit/28104bc0c3c2a0f24f392c27c850cfff40b4d9f9))
+* pinned model swap for eval sweeps, remove dead context-window call ([0100f1c](https://github.com/niansahc/ember-2/commit/0100f1c73991973a1a87dbd022f53cc2d631a5ea))
+* pinned model swap for eval sweeps, remove dead context-window call ([ab81c61](https://github.com/niansahc/ember-2/commit/ab81c6162cf302d7528e9b9b225bb3e3bd88e600))
+* provenance emission for all derived writers, cross-type source resolver ([cad6031](https://github.com/niansahc/ember-2/commit/cad60311c099646762a093edfe9f8b98002b1ca8))
+* provenance emission for all derived writers, cross-type source resolver ([3aa07ef](https://github.com/niansahc/ember-2/commit/3aa07efa4ec731c695f8941ba293ff38c836f77f))
+* reclassify prior-substrate conversation from ingested (ADR-015 amendment) ([351e348](https://github.com/niansahc/ember-2/commit/351e3486c3a5e7318637c4375f68db99cd58bd3c))
+* reclassify prior-substrate conversation from ingested (ADR-015 amendment) ([63466b1](https://github.com/niansahc/ember-2/commit/63466b15c50075dc62d84a6004a6a16b1d928935))
+* retrieval-architecture ablation eval (TDD §35) ([fb4e25f](https://github.com/niansahc/ember-2/commit/fb4e25f579634c1e680e5ee3505c3fbf4537d600))
+* retrieval-architecture ablation eval (TDD §35) ([1e7d773](https://github.com/niansahc/ember-2/commit/1e7d77394d5e94fe0148961dbb786341efdf1dee))
+* **scripts:** add memory.db rebuild path to rebuild_indexes ([b8dae3a](https://github.com/niansahc/ember-2/commit/b8dae3a0e6cb1895e95d3bee5a4d6bd4db7b7e08))
+* **scripts:** add memory.db rebuild path to rebuild_indexes ([07053b8](https://github.com/niansahc/ember-2/commit/07053b8cc010f658ec5a1d20ed00ca8e7032961b))
+
+
+### Bug Fixes
+
+* add candidate context windows, separate eval write-suppression from retrieval ([731eb91](https://github.com/niansahc/ember-2/commit/731eb9135014cd5440a239815d39a00c3c95cca8))
+* add candidate context windows, separate eval write-suppression from retrieval ([7aeb7dc](https://github.com/niansahc/ember-2/commit/7aeb7dc2810b4b511f82f1c9dde93f3952915f09))
+* ANTHROPIC_API_KEY resolves from keyring before .env (closes [#189](https://github.com/niansahc/ember-2/issues/189)) ([741302a](https://github.com/niansahc/ember-2/commit/741302a805a406b6e4096582aac789e75b93cfc9))
+* ANTHROPIC_API_KEY resolves from keyring before .env (closes [#189](https://github.com/niansahc/ember-2/issues/189)) ([c69cac8](https://github.com/niansahc/ember-2/commit/c69cac89258d873c6d53caca4ea322c7bf4e8955))
+* auxiliary callers resolve a local-only model, independent of generation host ([10e0bc2](https://github.com/niansahc/ember-2/commit/10e0bc25f80046642616ec9da54a7032cac96012))
+* auxiliary callers resolve a local-only model, independent of generation host ([#190](https://github.com/niansahc/ember-2/issues/190)) ([7481d24](https://github.com/niansahc/ember-2/commit/7481d2489cffb3eb6366873612206bc20055200a))
+* bind vault path at thread spawn for deferred writes (closes [#144](https://github.com/niansahc/ember-2/issues/144)) ([9e487fe](https://github.com/niansahc/ember-2/commit/9e487fe316bb1582c621dc7faa3c208537a3c1a1))
+* bind vault path at thread spawn for deferred writes (closes [#144](https://github.com/niansahc/ember-2/issues/144)) ([b6c2e40](https://github.com/niansahc/ember-2/commit/b6c2e40ddf5f672ced6407ec7847a93e34264ae3))
+* **context:** add read-only path so debug-context does not mutate retrieval stats ([dcbb7ec](https://github.com/niansahc/ember-2/commit/dcbb7ec52a307e421cbcb4224018c19844f847e0))
+* **context:** add read-only path so debug-context does not mutate retrieval stats ([085e4f7](https://github.com/niansahc/ember-2/commit/085e4f7a34de07217237f18609f0e06917aa0644)), closes [#206](https://github.com/niansahc/ember-2/issues/206)
+* derived-record provenance, authorship, and ranking corrections (Recalling Too Well Phase 1) ([9071a7d](https://github.com/niansahc/ember-2/commit/9071a7d7052b70279d33f16398554b6551182fcb))
+* derived-record provenance, authorship, and ranking corrections (Recalling Too Well Phase 1) ([b550ee3](https://github.com/niansahc/ember-2/commit/b550ee3949f30cad1c502bfc119b675161ec0eb7))
+* eval tools pin model swaps instead of persisting (closes [#154](https://github.com/niansahc/ember-2/issues/154)) ([be6920f](https://github.com/niansahc/ember-2/commit/be6920fcfde968808fcac78974e48c0a1647b489))
+* eval tools pin model swaps instead of persisting (closes [#154](https://github.com/niansahc/ember-2/issues/154)) ([6c38748](https://github.com/niansahc/ember-2/commit/6c3874878fbbf3220b1c5c87fd207cb6ecf462bd))
+* eval_conversations isolates to test vault before cloud judge calls (closes [#146](https://github.com/niansahc/ember-2/issues/146)) ([5eda07a](https://github.com/niansahc/ember-2/commit/5eda07af4e2d9c82078f1862b9c84532508a39a1))
+* eval_conversations isolates to test vault before cloud judge calls (closes [#146](https://github.com/niansahc/ember-2/issues/146)) ([f61368d](https://github.com/niansahc/ember-2/commit/f61368d8905b448f30ae7ee1c23f5c61477365b5))
+* force test vault in post-commit eval hook, fail closed if unset ([1069ed5](https://github.com/niansahc/ember-2/commit/1069ed5aee65523408529bd5ce87c1ce2fe9f533))
+* force test vault in post-commit eval hook, fail closed if unset ([6ff3878](https://github.com/niansahc/ember-2/commit/6ff3878c53521d82b822cd551aba4a80988749dc))
+* **generation:** thread session_id through non-streaming path, fix buffer reset ([9686ca6](https://github.com/niansahc/ember-2/commit/9686ca625b03574a57763cfe714eaf9942845988))
+* **generation:** thread session_id through non-streaming path, fix buffer reset ([3698453](https://github.com/niansahc/ember-2/commit/36984530887f189ae6711b900c687f29cd3c5099))
+* honor vision_enabled flag at image gate (closes [#138](https://github.com/niansahc/ember-2/issues/138)) ([416c525](https://github.com/niansahc/ember-2/commit/416c525425f11d3de3440f406388e15521550069))
+* honor vision_enabled flag at image gate (closes [#138](https://github.com/niansahc/ember-2/issues/138)) ([805d08c](https://github.com/niansahc/ember-2/commit/805d08c27471fa04d172b86115fcc4d48d6cf0ef))
+* isolate test environment from live .env configuration (closes [#195](https://github.com/niansahc/ember-2/issues/195)) ([15a9129](https://github.com/niansahc/ember-2/commit/15a91294db1530281fae60cc3077b68dfd095157))
+* isolate test environment from live .env configuration (closes [#195](https://github.com/niansahc/ember-2/issues/195)) ([1034f10](https://github.com/niansahc/ember-2/commit/1034f10e107a6198a744c0ed03dafc8997ead24a))
+* **privacy:** remove hardcoded user utterances from scoring triggers ([7cd10a5](https://github.com/niansahc/ember-2/commit/7cd10a55f41993ab4165ea7028f4d1c754d1e25d))
+* **privacy:** remove hardcoded user utterances from scoring triggers ([1f46953](https://github.com/niansahc/ember-2/commit/1f46953b1cbcaa8907e726a9e0c75fb7a591404e))
+* redact secrets from diagnostic output (closes [#188](https://github.com/niansahc/ember-2/issues/188)) ([5dc3f60](https://github.com/niansahc/ember-2/commit/5dc3f6014312225240842f165629d8fd9c85743b))
+* redact secrets from diagnostic output (closes [#188](https://github.com/niansahc/ember-2/issues/188)) ([9ba3950](https://github.com/niansahc/ember-2/commit/9ba3950ca50cbb1abe2803ca3107981b8591e5db))
+* report generation-host models so sweep validation can see them ([d1ea4f6](https://github.com/niansahc/ember-2/commit/d1ea4f6e3a1c4b996bfce49d3c4a1f548336a178))
+* report generation-host models so sweep validation can see them ([ee1d0b0](https://github.com/niansahc/ember-2/commit/ee1d0b04012e395813c7f867a7dfedd1c914416c))
+* restore process state between vault test suites (cross-file isolation leak) ([3eaabe7](https://github.com/niansahc/ember-2/commit/3eaabe722acd5908f30d83354f3e229a6914bd67))
+* restore process state between vault test suites (cross-file isolation leak) ([b715b52](https://github.com/niansahc/ember-2/commit/b715b525ce3d27d67b8835e5519c84874b677e72))
+* stop logging verbatim response text in safety reviews (closes [#151](https://github.com/niansahc/ember-2/issues/151)) ([60a11b9](https://github.com/niansahc/ember-2/commit/60a11b9e5465075447f8341a11bb8fc8a31c789c))
+* stop logging verbatim response text in safety reviews (closes [#151](https://github.com/niansahc/ember-2/issues/151)) ([dfbde12](https://github.com/niansahc/ember-2/commit/dfbde1208bdcc3597be1181d905702b9f3f50526))
+* treat stored vision_enabled=null as unset, not disabled ([04c7550](https://github.com/niansahc/ember-2/commit/04c75502222e56e1039297207a1d5f89e8465ed8))
+* **vault:** key store cache on resolved db path, verify swap, fail closed ([a0f5622](https://github.com/niansahc/ember-2/commit/a0f5622eaac661950678b6cd4128d79eb420f5ec))
+* **vault:** key store cache on resolved db path, verify swap, fail closed ([6cd1e03](https://github.com/niansahc/ember-2/commit/6cd1e03823f6c0e3efa64b875a49a118a7ba2d19))
+* verified context lengths for Spark candidates, correct installed tag strings ([8f58fe6](https://github.com/niansahc/ember-2/commit/8f58fe680c33947d2b03edc5e1b4898373bb68bd))
+
 ## [0.18.1](https://github.com/niansahc/ember-2/compare/v0.18.0...v0.18.1) (2026-08-31)
 
 

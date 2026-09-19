@@ -32,6 +32,7 @@ from .metrics import (
     evaluate_query,
     leakage_by_class,
     mean_ignoring_none,
+    mean_pairwise_jaccard,
     ndcg_at_k,
     unresolved_fraction,
 )
@@ -109,6 +110,19 @@ def summarise_arm(arm_payload: dict, reference_payload: dict | None) -> dict:
         "ranked_ndcg_at_6": agg("ranked", "ndcg_at_6"),
         "ranked_contamination_at_4": agg("ranked", "contamination_at_4"),
         "ranked_unresolved": agg("ranked", "unresolved_fraction"),
+        # Within-arm, not against the reference: how much this arm's delivered
+        # set changes as the query changes. Distinct from the *_jaccard_vs_ref
+        # entries below, which compare arms. See metrics.mean_pairwise_jaccard
+        # for why it needs a reference value rather than a zero baseline.
+        "delivered_cross_query_jaccard": mean_pairwise_jaccard(
+            [per_stratum[s.name]["delivered"]["delivered_ids"] for s in STRATA]
+        ),
+        "ranked_cross_query_jaccard_at_6": mean_pairwise_jaccard(
+            [
+                [i["id"] for i in arm_payload["cells"][s.name]["ranked"][:K_SERVICE]]
+                for s in STRATA
+            ]
+        ),
     }
 
     if reference_payload is not None:
@@ -222,6 +236,28 @@ def render_report(raw: dict) -> tuple[str, dict]:
             f"{_delta(a['ranked_ndcg_at_6'], ref_agg['ranked_ndcg_at_6'])} "
             f"{_fmt(a['ranked_contamination_at_4'], 9)} "
             f"{_delta(a['ranked_contamination_at_4'], ref_agg['ranked_contamination_at_4'])}"
+        )
+
+    add("")
+    add("-" * 78)
+    add("QUERY-INDEPENDENCE -- mean pairwise Jaccard across the 8 queries")
+    add("-" * 78)
+    add("How much the delivered set stays the same as the query changes.")
+    add("Within-arm, not against the reference. High means delivery is being")
+    add("decided by something other than the query. Read against the arms")
+    add("below, not against zero: the strata were authored with largely")
+    add("disjoint relevant sets, so a correct retriever scores low HERE for")
+    add("reasons that do not transfer to a vault where concerns recur.")
+    add("")
+    add(f"{'arm':22} {'delivered':>10} {'d':>7} {'ranked@6':>10} {'d':>7}")
+    for name, summary in summaries.items():
+        a = summary["aggregates"]
+        add(
+            f"{name:22} "
+            f"{_fmt(a['delivered_cross_query_jaccard'], 10)} "
+            f"{_delta(a['delivered_cross_query_jaccard'], ref_agg['delivered_cross_query_jaccard'])} "
+            f"{_fmt(a['ranked_cross_query_jaccard_at_6'], 10)} "
+            f"{_delta(a['ranked_cross_query_jaccard_at_6'], ref_agg['ranked_cross_query_jaccard_at_6'])}"
         )
 
     add("")

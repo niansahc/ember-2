@@ -91,7 +91,7 @@ PROFILE_RECORDS = [
     },
 
     # --- Personal interests and practices ---
-    # Hobbies, creative work, spiritual practice, anything that shapes
+    # Hobbies, creative work, spiritual practice, anything that governs
     # how you spend your time and what you care about.
     {
         "text": "Outside of work I spend time on [interests, practices, or pursuits]. [Brief description of what these mean to you or how they show up in your life].",

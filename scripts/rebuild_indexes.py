@@ -14,7 +14,7 @@ is the rebuild mechanism.
 memory.db and the reproducibility rule
 --------------------------------------
 That guarantee (CLAUDE.md core rule 4) did not hold for memory.db until
---memory-db was added, and the reason is worth stating because it shapes
+--memory-db was added, and the reason is worth stating because it drives
 the mode's design. memory.db holds primary-key identity that exists
 nowhere else: the prior-substrate conversation corpus was moved into it
 from ingested.db by an index-only migration, carrying ids minted by a

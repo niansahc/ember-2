@@ -74,6 +74,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.core.config import get_private_vault_path
 from src.memory.authorship import classify_authorship
+from src.memory.eval_fixtures import is_eval_fixture, should_index_record
 from src.retrieval.embedding_model import embed_texts
 from src.retrieval.sqlite_vector_store import SqliteVectorStore
 
@@ -359,6 +360,7 @@ def collect_source_records(vault: Path) -> list[SourceRecord]:
     (src/ingest/writers.py:26-35).
     """
     records: list[SourceRecord] = []
+    skipped_fixtures: list[str] = []
 
     for memory_type in MEMORY_DB_TYPES:
         directory = vault / "memory" / memory_type
@@ -372,6 +374,12 @@ def collect_source_records(vault: Path) -> list[SourceRecord]:
                 continue
             text = data.get("text") or ""
             if not text.strip():
+                continue
+            # Eval fixtures index only into the configured test vault, so a
+            # rebuild cannot reintroduce what the write path now refuses
+            # (issue #211). Same helper, same fail-closed direction.
+            if not should_index_record(vault, data.get("source"), data.get("metadata")):
+                skipped_fixtures.append(path.stem)
                 continue
             records.append(
                 SourceRecord(
@@ -409,6 +417,12 @@ def collect_source_records(vault: Path) -> list[SourceRecord]:
                     file_path=path,
                 )
             )
+
+    if skipped_fixtures:
+        print(
+            f"  [memory.db] skipped {len(skipped_fixtures)} eval fixture(s): "
+            "not indexing test corpus into a non-test vault"
+        )
 
     return records
 

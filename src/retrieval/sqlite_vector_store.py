@@ -34,6 +34,7 @@ store.close()
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sqlite3
 import struct
@@ -41,6 +42,8 @@ from datetime import datetime
 from pathlib import Path
 
 from src.core.timestamps import parse_vault_timestamp
+
+logger = logging.getLogger(__name__)
 
 
 class SqliteVectorStore:
@@ -403,6 +406,21 @@ class SqliteVectorStore:
         """
         if not record_ids:
             return
+
+        # Last line of defense for read-only replay. build_context's
+        # read_only flag is a per-call opt-in and the ablation harness did
+        # not pass it; gating here covers every entry point, including any
+        # that calls this store directly. See src/retrieval/retrieval_stats.py.
+        from src.retrieval.retrieval_stats import retrieval_stats_disabled_now
+
+        if retrieval_stats_disabled_now():
+            logger.info(
+                "[TIERING] retrieval-stat write suppressed for %d record(s): "
+                "read-only mode is active",
+                len(record_ids),
+            )
+            return
+
         from src.core.config import get_tier_recency_halflife_days
 
         halflife = get_tier_recency_halflife_days()

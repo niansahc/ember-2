@@ -239,9 +239,27 @@ class ContextService:
 
         # Profile items are guaranteed slots — partition them out first so the
         # ranker's score-based ordering cannot push them below the limit cutoff.
+        #
+        # memory_limit applies to the non-profile channel only; profile is not
+        # charged against it. Profile already has its own prompt section, and
+        # prompt_builder.py:978-979 partitions it out a second time and caps
+        # non-profile at [:4] independently -- so subtracting the profile count
+        # here reserved no prompt space for profile. It only starved the other
+        # channel before it reached a render layer that was going to separate
+        # them anyway.
+        #
+        # This also makes profile consistent with every other always-on layer.
+        # Nature, the lodestone seed and living values, state, tasks and
+        # reflections each have their own section and their own budget; profile
+        # was the only one billed to the retrieval window. On the reflective
+        # policy, whose limit is 4, the subtraction left one non-profile slot
+        # and killed _select_diverse_memory's round-robin outright.
+        #
+        # The guarantee is unchanged: three profile records, no gate, no
+        # threshold, no ordering. See the council review on #211 follow-up.
         profile_items = [i for i in deduped_memory if i.memory_type == "profile"]
         other_items = [i for i in deduped_memory if i.memory_type != "profile"]
-        remaining_limit = max(0, memory_limit - len(profile_items))
+        remaining_limit = memory_limit
 
         if policy.diversity:
             selected_other = self._select_diverse_memory(

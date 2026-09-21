@@ -495,11 +495,23 @@ def run_cell(stratum: Stratum, arm: Arm) -> CellResult:
 
     if not arm.ranker_stages:
         # Naive baseline: no ranker, no gating, no policy. Rank by retrieval
-        # score and cut at the service limit the pinned policy would have used,
-        # so the comparison is not decided by how many items each arm returns.
+        # score and cut at the budget the reference arm actually delivers, so
+        # the comparison is not decided by how many items each arm returns.
+        #
+        # That budget is memory_limit NON-PROFILE records plus every profile
+        # record, because ContextService does not charge profile against
+        # memory_limit -- profile is partitioned out and prepended before the
+        # limit applies. Using memory_limit alone was correct only while the
+        # service subtracted the profile count from it; it silently under-cut
+        # the naive arm the moment that stopped being true, which is a
+        # window-size confound rather than a ranking result.
         limit = ContextService.__new__(ContextService)._memory_limit_for_policy(
             stratum.policy_name
         )
+        n_profile = sum(
+            1 for c in candidates if getattr(c, "memory_type", "") == "profile"
+        )
+        limit += n_profile
         ordered = sorted(candidates, key=lambda i: i.score, reverse=True)
         return CellResult(
             delivered=_to_delivered(ordered[:limit]),

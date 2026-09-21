@@ -2,8 +2,9 @@
 
 **Status:** Proposed
 **Date:** 2026-09-19
+**Amended:** 2026-09-21 (decision 4, role -- see 4a)
 **Target:** v0.19.0
-**Related:** ADR-005 (context ranking), ADR-015 (memory tiering, and its 2026-09-19 corrections), ADR-007 (project-scoped retrieval), ADR-018 (intent-aware type gating), issues #204, #205, #206, #211
+**Related:** ADR-005 (context ranking), ADR-015 (memory tiering, and its 2026-09-19 corrections), ADR-007 (project-scoped retrieval), ADR-018 (intent-aware type gating), issues #204, #205, #206, #211, #218, PR #217 (experiment 2)
 
 ## Context
 
@@ -156,6 +157,62 @@ open question is not whether the capability is real but whether it belongs in
 score space at all, or as a predicate or per-authorship quota using the
 existing `authorship` column.
 
+### 4a. Amendment (2026-09-21): role moves to a hard predicate
+
+Experiment 2 has run (PR #217, `tests/test_incident_reproduction.py`). The
+deferral is closed. **Role leaves the scoring budget and becomes a hard
+predicate on the existing `authorship` column.** No schema change: the column
+was added by f9f5dda and is already populated and indexed.
+
+The measurement, at the model-visible window after the four-item slice:
+
+| incident | endpoint | shipped | reduced | + role predicate | + entity boost |
+|---|---|---|---|---|---|
+| self-echo | presence | PASS | **FAIL** | **PASS** | FAIL |
+| relational contamination | presence | PASS | PASS | PASS | PASS |
+| entity confusion | order | PASS | **FAIL** | FAIL | **PASS** |
+
+Three findings, and together they narrow role to a single job that a predicate
+does completely.
+
+**The pile is responsible for exactly one incident, and the predicate covers
+it.** Self-echo recurs the moment the role pile is removed and is fully
+suppressed by a predicate over the same records -- decoy gone, answer still
+delivered. A predicate is not an approximation of the pile here; on this
+incident it is a substitute for it.
+
+**The pile was expensive for what it bought.** Its combined swing is -0.45
+against a measured mean top-8 cosine spread of 0.1504: three times the entire
+observable similarity range, spent on one term, to do a job a WHERE clause
+does at no cost to the budget at all. Under the bound this ADR establishes, a
+term that large would have had to justify itself against the spread, and it
+cannot.
+
+**Two capabilities that looked like role's were not.** Relational
+contamination passes in *every* arm, including the fully reduced one, because
+the authorship multiplier is a gate rather than a class constant and is
+retained throughout -- that capability belongs to the authorship gate and was
+never the role pile's. Entity confusion is resolved only by the entity boost, a
+query-dependent term outside the role question entirely. Both were cited
+during the grill as reasons the role pile might be load-bearing. Neither is.
+
+What this does not say: assistant-turn demotion is unnecessary. It is
+necessary, it is the one capability with no second owner, and the reduced arm
+failing self-echo is the evidence. The change is only where it lives. Selection
+is the better home because a predicate cannot be outvoted by an unrelated
+constant, states its intent in the query rather than in a magnitude, and costs
+nothing against a bounded budget.
+
+Two things this amendment does not settle. Whether the predicate excludes
+assistant-authored conversation outright or caps it by quota -- outright is the
+simpler default and what experiment 2 measured, but a quota preserves access
+for the case where an assistant turn is genuinely the best record, and nothing
+here tests that case. And the interaction with the authorship population
+problem: the predicate keys on the same column whose `third_party` value now
+has zero rows behind it (issue #218), so whichever predicate ships must be
+written against the values the column actually carries rather than the ones
+f9f5dda assigned.
+
 ## The bound, and what it is asserted against
 
 The prior is bounded, and **the bound is asserted against the measured cosine
@@ -238,7 +295,11 @@ stepwise form or adopts tier's exponential one. Same dependency. The functional
 form should be settled before the values: two curves of different functional
 form cannot be compared by tuning.
 
-**Role.** Decision 4, pending experiment 2.
+**Role.** ~~Decision 4, pending experiment 2.~~ Settled by the 2026-09-21
+amendment above: role leaves the budget for a predicate on the `authorship`
+column. What remains open is narrower -- whether the predicate excludes
+outright or caps by quota, and which column values it keys on given that
+`third_party` currently has no rows behind it (issue #218).
 
 **The measured production cosine spread.** The 0.1504 figure is from the
 fixture corpus. The bound needs the production number and it has never been

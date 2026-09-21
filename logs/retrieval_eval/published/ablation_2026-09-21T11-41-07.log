@@ -1,7 +1,7 @@
 ==============================================================================
 RETRIEVAL-ARCHITECTURE ABLATION
 ==============================================================================
-Run:   2026-09-19T08-15-13
+Run:   2026-09-21T11-41-07
 Vault: C:\DEVEmberVault\test_vault
 Corpus: 8 strata, 42 fixtures, graded 0-3 by construction, cosines measured
 
@@ -12,17 +12,17 @@ hot/warm/cold tiering add over a naive verbatim + embedding baseline?
 DELIVERED -- what the model actually sees
 ------------------------------------------------------------------------------
 arm                     nDCG@6       d  nDCG@4       d  contam@4       d
-A0_FULL                  0.226  +0.000   0.198  +0.000     0.833  +0.000
-A_T-off_scoring          0.226  +0.000   0.198  +0.000     0.833  +0.000
-A_T-off_policy           0.266  +0.040   0.208  +0.010     0.812  -0.021
-A_H-off                  0.226  +0.000   0.198  +0.000     0.833  +0.000
-A_decay-off              0.226  +0.000   0.198  +0.000     0.833  +0.000
-A_recency-off            0.226  +0.000   0.198  +0.000     0.833  +0.000
-A_lexical-off            0.215  -0.011   0.167  -0.031     0.833  +0.000
-A_quality-off            0.226  +0.000   0.198  +0.000     0.833  +0.000
-A_T-off_H-off            0.226  +0.000   0.198  +0.000     0.833  +0.000
-A_NAIVE_cosine           0.515  +0.289   0.367  +0.169     0.562  -0.271
-A_NAIVE_plus_lexical     0.426  +0.200   0.258  +0.060     0.615  -0.219
+A0_FULL                  0.229  +0.000   0.207  +0.000     0.812  +0.000
+A_T-off_scoring          0.232  +0.003   0.208  +0.001     0.812  +0.000
+A_T-off_policy           0.266  +0.036   0.208  +0.001     0.812  +0.000
+A_H-off                  0.229  +0.000   0.207  +0.000     0.812  +0.000
+A_decay-off              0.229  -0.000   0.202  -0.005     0.844  +0.031
+A_recency-off            0.229  +0.000   0.207  +0.000     0.812  +0.000
+A_lexical-off            0.218  -0.011   0.176  -0.031     0.812  +0.000
+A_quality-off            0.229  +0.000   0.230  +0.023     0.812  +0.000
+A_T-off_H-off            0.232  +0.003   0.208  +0.001     0.812  +0.000
+A_NAIVE_cosine           0.522  +0.292   0.371  +0.163     0.531  -0.281
+A_NAIVE_plus_lexical     0.432  +0.203   0.258  +0.050     0.625  -0.188
 
 ------------------------------------------------------------------------------
 RANKED -- the ranker's verdict, before the limit and profile slots
@@ -51,17 +51,17 @@ disjoint relevant sets, so a correct retriever scores low HERE for
 reasons that do not transfer to a vault where concerns recur.
 
 arm                     delivered       d   ranked@6       d
-A0_FULL                     0.596  +0.000      0.732  +0.000
-A_T-off_scoring             0.596  +0.000      0.722  -0.010
-A_T-off_policy              0.656  +0.060      0.707  -0.026
-A_H-off                     0.596  +0.000      0.702  -0.031
-A_decay-off                 0.580  -0.017      0.639  -0.093
-A_recency-off               0.596  +0.000      0.722  -0.010
-A_lexical-off               0.628  +0.031      0.732  +0.000
-A_quality-off               0.531  -0.065      0.629  -0.103
-A_T-off_H-off               0.596  +0.000      0.676  -0.056
-A_NAIVE_cosine              0.088  -0.508      0.096  -0.636
-A_NAIVE_plus_lexical        0.081  -0.515      0.082  -0.651
+A0_FULL                     0.732  +0.000      0.732  +0.000
+A_T-off_scoring             0.707  -0.025      0.722  -0.010
+A_T-off_policy              0.656  -0.075      0.707  -0.026
+A_H-off                     0.721  -0.011      0.702  -0.031
+A_decay-off                 0.606  -0.126      0.639  -0.093
+A_recency-off               0.732  +0.000      0.722  -0.010
+A_lexical-off               0.732  +0.000      0.732  +0.000
+A_quality-off               0.667  -0.065      0.629  -0.103
+A_T-off_H-off               0.686  -0.046      0.676  -0.056
+A_NAIVE_cosine              0.139  -0.592      0.096  -0.636
+A_NAIVE_plus_lexical        0.127  -0.604      0.082  -0.651
 
 ------------------------------------------------------------------------------
 MOVEMENT -- masked vs inert
@@ -71,29 +71,29 @@ allocation, not inert. The delivered set alone cannot tell them apart.
 
 arm                     strata changed               displacement
                          deliv  ranked        deliv        ranked
-A_T-off_scoring              0/8     8/8        0.000         1.516
-A_T-off_policy               8/8     8/8        3.083         3.048
-A_H-off                      0/8     8/8        0.000         2.296
-A_decay-off                  3/8     8/8        0.000         3.718
-A_recency-off                0/8     8/8        0.000         1.298
-A_lexical-off                3/8     7/8        0.198         0.262
-A_quality-off                4/8     8/8        0.198         1.115
-A_T-off_H-off                0/8     8/8        0.000         3.288
-A_NAIVE_cosine               8/8     8/8        1.488        11.460
-A_NAIVE_plus_lexical         8/8     8/8        1.595        11.759
+A_T-off_scoring              3/8     8/8        0.062         1.516
+A_T-off_policy               8/8     8/8        3.050         3.048
+A_H-off                      3/8     8/8        0.000         2.296
+A_decay-off                  8/8     8/8        0.349         3.718
+A_recency-off                1/8     8/8        0.000         1.298
+A_lexical-off                3/8     7/8        0.168         0.262
+A_quality-off                6/8     8/8        0.503         1.115
+A_T-off_H-off                5/8     8/8        0.094         3.288
+A_NAIVE_cosine               8/8     8/8        2.173        11.460
+A_NAIVE_plus_lexical         8/8     8/8        2.969        11.759
 
 ------------------------------------------------------------------------------
 DISTRACTOR LEAKAGE (delivered, by targeted mechanism)
 ------------------------------------------------------------------------------
-A0_FULL                total=6   recency_bait=3, type_boost_bait=3
-A_T-off_scoring        total=6   recency_bait=3, type_boost_bait=3
+A0_FULL                total=10  recency_bait=5, reflection_weight_bait=1, type_boost_bait=4
+A_T-off_scoring        total=10  recency_bait=6, type_boost_bait=4
 A_T-off_policy         total=11  recency_bait=7, type_boost_bait=4
-A_H-off                total=6   recency_bait=3, type_boost_bait=3
-A_decay-off            total=4   recency_bait=3, type_boost_bait=1
-A_recency-off          total=6   recency_bait=3, type_boost_bait=3
-A_lexical-off          total=6   recency_bait=4, type_boost_bait=2
-A_quality-off          total=6   recency_bait=3, type_boost_bait=3
-A_T-off_H-off          total=6   recency_bait=3, type_boost_bait=3
+A_H-off                total=10  recency_bait=5, reflection_weight_bait=1, type_boost_bait=4
+A_decay-off            total=10  lexical_bait=1, recency_bait=4, reflection_weight_bait=1, type_boost_bait=4
+A_recency-off          total=10  recency_bait=5, reflection_weight_bait=1, type_boost_bait=4
+A_lexical-off          total=10  recency_bait=5, reflection_weight_bait=1, type_boost_bait=4
+A_quality-off          total=10  recency_bait=5, reflection_weight_bait=1, type_boost_bait=4
+A_T-off_H-off          total=11  lexical_bait=1, recency_bait=6, type_boost_bait=4
 A_NAIVE_cosine         total=12  decay_bait=1, entity_bait=1, experience_bait=1, lexical_bait=4, recency_bait=2, type_boost_bait=3
 A_NAIVE_plus_lexical   total=16  decay_bait=2, entity_bait=1, experience_bait=1, lexical_bait=5, recency_bait=3, tier_bait=1, type_boost_bait=3
 
@@ -130,11 +130,11 @@ d01_typeboost_grocery            type_boost_bait           +0.179            A_H
 ------------------------------------------------------------------------------
 SEPARABILITY
 ------------------------------------------------------------------------------
-  typing, scoring only      ranked nDCG cost of removing:   +0.002   moves ranking, masked by slot allocation
+  typing, scoring only      ranked nDCG cost of removing:   +0.002   moves ranking and delivery
   typing, incl. gating      ranked nDCG cost of removing:   -0.017   moves ranking and delivery
-  tiering                   ranked nDCG cost of removing:   +0.000   moves ranking, masked by slot allocation
+  tiering                   ranked nDCG cost of removing:   +0.000   moves ranking and delivery
   temporal decay            ranked nDCG cost of removing:   -0.004   moves ranking and delivery
-  recency bonus             ranked nDCG cost of removing:   -0.004   moves ranking, masked by slot allocation
+  recency bonus             ranked nDCG cost of removing:   -0.004   moves ranking and delivery
   lexical and entity terms  ranked nDCG cost of removing:   +0.029   moves ranking and delivery
   source quality            ranked nDCG cost of removing:   -0.028   moves ranking and delivery
 

@@ -11,7 +11,8 @@ and may not correspond to any committed code.
 
 | run | status | A0_FULL ranked nDCG@6 | notes |
 |---|---|---|---|
-| `ablation_2026-09-19T08-15-13` | **canonical** | 0.2515 | Current. Produced on `b8dae3a` (post ADR-015 amendment steps 1-5, post #208, post #209). First run to report cross-query Jaccard. |
+| `ablation_2026-09-21T11-41-07` | **canonical** | 0.2515 | Current. Post the profile slot-budget change: profile is no longer charged against `memory_limit`, so delivered counts rise from 4-6 to 7-10 and the naive arm's budget tracks it. |
+| `ablation_2026-09-19T08-15-13` | superseded | 0.2515 | Ran while profile was still billed to `memory_limit`. Its delivered counts are not comparable to the canonical run's; its ranked metrics are identical to it. |
 
 ## Invalidated runs — do not cite
 
@@ -84,6 +85,29 @@ Read the number against the other arms, not against zero. The strata were
 authored with largely disjoint relevant sets, so a correct retriever scores
 low *here* for reasons that do not transfer to a vault where a user's concerns
 recur across questions.
+
+## The 2026-09-21 change and what it moved
+
+Profile records stopped being charged against `memory_limit`
+(`service.py:244`), so the delivered window grew from 4-6 records to 7-10 and
+the naive arm's cut was corrected to track the same budget -- `memory_limit`
+non-profile plus every profile record -- because a hardcoded `memory_limit`
+silently under-cut the naive arm once the service stopped subtracting, which
+is a window-size confound rather than a ranking result.
+
+What moved, all eleven arms:
+
+- **ranked nDCG@6: identical, +0.000 everywhere.** The ranker's verdict did
+  not change, which is the expected result for a selection change.
+- delivered nDCG@6: +0.003 to +0.007.
+- contamination@4: -0.021 on most arms, -0.031 on bare cosine.
+- **cross-query Jaccard: up substantially**, A0_FULL 0.5962 -> 0.7317.
+
+Read that last one carefully rather than as a regression. Jaccard over larger
+delivered sets drawn from a fixed 42-fixture pool rises mechanically: at 9 or
+10 delivered from 42, overlap between any two queries is partly forced. The
+production corpus is 18,677 records, where a wider window does not compel the
+same overlap. The number is real; its interpretation does not transfer.
 
 ## Two standing cautions about any run
 

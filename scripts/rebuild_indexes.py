@@ -171,7 +171,13 @@ class RebuildPlan:
         return len(self.matched) + len(self.added)
 
     @property
-    def records_lost_to_collision(self) -> int:
+    def records_sharing_an_id(self) -> int:
+        """How many records will need a disambiguated store id.
+
+        One per bucket keeps its canonical id; the rest are suffixed by
+        SqliteVectorStore.insert. Before issue #210 these were the records
+        the rebuild lost, hence the count.
+        """
         return sum(len(v) - 1 for v in self.collisions.values())
 
 # Memory types that use JSON indexes.
@@ -483,11 +489,12 @@ def plan_memory_db_rebuild(vault: Path, existing_db: Path) -> RebuildPlan:
     # Canonical ids are not guaranteed unique across memory types.
     # write_memory derives memory_id from the timestamp alone
     # (src/memory/write_memory.py) while the directory carries the type, so a
-    # conversation and a reflection written in the same second share an id --
-    # and memory.db keys on id, so the second write silently replaces the
-    # first. Detect it here rather than reproduce the loss: a rebuild whose
-    # output is quietly smaller than its input is exactly the failure this
-    # mode exists to rule out.
+    # conversation and a reflection written in the same second share an id.
+    # memory.db keys on id, so the second record used to be dropped on the
+    # floor by INSERT OR IGNORE. SqliteVectorStore.insert now disambiguates
+    # instead (issue #210), so nothing is lost here -- but the rebuild still
+    # reports the buckets, because a canonical id claimed twice is a source
+    # defect and should be visible rather than silently absorbed.
     by_canonical: dict[str, list[SourceRecord]] = defaultdict(list)
     for record in sources:
         by_canonical[record.canonical_id].append(record)
@@ -542,16 +549,11 @@ def _print_plan(plan: RebuildPlan, existing_count: int) -> None:
         print(f"  [memory.db]   additions by type    : {dict(sorted(by_type.items()))}")
 
 
-class IdCollisionError(RuntimeError):
-    """Two or more canonical records claim the same id."""
-
-
 def rebuild_memory_db(
     vault: Path,
     out_path: Path | None = None,
     dry_run: bool = False,
     keep_orphans: bool = False,
-    allow_id_collisions: bool = False,
 ) -> int:
     """Rebuild memory.db from canonical vault records.
 
@@ -575,20 +577,15 @@ def rebuild_memory_db(
         )
 
     if plan.collisions:
-        lost = plan.records_lost_to_collision
+        shared = plan.records_sharing_an_id
         print(
             f"  [memory.db] {len(plan.collisions)} canonical id(s) claimed by more "
-            f"than one record; {lost} record(s) would be lost"
+            f"than one record; {shared} record(s) will be indexed under a "
+            f"disambiguated store id (issue #210)"
         )
         for canonical_id, bucket in sorted(plan.collisions.items()):
             types = ", ".join(sorted({r.memory_type for r in bucket}))
             print(f"  [memory.db]   id shared across types: {types}")
-        if not allow_id_collisions:
-            raise IdCollisionError(
-                f"{lost} canonical record(s) would be silently dropped because their "
-                f"id is shared. Fix the colliding records, or pass "
-                f"--allow-id-collisions to proceed and accept the loss."
-            )
 
     if dry_run:
         print("  [memory.db] dry run: nothing embedded, nothing written")
@@ -611,7 +608,11 @@ def rebuild_memory_db(
         for (record, existing), embedding in zip(batch, embeddings):
             row = _row_for(record, existing)
             row["embedding"] = embedding
-            store.insert(row)
+            # The written id is not always row["id"]: a record whose
+            # canonical id is already taken is indexed under a suffixed one
+            # (issue #210). Delivery history has to follow the row that was
+            # actually written, not the id we asked for.
+            written_id = store.insert(row)
             # SqliteVectorStore.insert writes only its own fixed column set
             # (id, text, embedding, source, memory_type, created_at,
             # metadata, authorship). Delivery history has to be applied
@@ -621,7 +622,7 @@ def rebuild_memory_db(
             # on the next nightly pass.
             history = {c: row[c] for c in _CARRIED_COLUMNS if c in row}
             if history:
-                carried.append((row["id"], history))
+                carried.append((written_id, history))
             written += 1
         done = min(start + BATCH_SIZE, total)
         print(f"  [memory.db] {done}/{total} embedded ({done / total * 100:.0f}%)")
@@ -725,11 +726,6 @@ def main():
         action="store_true",
         help="With --memory-db: retain indexed rows that have no canonical record",
     )
-    parser.add_argument(
-        "--allow-id-collisions",
-        action="store_true",
-        help="With --memory-db: proceed even though records sharing an id will be lost",
-    )
     parser.add_argument("--vault", help="Override the vault path (verification against a copy)")
     args = parser.parse_args()
 
@@ -745,18 +741,12 @@ def main():
     # reproducible from the vault, so it never overwrites the live file and
     # is not folded into the default "rebuild everything" path.
     if args.memory_db:
-        try:
-            total_records += rebuild_memory_db(
-                vault,
-                out_path=Path(args.out) if args.out else None,
-                dry_run=args.dry_run,
-                keep_orphans=args.keep_orphans,
-                allow_id_collisions=args.allow_id_collisions,
-            )
-        except IdCollisionError as exc:
-            print()
-            print(f"ABORTED: {exc}")
-            sys.exit(2)
+        total_records += rebuild_memory_db(
+            vault,
+            out_path=Path(args.out) if args.out else None,
+            dry_run=args.dry_run,
+            keep_orphans=args.keep_orphans,
+        )
         elapsed = time.time() - start
         print()
         print(f"{'=' * 50}")

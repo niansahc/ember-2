@@ -9,19 +9,24 @@ default client -- persists for the life of a process, so an in-process loop
 would let one arm's residue reach the next. A fresh interpreter per arm makes
 that structurally impossible rather than merely unlikely.
 
-Snapshot and restore of memory.db and ingested.db around every arm is
-mandatory. `ContextService.build_context` calls `_update_retrieval_stats`
-unconditionally on the read path, inside a bare `except`, and that writes
-`last_retrieved_at` and `frequency_score` (ADR-015 amendment step 4 --
-`retrieval_count` is legacy and no longer written) -- the inputs the
-tiering job reads. An arm can therefore promote the records it surfaced
-and change the next arm's treatment assignment. Fixture ids do not match
-any row in this ablation's synthetic corpus, so the writes are still
-no-ops here, but the guarantee must not rest on that coincidence --
-ContextItem.store_id now carries the real vectors primary key (the
-identity mismatch that made this a coincidence rather than a structural
-fact is itself fixed), so a fixture id that DID collide with a real row
-would now actually be written. Note also that `_recency_score` parses
+Retrieval-stat writes are suppressed three ways, deliberately redundant.
+`build_context` writes `last_retrieved_at` and `frequency_score` (ADR-015
+amendment step 4 -- `retrieval_count` is legacy and no longer written),
+which are the inputs the tiering job reads, so an unguarded arm promotes
+the records it surfaced and changes the next arm's treatment assignment:
+
+  1. every cell passes `read_only=True` (arms.py);
+  2. the child process is launched with EMBER_RETRIEVAL_STATS_READ_ONLY=1,
+     which gates the write inside the store itself, so a path that never
+     passes through build_context is covered too;
+  3. memory.db and ingested.db are snapshotted and restored around every
+     arm, as the backstop for anything the first two miss.
+
+Layer 3 used to be the only one, and the writes were no-ops only because
+fixture ids happened not to match any row. That coincidence is gone:
+ContextItem.store_id now carries the real vectors primary key, so a
+fixture id that DID collide with a real row would actually be written.
+Note also that `_recency_score` parses
 epoch/ISO/hyphenated timestamps via the shared helper now, not only a
 date prefix: restoring the files is still the only thing that separates
 arms, since same-day ordering alone no longer fails to parse.
@@ -46,6 +51,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 ENV_PATH = REPO_ROOT / ".env"
+
+# Imported rather than spelled out so the flag has exactly one definition.
+from src.retrieval.retrieval_stats import ENV_FLAG as ENV_STATS_READ_ONLY  # noqa: E402
 
 # The tiering inputs an arm can mutate through the read path.
 TIERING_DATABASES = ("memory.db", "ingested.db")
@@ -208,6 +216,11 @@ def run_all_arms(vault: Path, verbose: bool = False) -> dict:
                 # corpus uses explicit ids, but a stray hash-ordered set
                 # elsewhere should not vary between arms.
                 "PYTHONHASHSEED": "0",
+                # Arm the whole child process, not just the call sites that
+                # remembered. Snapshot and restore still runs, but it is now
+                # the fallback rather than the only thing standing between a
+                # replay and the tiering inputs (#206).
+                ENV_STATS_READ_ONLY: "1",
             }
             completed = subprocess.run(
                 [sys.executable, "-m", "tools.retrieval_ablation.runner", "--child", arm.name],

@@ -135,6 +135,12 @@ class ContextService:
         investigative read that promotes 6 records to hot is not a
         measurement; it is an intervention with a report attached.
 
+        A per-call flag only protects callers that remember it. For replay
+        and ablation, arm the process too:
+        src.retrieval.retrieval_stats.retrieval_stats_disabled() or
+        EMBER_RETRIEVAL_STATS_READ_ONLY=1, which gate the write inside the
+        store rather than here.
+
         Callers that answer a real user turn must leave this False. The
         activation model depends on genuine deliveries being recorded, and
         a chat path that silently stopped writing would look identical to
@@ -344,6 +350,21 @@ class ContextService:
         Runs in a try/except so retrieval stat failures never crash context building.
         """
         try:
+            from src.retrieval.retrieval_stats import retrieval_stats_disabled_now
+
+            # Process-level suppression, independent of the read_only
+            # argument: a replay harness that forgot the flag is still
+            # covered, and so is anything that reaches the stores by a path
+            # that does not pass through build_context at all.
+            if retrieval_stats_disabled_now():
+                if self.debug:
+                    logger.info(
+                        "[CONTEXT] retrieval-stat write suppressed for %d record(s): "
+                        "read-only mode is active",
+                        len(items),
+                    )
+                return
+
             from src.retrieval.semantic_search import _get_memory_store, _get_sqlite_store
 
             # Collect record IDs by store

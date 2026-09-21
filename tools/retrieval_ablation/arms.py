@@ -40,6 +40,7 @@ from datetime import datetime
 from unittest.mock import patch
 
 from src.context.models import ContextItem
+from src.retrieval.retrieval_stats import retrieval_stats_disabled
 from src.retrieval.semantic_search import (
     extract_query_terms,
     lexical_relevance_bonus,
@@ -567,7 +568,15 @@ def run_cell(stratum: Stratum, arm: Arm) -> CellResult:
     for ctx in stack:
         ctx.start()
     try:
-        packet = service.build_context(stratum.query, skip_web_search=True)
+        # read_only=True: a replay measures retrieval, it does not answer a
+        # turn. Without it every cell promotes the records it surfaced and
+        # the next arm inherits a different tier assignment (#206, #227).
+        # retrieval_stats_disabled() is the belt to that braces -- it holds
+        # even if a future cell reaches a store by some other path.
+        with retrieval_stats_disabled():
+            packet = service.build_context(
+                stratum.query, skip_web_search=True, read_only=True
+            )
     finally:
         for ctx in reversed(stack):
             ctx.stop()

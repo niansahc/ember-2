@@ -40,9 +40,28 @@ def semantic_search(
     query: str,
     limit: int = 5,
     memory_type: str | None = None,
-    min_score: float | None = 0.20,
+    min_score: float | None = None,
     query_embedding: list[float] | None = None,
 ):
+    """Semantic search over the vault indexes.
+
+    min_score is a floor on RAW COSINE, not on the adjusted score. That is
+    the semantics the JSON path has always had (VectorIndex.search filters
+    on the cosine before any adjustment), and matching it here is what makes
+    the parameter mean one thing everywhere. Gating the adjusted score
+    instead would let the query-independent constant pile lift a record
+    through a floor that exists to keep it out.
+
+    The default moved from 0.20 to None (issue #205). The old default was
+    inert: it was forwarded only to VectorIndex.search, and every live
+    memory type is SQLite-backed, so no live caller was ever filtered by it.
+    Enforcing 0.20 on the SQLite path while leaving it as the default would
+    have silently applied a floor to all of get_memory_items' retrieval,
+    which is a far larger change than repairing the floor. None preserves
+    today's behaviour for every caller that does not ask for a floor, and
+    the two that do -- get_profile_items at 0.3, and the /semantic-search
+    endpoint when a caller supplies one -- now get the floor they asked for.
+    """
     vault = get_private_vault_path()
     embeddings_dir = vault / "embeddings"
 
@@ -77,6 +96,9 @@ def semantic_search(
                 metadata = result.get("metadata", {})
                 mem_type = result.get("memory_type", memory_type)
                 raw_score = float(result.get("score", 0.0))
+                # Floor on raw cosine, before any adjustment (#205).
+                if min_score is not None and raw_score < min_score:
+                    continue
                 score = raw_score
                 score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
                 score += memory_type_adjustment(mem_type)
@@ -105,6 +127,9 @@ def semantic_search(
 
                     metadata = result.get("metadata", {})
                     raw_score = float(result.get("score", 0.0))
+                    # Floor on raw cosine, before any adjustment (#205).
+                    if min_score is not None and raw_score < min_score:
+                        continue
                     score = raw_score
                     score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
                     score += memory_type_adjustment(mem_type)
@@ -197,6 +222,9 @@ def semantic_search(
 
                 metadata = result.get("metadata", {})
                 raw_score = float(result.get("score", 0.0))
+                # Floor on raw cosine, before any adjustment (#205).
+                if min_score is not None and raw_score < min_score:
+                    continue
                 score = raw_score
                 score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
                 score += memory_type_adjustment("ingested")

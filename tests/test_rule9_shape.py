@@ -53,6 +53,7 @@ RULE9_TARGET_FILES = (
     # Written under the rule rather than cleaned after the fact. Listed so
     # it stays that way.
     "docs/adr/ADR-044-retrieval-score-composition-contract.md",
+    "docs/adr/ADR-045-supersession-via-write-time-linking.md",
 )
 
 # Word-boundary, case-insensitive. Catches "shape", "Shape", "SHAPES",

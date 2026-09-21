@@ -10,6 +10,7 @@ from src.core.config import (
     vault_writes_blocked,
 )
 from src.memory.authorship import classify_authorship
+from src.memory.eval_fixtures import should_index_record
 from src.memory.storage import MemoryStorage
 from src.retrieval.embed_memory import embed_text
 from src.retrieval.sqlite_vector_store import SqliteVectorStore
@@ -205,6 +206,21 @@ def write_memory(
 
     file_path = memory_dir / f"{timestamp}.json"
     storage.write_json(file_path, memory)
+
+    # Eval fixtures are written to disk like any other record but are only
+    # indexed into the configured test vault. Indexing them elsewhere puts
+    # synthetic records into someone's personal memory where retrieval cannot
+    # tell them from real recollection -- see src/memory/eval_fixtures.py and
+    # issue #211. Fails closed: an unidentifiable vault does not get them.
+    # Checked before embedding, so a skipped fixture costs no model call.
+    if not should_index_record(vault, source, clean_metadata):
+        logger.warning(
+            "[VAULT] eval fixture written to disk but not indexed: vault is not "
+            "the configured test vault (memory_type=%s source=%s)",
+            memory_type,
+            source,
+        )
+        return memory
 
     embedding = embed_text(text)
 

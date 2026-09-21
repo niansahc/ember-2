@@ -22,7 +22,6 @@ from pathlib import Path
 import pytest
 
 from scripts.rebuild_indexes import (
-    IdCollisionError,
     collect_source_records,
     plan_memory_db_rebuild,
     rebuild_memory_db,
@@ -410,28 +409,42 @@ def test_shared_canonical_id_across_types_is_detected(tmp_path):
 
     plan = plan_memory_db_rebuild(tmp_path, tmp_path / "embeddings" / "memory.db")
     assert set(plan.collisions) == {shared}
-    assert plan.records_lost_to_collision == 1
+    assert plan.records_sharing_an_id == 1
 
 
-def test_rebuild_refuses_to_silently_drop_colliding_records(tmp_path):
+def test_rebuild_keeps_both_records_that_share_an_id(tmp_path):
+    """Issue #210. The rebuild used to abort here rather than reproduce the
+    loss; now nothing is lost, so there is nothing to abort over."""
     shared = "2024-01-01T00-00-01"
     _write_native(tmp_path, "conversation", shared, "a conversation turn")
     _write_native(tmp_path, "reflection", shared, "a reflection body")
 
     out = tmp_path / "embeddings" / "rebuilt.db"
-    with pytest.raises(IdCollisionError):
-        rebuild_memory_db(tmp_path, out_path=out)
-    assert not out.exists()
+    written = rebuild_memory_db(tmp_path, out_path=out)
+
+    assert written == 2
+    ids = set(_rows(out))
+    assert len(ids) == 2
+    assert shared in ids
+    assert any(i.startswith(f"{shared}#") for i in ids)
 
 
-def test_collisions_can_be_accepted_explicitly(tmp_path):
+def test_both_colliding_records_keep_their_own_text(tmp_path):
     shared = "2024-01-01T00-00-01"
     _write_native(tmp_path, "conversation", shared, "a conversation turn")
     _write_native(tmp_path, "reflection", shared, "a reflection body")
 
     out = tmp_path / "embeddings" / "rebuilt.db"
-    rebuild_memory_db(tmp_path, out_path=out, allow_id_collisions=True)
-    assert len(_rows(out)) == 1
+    rebuild_memory_db(tmp_path, out_path=out)
+
+    conn = sqlite3.connect(out)
+    try:
+        texts = {row[0] for row in conn.execute("SELECT text FROM vectors")}
+        types = {row[0] for row in conn.execute("SELECT memory_type FROM vectors")}
+    finally:
+        conn.close()
+    assert texts == {"a conversation turn", "a reflection body"}
+    assert types == {"conversation", "reflection"}
 
 
 def test_no_collision_when_ids_are_distinct(tmp_path):
@@ -440,7 +453,7 @@ def test_no_collision_when_ids_are_distinct(tmp_path):
 
     plan = plan_memory_db_rebuild(tmp_path, tmp_path / "embeddings" / "memory.db")
     assert plan.collisions == {}
-    assert plan.records_lost_to_collision == 0
+    assert plan.records_sharing_an_id == 0
 
 
 def test_unreadable_record_does_not_abort_the_rebuild(tmp_path):

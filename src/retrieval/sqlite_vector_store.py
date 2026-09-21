@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import sqlite3
 import struct
 from datetime import datetime
@@ -44,6 +45,22 @@ from pathlib import Path
 from src.core.timestamps import parse_vault_timestamp
 
 logger = logging.getLogger(__name__)
+
+# Separator between a colliding record's id and its disambiguating counter.
+# See SqliteVectorStore.insert (issue #210).
+ID_COLLISION_MARKER = "#"
+
+
+def _same_text(left: str | None, right: str | None) -> bool:
+    """Whitespace- and case-insensitive equality, matching the rebuild's join.
+
+    Re-indexing the same record must not be mistaken for a collision just
+    because the text was re-wrapped on the way through.
+    """
+    def _norm(value: str | None) -> str:
+        return re.sub(r"\s+", " ", (value or "").strip().lower())
+
+    return _norm(left) == _norm(right)
 
 
 class SqliteVectorStore:
@@ -113,14 +130,13 @@ class SqliteVectorStore:
     # Write
     # ------------------------------------------------------------------
 
-    def insert(self, record: dict) -> None:
+    def insert(self, record: dict) -> str:
         """
-        Insert a record into the vector store.
+        Insert a record into the vector store. Returns the id actually written.
 
         The embedding (list[float]) is packed into a binary BLOB using
         struct.pack with format '{n}f'. Metadata (dict) is serialised to
-        a JSON string. If a record with the same id already exists the
-        insert is silently skipped (INSERT OR IGNORE).
+        a JSON string.
 
         Required keys: id, text, embedding
         Optional keys: source, memory_type, created_at, metadata, authorship
@@ -129,6 +145,35 @@ class SqliteVectorStore:
         matching the read path's fallback. _migrate_authorship_column()
         runs in __init__ before any insert() call, so the column always
         exists by the time this executes.
+
+        Id collisions (issue #210)
+        --------------------------
+        This used to be INSERT OR IGNORE, which made two different records
+        claiming one id indistinguishable from a re-index of the same
+        record: the second was dropped and nothing said so. Ids come from
+        `write_memory`, which derives them from the timestamp alone while
+        the directory carries the type, so a conversation and a reflection
+        written in the same second shared an id -- and the reflection was
+        never indexed, so it was unreachable by retrieval while its
+        canonical file sat in the vault looking fine.
+
+        Now the two cases are separated:
+
+          - same id, same normalized text -> a re-index of the same record.
+            Skipped, as before, and the existing id is returned. Rebuilds
+            and backfills depend on this being idempotent.
+          - same id, different text -> a real collision. The record is
+            written under a disambiguated id (`{id}#2`, `{id}#3`, ...) and
+            logged at WARNING. Nothing is discarded.
+
+        Disambiguating rather than raising is deliberate on the live write
+        path: the canonical JSON file is already on disk by the time
+        write_memory calls this, so raising would leave a record that
+        exists but cannot be retrieved -- the exact failure being fixed.
+        The suffix only ever changes the index's primary key; the canonical
+        record keeps the id it was written with, and vectors.id has never
+        been required to equal it (roughly 99 percent of rows carry ids
+        minted by the retired ingest pipeline).
         """
         embedding: list[float] = record["embedding"]
         n = len(embedding)
@@ -137,16 +182,33 @@ class SqliteVectorStore:
         metadata = record.get("metadata", {})
         metadata_str = json.dumps(metadata, ensure_ascii=False)
 
+        record_id = str(record["id"])
+        text = record["text"]
+
+        existing = self._conn.execute(
+            "SELECT text FROM vectors WHERE id = ?", (record_id,)
+        ).fetchone()
+        if existing is not None:
+            if _same_text(existing["text"], text):
+                return record_id  # idempotent re-index, nothing to do
+            record_id = self._disambiguate_id(record_id)
+            logger.warning(
+                "[INDEX] id collision: a %s record claimed an id already held by a "
+                "different record; indexing it under a disambiguated id instead of "
+                "discarding it (issue #210)",
+                record.get("memory_type") or "unknown-type",
+            )
+
         self._conn.execute(
             """
-            INSERT OR IGNORE INTO vectors
+            INSERT INTO vectors
                 (id, text, embedding, source, memory_type, created_at, metadata, authorship)
             VALUES
                 (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                record["id"],
-                record["text"],
+                record_id,
+                text,
                 embedding_blob,
                 record.get("source"),
                 record.get("memory_type"),
@@ -156,6 +218,21 @@ class SqliteVectorStore:
             ),
         )
         self._conn.commit()
+        return record_id
+
+    def _disambiguate_id(self, record_id: str) -> str:
+        """First free `{record_id}#n`, n starting at 2.
+
+        '#' cannot appear in a vault timestamp id or in an ingest chunk id,
+        so a disambiguated id is recognisable as one and cannot be produced
+        by the id minters themselves.
+        """
+        suffix = 2
+        while self._conn.execute(
+            "SELECT 1 FROM vectors WHERE id = ?", (f"{record_id}{ID_COLLISION_MARKER}{suffix}",)
+        ).fetchone() is not None:
+            suffix += 1
+        return f"{record_id}{ID_COLLISION_MARKER}{suffix}"
 
     # ------------------------------------------------------------------
     # Search

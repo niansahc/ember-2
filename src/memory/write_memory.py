@@ -227,7 +227,7 @@ def write_memory(
     if memory_type in SQLITE_MEMORY_TYPES:
         # Write to SQLite (memory.db) for migrated types
         store = _get_write_memory_store()
-        store.insert({
+        store_id = store.insert({
             "id": memory_id,
             "text": text,
             "embedding": embedding,
@@ -243,6 +243,17 @@ def write_memory(
                 "source_field": source,
             },
         })
+        if store_id != memory_id:
+            # The index disambiguated a colliding id rather than dropping
+            # the row (issue #210). Worth a line in the log: the record is
+            # reachable, but its store key no longer equals its canonical
+            # id, and anything that assumed those were the same for records
+            # written by this path is now wrong.
+            logger.warning(
+                "[VAULT] indexed a %s record under a disambiguated store id: "
+                "its canonical id was already claimed in memory.db",
+                memory_type,
+            )
     else:
         # Fallback to JSON index for non-migrated types
         index_path = vector_index.get_index_path(vault, memory_type)

@@ -25,20 +25,12 @@ visiting k+1 points and changing one factor per step, so each trajectory
 yields one elementary effect per factor at a cost of k+1 evaluations
 (Morris 1991, with Campolongo's mu* and the standard B* construction).
 
-Two endpoints, because they answer different questions:
-
-    score       the mean composed score across candidates. Continuous, so
-                the elementary effects are well behaved -- but it is
-                RANK-INSENSITIVE. A parameter that lifts every candidate
-                equally moves this endpoint and changes nothing anybody
-                would notice.
-    delivery    how far the delivered set has moved from the shipped
-                configuration's, as a Jaccard distance averaged over
-                queries. This is the endpoint that corresponds to a user
-                seeing different records. It is a step function, so its
-                elementary effects are lumpy and its sigma is large almost
-                everywhere; that is a property of the output, not evidence
-                of interaction, and the report says so.
+Both endpoints -- the composed score and delivered-set membership --
+are defined in endpoints.py and shared with the Sobol pass, so the two
+methods are answering questions about the same quantities. The delivery
+endpoint is a step function, so its elementary effects are lumpy and its
+sigma is large almost everywhere; that is a property of the output, not
+evidence of interaction, and the report says so.
 
 Parameters with no activation anywhere in the trace are excluded from the
 trajectories rather than screened at zero. Including them would spend
@@ -51,76 +43,19 @@ separate section exists to prevent.
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from statistics import fmean, pstdev
 
+from .endpoints import (
+    ENDPOINT_DELIVERY,
+    ENDPOINT_SCORE,
+    ENDPOINTS,
+    EndpointEvaluator,
+)
 from .params import ReplayParams
 from .ranges import ParameterRange, build_ranges
 from .replay import EXACT_TOLERANCE, replay_query
 from .schema import TraceRun
-
-ENDPOINT_SCORE = "score"
-ENDPOINT_DELIVERY = "delivery"
-ENDPOINTS: tuple[str, ...] = (ENDPOINT_SCORE, ENDPOINT_DELIVERY)
-
-
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
-def _delivered_sets(run: TraceRun, params: ReplayParams) -> dict[str, set[str]]:
-    sets: dict[str, set[str]] = {}
-    for query in run.queries:
-        replay = replay_query(query, params)
-        sets[query.query_id] = set(replay.delivered_refs) | {
-            f"refl:{ref}" for ref in replay.delivered_reflection_refs
-        }
-    return sets
-
-
-@dataclass
-class EndpointEvaluator:
-    """Evaluates both endpoints for one parameter vector, in one pass.
-
-    The delivery endpoint is measured against the SHIPPED configuration's
-    delivered set, computed once at construction. That makes delivery a
-    distance from production rather than from an arbitrary origin, which is
-    the quantity worth screening: "how far from what the user sees today".
-    """
-
-    run: TraceRun
-    baseline_delivery: dict[str, set[str]] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if not self.baseline_delivery:
-            self.baseline_delivery = _delivered_sets(self.run, ReplayParams())
-
-    def evaluate(self, params: ReplayParams) -> dict[str, float]:
-        per_query_score: list[float] = []
-        per_query_distance: list[float] = []
-
-        for query in self.run.queries:
-            replay = replay_query(query, params)
-            if replay.scored:
-                # Query-balanced: a query that happened to retrieve more
-                # candidates must not weigh more in the mean than one that
-                # retrieved fewer.
-                per_query_score.append(fmean(s.score for s in replay.scored))
-
-            delivered = set(replay.delivered_refs) | {
-                f"refl:{ref}" for ref in replay.delivered_reflection_refs
-            }
-            baseline = self.baseline_delivery[query.query_id]
-            union = delivered | baseline
-            per_query_distance.append(
-                len(delivered ^ baseline) / len(union) if union else 0.0
-            )
-
-        return {
-            ENDPOINT_SCORE: fmean(per_query_score) if per_query_score else 0.0,
-            ENDPOINT_DELIVERY: fmean(per_query_distance) if per_query_distance else 0.0,
-        }
-
 
 # ---------------------------------------------------------------------------
 # Trajectory sampling

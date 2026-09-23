@@ -5,6 +5,8 @@ tools/retrieval_trace/__main__.py
                                             [--pool-limit N]
     python -m tools.retrieval_trace verify   PATH
     python -m tools.retrieval_trace coverage PATH
+    python -m tools.retrieval_trace morris   PATH [--trajectories R] [--levels P]
+                                                  [--seed N] [--json OUT]
     python -m tools.retrieval_trace sweep    PATH PARAM V1,V2,...
 
 Run `coverage` before any sensitivity pass. It reports which parameters the
@@ -21,6 +23,7 @@ goes, and the trace file lives outside the repository.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -29,6 +32,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.retrieval_trace.capture import capture_run, default_output_path  # noqa: E402
+from tools.retrieval_trace.morris import (  # noqa: E402
+    ENDPOINTS,
+    format_report,
+    rank_stability,
+    screen,
+    to_dict,
+)
 from tools.retrieval_trace.queries import EXPECTED_POLICIES, capture_pairs  # noqa: E402
 from tools.retrieval_trace.replay import (  # noqa: E402
     check_fidelity,
@@ -96,6 +106,22 @@ def main() -> int:
     )
     cov.add_argument("path")
 
+    mor = sub.add_parser("morris", help="Morris screening: rank parameters by mu*")
+    mor.add_argument("path")
+    mor.add_argument("--trajectories", type=int, default=10)
+    mor.add_argument("--levels", type=int, default=8, help="grid levels, must be even")
+    mor.add_argument("--seed", type=int, default=20260923)
+    mor.add_argument("--top", type=int, default=0, help="limit each table (0 = all)")
+    mor.add_argument("--json", help="also write the full results as JSON")
+    mor.add_argument(
+        "--check-stability",
+        type=int,
+        default=0,
+        metavar="N",
+        help="re-run with N further seeds and report whether the top of the "
+        "ranking survives a different draw of trajectories",
+    )
+
     swp = sub.add_parser("sweep", help="one-at-a-time sweep of one parameter")
     swp.add_argument("path")
     swp.add_argument("param")
@@ -135,6 +161,56 @@ def main() -> int:
         print("  strongest:")
         for name, moved in sorted(results, key=lambda p: -p[1])[:10]:
             print(f"    {name:36} {moved:>5} candidate(s)")
+        return 0
+
+    if args.command == "morris":
+        run = load_run(Path(args.path))
+
+        def morris_progress(done, total, evaluations):
+            print(
+                f"  trajectory {done}/{total} ({evaluations} evaluations)",
+                flush=True,
+            )
+
+        screening = screen(
+            run,
+            trajectories=args.trajectories,
+            levels=args.levels,
+            seed=args.seed,
+            progress=morris_progress,
+        )
+        print()
+        print(format_report(screening, top=args.top))
+
+        if args.check_stability:
+            extra = [
+                screen(
+                    run,
+                    trajectories=args.trajectories,
+                    levels=args.levels,
+                    seed=args.seed + offset,
+                )
+                for offset in range(1, args.check_stability + 1)
+            ]
+            print()
+            print("  STABILITY (does the ranking survive a different draw?)")
+            for endpoint in ENDPOINTS:
+                report = rank_stability([screening] + extra, endpoint, top=10)
+                verdict = "stable" if report.stable() else "UNSTABLE -- raise --trajectories"
+                print(
+                    f"    {endpoint:9} top-10 agreement {report.agreement:.2f} "
+                    f"across {len(report.seeds)} seed(s); worst rank movement "
+                    f"{report.max_displacement} place(s): {verdict}"
+                )
+
+        if args.json:
+            # Parameter names and numbers only -- no vault data -- so unlike
+            # a trace this may be written anywhere the caller wants it.
+            out = Path(args.json)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(to_dict(screening), indent=2), encoding="utf-8")
+            print()
+            print(f"  results written  : {out}")
         return 0
 
     if args.command == "sweep":

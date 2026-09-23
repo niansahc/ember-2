@@ -14,6 +14,7 @@ import warnings
 
 from src.context.models import ContextItem
 from src.memory.service import MemoryService
+from src.observability.guard_counters import count
 from src.retrieval.semantic_search import semantic_search as _semantic_search
 from src.state.models import StateItem
 from src.state.state_resolver import StateResolver, _state_debug_enabled
@@ -100,7 +101,8 @@ class ContextRetriever:
             content = result.get("content", "")
             mem_type = result.get("memory_type", "memory")
 
-            if self._should_exclude_content(content, user_message):
+            if count("retriever.exclude.memory_channel",
+                     self._should_exclude_content(content, user_message)):
                 continue
 
             # ADR-021: surface the cached embedding into ContextItem.metadata
@@ -167,7 +169,8 @@ class ContextRetriever:
         for result in results:
             content = result.get("text", "")
 
-            if self._should_exclude_content(content, user_message):
+            if count("retriever.exclude.reflection_channel",
+                     self._should_exclude_content(content, user_message)):
                 continue
 
             score = self._jaccard_similarity(
@@ -236,7 +239,9 @@ class ContextRetriever:
         user_message: str,
         query_embedding: list[float] | None = None,
     ) -> list[ContextItem]:
-        is_identity = self._is_identity_query(user_message)
+        is_identity = count(
+            "profile.identity_query", self._is_identity_query(user_message)
+        )
         limit = 8 if is_identity else 3
         min_score = 0.0 if is_identity else 0.3
 
@@ -254,7 +259,8 @@ class ContextRetriever:
             content = result.get("content", "")
             score = result.get("score", 0.0)
 
-            if not content or len(content.strip()) < 40:
+            if count("profile.under_40_chars",
+                     not content or len(content.strip()) < 40):
                 continue
 
             items.append(
@@ -353,9 +359,9 @@ class ContextRetriever:
 
         for item in items:
             key = self._normalize_text(item.content)
-            if not key:
+            if count("retriever.dedup.empty_key", not key):
                 continue
-            if key in seen:
+            if count("retriever.dedup.duplicate_content", key in seen):
                 continue
 
             deduped.append(item)
@@ -367,10 +373,10 @@ class ContextRetriever:
         normalized_content = self._normalize_text(content)
         normalized_user_message = self._normalize_text(user_message)
 
-        if not normalized_content:
+        if count("retriever.exclude.empty", not normalized_content):
             return True
 
-        if len(normalized_content) < 40:
+        if count("retriever.exclude.under_40_chars", len(normalized_content) < 40):
             return True
 
         meta_markers = (
@@ -387,24 +393,31 @@ class ContextRetriever:
             '"chunk_id":',
         )
 
-        if any(marker in normalized_content for marker in meta_markers):
+        if count("retriever.exclude.meta_marker",
+                 any(marker in normalized_content for marker in meta_markers)):
             return True
 
-        if normalized_content.startswith("{") or normalized_content.startswith("["):
+        if count("retriever.exclude.json_payload",
+                 normalized_content.startswith("{")
+                 or normalized_content.startswith("[")):
             return True
 
-        if "```" in content:
+        if count("retriever.exclude.code_fence", "```" in content):
             return True
 
         # File trees and directory listings (Unicode box-drawing characters)
-        if "\u2502" in content or "\u251c" in content or "\u2514" in content:
+        if count("retriever.exclude.box_drawing",
+                 "\u2502" in content or "\u251c" in content or "\u2514" in content):
             return True
 
         # "Recent themes:" followed by short user complaints — session summary junk
-        if normalized_content.startswith("recent themes:"):
+        if count("retriever.exclude.recent_themes_prefix",
+                 normalized_content.startswith("recent themes:")):
             return True
 
-        if normalized_user_message and normalized_user_message in normalized_content:
+        if count("retriever.exclude.query_verbatim_in_content",
+                 bool(normalized_user_message)
+                 and normalized_user_message in normalized_content):
             return True
 
         similarity = self._jaccard_similarity(
@@ -412,7 +425,8 @@ class ContextRetriever:
             self._tokenize(normalized_user_message),
         )
 
-        if similarity > 0.60:
+        if count("retriever.exclude.jaccard_over_0_60",
+                 similarity > 0.60):
             return True
 
         return False

@@ -1,6 +1,7 @@
 import re
 
 from src.core.config import get_private_vault_path
+from src.observability.guard_counters import branch, count
 from src.retrieval.embed_memory import embed_text
 from src.retrieval.sqlite_vector_store import SqliteVectorStore
 from src.retrieval.store_cache import get_store
@@ -90,14 +91,16 @@ def semantic_search(
                 content = result.get("content", "")
                 normalized_content = normalize_text(content)
 
-                if should_exclude_result(normalized_content):
+                if count("semantic_search.should_exclude_result.memory_typed",
+                         should_exclude_result(normalized_content)):
                     continue
 
                 metadata = result.get("metadata", {})
                 mem_type = result.get("memory_type", memory_type)
                 raw_score = float(result.get("score", 0.0))
                 # Floor on raw cosine, before any adjustment (#205).
-                if min_score is not None and raw_score < min_score:
+                if count("semantic_search.min_score_floor.memory_typed",
+                         min_score is not None and raw_score < min_score):
                     continue
                 score = raw_score
                 score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
@@ -122,13 +125,15 @@ def semantic_search(
                     content = result.get("content", "")
                     normalized_content = normalize_text(content)
 
-                    if should_exclude_result(normalized_content):
+                    if count("semantic_search.should_exclude_result.memory_all_types",
+                             should_exclude_result(normalized_content)):
                         continue
 
                     metadata = result.get("metadata", {})
                     raw_score = float(result.get("score", 0.0))
                     # Floor on raw cosine, before any adjustment (#205).
-                    if min_score is not None and raw_score < min_score:
+                    if count("semantic_search.min_score_floor.memory_all_types",
+                             min_score is not None and raw_score < min_score):
                         continue
                     score = raw_score
                     score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
@@ -154,7 +159,8 @@ def semantic_search(
             content = result.get("content", "")
             normalized_content = normalize_text(content)
 
-            if should_exclude_result(normalized_content):
+            if count("semantic_search.should_exclude_result.json_typed",
+                     should_exclude_result(normalized_content)):
                 continue
 
             raw_score = float(result.get("score", 0.0))
@@ -189,7 +195,8 @@ def semantic_search(
                 content = result.get("content", "")
                 normalized_content = normalize_text(content)
 
-                if should_exclude_result(normalized_content):
+                if count("semantic_search.should_exclude_result.json_all_types",
+                         should_exclude_result(normalized_content)):
                     continue
 
                 raw_score = float(result.get("score", 0.0))
@@ -217,13 +224,15 @@ def semantic_search(
                 content = result.get("content", "")
                 normalized_content = normalize_text(content)
 
-                if should_exclude_result(normalized_content):
+                if count("semantic_search.should_exclude_result.ingested",
+                         should_exclude_result(normalized_content)):
                     continue
 
                 metadata = result.get("metadata", {})
                 raw_score = float(result.get("score", 0.0))
                 # Floor on raw cosine, before any adjustment (#205).
-                if min_score is not None and raw_score < min_score:
+                if count("semantic_search.min_score_floor.ingested",
+                         min_score is not None and raw_score < min_score):
                     continue
                 score = raw_score
                 score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
@@ -491,10 +500,13 @@ def extract_query_terms(query: str) -> list[str]:
 
 
 def should_exclude_result(content: str) -> bool:
-    if not content:
+    # Each arm is counted separately: these are five independent rules that
+    # happen to share a function, and "the JSON-payload rule has never
+    # fired" is a different finding from "the length floor fires constantly".
+    if count("should_exclude_result.empty", not content):
         return True
 
-    if len(content) < 40:
+    if count("should_exclude_result.under_40_chars", len(content) < 40):
         return True
 
     meta_markers = (
@@ -511,13 +523,19 @@ def should_exclude_result(content: str) -> bool:
         '"chunk_id":',
     )
 
-    if any(marker in content for marker in meta_markers):
+    if count(
+        "should_exclude_result.meta_marker",
+        any(marker in content for marker in meta_markers),
+    ):
         return True
 
-    if content.startswith("{") or content.startswith("["):
+    if count(
+        "should_exclude_result.json_payload",
+        content.startswith("{") or content.startswith("["),
+    ):
         return True
 
-    if "```" in content:
+    if count("should_exclude_result.code_fence", "```" in content):
         return True
 
     return False

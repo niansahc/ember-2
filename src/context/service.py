@@ -15,6 +15,8 @@ import re
 
 from src.context.formatter import ContextFormatter
 from src.core.config import get_ember_debug
+from src.observability import guard_counters
+from src.observability.guard_counters import branch, count
 
 logger = logging.getLogger("ember.context_service")
 
@@ -75,7 +77,8 @@ def _quarantine_ai_docs(
     system, all results pass through unfiltered.
     """
     user_lower = user_message.lower()
-    if any(pattern in user_lower for pattern in _AI_INQUIRY_PATTERNS):
+    if count("web_quarantine.ai_inquiry_escape_hatch",
+             any(pattern in user_lower for pattern in _AI_INQUIRY_PATTERNS)):
         return web_items, []
 
     safe: list[dict] = []
@@ -89,7 +92,8 @@ def _quarantine_ai_docs(
         ai_name_count = sum(1 for name in AI_SYSTEM_NAMES if name in combined)
         has_doc_marker = any(marker in combined for marker in AI_DOC_MARKERS)
 
-        if ai_name_count >= 2 or has_doc_marker:
+        if count("web_quarantine.ai_doc_detected",
+                 ai_name_count >= 2 or has_doc_marker):
             quarantined.append(item)
         else:
             safe.append(item)
@@ -147,6 +151,32 @@ class ContextService:
         this fix while quietly disabling tiering's only upward path.
         """
         policy = classify_query(user_message)
+        # Guard hit counters record this turn only if it is a real one:
+        # not read_only, and not inside a suppressed-stats scope. Every
+        # investigative caller sets one or the other, so eval harnesses,
+        # the ablation and the trace capture are excluded structurally
+        # rather than by remembering to turn something off. The scope also
+        # refuses to open under pytest -- test fixtures exercise guards
+        # production never does, and counting them would report a rule as
+        # live when no real record has ever matched it.
+        from src.retrieval.retrieval_stats import retrieval_stats_disabled_now
+
+        with guard_counters.recording(
+            enabled=not read_only and not retrieval_stats_disabled_now()
+        ):
+            return self._build_context(user_message, image_data, project_id,
+                                       skip_web_search, read_only, policy)
+
+    def _build_context(
+        self,
+        user_message: str,
+        image_data: list[str] | None,
+        project_id: str | None,
+        skip_web_search: bool,
+        read_only: bool,
+        policy,
+    ) -> ContextPacket:
+        """Assembly proper. Split out so the counter scope wraps all of it."""
 
         web_items: list[dict] = []
         # skip_web_search=True when ask-first mode is active — the search
@@ -168,7 +198,7 @@ class ContextService:
         # raw cosine similarity >= threshold, suppress vault memory entirely.
         # Prevents general knowledge queries from getting vault-based coaching.
         # Profile items are exempt — identity queries should always surface.
-        if policy.name == "default":
+        if count("relevance_gate.evaluated", policy.name == "default"):
             from src.core.config import get_retrieval_min_raw_score
             min_raw = get_retrieval_min_raw_score()
             # Lower threshold for ingested items. ChatGPT exports
@@ -193,7 +223,10 @@ class ContextService:
             )
             # Gate passes if EITHER standard types clear their threshold OR
             # ingested clears its lower threshold.
-            if max_raw_standard < min_raw and max_raw_ingested < _INGESTED_MIN_RAW:
+            if count(
+                "relevance_gate.suppressed_non_profile",
+                max_raw_standard < min_raw and max_raw_ingested < _INGESTED_MIN_RAW,
+            ):
                 memory_items = [i for i in memory_items if getattr(i, "memory_type", "") == "profile"]
                 reflection_items = []
 
@@ -230,11 +263,14 @@ class ContextService:
         filtered_memory = [
             item
             for item in ranked_memory
-            if not self._is_echo_or_meta_memory(item, normalized_user_message)
-            and not self._is_low_value_memory(item)
+            if not count("filter.echo_or_meta",
+                         self._is_echo_or_meta_memory(item, normalized_user_message))
+            and not count("filter.low_value",
+                          self._is_low_value_memory(item))
         ]
 
-        if not filtered_memory:
+        if count("filter.took_everything_fallback",
+                 bool(ranked_memory) and not filtered_memory):
             filtered_memory = ranked_memory
 
         deduped_memory = self._deduplicate(filtered_memory)
@@ -267,7 +303,14 @@ class ContextService:
         other_items = [i for i in deduped_memory if i.memory_type != "profile"]
         remaining_limit = memory_limit
 
-        if policy.diversity:
+        count("reserved_slots.profile_present", bool(profile_items))
+        count("reserved_slots.profile_over_limit",
+              len(profile_items) > memory_limit)
+        count("reserved_slots.non_profile_truncated",
+              len(other_items) > remaining_limit)
+
+        if branch("selection.mode",
+                  "diversity" if policy.diversity else "score_order") == "diversity":
             selected_other = self._select_diverse_memory(
                 other_items,
                 limit=remaining_limit,
@@ -319,16 +362,18 @@ class ContextService:
         # surface on every turn and aren't evidence of specific personal
         # grounding for this query.
         from src.context.policies import _matches_relational_query
-        if _matches_relational_query(user_message):
+        if count("zero_hit_signal.relational_query",
+                 bool(_matches_relational_query(user_message))):
             non_profile = [
                 i for i in selected_memory
                 if getattr(i, "memory_type", "") != "profile"
             ]
-            if non_profile and all(
-                float(getattr(i, "score", 0.0)) == 0.0 for i in non_profile
-            ):
+            if count("zero_hit_signal.all_non_profile_zeroed",
+                     bool(non_profile)
+                     and all(float(getattr(i, "score", 0.0)) == 0.0
+                             for i in non_profile)):
                 packet.relational_query_empty = True
-            elif not non_profile:
+            elif count("zero_hit_signal.profile_only", not non_profile):
                 # Nothing but profile items — also treat as empty for this
                 # signal. Kinship/identity questions should surface the gap
                 # rather than answer from onboarding boilerplate.
@@ -403,15 +448,23 @@ class ContextService:
         eligible = policy.eligible_memory_types
         min_score = policy.min_score
 
-        return [
-            i for i in items
-            if getattr(i, "memory_type", None) == "profile"
-            or (
-                (not suppress or getattr(i, "memory_type", None) not in suppress)
-                and (eligible is None or getattr(i, "memory_type", None) in eligible)
-                and getattr(i, "score", 0.0) >= min_score
-            )
-        ]
+        kept = []
+        for i in items:
+            mem_type = getattr(i, "memory_type", None)
+            if count("type_gate.profile_bypass", mem_type == "profile"):
+                kept.append(i)
+                continue
+            if count("type_gate.suppressed_type",
+                     bool(suppress) and mem_type in suppress):
+                continue
+            if count("type_gate.not_eligible_type",
+                     eligible is not None and mem_type not in eligible):
+                continue
+            if count("type_gate.below_min_score",
+                     getattr(i, "score", 0.0) < min_score):
+                continue
+            kept.append(i)
+        return kept
 
     def _memory_limit_for_policy(self, policy_name: str) -> int:
         if policy_name == "reflective":
@@ -442,7 +495,7 @@ class ContextService:
     def _is_echo_or_meta_memory(self, item, normalized_user_message: str) -> bool:
         content = self._normalize_text(item.content)
 
-        if not content:
+        if count("echo_filter.empty_content", not content):
             return True
 
         meta_markers = (
@@ -454,10 +507,13 @@ class ContextService:
             "answer:",
         )
 
-        if any(marker in content for marker in meta_markers):
+        if count("echo_filter.meta_marker",
+                 any(marker in content for marker in meta_markers)):
             return True
 
-        if normalized_user_message and normalized_user_message in content:
+        if count("echo_filter.query_verbatim_in_content",
+                 bool(normalized_user_message)
+                 and normalized_user_message in content):
             return True
 
         similarity = self._jaccard_similarity(
@@ -471,13 +527,13 @@ class ContextService:
         # paraphrased the question). Tuned to catch echoes without dropping
         # semantically related but distinct content — 0.50 produced false
         # positives on legitimate related memories, 0.60 let echoes through.
-        return similarity > 0.55
+        return count("echo_filter.jaccard_over_0_55", similarity > 0.55)
 
     def _is_low_value_memory(self, item) -> bool:
         content = self._normalize_text(item.content)
         metadata = getattr(item, "metadata", {}) or {}
 
-        if len(content) < 40:
+        if count("low_value_filter.under_40_chars", len(content) < 40):
             return True
 
         # Previously an exact-match list plus a marker list, both built from
@@ -487,10 +543,11 @@ class ContextService:
         # nobody there has written. Replaced by patterns over the same three
         # classes: model boilerplate, response-style feedback, and the user's
         # own meta-prompts to the assistant. See src/context/low_value.py.
-        if is_low_value_content(content):
+        if count("low_value_filter.pattern_match", is_low_value_content(content)):
             return True
 
-        if metadata.get("content_kind") == "question" and len(content) < 120:
+        if count("low_value_filter.short_question",
+                 metadata.get("content_kind") == "question" and len(content) < 120):
             return True
 
         return False
@@ -501,7 +558,7 @@ class ContextService:
 
         for item in items:
             key = self._normalize_text(item.content)
-            if key not in seen:
+            if not count("selection.dedup.duplicate_content", key in seen):
                 deduped.append(item)
                 seen.add(key)
 
@@ -527,25 +584,26 @@ class ContextService:
                     grouped_items[group_name], selected
                 )
 
-                if candidate:
+                if count(f"diversity.group_yielded.{group_name}", bool(candidate)):
                     selected.append(candidate)
                     grouped_items[group_name].remove(candidate)
                     made_progress = True
 
-                    if len(selected) >= limit:
+                    if count("diversity.limit_reached_mid_round",
+                             len(selected) >= limit):
                         break
 
-            if not made_progress:
+            if count("diversity.round_made_no_progress", not made_progress):
                 break
 
-        if len(selected) < limit:
+        if count("diversity.fell_short_of_limit", len(selected) < limit):
             remaining = []
             for group_items in grouped_items.values():
                 remaining.extend(group_items)
 
             while len(selected) < limit and remaining:
                 candidate = self._best_diverse_candidate(remaining, selected)
-                if not candidate:
+                if count("diversity.backfill_exhausted", not candidate):
                     break
                 selected.append(candidate)
                 remaining.remove(candidate)

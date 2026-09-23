@@ -150,6 +150,14 @@ def main() -> int:
         "narrow (half-width)",
     )
     sob.add_argument("--seed", type=int, default=20260923)
+    sob.add_argument(
+        "--sampler",
+        default="auto",
+        choices=("auto", "sobol", "random"),
+        help="auto: scrambled Sobol if scipy is importable, else numpy. "
+        "sobol: require it. random: numpy always, for a result that must "
+        "reproduce on any machine.",
+    )
     sob.add_argument("--top", type=int, default=0)
     sob.add_argument("--pairs", type=int, default=15)
     sob.add_argument("--json", help="write the full results as JSON")
@@ -287,6 +295,7 @@ def main() -> int:
             max_samples=args.max_samples,
             st_ci_target=args.st_ci_target,
             seed=args.seed,
+            sampler=args.sampler,
             progress=sobol_progress,
         )
         print()

@@ -89,26 +89,55 @@ class SampleStream:
     paid for, which only works if the first N rows of the 2N sample are
     the N sample.
 
-    Uses a scrambled Sobol' sequence when scipy is available, because a
-    low-discrepancy sequence reaches a given interval width in far fewer
-    samples than plain Monte Carlo, and here each sample costs 2k+2 full
-    replays. Falls back to numpy's generator otherwise. Which one was used
-    is recorded in the result: the two converge to the same indices, but
-    not at the same N, and a reader comparing two runs needs to know.
+    Prefers a scrambled Sobol' sequence, because a low-discrepancy sequence
+    reaches a given interval width in far fewer samples than plain Monte
+    Carlo, and here each sample costs 2k+2 full replays. That needs scipy,
+    which is present in this environment but is NOT in requirements.txt, so
+    it cannot be assumed.
+
+    The sampler is therefore selectable and always recorded, never silently
+    inferred:
+
+        "auto"    Sobol' if scipy is importable, else numpy. Records which.
+        "sobol"   Sobol', or raise. For a run whose numbers will be quoted.
+        "random"  numpy, always available. For anything that must behave
+                  identically on every machine.
+
+    "auto" used to be the only behaviour, and it made accuracy a property
+    of the machine: the same code at the same N produced QMC-quality
+    numbers here and Monte-Carlo-quality numbers in CI, where scipy is
+    absent. Tests calibrated against one silently failed on the other. The
+    two samplers converge to the same indices but not at the same N, so
+    which one ran is part of the result, not an implementation detail.
     """
 
-    def __init__(self, dimensions: int, seed: int) -> None:
+    def __init__(self, dimensions: int, seed: int, sampler: str = "auto") -> None:
         self.dimensions = dimensions
         self.seed = seed
         self._rows = np.empty((0, dimensions))
-        try:
-            from scipy.stats import qmc
 
-            self._engine = qmc.Sobol(d=dimensions, scramble=True, seed=seed)
-            self.sampler = "scipy.qmc.Sobol(scrambled)"
-        except Exception:  # noqa: BLE001 -- scipy is optional here
-            self._engine = np.random.default_rng(seed)
+        if sampler not in {"auto", "sobol", "random"}:
+            raise ValueError(f"unknown sampler {sampler!r}")
+
+        engine = None
+        if sampler in {"auto", "sobol"}:
+            try:
+                from scipy.stats import qmc
+
+                engine = qmc.Sobol(d=dimensions, scramble=True, seed=seed)
+                self.sampler = "scipy.qmc.Sobol(scrambled)"
+            except ImportError:
+                if sampler == "sobol":
+                    raise RuntimeError(
+                        "sampler='sobol' requires scipy, which is not installed. "
+                        "Use 'random' and expect to need roughly an order of "
+                        "magnitude more samples for the same interval width."
+                    ) from None
+
+        if engine is None:
+            engine = np.random.default_rng(seed)
             self.sampler = "numpy.default_rng"
+        self._engine = engine
 
     def take(self, n: int) -> np.ndarray:
         """The first n rows, drawing more only if we do not have them yet."""
@@ -275,6 +304,7 @@ class SobolAnalysis:
         *,
         seed: int = 20260923,
         pair_bootstrap: int = 25,
+        sampler: str = "auto",
     ) -> None:
         self.run = run
         self.names = names
@@ -282,7 +312,9 @@ class SobolAnalysis:
         self.pair_bootstrap = pair_bootstrap
         self.ranges = build_ranges(run.param_defaults)
         self.evaluator = EndpointEvaluator(run=run)
-        self.stream = SampleStream(dimensions=2 * len(names), seed=seed)
+        self.stream = SampleStream(
+            dimensions=2 * len(names), seed=seed, sampler=sampler
+        )
         # matrix key -> endpoint -> outputs, grown in place as N doubles.
         self._outputs: dict[str, dict[str, list[float]]] = {}
         self.evaluations = 0
@@ -460,6 +492,7 @@ def analyse(
     top_k: int = 10,
     seed: int = 20260923,
     probe_delivery: bool = True,
+    sampler: str = "auto",
     progress=None,
 ) -> SobolRun:
     """Double N until the top of the ST ranking is resolved, then stop.
@@ -470,7 +503,7 @@ def analyse(
     membership of that top-k has stopped changing between doublings. What
     it costs to get there is a result, not an input.
     """
-    analysis = SobolAnalysis(run, names, seed=seed)
+    analysis = SobolAnalysis(run, names, seed=seed, sampler=sampler)
     convergence: list[dict] = []
     samples = start_samples
     indices = None
@@ -589,6 +622,12 @@ def format_report(sobol: SobolRun, top: int = 0, pairs: int = 15) -> str:
         lines.append(
             "  the bootstrap prices the sample as iid; a scrambled sequence is "
             "stratified, so the widths are conservative"
+        )
+    else:
+        lines.append(
+            "  NOTE: plain Monte Carlo (scipy absent). Roughly an order of "
+            "magnitude more samples are needed for the width a scrambled "
+            "sequence reaches"
         )
 
     lines.append("")

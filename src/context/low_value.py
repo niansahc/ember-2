@@ -49,6 +49,8 @@ from __future__ import annotations
 
 import re
 
+from src.observability.guard_counters import count
+
 # Meta-commentary is short by nature. A record longer than this that
 # happens to match a pattern is far more likely to be substantive content
 # mentioning the topic than commentary about it. 120 matches the bound
@@ -158,8 +160,11 @@ def is_low_value_content(content: str) -> bool:
     Callers apply their own additional rules (length floors, content_kind
     gating); this covers only the three shared classes.
     """
+    # Counted per class: these are three independent rules and "the
+    # style-feedback pattern has never matched a real record" is a
+    # different finding from "the whole filter never fires".
     return (
-        is_model_non_answer(content)
-        or is_style_feedback(content)
-        or is_assistant_meta_prompt(content)
+        count("low_value.model_non_answer", is_model_non_answer(content))
+        or count("low_value.style_feedback", is_style_feedback(content))
+        or count("low_value.assistant_meta_prompt", is_assistant_meta_prompt(content))
     )

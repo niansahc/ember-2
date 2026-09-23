@@ -17,6 +17,7 @@ import re
 from datetime import datetime, timezone
 
 from src.context.models import ContextItem
+from src.observability.guard_counters import branch, count, reached
 from src.state.models import StateItem
 
 # ADR-015 amendment (PR #180), implementation step 3: cold is a reduced
@@ -62,32 +63,40 @@ class ContextRanker:
             else:
                 score *= policy.memory_weight
 
-            if getattr(policy, "recency_bias", 0.0):
+            if count("ranker.policy.recency_bias_active",
+                     bool(getattr(policy, "recency_bias", 0.0))):
                 score += self._recency_boost(item.timestamp) * float(policy.recency_bias)
 
             content = item.content.lower()
             metadata = getattr(item, "metadata", {}) or {}
             content_kind = metadata.get("content_kind")
 
-            if getattr(policy, "prefer_experiences", False):
-                if content_kind == "experience" or self._looks_like_experience(content):
+            if count("ranker.policy.prefer_experiences_enabled",
+                     bool(getattr(policy, "prefer_experiences", False))):
+                if count("ranker.policy.prefer_experiences_fired",
+                         content_kind == "experience"
+                         or self._looks_like_experience(content)):
                     # +0.20: concrete first-person experiences ("I was", "I felt")
                     # are more valuable than third-person summaries for reflective
                     # queries. Tuned to be significant but not overwhelming — a
                     # high-similarity non-experience can still win.
                     score += 0.20
 
-            if getattr(policy, "prefer_active_work", False):
-                if self._looks_like_active_work(content, metadata):
+            if count("ranker.policy.prefer_active_work_enabled",
+                     bool(getattr(policy, "prefer_active_work", False))):
+                if count("ranker.policy.prefer_active_work_fired",
+                         self._looks_like_active_work(content, metadata)):
                     # +0.22: slightly above experience boost because work/task
                     # queries need current project context to be useful. A stale
                     # experience from weeks ago is less relevant than today's
                     # work log for "what am I working on" queries.
                     score += 0.22
 
-            if getattr(policy, "prefer_exact_matches", False):
+            if count("ranker.policy.prefer_exact_matches_enabled",
+                     bool(getattr(policy, "prefer_exact_matches", False))):
                 queryish_bonus = 0.0
-                if content_kind == "question":
+                if count("ranker.policy.exact_match_question",
+                         content_kind == "question"):
                     # -0.05: questions as retrieved context are usually the user's
                     # own prior question, not useful evidence. Mild penalty.
                     queryish_bonus -= 0.05
@@ -115,8 +124,10 @@ class ContextRanker:
             mem_type = getattr(item, "memory_type", "")
 
             if mem_type == "profile":
+                branch("ranker.tier", "profile_bypass")
                 pass  # profile bypasses tier scoring
             elif tier == "cold":
+                branch("ranker.tier", "cold")
                 # ADR-015 amendment step 3: reduced weight, not exclusion.
                 # Ordering within cold is preserved -- a nonzero multiplier
                 # is strictly order-preserving on its own input, applied
@@ -125,12 +136,16 @@ class ContextRanker:
                 # comment for the value rationale.
                 score *= COLD_MULTIPLIER
             elif tier == "warm":
+                branch("ranker.tier", "warm")
                 # 0.7 multiplier: warm items are retained but disadvantaged.
                 # They represent content that was once relevant but has not
                 # been retrieved recently. The 30% penalty is enough to push
                 # them below hot items of similar base score but still allows
                 # them to surface when nothing better exists.
                 score *= 0.7
+            else:
+                # hot, or an unrecognised tier falling through to no change.
+                branch("ranker.tier", "hot_or_unrecognised")
             # hot: no change
 
             item.score = score
@@ -162,7 +177,8 @@ class ContextRanker:
         """
         from src.context.policies import _matches_relational_query
 
-        if not _matches_relational_query(user_message):
+        if not count("ranker.authorship.relational_query",
+                     bool(_matches_relational_query(user_message))):
             return items
 
         multipliers = {
@@ -177,6 +193,10 @@ class ContextRanker:
             if not authorship:
                 metadata = getattr(item, "metadata", {}) or {}
                 authorship = metadata.get("authorship") or "unknown"
+            branch(
+                "ranker.authorship.branch",
+                authorship if authorship in multipliers else "unrecognised",
+            )
             item.score = float(item.score) * multipliers.get(authorship, 0.5)
 
         return items
@@ -201,7 +221,8 @@ class ContextRanker:
         """
         boost = getattr(policy, "state_boost", 0.0)
 
-        if not state_items or boost == 0.0:
+        if not count("ranker.state_boost.active",
+                     bool(state_items) and boost != 0.0):
             return state_items
 
         priority_order = {"high": 3, "medium": 2, "low": 1}
@@ -235,12 +256,13 @@ class ContextRanker:
 
         If project_id is None (no active project), items are returned unchanged.
         """
-        if not project_id or not items:
+        if not count("ranker.project.active", bool(project_id and items)):
             return items
 
         for item in items:
             metadata = getattr(item, "metadata", {}) or {}
-            if metadata.get("project_id") == project_id:
+            if count("ranker.project.match",
+                     metadata.get("project_id") == project_id):
                 item.score = float(item.score) + 0.15
 
         return items
@@ -342,15 +364,15 @@ class ContextRanker:
         # Length scoring: very short content is usually noise (greetings, "yes",
         # "ok"), very long content is usually a full document dump that dilutes
         # the context packet. The sweet spot is 50-1200 chars.
-        if len(content) < 20:
+        if count("ranker.length.under_20", len(content) < 20):
             score -= 0.10
-        elif len(content) < 50:
+        elif count("ranker.length.under_50", len(content) < 50):
             score -= 0.04
-        elif len(content) > 1200:
+        elif count("ranker.length.over_1200", len(content) > 1200):
             score -= 0.03
 
         token_count = len(self._tokenize(content))
-        if token_count < 5:
+        if count("ranker.tokens.under_5", token_count < 5):
             score -= 0.05
 
         # A -0.18 low-value-prompt penalty used to sit here, triggered by an
@@ -384,7 +406,7 @@ class ContextRanker:
 
         score *= 0.95
 
-        if len(content) < 30:
+        if count("ranker.reflection.under_30_chars", len(content) < 30):
             score -= 0.08
 
         score += self._recency_boost(item.timestamp) * 0.5
@@ -442,25 +464,31 @@ class ContextRanker:
         """
         mem_type = getattr(item, "memory_type", "") or ""
 
-        if mem_type in self._NO_DECAY_TYPES:
+        if count("ranker.decay.no_decay_type", mem_type in self._NO_DECAY_TYPES):
             return 1.0
 
         age_days = self._parse_age_days(item.timestamp)
-        if age_days is None:
+        if count("ranker.decay.unparsed_timestamp", age_days is None):
             return 1.0
 
         if mem_type == "reflection":
-            tiers = self._REFLECTION_DECAY
+            family, tiers = "reflection", self._REFLECTION_DECAY
         elif mem_type in self._EPHEMERAL_TYPES:
-            tiers = self._EPHEMERAL_DECAY
+            family, tiers = "ephemeral", self._EPHEMERAL_DECAY
         else:
-            tiers = self._DEFAULT_DECAY
+            family, tiers = "default", self._DEFAULT_DECAY
+        branch("ranker.decay.family", family)
 
         for max_age, weight in tiers:
             if max_age is None or age_days <= max_age:
+                branch(
+                    f"ranker.decay.bucket.{family}",
+                    "older" if max_age is None else f"d{max_age}",
+                )
                 return weight
 
         # Should never reach here, but safety fallback.
+        reached("ranker.decay.ladder_fell_through")
         return 1.0
 
     def _parse_age_days(self, timestamp: str | None) -> int | None:
@@ -544,16 +572,22 @@ class ContextRanker:
         """
         age_days = self._parse_age_days(timestamp)
         if age_days is None:
+            branch("ranker.recency.bucket", "unparsed")
             return 0.0
 
         if age_days <= 7:
+            branch("ranker.recency.bucket", "d7")
             return 0.18
         if age_days <= 30:
+            branch("ranker.recency.bucket", "d30")
             return 0.12
         if age_days <= 90:
+            branch("ranker.recency.bucket", "d90")
             return 0.06
         if age_days <= 365:
+            branch("ranker.recency.bucket", "d365")
             return 0.02
+        branch("ranker.recency.bucket", "older")
         return -0.03
 
     def _looks_like_experience(self, content: str) -> bool:

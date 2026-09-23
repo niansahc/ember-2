@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 
 from src.core.jsonio import safe_read_json, safe_write_json
+from src.observability.guard_counters import count
 
 logger = logging.getLogger("ember.vector_index")
 
@@ -125,7 +126,8 @@ class VectorIndex:
 
             score = self.cosine_similarity(query_embedding, embedding)
 
-            if min_score is not None and score < min_score:
+            if count("vector_index.min_score_floor.json",
+                     min_score is not None and score < min_score):
                 continue
 
             scored_results.append(

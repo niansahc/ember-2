@@ -7,6 +7,7 @@ tools/retrieval_trace/__main__.py
     python -m tools.retrieval_trace coverage PATH
     python -m tools.retrieval_trace morris   PATH [--trajectories R] [--levels P]
                                                   [--seed N] [--json OUT]
+    python -m tools.retrieval_trace sobol    PATH [--st-ci-target X] [--max-samples N]
     python -m tools.retrieval_trace sweep    PATH PARAM V1,V2,...
 
 Run `coverage` before any sensitivity pass. It reports which parameters the
@@ -34,12 +35,21 @@ if str(REPO_ROOT) not in sys.path:
 from tools.retrieval_trace.capture import capture_run, default_output_path  # noqa: E402
 from tools.retrieval_trace.morris import (  # noqa: E402
     ENDPOINTS,
+    find_unexercised,
     format_report,
     rank_stability,
     screen,
     to_dict,
 )
 from tools.retrieval_trace.queries import EXPECTED_POLICIES, capture_pairs  # noqa: E402
+from tools.retrieval_trace.sobol import (  # noqa: E402
+    analyse,
+    check_pair,
+    load_results,
+    pairs_involving,
+)
+from tools.retrieval_trace.sobol import format_report as format_sobol  # noqa: E402
+from tools.retrieval_trace.sobol import to_dict as sobol_to_dict  # noqa: E402
 from tools.retrieval_trace.replay import (  # noqa: E402
     check_fidelity,
     parameter_coverage,
@@ -121,6 +131,51 @@ def main() -> int:
         help="re-run with N further seeds and report whether the top of the "
         "ranking survives a different draw of trajectories",
     )
+
+    sob = sub.add_parser("sobol", help="Sobol S1/S2/ST variance decomposition")
+    sob.add_argument("path")
+    sob.add_argument("--start-samples", type=int, default=128)
+    sob.add_argument(
+        "--max-samples",
+        type=int,
+        default=4096,
+        help="ceiling, not a target: the pass stops when the intervals are "
+        "narrow enough, and reports the N that took",
+    )
+    sob.add_argument(
+        "--st-ci-target",
+        type=float,
+        default=0.02,
+        help="stop once the widest 95%% ST interval in the top 10 is this "
+        "narrow (half-width)",
+    )
+    sob.add_argument("--seed", type=int, default=20260923)
+    sob.add_argument("--top", type=int, default=0)
+    sob.add_argument("--pairs", type=int, default=15)
+    sob.add_argument("--json", help="write the full results as JSON")
+    sob.add_argument(
+        "--check-pair",
+        action="append",
+        default=[],
+        metavar="A,B",
+        help="name a hypothesised pair to look up explicitly; repeatable",
+    )
+
+    rep = sub.add_parser(
+        "sobol-report", help="re-render a saved Sobol result without re-running it"
+    )
+    rep.add_argument("json_path")
+    rep.add_argument("--st-ci-target", type=float, default=0.02)
+    rep.add_argument("--top", type=int, default=0)
+    rep.add_argument("--pairs", type=int, default=15)
+
+    pai = sub.add_parser(
+        "sobol-pairs", help="query the S2 matrix of a saved Sobol result"
+    )
+    pai.add_argument("json_path", help="a results file written by `sobol --json`")
+    pai.add_argument("--for", dest="parameter", required=True)
+    pai.add_argument("--endpoint", default="score", choices=list(ENDPOINTS))
+    pai.add_argument("--limit", type=int, default=10)
 
     swp = sub.add_parser("sweep", help="one-at-a-time sweep of one parameter")
     swp.add_argument("path")
@@ -211,6 +266,74 @@ def main() -> int:
             out.write_text(json.dumps(to_dict(screening), indent=2), encoding="utf-8")
             print()
             print(f"  results written  : {out}")
+        return 0
+
+    if args.command == "sobol":
+        run = load_run(Path(args.path))
+        unexercised = find_unexercised(run)
+        names = [n for n in sorted(run.param_defaults) if n not in set(unexercised)]
+        print(f"  exercised parameters: {len(names)}")
+        print(f"  unexercised (carried, not ranked): {len(unexercised)}")
+
+        def sobol_progress(evaluations, note=None):
+            suffix = f" -- {note}" if note else ""
+            print(f"  {evaluations} evaluations{suffix}", flush=True)
+
+        sobol = analyse(
+            run,
+            names,
+            unexercised,
+            start_samples=args.start_samples,
+            max_samples=args.max_samples,
+            st_ci_target=args.st_ci_target,
+            seed=args.seed,
+            progress=sobol_progress,
+        )
+        print()
+        print(format_sobol(sobol, top=args.top, pairs=args.pairs))
+
+        for spec in args.check_pair:
+            first, _, second = spec.partition(",")
+            print()
+            print(f"  HYPOTHESIS: {first.strip()} x {second.strip()}")
+            for endpoint in ENDPOINTS:
+                value, decided, reason = check_pair(
+                    sobol, endpoint, first.strip(), second.strip()
+                )
+                verdict = "supported" if decided else "not supported"
+                print(f"    {endpoint:9} S2 {value:>9.4f}  {verdict} ({reason})")
+
+        if args.json:
+            out = Path(args.json)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(sobol_to_dict(sobol), indent=2), encoding="utf-8")
+            print()
+            print(f"  results written  : {out}")
+        return 0
+
+    if args.command == "sobol-report":
+        results = json.loads(Path(args.json_path).read_text(encoding="utf-8"))
+        sobol = load_results(results, st_ci_target=args.st_ci_target)
+        print(format_sobol(sobol, top=args.top, pairs=args.pairs))
+        return 0
+
+    if args.command == "sobol-pairs":
+        results = json.loads(Path(args.json_path).read_text(encoding="utf-8"))
+        rows = pairs_involving(results, args.endpoint, args.parameter, args.limit)
+        if not rows:
+            print(f"  no pairs involving {args.parameter} on {args.endpoint}")
+            return 1
+        print(f"  largest S2 involving {args.parameter} on {args.endpoint}:")
+        for entry in rows:
+            partner = (
+                entry["second"] if entry["first"] == args.parameter else entry["first"]
+            )
+            interval = (
+                f"[{entry['s2_ci'][0]:>8.4f},{entry['s2_ci'][1]:>8.4f}]"
+                if entry.get("s2_ci")
+                else ""
+            )
+            print(f"    {partner:38} {entry['s2']:>9.4f} {interval}")
         return 0
 
     if args.command == "sweep":

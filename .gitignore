@@ -60,3 +60,12 @@ Thumbs.db
 # carry deployment-specific personal detail that the Vault Privacy Rule
 # keeps out of the codebase. Draft them here, land them in their own repo.
 docs/design/
+
+# Retrieval traces (tools/retrieval_trace). A trace carries real query text
+# and, by default, real record content -- it is vault data wearing a JSON
+# extension. The writer refuses any path inside the repository, so these
+# patterns are the second lock, not the first: they cover a trace that
+# arrives some other way (an editor's copy, a tarball unpacked in place).
+*.trace.json
+retrieval_trace_*.json
+traces/

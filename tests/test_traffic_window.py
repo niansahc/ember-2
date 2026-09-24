@@ -274,7 +274,14 @@ class TestRunRefusesThePersonalVault:
     def test_reads_the_personal_path_from_the_env_file_not_the_environment(
         self, monkeypatch
     ):
-        """The driver may itself be run with PRIVATE_VAULT_PATH overridden."""
-        monkeypatch.setenv("PRIVATE_VAULT_PATH", "C:/nowhere/at/all")
+        """The driver may itself be run with PRIVATE_VAULT_PATH overridden.
+
+        The sentinel comes from tmp_path rather than a literal, so the
+        assertion tests the source of the value and not path syntax: a
+        Windows-style literal is a relative path on POSIX and resolves
+        somewhere neither side meant.
+        """
+        sentinel = Path(self.__class__.__name__).resolve() / "nowhere"
+        monkeypatch.setenv("PRIVATE_VAULT_PATH", str(sentinel))
         from_file = window._personal_vault_from_env_file()
-        assert from_file is None or from_file != Path("C:/nowhere/at/all").resolve()
+        assert from_file is None or from_file != sentinel

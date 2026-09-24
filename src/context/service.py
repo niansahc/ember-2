@@ -161,8 +161,13 @@ class ContextService:
         # live when no real record has ever matched it.
         from src.retrieval.retrieval_stats import retrieval_stats_disabled_now
 
+        # A declared measurement window overrides both exclusions. That is
+        # the only way to count guards against a corpus that must not be
+        # written to, which is the whole of a read-only window over real
+        # memory. Nothing sets it by default.
         with guard_counters.recording(
-            enabled=not read_only and not retrieval_stats_disabled_now()
+            enabled=guard_counters.window_override_active()
+            or (not read_only and not retrieval_stats_disabled_now())
         ):
             return self._build_context(user_message, image_data, project_id,
                                        skip_web_search, read_only, policy)

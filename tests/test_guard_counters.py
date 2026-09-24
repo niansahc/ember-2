@@ -341,6 +341,80 @@ def test_writing_inside_the_vault_is_refused(tmp_path):
         gc.flush({"site.a": ["predicate", None, 1, 1]}, vault / "counters.db")
 
 
+def test_a_measurement_window_refuses_a_database_inside_the_repository(monkeypatch):
+    """A window over real memory must leave nothing in the working tree.
+
+    Counts are site names and integers, so the in-repo default is fine for
+    a test corpus. A declared window is the case where an artefact could
+    be staged or grepped into a diff, and structural refusal beats
+    remembering to pass the right path.
+    """
+    monkeypatch.setenv(gc.ENV_WINDOW, "1")
+    with pytest.raises(ValueError, match="inside the repository"):
+        gc.flush({"site.a": ["predicate", None, 1, 1]}, gc.DEFAULT_DB_PATH)
+
+
+def test_a_path_outside_the_repository_is_accepted(tmp_path):
+    """The refusal has to let the legitimate case through.
+
+    tmp_path rather than a literal: a Windows-style absolute path is a
+    RELATIVE path on POSIX, so `Path("C:/x").resolve()` lands under the
+    working directory -- inside the repository -- and the refusal fires
+    correctly for a reason the test never meant to exercise.
+    """
+    gc.assert_outside_repo(tmp_path / "counters.db")
+
+
+def test_without_a_window_the_in_repo_default_is_allowed(counter_db, monkeypatch):
+    monkeypatch.delenv(gc.ENV_WINDOW, raising=False)
+    # The refusal is scoped to a declared window, not to every write.
+    with patch.object(gc, "_under_pytest", return_value=False):
+        with gc.recording(enabled=True):
+            gc.count("site.a", True)
+    assert gc.read_all(counter_db)
+
+
+def test_the_window_override_is_off_unless_declared(monkeypatch):
+    monkeypatch.delenv(gc.ENV_WINDOW, raising=False)
+    assert gc.window_override_active() is False
+    monkeypatch.setenv(gc.ENV_WINDOW, "1")
+    assert gc.window_override_active() is True
+
+
+def test_a_declared_window_records_under_suppressed_stats(counter_db, monkeypatch, seeded_vault):
+    """The point of the override.
+
+    Suppressed stats normally mean an investigative caller, whose traffic
+    is the wrong population. A read-only window over a corpus that must
+    not be written to is the exception, and it has to be able to count.
+    """
+    from src.retrieval.retrieval_stats import retrieval_stats_disabled
+
+    monkeypatch.setenv(gc.ENV_DB_PATH, str(counter_db))
+    monkeypatch.setenv(gc.ENV_WINDOW, "1")
+    service = ContextService()
+
+    with patch.object(gc, "_under_pytest", return_value=False), \
+            patch("src.retrieval.semantic_search.embed_text", return_value=seeded_vault):
+        with retrieval_stats_disabled():
+            service.build_context(QUERY, read_only=True)
+
+    rows = gc.read_all(counter_db)
+    assert rows, "a declared window recorded nothing"
+
+
+def test_without_the_window_a_read_only_build_records_nothing(counter_db, monkeypatch, seeded_vault):
+    monkeypatch.setenv(gc.ENV_DB_PATH, str(counter_db))
+    monkeypatch.delenv(gc.ENV_WINDOW, raising=False)
+    service = ContextService()
+
+    with patch.object(gc, "_under_pytest", return_value=False), \
+            patch("src.retrieval.semantic_search.embed_text", return_value=seeded_vault):
+        service.build_context(QUERY, read_only=True)
+
+    assert gc.read_all(counter_db) == []
+
+
 def test_the_default_path_is_outside_the_vault():
     from src.core.config import get_private_vault_path
 

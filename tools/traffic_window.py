@@ -15,10 +15,11 @@ the bias costs. In short: a guard that fires here is confirmed reachable,
 and a guard that never fires is only a candidate for dead configuration
 until the query set is shown to have had a way to reach it.
 
-Two modes:
+Three modes:
 
-    python tools/traffic_window.py --classify   # no API, no writes
-    python tools/traffic_window.py --run        # real turns at the API
+    python tools/traffic_window.py --classify      # no API, no writes
+    python tools/traffic_window.py --run           # real turns at the API
+    python tools/traffic_window.py --run-readonly  # in-process, no writes
 
 --classify routes every query through classify_query and prints which
 policy each one actually got, plus which policies the set covers. Intent
@@ -35,7 +36,19 @@ against PRIVATE_VAULT_PATH as written in .env, not against the label and
 not against its own environment -- the check has to survive being run by a
 process whose own environment was overridden.
 
-Prints queries, policy names and counts. Never prints a response.
+--run-readonly is how a corpus that must not be written to gets measured.
+It calls build_context directly with read_only=True inside a suppressed-
+stats scope, so there is no generation, no conversation record, no
+extracted state and no retrieval stat write -- and build_context is the
+whole instrumented surface, so the guards see the same turn either way. It
+snapshots the memory store, rehearses restoring it, and digests the vault
+on both sides of the window rather than trusting the flags. Counting under
+suppression needs the measurement window declared explicitly
+(EMBER_GUARD_COUNTER_WINDOW=1), and then the counter database has to live
+outside the repository.
+
+Prints queries, policy names and counts. Never prints a response, and
+never prints the resolved project id -- that one is vault-derived.
 """
 
 from __future__ import annotations
@@ -155,6 +168,30 @@ QUERY_SET: tuple[dict, ...] = (
     {"query": "what happened in the session where the index was rebuilt",
      "intent": "any", "targets": ["selection.dedup.duplicate_content",
                                   "retriever.dedup.duplicate_content"]},
+
+    # -- the three gaps #234 found in this set ------------------------
+    # 1. No turn carried a project, so the ADR-007 boost was evaluated
+    #    against an absent id and its match arm was never reached. The id
+    #    is resolved at run time, never written down.
+    {"query": "where did this project get to", "project": True,
+     "intent": "any", "targets": ["ranker.project.active",
+                                  "ranker.project.match"]},
+    # 2. prefer_exact_matches was active fifteen times without a single
+    #    question-form query behind it, so the question predicate never
+    #    had a chance.
+    {"query": "when did i decide to use sqlite for the vector store?",
+     "intent": "factual_recall", "targets": ["ranker.policy.exact_match_question",
+                                             "ranker.policy.prefer_exact_matches_enabled"]},
+    # 3. The zero-hit signal needs a relational query. Two ways in: every
+    #    non-profile candidate scored to zero (the third-party multiplier
+    #    is the only thing that does that), or no non-profile candidate
+    #    surviving the relevance gate at all.
+    {"query": "what has my partner said about work lately",
+     "intent": "any", "targets": ["zero_hit_signal.all_non_profile_zeroed",
+                                  "ranker.authorship.branch=third_party"]},
+    {"query": "my hamster's firmware update schedule",
+     "intent": "any", "targets": ["zero_hit_signal.profile_only",
+                                  "relevance_gate.suppressed_non_profile"]},
 )
 
 
@@ -231,6 +268,257 @@ def _personal_vault_from_env_file() -> Path | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Read-only window over a corpus that must not be written to
+# ---------------------------------------------------------------------------
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _vault_digest(vault: Path) -> dict:
+    """A digest that notices a write anywhere in the vault.
+
+    Every store gets a content hash. Records get name, size and mtime
+    rather than content, because hashing a corpus of that size on both
+    sides of the window costs minutes and a new or rewritten record
+    changes the manifest anyway. An append-only store is exactly the case
+    where a manifest is sufficient.
+    """
+    import hashlib
+
+    stores = {}
+    embeddings = vault / "embeddings"
+    if embeddings.is_dir():
+        for path in sorted(embeddings.glob("*.db")):
+            stores[path.name] = _sha256(path)
+
+    manifest = hashlib.sha256()
+    files = 0
+    for path in sorted(vault.rglob("*")):
+        if not path.is_file() or path.suffix == ".db":
+            continue
+        stat = path.stat()
+        manifest.update(
+            f"{path.relative_to(vault).as_posix()}|{stat.st_size}|"
+            f"{stat.st_mtime_ns}\n".encode("utf-8")
+        )
+        files += 1
+    return {"stores": stores, "files": files, "manifest": manifest.hexdigest()}
+
+
+def _snapshot_store(source: Path, destination: Path) -> dict:
+    """Copy a store and prove the copy is the original.
+
+    sqlite3's own backup API rather than a file copy: a live WAL database
+    copied byte by byte can land mid-transaction, and a snapshot that
+    cannot be restored is worse than none because it is believed.
+    """
+    import sqlite3
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    reader = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    writer = sqlite3.connect(str(destination))
+    try:
+        reader.backup(writer)
+    finally:
+        writer.close()
+        reader.close()
+
+    checks = sqlite3.connect(f"file:{destination}?mode=ro", uri=True)
+    try:
+        integrity = checks.execute("PRAGMA integrity_check").fetchone()[0]
+        tables = [
+            row[0] for row in checks.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        ]
+        rows = {
+            table: checks.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+            for table in tables
+        }
+    finally:
+        checks.close()
+
+    return {
+        "source_sha256": _sha256(source),
+        "snapshot_sha256": _sha256(destination),
+        "integrity": integrity,
+        "rows": rows,
+    }
+
+
+def _discover_project_id(vault: Path) -> str | None:
+    """The most-used project id in the corpus, or None.
+
+    Resolved at run time and held in memory. It is vault-derived, so it is
+    never printed, logged or written to an artefact -- the window only
+    needs to pass it in, not to know what it says.
+    """
+    import json
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    memory = vault / "memory"
+    if not memory.is_dir():
+        return None
+    for path in memory.rglob("*.json"):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 -- a malformed record is not our business
+            continue
+        if not isinstance(record, dict):
+            continue
+        project_id = (record.get("metadata") or {}).get("project_id")
+        if isinstance(project_id, str) and project_id:
+            counts[project_id] += 1
+    if not counts:
+        return None
+    return counts.most_common(1)[0][0]
+
+
+def cmd_run_readonly(artefacts: Path, project_id: str | None) -> int:
+    """Drive the set in-process, read-only, against the configured vault.
+
+    No API and no generation on purpose. The instrumented surface is
+    build_context, so a turn here reaches every guard a served turn
+    reaches, and it reaches none of the writes -- no conversation record,
+    no extracted state, no retrieval stats. That is what makes it safe to
+    point at real memory.
+
+    Three belts: read_only=True stops the stats write inside
+    build_context, retrieval_stats_disabled() stops it at the store for
+    anything that does not go through build_context, and the vault is
+    digested on both sides to check rather than trust.
+    """
+    import os
+
+    from src.core.config import get_private_vault_path
+    from src.observability import guard_counters as counters
+    from src.retrieval.retrieval_stats import retrieval_stats_disabled
+
+    if not counters.window_override_active():
+        print(f"  REFUSED: set {counters.ENV_WINDOW}=1 to declare a measurement "
+              "window. Without it a read-only turn records nothing.")
+        return 2
+
+    database = counters.database_path()
+    try:
+        counters.assert_outside_repo(database)
+    except ValueError as exc:
+        print(f"  REFUSED: {exc}")
+        return 2
+
+    vault = get_private_vault_path().resolve()
+    artefacts.mkdir(parents=True, exist_ok=True)
+    try:
+        counters.assert_outside_repo(artefacts)
+    except ValueError as exc:
+        print(f"  REFUSED: {exc}")
+        return 2
+
+    print(f"  counter database : {database}")
+    print(f"  artefacts        : {artefacts}")
+
+    memory_db = vault / "embeddings" / "memory.db"
+    snapshot = artefacts / "memory.db.snapshot"
+    if not memory_db.exists():
+        print("  REFUSED: no memory.db to snapshot.")
+        return 2
+
+    details = _snapshot_store(memory_db, snapshot)
+    print(f"  snapshot         : integrity={details['integrity']} "
+          f"tables={len(details['rows'])}")
+    if details["integrity"] != "ok":
+        print("  REFUSED: snapshot failed its integrity check.")
+        return 2
+
+    # Rehearse the restore rather than assert it. A snapshot is only worth
+    # taking if putting it back produces the original, and the cheap way
+    # to know that is to put it back somewhere harmless and compare.
+    rehearsal = artefacts / "memory.db.restore-rehearsal"
+    rehearsed = _snapshot_store(snapshot, rehearsal)
+    restorable = (
+        rehearsed["integrity"] == "ok"
+        and rehearsed["rows"] == details["rows"]
+        and rehearsed["snapshot_sha256"] == details["snapshot_sha256"]
+    )
+    print(f"  restore rehearsal: {'VERIFIED' if restorable else 'FAILED'} "
+          f"(integrity={rehearsed['integrity']}, rows match="
+          f"{rehearsed['rows'] == details['rows']})")
+    if not restorable:
+        print("  REFUSED: the snapshot does not restore to itself.")
+        return 2
+    rehearsal.unlink(missing_ok=True)
+
+    before = _vault_digest(vault)
+    print(f"  digest before    : {before['manifest'][:16]} "
+          f"({before['files']} files, {len(before['stores'])} stores)")
+
+    if project_id is None:
+        project_id = _discover_project_id(vault)
+    print(f"  project id       : {'resolved' if project_id else 'none found'}")
+
+    from src.context.service import ContextService
+
+    service = ContextService()
+    rows = classify_set()
+    print(f"  turns: {len(rows)}")
+    print()
+
+    failures = 0
+    started = time.perf_counter()
+    with retrieval_stats_disabled():
+        for index, (entry, assigned) in enumerate(rows, start=1):
+            turn_started = time.perf_counter()
+            try:
+                packet = service.build_context(
+                    entry["query"],
+                    project_id=project_id if entry.get("project") else None,
+                    read_only=True,
+                )
+                outcome = f"ok delivered={len(packet.memory_items)}"
+            except Exception as exc:  # noqa: BLE001
+                outcome = f"FAILED {type(exc).__name__}"
+                failures += 1
+            print(f"  {index:3}/{len(rows)}  {assigned:16} "
+                  f"{time.perf_counter() - turn_started:6.1f}s  {outcome}")
+
+    print()
+    print(f"  window: {len(rows)} turns, {failures} failed, "
+          f"{time.perf_counter() - started:.0f}s total")
+
+    after = _vault_digest(vault)
+    unchanged = (
+        after["manifest"] == before["manifest"]
+        and after["stores"] == before["stores"]
+        and after["files"] == before["files"]
+    )
+    print(f"  digest after     : {after['manifest'][:16]} "
+          f"({after['files']} files, {len(after['stores'])} stores)")
+    print(f"  vault unchanged  : {unchanged}")
+    if not unchanged:
+        changed = sorted(
+            name for name, digest in after["stores"].items()
+            if before["stores"].get(name) != digest
+        )
+        print(f"  CHANGED stores   : {', '.join(changed) or 'none'}")
+        print(f"  CHANGED records  : manifest differs "
+              f"({after['files'] - before['files']:+d} files)")
+        print("  The snapshot above restores memory.db. Nothing is restored "
+              "automatically: an unexpected write needs looking at before it "
+              "is overwritten.")
+        return 3
+
+    return 1 if failures else 0
+
+
 def cmd_run(base_url: str, model: str, timeout: float) -> int:
     from src.core.config import get_ember_api_key
 
@@ -289,6 +577,15 @@ def main() -> int:
                         help="route the query set locally, no API calls")
     parser.add_argument("--run", action="store_true",
                         help="drive the window at a running API")
+    parser.add_argument("--run-readonly", action="store_true",
+                        help="drive the set in-process, read-only, against the "
+                             "configured vault (snapshots and digests it first)")
+    parser.add_argument("--artefacts",
+                        help="directory for the snapshot and digests; must be "
+                             "outside the repository")
+    parser.add_argument("--project-id",
+                        help="project id for the project-boost turn; resolved "
+                             "from the corpus when omitted")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--model", default="ember",
                         help="model name sent in the request body")
@@ -299,7 +596,11 @@ def main() -> int:
         return cmd_classify()
     if args.run:
         return cmd_run(args.base_url, args.model, args.timeout)
-    parser.error("choose --classify or --run")
+    if args.run_readonly:
+        if not args.artefacts:
+            parser.error("--run-readonly needs --artefacts")
+        return cmd_run_readonly(Path(args.artefacts), args.project_id)
+    parser.error("choose --classify, --run or --run-readonly")
 
 
 if __name__ == "__main__":

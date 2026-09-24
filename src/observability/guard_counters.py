@@ -27,7 +27,9 @@ Three rules govern this module, in order of importance.
    record has ever had that tag. Recording is therefore off unless a
    recording scope is open, build_context opens one only for a real turn
    (not read_only, not inside retrieval_stats_disabled), and the scope
-   refuses to open under pytest at all.
+   refuses to open under pytest at all. The one exception is a declared
+   measurement window (see window_override_active), which is how a corpus
+   that must not be written to can still be measured.
 
 3. IT DOES NOT TOUCH THE VAULT. Counts are site names and integers, no
    vault content of any kind, and they are written outside the vault. The
@@ -57,6 +59,7 @@ DEFAULT_DB_PATH = REPO_ROOT / "logs" / "observability" / "guard_counters.db"
 
 ENV_DB_PATH = "EMBER_GUARD_COUNTER_DB"
 ENV_DISABLE = "EMBER_GUARD_COUNTERS_OFF"
+ENV_WINDOW = "EMBER_GUARD_COUNTER_WINDOW"
 
 KIND_PREDICATE = "predicate"
 KIND_PARENT = "parent"
@@ -85,6 +88,31 @@ def _under_pytest() -> bool:
     return "pytest" in sys.modules or "PYTEST_CURRENT_TEST" in os.environ
 
 
+def _env_true(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def window_override_active() -> bool:
+    """True when a deliberate measurement window is in progress.
+
+    Rule 2 above excludes any caller that suppresses retrieval stats,
+    because that is what investigative callers do and their traffic is the
+    wrong population. It also excludes the one case where suppression is
+    exactly right: measuring guards against a corpus whose records must
+    not be written to. The test-vault window (#234) could not answer
+    anything corpus-bound -- no authorship metadata, no records past a
+    year, no ingested store -- and answering those means reading the real
+    corpus without touching it.
+
+    So the exclusion is overridable, but only by saying so out loud. An
+    eval harness does not set this by accident, and nothing sets it by
+    default. When it is set the counter database must live outside the
+    repository, because a window held open over real memory is the case
+    where a stray artefact is worth refusing outright.
+    """
+    return _env_true(ENV_WINDOW)
+
+
 def recording_enabled() -> bool:
     return getattr(_local, "pending", None) is not None
 
@@ -100,7 +128,7 @@ def recording(enabled: bool = True):
         not enabled
         or recording_enabled()
         or _under_pytest()
-        or os.environ.get(ENV_DISABLE, "").strip().lower() in {"1", "true", "yes", "on"}
+        or _env_true(ENV_DISABLE)
     ):
         yield False
         return
@@ -194,6 +222,25 @@ def _assert_outside_vault(path: Path) -> None:
         )
 
 
+def assert_outside_repo(path: Path) -> None:
+    """Counters from a measurement window must not land in the repository.
+
+    Counts are site names and integers, so an in-repo file is fine for a
+    window over a test corpus -- that is where the default lives. A window
+    over real memory is held to the stricter rule the trace capture uses
+    (#230): nothing derived from the personal vault is written anywhere
+    inside the working tree, where it could be staged, committed or
+    grepped into a diff by accident. The refusal is structural, so getting
+    it right does not depend on choosing the right path.
+    """
+    resolved = path.resolve()
+    if resolved == REPO_ROOT or REPO_ROOT in resolved.parents:
+        raise ValueError(
+            f"refusing to write measurement-window counters inside the "
+            f"repository ({resolved}). Set {ENV_DB_PATH} to a path outside it."
+        )
+
+
 _connections: dict[str, sqlite3.Connection] = {}
 
 
@@ -217,6 +264,8 @@ def _connect(path: Path) -> sqlite3.Connection:
         return cached
 
     _assert_outside_vault(path)
+    if window_override_active():
+        assert_outside_repo(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=5.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row

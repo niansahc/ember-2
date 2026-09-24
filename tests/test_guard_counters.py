@@ -354,9 +354,19 @@ def test_a_measurement_window_refuses_a_database_inside_the_repository(monkeypat
         gc.flush({"site.a": ["predicate", None, 1, 1]}, gc.DEFAULT_DB_PATH)
 
 
+def test_a_path_outside_the_repository_is_accepted(tmp_path):
+    """The refusal has to let the legitimate case through.
+
+    tmp_path rather than a literal: a Windows-style absolute path is a
+    RELATIVE path on POSIX, so `Path("C:/x").resolve()` lands under the
+    working directory -- inside the repository -- and the refusal fires
+    correctly for a reason the test never meant to exercise.
+    """
+    gc.assert_outside_repo(tmp_path / "counters.db")
+
+
 def test_without_a_window_the_in_repo_default_is_allowed(counter_db, monkeypatch):
     monkeypatch.delenv(gc.ENV_WINDOW, raising=False)
-    gc.assert_outside_repo(Path("C:/somewhere/else/counters.db"))
     # The refusal is scoped to a declared window, not to every write.
     with patch.object(gc, "_under_pytest", return_value=False):
         with gc.recording(enabled=True):

@@ -26,6 +26,7 @@ TestLodestoneChainedDerivation's docstring.
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 from unittest.mock import patch
 
 import pytest
@@ -45,6 +46,18 @@ def isolated_vault(tmp_path):
     yield vault, vault / "embeddings" / "memory.db"
 
 
+def _today_stamp() -> str:
+    """Now, in the vault's hyphenated format.
+
+    These tests need their records to heat-score hot on recency alone, so
+    that the source bound is observably what pulls a reflection down
+    rather than age doing it quietly. A literal date does that on the day
+    it is written and then expires: the same test reads as a bound failure
+    once the date drifts out of the hot band, which is what happened here.
+    """
+    return datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+
+
 def _insert(db_path, record_id: str, memory_type: str, metadata: dict | None = None) -> None:
     store = SqliteVectorStore(db_path)
     try:
@@ -54,7 +67,7 @@ def _insert(db_path, record_id: str, memory_type: str, metadata: dict | None = N
             "embedding": [0.1] * 768,
             "source": "test",
             "memory_type": memory_type,
-            "created_at": "2026-09-14T00-00-00",
+            "created_at": _today_stamp(),
             "metadata": metadata or {},
         })
     finally:

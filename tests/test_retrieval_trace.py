@@ -33,6 +33,7 @@ from src.context.models import ContextItem
 from src.context.policies import ContextPolicy
 from src.context.ranker import COLD_MULTIPLIER, ContextRanker
 from src.context.service import ContextService
+from tests.conftest import deliver_packet
 from src.core.config import get_private_vault_path
 from src.memory.write_memory import write_memory
 from src.retrieval.semantic_search import (
@@ -490,9 +491,9 @@ def test_capture_leaves_the_database_unchanged(traced_run):
 def test_the_same_pipeline_unguarded_does_write(stub_query_embedding):
     """Control for the test above: without the guard, a build writes."""
     service = ContextService()
-    service.build_context(QUERY)
+    deliver_packet(service.build_context(QUERY))
     before = _stats_digest()
-    service.build_context(QUERY)
+    deliver_packet(service.build_context(QUERY))
     assert _stats_digest() != before
 
 

@@ -356,6 +356,17 @@ class LLMAdapter:
             if _trim_log["overflow"]:
                 logger.warning("[PROMPT_GUARD] OVERFLOW %s", _trim_log)
 
+        # ADR-015 retrieval stats, issue #227. The prompt is final here --
+        # trimmed if it was going to be trimmed -- so this is the first point
+        # at which "what the model sees" is a settled question. Committing
+        # earlier would credit records that a later trim pass dropped.
+        # No-op when build_context armed nothing (read_only) or when no
+        # memory section rendered.
+        _delivered = context_packet.commit_delivery()
+        if _delivered:
+            logger.debug("[CONTEXT] retrieval stats recorded for %d rendered "
+                         "record(s)", _delivered)
+
         # Vision pipeline: the VisionService preprocessor (called upstream
         # in openai_adapter.py) extracts a text description that's already
         # injected into system_prompt via vision_description. The main
@@ -566,6 +577,17 @@ class LLMAdapter:
                 logger.info("[PROMPT_GUARD] %s", _trim_log)
             if _trim_log["overflow"]:
                 logger.warning("[PROMPT_GUARD] OVERFLOW %s", _trim_log)
+
+        # ADR-015 retrieval stats, issue #227. The prompt is final here --
+        # trimmed if it was going to be trimmed -- so this is the first point
+        # at which "what the model sees" is a settled question. Committing
+        # earlier would credit records that a later trim pass dropped.
+        # No-op when build_context armed nothing (read_only) or when no
+        # memory section rendered.
+        _delivered = context_packet.commit_delivery()
+        if _delivered:
+            logger.debug("[CONTEXT] retrieval stats recorded for %d rendered "
+                         "record(s)", _delivered)
 
         # Assistant prefill for web-search-grounded turns (streaming path).
         _prefix = None

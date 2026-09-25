@@ -23,6 +23,27 @@ from src.tasks.task_resolver import TaskResolver
 
 logger = logging.getLogger("ember.context_retriever")
 
+# Floor on RAW COSINE for the main memory search, applied inside
+# semantic_search before any adjustment (#205).
+#
+# Until now the main path passed nothing and semantic_search defaults
+# min_score to None, so `min_score is not None and raw < min_score` was
+# identically false: 0 firings in 4,248 evaluations on
+# vector_index.min_score_floor.json and 0 in 2,609 on
+# semantic_search.min_score_floor.memory_all_types. The floor existed,
+# was configured, and did not run. It fired only through the profile
+# search, which does pass one, at 2 of 440.
+#
+# THE VALUE IS NOT CALIBRATED. 0.25 is inherited from policy.min_score,
+# which is a different gate on a different quantity -- that one judges
+# the adjusted score after the additive terms, this one judges raw
+# cosine. On the production corpus it excludes nothing: 288 candidates
+# over 36 queries span 0.4214 to 0.7595, so the nearest value that would
+# change delivery is 0.50 (4.5% excluded). Activating the guard and
+# choosing its value are separate pieces of work and only the first is
+# done here. See the calibration issue before changing this number.
+MEMORY_MIN_RAW_SCORE = 0.25
+
 
 class ContextRetriever:
     def __init__(
@@ -93,7 +114,12 @@ class ContextRetriever:
     ) -> list[ContextItem]:
         from src.retrieval.semantic_search import semantic_search
 
-        results = semantic_search(user_message, limit=8, query_embedding=query_embedding)
+        results = semantic_search(
+            user_message,
+            limit=8,
+            query_embedding=query_embedding,
+            min_score=MEMORY_MIN_RAW_SCORE,
+        )
         items: list[ContextItem] = []
 
         for result in results:

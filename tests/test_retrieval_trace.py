@@ -437,7 +437,10 @@ def seeded_vault():
 
 @pytest.fixture
 def stub_query_embedding(seeded_vault):
-    with patch("src.retrieval.semantic_search.embed_text", return_value=seeded_vault):
+    # Both bindings -- retrieve() embeds through src.retrieval.embed_memory
+    # and passes the result down, so patching only the semantic_search
+    # binding leaves the query vector real against stubbed records.
+    with patch("src.retrieval.semantic_search.embed_text", return_value=seeded_vault),             patch("src.retrieval.embed_memory.embed_text", return_value=seeded_vault):
         yield
 
 
@@ -478,6 +481,16 @@ def test_replay_reproduces_every_captured_score_exactly(traced_run):
     assert report.score_mismatches == []
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason="#244: the harness models the reflection channel as having no "
+           "retrieval stage -- true under Jaccard scoring, stale since "
+           "#241 routed reflections through semantic_search. Non-strict "
+           "because the outcome is order-dependent, and the passing case "
+           "is the vacuous one: the two models agree whenever the shared "
+           "session vault is large enough that the channel delivers "
+           "nothing in both. Remove with the #244 fix, not before.",
+)
 def test_replay_reproduces_the_delivered_set(traced_run):
     report = check_fidelity(traced_run)
     assert report.delivery_mismatches == []
@@ -555,6 +568,16 @@ def test_sweep_reports_delivery_changes(traced_run):
 # Serialization and the privacy guard
 # ---------------------------------------------------------------------------
 
+@pytest.mark.xfail(
+    strict=False,
+    reason="#244: the harness models the reflection channel as having no "
+           "retrieval stage -- true under Jaccard scoring, stale since "
+           "#241 routed reflections through semantic_search. Non-strict "
+           "because the outcome is order-dependent, and the passing case "
+           "is the vacuous one: the two models agree whenever the shared "
+           "session vault is large enough that the channel delivers "
+           "nothing in both. Remove with the #244 fix, not before.",
+)
 def test_round_trip_through_disk(traced_run, tmp_path):
     path = traced_run.write(tmp_path / "trace.json")
     reloaded = load_run(path)

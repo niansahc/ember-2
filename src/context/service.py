@@ -330,22 +330,6 @@ class ContextService:
         if self.debug:
             _log_context_selection(selected_memory)
 
-        # ADR-015: Update retrieval stats on selected records only.
-        # Only records that made it into the final context packet get
-        # their frequency_score decayed-then-incremented and
-        # last_retrieved_at set.
-        #
-        # Skipped entirely under read_only. This is the sole write in
-        # build_context, so gating it here is what makes the flag's name
-        # true rather than aspirational (issue #206).
-        if not read_only:
-            self._update_retrieval_stats(selected_memory + selected_reflections)
-        elif self.debug:
-            logger.info(
-                "[CONTEXT] read_only: skipped retrieval-stats write for %d record(s)",
-                len(selected_memory) + len(selected_reflections),
-            )
-
         packet = self.formatter.format(
             user_message=user_message,
             memory_items=selected_memory,
@@ -358,6 +342,24 @@ class ContextService:
         # Attach pre-computed query embedding for downstream use (lodestone
         # resolver in prompt builder). Avoids a redundant embed_text() call.
         packet.query_embedding = query_embedding
+
+        # ADR-015 retrieval stats, issue #227. The write is armed here and
+        # fired by the adapter once the prompt is final, against the records
+        # the prompt actually rendered rather than every candidate in the
+        # packet. build_context cannot do it itself: it returns before the
+        # prompt exists, and the slice is decided in prompt_builder.
+        #
+        # read_only arms nothing at all, which keeps #206's guarantee
+        # structural -- there is no writer to reach rather than a branch that
+        # declines to call one.
+        if not read_only:
+            packet.arm_delivery_recorder(self._update_retrieval_stats)
+        elif self.debug:
+            logger.info(
+                "[CONTEXT] read_only: no retrieval-stats recorder armed for "
+                "%d candidate record(s)",
+                len(selected_memory) + len(selected_reflections),
+            )
 
         # Zero-hit signal. If the query was relational
         # AND every non-profile memory item zeroed out under authorship

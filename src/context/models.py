@@ -74,6 +74,62 @@ class ContextPacket:
     # detect_t2_pattern; None when no pattern was detected this turn.
     t2_pattern_signal: PatternSignal | None = None
 
+    # --- delivery accounting (issue #227) --------------------------------
+    #
+    # The packet is a candidate set; the prompt renders a slice of it. ADR-015
+    # heat is supposed to record delivery, so it has to be written against the
+    # slice, not the packet. A single write sets last_retrieved_at to now,
+    # which forces recency to 1.0 and heat to at least 0.625 -- over the 0.5
+    # hot threshold outright. Under the old timing one appearance in a
+    # candidate set was a guaranteed promotion to hot for a record the model
+    # never saw.
+    #
+    # So the write is deferred. build_context arms the packet with a recorder,
+    # the prompt builder reports what it actually rendered, and the adapter
+    # commits once the prompt is final. Nothing renders, nothing is recorded --
+    # which is the correct answer for a packet that never reached a model.
+    delivered_items: list[ContextItem] = field(default_factory=list, repr=False)
+    _delivery_recorder: Any | None = field(default=None, repr=False, compare=False)
+
+    def arm_delivery_recorder(self, recorder) -> None:
+        """Install the callback that commits retrieval stats for this turn.
+
+        Left unarmed for read-only builds, so the read_only contract is
+        expressed by never installing a writer rather than by a branch at
+        write time.
+        """
+        self._delivery_recorder = recorder
+
+    def begin_render(self) -> None:
+        """Start a render pass, discarding any previous one.
+
+        Discarding rather than accumulating is what makes the cascade-trim
+        path correct: prompt_guardrail builds the same packet up to seven
+        times, dropping sections each round, and only the last build is what
+        the model receives.
+        """
+        self.delivered_items = []
+
+    def record_rendered(self, items) -> None:
+        """Record items this render pass put in front of the model."""
+        self.delivered_items.extend(items)
+
+    def commit_delivery(self) -> int:
+        """Commit the recorded render. Idempotent.
+
+        Disarms afterwards, so a second prompt build for the same turn --
+        the constitutional review path rebuilds one -- cannot double count.
+        Returns the number of records committed.
+        """
+        recorder = self._delivery_recorder
+        if recorder is None:
+            return 0
+        self._delivery_recorder = None
+        items = list(self.delivered_items)
+        if items:
+            recorder(items)
+        return len(items)
+
     def all_items(self) -> list[ContextItem]:
         # Order matches TDD context packet order:
         # state → reflections → source memories

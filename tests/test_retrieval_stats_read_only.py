@@ -25,6 +25,7 @@ from unittest.mock import patch
 import pytest
 
 from src.context.service import ContextService
+from tests.conftest import deliver_packet
 from src.core.config import get_private_vault_path
 from src.memory.write_memory import write_memory
 from src.retrieval.retrieval_stats import (
@@ -160,6 +161,8 @@ def test_unguarded_build_context_writes(stub_query_embedding, clean_env):
     before = _stats_digest()
 
     packet = service.build_context(QUERY)
+    # #227: the write is fired by the render, not by build_context.
+    deliver_packet(packet)
 
     assert packet.memory_items, "nothing delivered; the suppression tests would be vacuous"
     assert _stats_digest() != before
@@ -209,10 +212,10 @@ def test_writes_resume_after_the_scope_closes(stub_query_embedding, clean_env):
     """
     service = ContextService()
     with retrieval_stats_disabled():
-        service.build_context(QUERY)
+        deliver_packet(service.build_context(QUERY))
     before = _stats_digest()
 
-    service.build_context(QUERY)
+    deliver_packet(service.build_context(QUERY))
 
     assert _stats_digest() != before
 
@@ -263,11 +266,11 @@ def test_the_same_replay_unguarded_does_change_the_database(stub_query_embedding
     """Control for the test above. Ten passes, not a hundred -- the point is
     that the harness is capable of writing, not how much."""
     service = ContextService()
-    service.build_context(QUERY)
+    deliver_packet(service.build_context(QUERY))
     before = _stats_digest()
 
     for query in REPLAY_QUERIES[:10]:
-        service.build_context(query)
+        deliver_packet(service.build_context(query))
 
     assert _stats_digest() != before
 

@@ -361,6 +361,11 @@ class PromptBuilder:
         # emitted regardless of query type.
         is_conversational = is_conversational_query(context_packet.user_message)
 
+        # Issue #227: start a fresh delivery record for this pass. The
+        # cascade-trim path rebuilds the same packet as it drops sections, so
+        # only the last build describes what the model receives.
+        context_packet.begin_render()
+
         # System prompt with nature (dual injection) + identity rules at front
         # Bare mode: skip nature, identity rules, lodestone seed, and style
         system_sections: list[str] = [
@@ -978,6 +983,11 @@ class PromptBuilder:
         profile_items = [i for i in context_packet.memory_items if i.memory_type == "profile"]
         other_items = [i for i in context_packet.memory_items if i.memory_type != "profile"][:4]
 
+        # Issue #227: this slice, not the packet, is what the model sees on
+        # the memory channel. Recorded here rather than recomputed elsewhere
+        # so the record and the render cannot drift apart.
+        context_packet.record_rendered(profile_items + other_items)
+
         sections: list[str] = []
 
         if profile_items:
@@ -1270,7 +1280,13 @@ class PromptBuilder:
             return ""
 
         lines: list[str] = []
-        for item in context_packet.reflection_items[:1]:
+        rendered_reflections = context_packet.reflection_items[:1]
+        # Issue #227, second channel. reflection_limit is 1 to 3 depending on
+        # policy and this renders one, so the difference took a promotion for
+        # a delivery that did not happen -- the same defect as the memory
+        # channel, just smaller.
+        context_packet.record_rendered(rendered_reflections)
+        for item in rendered_reflections:
             date_str = self._format_item_date(item.timestamp)
             age_str = self._format_item_age(item.timestamp)
             lines.append(f"- [reflection{date_str}]{age_str} {item.content.strip()}")

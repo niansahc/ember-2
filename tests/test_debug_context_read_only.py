@@ -29,6 +29,7 @@ from src.api.main import app
 from src.context.service import ContextService
 from src.core.config import get_private_vault_path
 from src.memory.write_memory import write_memory
+from tests.conftest import deliver_packet
 
 EMBED_DIM = 768
 QUERY = "what have i been reading about lately"
@@ -113,6 +114,9 @@ def test_default_build_context_writes_retrieval_stats(stub_query_embedding):
     before = _stats_digest()
 
     packet = service.build_context(QUERY)
+    # #227: build_context arms the write, the render fires it. A packet that
+    # never reaches a prompt is a candidate set, not a delivery.
+    deliver_packet(packet)
 
     assert packet.memory_items, "nothing delivered; the read-only tests would be vacuous"
     assert _stats_digest() != before
@@ -174,7 +178,7 @@ def test_read_only_skips_the_stats_call_entirely(stub_query_embedding):
 def test_default_calls_the_stats_writer(stub_query_embedding):
     service = ContextService()
     with patch.object(service, "_update_retrieval_stats") as stats:
-        service.build_context(QUERY)
+        deliver_packet(service.build_context(QUERY))
     stats.assert_called_once()
 
 
@@ -184,7 +188,7 @@ def test_read_only_defaults_to_false(stub_query_embedding):
     # recovery path while looking like a bug fix.
     service = ContextService()
     with patch.object(service, "_update_retrieval_stats") as stats:
-        service.build_context(QUERY)
+        deliver_packet(service.build_context(QUERY))
     stats.assert_called_once()
 
 

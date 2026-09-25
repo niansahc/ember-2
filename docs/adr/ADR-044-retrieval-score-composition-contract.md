@@ -2,9 +2,9 @@
 
 **Status:** Proposed
 **Date:** 2026-09-19
-**Amended:** 2026-09-21 (decision 4, role -- see 4a)
+**Amended:** 2026-09-21 (decision 4, role -- see 4a); 2026-09-25 (production cosine spread measured -- figures only, no decision changed)
 **Target:** v0.19.0
-**Related:** ADR-005 (context ranking), ADR-015 (memory tiering, and its 2026-09-19 corrections), ADR-007 (project-scoped retrieval), ADR-018 (intent-aware type gating), issues #204, #205, #206, #211, #218, PR #217 (experiment 2)
+**Related:** ADR-005 (context ranking), ADR-015 (memory tiering, and its 2026-09-19 corrections), ADR-007 (project-scoped retrieval), ADR-018 (intent-aware type gating), issues #204, #205, #206, #211, #218, PR #217 (experiment 2), PR #236 (production cosine spread)
 
 ## Context
 
@@ -182,11 +182,14 @@ delivered. A predicate is not an approximation of the pile here; on this
 incident it is a substitute for it.
 
 **The pile was expensive for what it bought.** Its combined swing is -0.45
-against a measured mean top-8 cosine spread of 0.1504: three times the entire
-observable similarity range, spent on one term, to do a job a WHERE clause
-does at no cost to the budget at all. Under the bound this ADR establishes, a
-term that large would have had to justify itself against the spread, and it
-cannot.
+against a measured mean top-8 cosine spread of 0.0815 on the production
+corpus: roughly five and a half times the entire observable similarity range,
+spent on one term, to do a job a WHERE clause does at no cost to the budget at
+all. Under the bound this ADR establishes, a term that large would have had to
+justify itself against the spread, and it cannot. (This argument was first
+written against the fixture-corpus figure of 0.1504, where the same swing is
+three times the range. The production measurement makes it stronger, not
+weaker -- see "The bound, and what it is asserted against".)
 
 **Two capabilities that looked like role's were not.** Relational
 contamination passes in *every* arm, including the fully reduced one, because
@@ -221,12 +224,43 @@ decay into folklore, because every constant in the current stack got there that
 way.
 
 The reference quantity is the realized top-k spread of the embedder over the
-corpus -- 0.1504 mean top-8 on the fixture corpus, measured, with the
-production figure still unmeasured and needed. A prior permitted to move a
-record further than the entire observable similarity range is not a tiebreaker;
-it is the ranking signal, with cosine as a tiebreaker. The current stack is
-already there: a query-independent additive swing of 0.98 at the retrieval
-stage alone, against a spread of 0.15, is roughly 6.5:1.
+corpus. **On the production corpus it is 0.0815** (median 0.0707, stdev
+0.0553), measured on the corrected index in #236 by
+`tools/cosine_spread.py`.
+
+The definition, stated because two spreads measured differently are not
+comparable and this document carries both:
+
+> For each query, take the top 8 results by **raw cosine, before any
+> additive or multiplicative adjustment**, and take `max - min` across those
+> 8. The reported figure is the mean of that quantity over the query set.
+
+Raw rather than composed is a requirement, not a detail. The composed score is
+the quantity this bound governs; measuring the spread on it would compare the
+prior against itself and always look reasonable.
+
+| corpus | mean top-8 raw spread | status |
+|---|---|---|
+| production (#236, 36 queries) | **0.0815** | the figure the bound is asserted against |
+| fixture (earlier, definition not reproducible in-repo) | 0.1504 | prior reference, retained for comparison only |
+
+The fixture figure is kept visible because the arguments in this document were
+originally written against it, and because its own definition cannot be
+re-derived from this repository -- it is a reference point, not a second
+measurement of the same thing.
+
+**This tightens the ADR; it does not loosen it.** Production resolves 0.54x the
+similarity range the fixture corpus does, so every bound in this document that
+was asserted against 0.1504 was asserted against a spread roughly twice as wide
+as the real one. Each ratio below therefore understated the problem by about a
+factor of two. No decision changes as a result: they all move further in the
+direction they already argued.
+
+A prior permitted to move a record further than the entire observable
+similarity range is not a tiebreaker; it is the ranking signal, with cosine as
+a tiebreaker. The current stack is already there: a query-independent additive
+swing of 0.98 at the retrieval stage alone, against a spread of 0.0815, is
+roughly **12:1** (it was stated as 6.5:1 against the fixture figure).
 
 Two conditions on the bound:
 
@@ -243,7 +277,9 @@ property `COLD_MULTIPLIER`'s rationale claims and does not deliver.
 it, and the ratio to the measured spread is stated in the code rather than
 implied. The failure this prevents is the one already in the record: the entity
 boost was sized against an *assumed* cosine variance of 0.3-0.5 and shipped
-with a cap of 0.40, which is 2.7x the spread it was meant to nudge.
+with a cap of 0.40, which is 4.9x the measured production spread it was meant
+to nudge (2.7x against the fixture figure). The assumption was wrong by a
+factor of four to six, which is the case for measuring rather than assuming.
 
 ## Why this is not the alternative ADR-005 rejects
 
@@ -301,9 +337,11 @@ column. What remains open is narrower -- whether the predicate excludes
 outright or caps by quota, and which column values it keys on given that
 `third_party` currently has no rows behind it (issue #218).
 
-**The measured production cosine spread.** The 0.1504 figure is from the
+**The measured production cosine spread.** ~~The 0.1504 figure is from the
 fixture corpus. The bound needs the production number and it has never been
-taken.
+taken.~~ Closed 2026-09-25. Measured at **0.0815** mean top-8 raw spread on the
+corrected index (#236), against 0.1504 on the fixture corpus. The bound and
+every ratio derived from it are stated against the production figure above.
 
 **Whether query-independent convergence is a defect at all.** On the fixture
 corpus an ideal retriever scores mean pairwise cross-query Jaccard of 0.0779

@@ -149,35 +149,54 @@ class ContextRetriever:
 
         return items
 
-    def get_reflection_items(self, user_message: str) -> list[ContextItem]:
-        # Recalling Too Well Phase 1, items 4-5: MemoryService.search() is
-        # keyword-overlap matching (search_memory.py) and returns no score
-        # of its own, so reflections were hardcoded to score=1.0 -- higher
-        # than any cosine-derived memory item could reach. A Jaccard score
-        # against the user message gives reflections a real, comparable
-        # score instead. No unconditional "most recent reflection" fallback
-        # when search comes back empty -- an empty result means no
-        # reflection_items, matching get_memory_items()/get_profile_items().
-        results = self.memory_service.search(
+    def get_reflection_items(
+        self,
+        user_message: str,
+        query_embedding: list[float] | None = None,
+    ) -> list[ContextItem]:
+        """Reflection candidates, scored on the same scale as everything else.
+
+        Issue #239. The history here is two corrections deep. First,
+        MemoryService.search() is keyword-overlap matching and returns no
+        score, so reflections were hardcoded to score=1.0 -- above anything
+        a cosine-derived memory item could reach. That was replaced with a
+        token Jaccard score against the query, which was comparable in the
+        sense of being a number between 0 and 1 and in no other sense: the
+        gate that judges it (_apply_type_gate, min_score 0.25) is
+        calibrated for cosine, where production top-8 raw spread is 0.0815
+        around a mean rank-1 of 0.6375 (#236). Jaccard between a short
+        query and a multi-paragraph synthesis does not reach that. Over 36
+        queries the channel produced 100 candidates on 34 turns, the best
+        scored 0.0794, and the gate rejected every one.
+
+        So the channel is scored by cosine now, through the same
+        semantic_search path and the same adjusted score the memory
+        channel uses. The gate compares like with like and can
+        discriminate rather than reject.
+
+        No "most recent reflection" fallback when the search comes back
+        empty -- an empty result means no reflection_items, matching
+        get_memory_items() and get_profile_items().
+        """
+        from src.retrieval.semantic_search import semantic_search
+
+        results = semantic_search(
             user_message,
             memory_type="reflection",
             limit=3,
+            query_embedding=query_embedding,
         )
 
         items: list[ContextItem] = []
 
         for result in results:
-            content = result.get("text", "")
+            content = result.get("content", "")
 
             if count("retriever.exclude.reflection_channel",
                      self._should_exclude_content(content, user_message)):
                 continue
 
-            score = self._jaccard_similarity(
-                self._tokenize(self._normalize_text(content)),
-                self._tokenize(self._normalize_text(user_message)),
-            )
-
+            metadata = result.get("metadata", {}) or {}
             items.append(
                 ContextItem(
                     id=result.get("id", ""),
@@ -185,17 +204,19 @@ class ContextRetriever:
                     source="reflection",
                     item_type="reflection",
                     memory_type="reflection",
-                    score=score,
-                    timestamp=result.get("timestamp"),
-                    tags=result.get("tags", []),
-                    metadata=result,
-                    # This path already returns the vault-canonical id
-                    # (which equals vectors.id -- see write_memory.py),
-                    # unlike get_memory_items()'s SQLite path. Set
-                    # explicitly anyway (ADR-015 amendment step 4) so
-                    # reflection stops being the one type that "happens to
-                    # work" through `id` and is on the same explicit
-                    # contract as everything else.
+                    score=result.get("score", 0.0),
+                    # B-RET-002: created_at is a vectors column, not a
+                    # metadata key.
+                    timestamp=result.get("created_at"),
+                    tags=metadata.get("tags", []),
+                    metadata={
+                        **metadata,
+                        "memory_type": "reflection",
+                        "raw_score": result.get("raw_score", 0.0),
+                    },
+                    tier=result.get("tier", "hot"),
+                    authorship=result.get("authorship", "unknown"),
+                    # ADR-015 amendment step 4: the real vectors.id.
                     store_id=result.get("id"),
                 )
             )
@@ -346,12 +367,58 @@ class ContextRetriever:
         # get_conversation_items wrapper were dead code that read a stale
         # index never refreshed on writes.
         memory_items = self.get_memory_items(user_message, query_embedding=query_embedding)
-        reflection_items = self.get_reflection_items(user_message)
+        reflection_items = self.get_reflection_items(
+            user_message, query_embedding=query_embedding
+        )
 
         memory_items = profile_items + memory_items
         memory_items = self._deduplicate_items(memory_items)
+        memory_items = self._drop_reflection_duplicates(
+            memory_items, reflection_items
+        )
 
         return state_items, task_items, memory_items, reflection_items, query_embedding
+
+    def _drop_reflection_duplicates(
+        self,
+        memory_items: list[ContextItem],
+        reflection_items: list[ContextItem],
+    ) -> list[ContextItem]:
+        """Keep a reflection in one channel, not both.
+
+        The memory channel searches every migrated type, reflection
+        included, so a record that clears the gate can arrive twice: once
+        as a source memory and once as a reflection. Dedup did not catch
+        it because it runs per channel. While the reflection channel
+        delivered nothing (#239) this could not happen; scoring it by
+        cosine makes it reachable.
+
+        Two copies would be rendered in two prompt sections and, since
+        #238, recorded as two deliveries of one record.
+
+        The reflection copy wins. It is the one with the
+        provenance="derived-synthesis" framing and the per-item age label,
+        which exist so the model does not read a synthesis as a source
+        record.
+        """
+        if not reflection_items or not memory_items:
+            return memory_items
+
+        store_ids = {
+            i.store_id for i in reflection_items if getattr(i, "store_id", None)
+        }
+        keys = {self._normalize_text(i.content) for i in reflection_items}
+
+        kept: list[ContextItem] = []
+        for item in memory_items:
+            duplicate = (
+                (getattr(item, "store_id", None) or None) in store_ids
+                or self._normalize_text(item.content) in keys
+            )
+            if count("retriever.dedup.reflection_cross_channel", duplicate):
+                continue
+            kept.append(item)
+        return kept
 
     def _deduplicate_items(self, items: list[ContextItem]) -> list[ContextItem]:
         seen = set()

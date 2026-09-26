@@ -138,7 +138,8 @@ class TestRelationalQueryEmptyFlagNotSpuriouslyAffected:
     """service.py's relational_query_empty check
     (`all(float(item.score) == 0.0 for item in non_profile)`) was designed
     around apply_authorship_scoring's third_party: 0.0 multiplier, not
-    tier. Confirms a cold-tier, first-person-authored item -- which used to
+    tier. #218 retired that multiplier, so the check now has no source of
+    an exact 0.0 at all -- see the second test. Confirms a cold-tier, first-person-authored item -- which used to
     reach this check at exactly 0.0 only when the additive ladder happened
     to net to zero, and now never reaches exactly 0.0 from tier alone --
     behaves the same representative way either way: nonzero, because the
@@ -159,20 +160,31 @@ class TestRelationalQueryEmptyFlagNotSpuriouslyAffected:
 
         assert ranked_memory[0].score != 0.0
 
-    def test_cold_third_party_item_still_zeroes_on_relational_query(self):
-        """The flag's actual trigger (third_party authorship on a relational
-        query) is unaffected by the tier change -- it was never driven by
-        tier in the first place."""
+    def test_nothing_zeroes_on_a_relational_query_since_218(self):
+        """The flag's only trigger is gone.
+
+        It was third_party authorship at multiplier 0.0, a class with zero
+        rows in production and no live path to acquire any, retired in
+        #218. Tier never drove this check and still does not. So
+        relational_query_empty can now only be reached through its
+        profile_only arm, and the all_non_profile_zeroed arm is
+        unreachable -- consistent with it firing 0 times in 5 evaluations
+        on the personal-vault window before the retirement.
+
+        Asserted rather than left implicit so that restoring any 0.0
+        multiplier flips this test and forces the signal to be
+        reconsidered with it.
+        """
         ranker = ContextRanker()
         policy = ContextPolicy(name="test", memory_weight=1.0)
 
-        item = _item("cold-third-party", score=0.5, tier="cold", memory_type="ingested")
-        item.authorship = "third_party"
+        item = _item("cold-ingested", score=0.5, tier="cold", memory_type="ingested")
+        item.authorship = "third_party"  # the retired tag, if it somehow appears
 
         adjusted = ranker.apply_policy([item], policy)
         authored = ranker.apply_authorship_scoring(adjusted, "what has my son been up to")
 
-        assert authored[0].score == 0.0
+        assert authored[0].score > 0.0
 
 
 class TestProfileBypassStillWorks:

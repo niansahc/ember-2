@@ -87,7 +87,10 @@ POLICY_DEFAULTS: dict[str, float] = {
 AUTHORSHIP_DEFAULTS: dict[str, float] = {
     "auth.first_person": 1.0,
     "auth.mixed": 0.3,
-    "auth.third_party": 0.0,
+    # auth.third_party retired in #218 -- the class had no population and no
+    # live assigner. Removing the parameter rather than pinning it at 0.0
+    # keeps the sensitivity passes from reporting an index for a term the
+    # pipeline no longer has.
     "auth.unknown": 0.5,
     "proj.boost": 0.15,
 }

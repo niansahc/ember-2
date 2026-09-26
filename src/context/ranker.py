@@ -166,11 +166,24 @@ class ContextRanker:
         conversations) must not be allowed to answer as if it were about
         the user. See UAT-005 root cause analysis.
 
-        Multipliers — applied only when _matches_relational_query is True:
-          first_person: 1.0  (user-authored — conversation/journal/profile)
+        Multipliers -- applied only when _matches_relational_query is True:
+          first_person: 1.0  (user-authored -- conversation/journal/profile)
           mixed:        0.3  (content of uncertain authorship)
-          third_party:  0.0  (books, articles, other voices — filtered out)
           unknown:      0.5  (conservative middle pending re-tag)
+
+        third_party (0.0) was retired in #218. It had zero rows in the
+        production index and no live path to acquire any: classify_authorship
+        never returns it, and the only code that assigned it was a standalone
+        backfill whose ChatGPT rule contradicted ADR-015. See ADR-015's
+        2026-09-26 correction. Genuine third-party material -- documents,
+        articles, other people's writing -- is owned by the `ingested`
+        memory type and ADR-018 type gating, which is a write-time
+        provenance fact rather than a rank-time multiplier.
+
+        An unrecognised authorship value now takes the 0.5 default rather
+        than a hard exclusion, which is the conservative direction: a
+        record with an unreadable tag competes at a discount instead of
+        being silently erased.
 
         On non-relational queries this is a no-op — ingested content remains
         useful for general knowledge questions.
@@ -184,7 +197,6 @@ class ContextRanker:
         multipliers = {
             "first_person": 1.0,
             "mixed": 0.3,
-            "third_party": 0.0,
             "unknown": 0.5,
         }
 

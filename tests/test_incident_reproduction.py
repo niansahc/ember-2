@@ -194,14 +194,19 @@ def _relational_contamination() -> Incident:
         query=query,
         items=(
             # Decoy: imported content carrying the kinship phrase, not about
-            # this user. Under f9f5dda this is third_party -> multiplier 0.0.
+            # this user. Tagged mixed, which is what classify_authorship
+            # actually assigns to an imported assistant turn -- multiplier
+            # 0.3. It was third_party (0.0) until #218 retired that class,
+            # and while it was, this fixture exercised a value with zero rows
+            # in production: the decoy was held out by a mechanism that could
+            # not have fired on real data.
             _item(
                 "rel_imported",
                 f"{MARK_WRONG} my sibling usually brings a casserole to these "
                 "things, and my sibling always says that is what my sibling is "
                 "known for at every gathering.",
                 role="assistant",
-                authorship="third_party",
+                authorship="mixed",
                 score=0.74,
             ),
             # The answer: the user's own record, lower cosine.

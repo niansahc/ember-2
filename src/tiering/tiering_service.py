@@ -121,6 +121,38 @@ def _recency_score(
     return math.pow(2, -days_ago / halflife_days)
 
 
+# ADR-044 decision 3: the per-type age curve absorbed from the ranker's
+# _temporal_decay_weight, so there is one age model rather than two
+# compounding ones.
+#
+# Halflives are fitted to the ladders they replace, at the knee of each:
+#   ephemeral  x0.25 at 30 days  -> 30 / log2(1/0.25) = 15 days
+#   default    x0.30 at 90 days  -> 90 / log2(1/0.30) = 52 days
+#   reflection x0.60 at 90 days  -> 90 / log2(1/0.60) = 122 days
+# The reference-class types keep the exemption they had: profile,
+# reference and ingested did not decay before and do not now.
+_EPHEMERAL_TYPES = frozenset({"conversation", "journal", "session", "decision"})
+_NO_DECAY_TYPES = frozenset({"profile", "reference", "ingested"})
+
+_TYPE_HALFLIFE_DAYS = {
+    "reflection": 122.0,
+}
+
+
+def halflife_for_type(memory_type: str, default_halflife: float) -> float | None:
+    """Per-type halflife, or None for the reference classes that do not decay.
+
+    default_halflife is the configured global value; a type with no entry
+    of its own takes it, which keeps the existing behaviour for anything
+    the absorbed ladders did not name.
+    """
+    if memory_type in _NO_DECAY_TYPES:
+        return None
+    if memory_type in _EPHEMERAL_TYPES:
+        return 15.0
+    return _TYPE_HALFLIFE_DAYS.get(memory_type, default_halflife)
+
+
 def _access_score(frequency_score: float, ceiling: int) -> float:
     """Normalized decayed-frequency accumulator. Saturates at 1.0 when
     frequency_score >= ceiling.
@@ -247,7 +279,13 @@ class TieringService:
                 # Compute component scores. Frequency decays on the same
                 # curve as recency (same reference timestamp, same
                 # halflife) -- see module docstring's "Activation model".
-                recency = _recency_score(last_retrieved, created_at, halflife)
+                # ADR-044 decision 3: one age model, per type.
+                type_halflife = halflife_for_type(memory_type, halflife)
+                if type_halflife is None:
+                    recency = 1.0  # reference classes do not decay
+                else:
+                    recency = _recency_score(last_retrieved, created_at,
+                                             type_halflife)
                 freq_decayed = frequency_score * recency
                 access = _access_score(freq_decayed, ceiling)
                 heat = _compute_heat(recency, access)

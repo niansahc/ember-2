@@ -16,29 +16,33 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
+from src.context import prior
 from src.context.models import ContextItem
 from src.observability.guard_counters import branch, count, reached
 from src.state.models import StateItem
 
-# ADR-015 amendment (PR #180), implementation step 3: cold is a reduced
-# weight, not exclusion. Was `score = 0.0` -- collapsing every cold item to
-# one indistinguishable value and erasing relative relevance across most of
-# the corpus (measured: unresolved tie-band fraction 0.178 with tiering on
-# vs 0.015 with it off, roughly 12x -- see the ADR amendment's "Cold is a
-# weight, not exclusion" section).
+# ADR-015 tier weights, re-derived under ADR-044's bound.
 #
-# 0.3, not a smaller value: warm's 0.7 discount is a single, moderate step
-# down; matching that same ratio again for cold (0.7 * 0.7 = 0.49) would
-# leave cold too close to warm and blur the three-tier separation the
-# design wants. Going near-zero (0.05-0.1) stays too close to the old
-# behavior it replaces and undersells "reduced weight" as a real signal
-# rather than a technicality. 0.3 is a clear third band below warm, while
-# still leaving enough headroom that a highly relevant cold record can
-# outrank a weakly relevant hot one when that is genuinely the better
-# answer -- context conditioning and direct addressing are the amendment's
-# named recovery paths, not automatic fallback, so ranking has to be able
-# to do this on its own sometimes.
-COLD_MULTIPLIER = 0.3
+# These were 0.3 / 0.7 / 1.0. ADR-015 argued 0.3 as "a clear third band
+# below warm, while still leaving enough headroom that a highly relevant
+# cold record can outrank a weakly relevant hot one". Measured against the
+# production corpus, that headroom does not exist and never did: within a
+# query the rank-8/rank-1 raw cosine ratio has a median of 0.893 and a
+# minimum of 0.658, so a 0.30 multiplier permitted the property in 0 of 36
+# queries. Absorbing the temporal decay (ADR-044 decision 3) improves the
+# composed floor from 0.03 to 0.30 and leaves it at 0 of 36.
+#
+# Under the bound, tier takes half the budget: sqrt(0.87216) = 0.9339.
+# Warm sits at the geometric midpoint between cold and hot. Reachability
+# then holds in 16 of 36 queries -- the ones whose internal spread exceeds
+# the 14.7% cosine advantage a cold record now needs. That is the property
+# ADR-015 claimed, delivered for the first time, on the queries where the
+# embedder resolves enough difference for it to mean anything.
+#
+# The cost is that tier is no longer a ranking force. It is a tiebreaker.
+# ADR-015's 2026-09-26 amendment records that trade and accepts it.
+COLD_MULTIPLIER = prior.TIER_MIN
+WARM_MULTIPLIER = prior.TIER_MIN ** 0.5
 
 
 class ContextRanker:
@@ -63,9 +67,9 @@ class ContextRanker:
             else:
                 score *= policy.memory_weight
 
-            if count("ranker.policy.recency_bias_active",
-                     bool(getattr(policy, "recency_bias", 0.0))):
-                score += self._recency_boost(item.timestamp) * float(policy.recency_bias)
+            # The additive recency term that stood here is gone. Recency is
+            # in the prior once (ADR-044), and policy.recency_bias scaling a
+            # second additive copy of it was the third of the three counts.
 
             content = item.content.lower()
             metadata = getattr(item, "metadata", {}) or {}
@@ -142,7 +146,7 @@ class ContextRanker:
                 # been retrieved recently. The 30% penalty is enough to push
                 # them below hot items of similar base score but still allows
                 # them to surface when nothing better exists.
-                score *= 0.7
+                score *= WARM_MULTIPLIER
             else:
                 # hot, or an unrecognised tier falling through to no change.
                 branch("ranker.tier", "hot_or_unrecognised")
@@ -272,18 +276,16 @@ class ContextRanker:
         memory_items: list[ContextItem],
         reflection_items: list[ContextItem],
     ) -> tuple[list[ContextItem], list[ContextItem]]:
+        """Apply the metadata prior once, then order.
+
+        ADR-044: this used to be an additive pile here plus a second one in
+        semantic_search, followed by a multiplicative temporal decay. The
+        pile is now a single bounded multiplier (src/context/prior.py) and
+        the decay is absorbed into TieringService's per-type halflife, so
+        age reaches ranking once, through tier, rather than three times.
+        """
         ranked_memory = [self._score_memory_item(item) for item in memory_items]
         ranked_reflections = [self._score_reflection_item(item) for item in reflection_items]
-
-        # Apply multiplicative temporal decay AFTER additive scoring, BEFORE
-        # final sort. This is distinct from _recency_boost (which is additive
-        # and rewards freshness). Temporal decay progressively reduces old
-        # records' contribution so stale content cannot win context slots on
-        # semantic similarity alone. Both mechanisms coexist intentionally.
-        for item in ranked_memory:
-            item.score = float(item.score) * self._temporal_decay_weight(item)
-        for item in ranked_reflections:
-            item.score = float(item.score) * self._temporal_decay_weight(item)
 
         ranked_memory.sort(key=lambda item: item.score, reverse=True)
         ranked_reflections.sort(key=lambda item: item.score, reverse=True)
@@ -291,205 +293,62 @@ class ContextRanker:
         return ranked_memory, ranked_reflections
 
     def _score_memory_item(self, item: ContextItem) -> ContextItem:
-        """Score a memory item for ranking. All constants are empirical.
+        """score = similarity x prior. Tier is applied in apply_policy.
 
-        The scoring hierarchy encodes a clear priority order:
-          1. User-authored first-person experiences (highest)
-          2. User conversation turns
-          3. Reflections and summaries
-          4. Ingested third-party content
-          5. Assistant responses (penalized — self-echo risk)
-          6. Tool/system traces (heavily penalized)
+        ADR-044 decision 2. Every additive term that used to live here --
+        type, role, content_kind, length, token count, recency -- is now
+        either inside the bounded prior or gone:
+
+          type        removed. rank.type.conversation / .reflection /
+                      .other are all in Sobol's no_solo_delivery_effect
+                      list and Morris's no-effect class on delivery, and
+                      they were the terms counted twice.
+          role        moved out of the budget to a hard predicate
+                      (ADR-044 4a, src/context/role_predicate.py).
+          content_kind, length, recency
+                      retained inside the prior, magnitudes re-derived
+                      from Sobol ST on delivery.
+          tokens<5    removed. Subsumed by the length term it duplicates
+                      and never separately measured.
         """
-        score = float(item.score)
-
-        item_type = getattr(item, "item_type", "")
-        metadata = getattr(item, "metadata", {}) or {}
         content = item.content.lower().strip()
+        metadata = getattr(item, "metadata", {}) or {}
 
-        # Type boost: conversation > reflection > generic memory > ingested.
-        # Conversation content is the user's own words and the most reliable
-        # evidence of their actual experience. Ingested content (imported
-        # docs, chat exports) gets no boost — it competes on semantic
-        # similarity alone.
-        if item_type == "conversation":
-            score += 0.10
-        elif item_type == "reflection":
-            score += 0.06
-        elif item_type == "memory":
-            score += 0.04
-        elif item_type == "ingested":
-            score += 0.00
-
-        role = metadata.get("role")
-        content_kind = metadata.get("content_kind")
-
-        # Role scoring: user content is evidence; assistant content is echo risk.
-        # +0.12 user: the user's own words are the strongest evidence of their
-        # experience, values, and decisions. Boosting user-authored content is
-        # the single most effective retrieval quality lever.
-        # -0.25 assistant: assistant self-echo is the #1 context quality issue.
-        # Prior assistant responses retrieved and presented unlabeled cause
-        # the model to attribute its own words back to the user. This penalty
-        # was tuned to be strong enough that assistant content almost never
-        # wins a slot unless nothing else is available.
-        # -0.20 tool/system: traces, metadata, and system messages are noise.
-        if role == "user":
-            score += 0.12
-        elif role == "assistant":
-            score -= 0.25
-        elif role in {"tool", "system"}:
-            score -= 0.20
-
-        # Content kind scoring: experiences > user_content > questions/answers.
-        # +0.14 experience: concrete first-person accounts ("I tried X and Y
-        # happened") are the most valuable retrieval content for reflective
-        # and identity queries.
-        # -0.10 answer: assistant answers get an additional penalty beyond
-        # the role penalty — they are the most common source of self-echo.
-        # -0.10 question: user questions are usually context-setting, not
-        # evidence. The actual content is in the answer or follow-up.
-        if content_kind == "experience":
-            score += 0.14
-        elif content_kind == "user_content":
-            score += 0.05
-        elif content_kind == "answer":
-            score -= 0.10
-        elif content_kind == "question":
-            score -= 0.10
-
-        if content.startswith("user:"):
-            score += 0.04
-
-        # Length scoring: very short content is usually noise (greetings, "yes",
-        # "ok"), very long content is usually a full document dump that dilutes
-        # the context packet. The sweet spot is 50-1200 chars.
-        if count("ranker.length.under_20", len(content) < 20):
-            score -= 0.10
-        elif count("ranker.length.under_50", len(content) < 50):
-            score -= 0.04
-        elif count("ranker.length.over_1200", len(content) > 1200):
-            score -= 0.03
-
-        token_count = len(self._tokenize(content))
-        if count("ranker.tokens.under_5", token_count < 5):
-            score -= 0.05
-
-        # A -0.18 low-value-prompt penalty used to sit here, triggered by an
-        # exact-match list of three verbatim user utterances copied from one
-        # install (CLAUDE.md Vault Privacy Rule). It is removed rather than
-        # rewritten as a pattern: the class it targeted -- the user's own
-        # meta-prompts retrieved back as evidence -- is handled by
-        # ContextService._is_low_value_memory, which drops those records
-        # outright, so a score penalty on top of a hard filter was redundant
-        # for two of the three literals. The third was an ordinary question
-        # about the user's own work, which is not low value; penalising it
-        # was overfitting to one corpus. See src/context/low_value.py.
-
-        score += self._recency_boost(item.timestamp)
-
-        item.score = score
+        item.score = float(item.score) * prior.assemble(
+            content_kind=metadata.get("content_kind"),
+            content_length=len(content),
+            recency_bucket=self._recency_bucket(item.timestamp),
+        )
         return item
 
     def _score_reflection_item(self, item: ContextItem) -> ContextItem:
-        """Score a reflection item. Reflections get a slight base discount
-        (0.95x) because they are derived artifacts — the source memory
-        they summarize is usually more specific and more useful. Short
-        reflections (<30 chars) are likely junk from failed synthesis.
-        Recency boost is halved (0.5x) because reflections cover time
-        windows, not moments — a weekly reflection from 10 days ago is
-        still relevant in a way that a conversation turn from 10 days
-        ago is not.
+        """Reflections take the same prior, flagged as derived.
+
+        The 0.95 base discount and the -0.08 short-reflection penalty are
+        gone: refl.base_discount is in Sobol's no_solo_delivery_effect
+        list, and ranker.reflection.under_30_chars fired 0 times in the
+        personal-vault window. Neither has a defensible magnitude, so both
+        take the smallest value consistent with the contract.
         """
-        score = float(item.score)
         content = item.content.lower().strip()
+        metadata = getattr(item, "metadata", {}) or {}
 
-        score *= 0.95
-
-        if count("ranker.reflection.under_30_chars", len(content) < 30):
-            score -= 0.08
-
-        score += self._recency_boost(item.timestamp) * 0.5
-
-        item.score = score
+        item.score = float(item.score) * prior.assemble(
+            content_kind=metadata.get("content_kind"),
+            content_length=len(content),
+            recency_bucket=self._recency_bucket(item.timestamp),
+            is_reflection=True,
+        )
         return item
 
-    # -----------------------------------------------------------------
-    # Decay tier definitions. Each tier maps memory types to a list of
-    # (max_age_days, weight) tuples. The list MUST be sorted ascending
-    # by max_age_days so the first match wins. A final entry with
-    # max_age_days=None serves as the fallback for anything older.
-    # -----------------------------------------------------------------
+    # The decay ladders and _temporal_decay_weight that stood here are
+    # absorbed into TieringService as a per-type halflife (ADR-044 decision
+    # 3). They were a second multiplicative age model compounding with
+    # tier's, governed by no ADR, and the larger of the two in production:
+    # ranker.decay.bucket.ephemeral=older fired 256 of 256 times, a flat
+    # x0.10 on nearly everything that reached it. Age now reaches ranking
+    # once, through tier.
     _NO_DECAY_TYPES = frozenset({"profile", "reference", "ingested"})
-
-    _REFLECTION_DECAY = [
-        (7, 1.0),
-        (30, 0.80),
-        (90, 0.60),
-        (None, 0.40),
-    ]
-
-    _EPHEMERAL_DECAY = [
-        (3, 1.0),
-        (7, 0.70),
-        (14, 0.45),
-        (30, 0.25),
-        (None, 0.10),
-    ]
-    _EPHEMERAL_TYPES = frozenset({"conversation", "journal", "session", "decision"})
-
-    _DEFAULT_DECAY = [
-        (3, 1.0),
-        (7, 0.85),
-        (14, 0.70),
-        (30, 0.50),
-        (90, 0.30),
-        (None, 0.15),
-    ]
-
-    def _temporal_decay_weight(self, item: ContextItem) -> float:
-        """Compute a multiplicative temporal decay weight for a context item.
-
-        This is intentionally separate from _recency_boost():
-        - _recency_boost is ADDITIVE and rewards freshness (a bonus).
-        - _temporal_decay_weight is MULTIPLICATIVE and penalizes staleness
-          (a scaling factor that shrinks old scores toward zero).
-
-        Both coexist. The additive boost ensures recent items get a lift;
-        the multiplicative decay ensures old items cannot win context slots
-        on high semantic similarity alone.
-
-        Returns 1.0 (no decay) for reference-class types (profile, reference,
-        ingested) and for items whose timestamp cannot be parsed.
-        """
-        mem_type = getattr(item, "memory_type", "") or ""
-
-        if count("ranker.decay.no_decay_type", mem_type in self._NO_DECAY_TYPES):
-            return 1.0
-
-        age_days = self._parse_age_days(item.timestamp)
-        if count("ranker.decay.unparsed_timestamp", age_days is None):
-            return 1.0
-
-        if mem_type == "reflection":
-            family, tiers = "reflection", self._REFLECTION_DECAY
-        elif mem_type in self._EPHEMERAL_TYPES:
-            family, tiers = "ephemeral", self._EPHEMERAL_DECAY
-        else:
-            family, tiers = "default", self._DEFAULT_DECAY
-        branch("ranker.decay.family", family)
-
-        for max_age, weight in tiers:
-            if max_age is None or age_days <= max_age:
-                branch(
-                    f"ranker.decay.bucket.{family}",
-                    "older" if max_age is None else f"d{max_age}",
-                )
-                return weight
-
-        # Should never reach here, but safety fallback.
-        reached("ranker.decay.ladder_fell_through")
-        return 1.0
 
     def _parse_age_days(self, timestamp: str | None) -> int | None:
         """Parse a timestamp string and return age in days, or None on failure.
@@ -546,49 +405,29 @@ class ContextRanker:
         now = datetime.now(timezone.utc)
         return max((now - item_dt).days, 0)
 
-    def _recency_boost(self, timestamp: str | None) -> float:
-        """Time-based scoring adjustment. Recent content is more likely to
-        be relevant to the user's current context.
+    def _recency_bucket(self, timestamp: str | None) -> str:
+        """Which recency band this record falls in.
 
-        Buckets were chosen to match natural conversation rhythms:
-          ≤7 days  (+0.18): this week's content is almost certainly relevant
-          ≤30 days (+0.12): this month — still fresh, still useful
-          ≤90 days (+0.06): this quarter — relevant for patterns and projects
-          ≤1 year  (+0.02): mild boost, enough to break ties
-          >1 year  (-0.03): slight penalty, old content needs high semantic
-                            similarity to justify a context slot
-
-        The boost magnitudes are calibrated against the type and role boosts
-        above — a 7-day-old assistant response (+0.18 recency - 0.25 role =
-        -0.07) still scores below a 30-day-old user experience (+0.12
-        recency + 0.12 role + 0.14 experience = +0.38). This is intentional:
-        recency should never override source quality.
-
-        Delegates timestamp parsing to _parse_age_days so the three formats
-        (Unix epoch, ISO 8601, hyphenated vault ``YYYY-MM-DDTHH-MM-SS``) are
-        handled uniformly. The previous inline parser missed the hyphenated
-        state-layer format — fresh state records silently scored 0.0 instead
-        of +0.18, so older records could outrank them.
+        The bucket names are the interface; the magnitudes moved into
+        src/context/prior.py, where they are derived from Sobol ST rather
+        than from the eval that does not exist. Previously this returned
+        an additive bonus and was called at three separate sites -- once
+        in apply_policy scaled by recency_bias, once per memory item and
+        once at half weight per reflection -- which is why #207 counted
+        recency three times over on the additive side alone.
         """
         age_days = self._parse_age_days(timestamp)
         if age_days is None:
-            branch("ranker.recency.bucket", "unparsed")
-            return 0.0
-
+            return branch("ranker.recency.bucket", "unparsed")
         if age_days <= 7:
-            branch("ranker.recency.bucket", "d7")
-            return 0.18
+            return branch("ranker.recency.bucket", "d7")
         if age_days <= 30:
-            branch("ranker.recency.bucket", "d30")
-            return 0.12
+            return branch("ranker.recency.bucket", "d30")
         if age_days <= 90:
-            branch("ranker.recency.bucket", "d90")
-            return 0.06
+            return branch("ranker.recency.bucket", "d90")
         if age_days <= 365:
-            branch("ranker.recency.bucket", "d365")
-            return 0.02
-        branch("ranker.recency.bucket", "older")
-        return -0.03
+            return branch("ranker.recency.bucket", "d365")
+        return branch("ranker.recency.bucket", "older")
 
     def _looks_like_experience(self, content: str) -> bool:
         markers = (

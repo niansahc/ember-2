@@ -102,6 +102,7 @@ def _quarantine_ai_docs(
 from src.context.low_value import is_low_value_content
 from src.context.models import ContextPacket
 from src.context.policies import classify_query
+from src.context import role_predicate
 from src.context.ranker import ContextRanker
 from src.context.retriever import ContextRetriever
 from src.tools.web_search import web_search
@@ -249,6 +250,10 @@ class ContextService:
         # "my health"), third-party ingested content is zeroed out so kinship
         # answers don't synthesize from books or the user's old ChatGPT
         # dialogue about other people.
+        # ADR-044 4a: role is a predicate, not a score term. Applied before
+        # the authorship multiplier so an assistant turn on a relational
+        # query is gone rather than discounted.
+        memory_items = role_predicate.apply(memory_items, user_message)
         memory_items = self.ranker.apply_authorship_scoring(memory_items, user_message)
 
         # Boost memories from the active project (ADR-007)

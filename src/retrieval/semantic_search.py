@@ -104,8 +104,6 @@ def semantic_search(
                     continue
                 score = raw_score
                 score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
-                score += memory_type_adjustment(mem_type)
-                score += source_quality_adjustment(normalized_content, metadata)
                 score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
 
                 result["score"] = score
@@ -137,8 +135,6 @@ def semantic_search(
                         continue
                     score = raw_score
                     score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
-                    score += memory_type_adjustment(mem_type)
-                    score += source_quality_adjustment(normalized_content, metadata)
                     score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
 
                     result["score"] = score
@@ -166,9 +162,7 @@ def semantic_search(
             raw_score = float(result.get("score", 0.0))
             score = raw_score
             score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
-            score += memory_type_adjustment(memory_type)
             metadata = result.get("metadata", {})
-            score += source_quality_adjustment(normalized_content, metadata)
             score += query_intent_adjustment(normalized_query, memory_type, normalized_content)
 
             result["score"] = score
@@ -202,9 +196,7 @@ def semantic_search(
                 raw_score = float(result.get("score", 0.0))
                 score = raw_score
                 score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
-                score += memory_type_adjustment(mem_type)
                 metadata = result.get("metadata", {})
-                score += source_quality_adjustment(normalized_content, metadata)
                 score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
 
                 result["score"] = score
@@ -236,8 +228,6 @@ def semantic_search(
                     continue
                 score = raw_score
                 score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
-                score += memory_type_adjustment("ingested")
-                score += source_quality_adjustment(normalized_content, metadata)
                 score += query_intent_adjustment(normalized_query, "ingested", normalized_content)
 
                 result["score"] = score

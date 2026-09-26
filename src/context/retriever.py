@@ -463,47 +463,47 @@ class ContextRetriever:
         return deduped
 
     def _should_exclude_content(self, content: str, user_message: str) -> bool:
+        """Exclusion rules that semantic_search does not already apply.
+
+        This used to re-check five rules the upstream filter had already
+        run: empty, under_40_chars, meta_marker, json_payload and
+        code_fence. They were not merely redundant, they were unreachable,
+        and the counters showed it -- 0 firings in 391 evaluations each on
+        the production corpus while the same-named predicates upstream
+        fired 1,152, 229 and 78 times.
+
+        Removed because two copies of one rule drift apart, not because
+        they cost anything. The counter evidence alone would not justify
+        the deletion; zero firings over one window is equally consistent
+        with a rare path. The control-flow argument is what justifies it:
+
+          * every `results.append` in semantic_search is guarded by
+            should_exclude_result, on all five branches, so no result
+            reaches here without having passed it
+          * both call sites of this method consume semantic_search output
+            (get_memory_items, get_reflection_items); nothing else calls it
+          * the predicates were textually identical, and both sides
+            normalize with the same expression, so they ran on the same
+            string and could not disagree
+
+        The arms below are the ones with no upstream equivalent, and three
+        of the four fire on real traffic.
+
+        Note the dependency this creates. The reflection path is only
+        covered because #241 routed it through semantic_search; before
+        that it came from MemoryService.search and these five rules were
+        load-bearing on it. A new channel that does not go through
+        semantic_search needs its own filter, or it needs these back.
+        """
         normalized_content = self._normalize_text(content)
         normalized_user_message = self._normalize_text(user_message)
-
-        if count("retriever.exclude.empty", not normalized_content):
-            return True
-
-        if count("retriever.exclude.under_40_chars", len(normalized_content) < 40):
-            return True
-
-        meta_markers = (
-            "user asked:",
-            "ember responded:",
-            "assistant responded:",
-            "assistant said:",
-            "### task:",
-            "generate 1-3 broad tags",
-            '"user_message":',
-            '"memory_items":',
-            '"reflection_items":',
-            '"conversation_id":',
-            '"chunk_id":',
-        )
-
-        if count("retriever.exclude.meta_marker",
-                 any(marker in normalized_content for marker in meta_markers)):
-            return True
-
-        if count("retriever.exclude.json_payload",
-                 normalized_content.startswith("{")
-                 or normalized_content.startswith("[")):
-            return True
-
-        if count("retriever.exclude.code_fence", "```" in content):
-            return True
 
         # File trees and directory listings (Unicode box-drawing characters)
         if count("retriever.exclude.box_drawing",
                  "\u2502" in content or "\u251c" in content or "\u2514" in content):
             return True
 
-        # "Recent themes:" followed by short user complaints — session summary junk
+        # "Recent themes:" followed by short user complaints -- session summary junk
         if count("retriever.exclude.recent_themes_prefix",
                  normalized_content.startswith("recent themes:")):
             return True

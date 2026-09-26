@@ -19,14 +19,17 @@ class TestClassify:
     def test_chatgpt_user_prefix_is_first_person(self):
         assert _classify("chatgpt_export", "user: I'm thinking about X", None) == "first_person"
 
-    def test_chatgpt_assistant_prefix_is_third_party(self):
-        assert _classify("chatgpt_export", "assistant: Here's how X works", None) == "third_party"
+    def test_chatgpt_assistant_prefix_is_mixed(self):
+        """#218: ADR-015 governs. The imported assistant side is Ember's own
+        continuity, not third-party material, and this matches what
+        classify_authorship assigns the same record on the live path."""
+        assert _classify("chatgpt_export", "assistant: Here's how X works", None) == "mixed"
 
     def test_chatgpt_metadata_role_user_is_first_person(self):
         assert _classify("chatgpt_export", "plain body", '{"role": "user"}') == "first_person"
 
-    def test_chatgpt_metadata_role_assistant_is_third_party(self):
-        assert _classify("chatgpt_export", "plain body", '{"role": "assistant"}') == "third_party"
+    def test_chatgpt_metadata_role_assistant_is_mixed(self):
+        assert _classify("chatgpt_export", "plain body", '{"role": "assistant"}') == "mixed"
 
     def test_chatgpt_no_prefix_no_metadata_is_unknown(self):
         assert _classify("chatgpt_export", "no prefix here", None) == "unknown"
@@ -37,11 +40,15 @@ class TestClassify:
     def test_journal_is_first_person(self):
         assert _classify("journal", "entry", None) == "first_person"
 
-    def test_book_is_third_party(self):
-        assert _classify("book", "prose", None) == "third_party"
+    def test_book_is_unknown(self):
+        """#218: genuine third-party material is owned by the `ingested`
+        memory type and ADR-018 gating, not by an authorship multiplier. On
+        this column it takes the conservative default rather than a hard
+        exclusion, which is a deliberate reduction in that protection."""
+        assert _classify("book", "prose", None) == "unknown"
 
-    def test_pdf_is_third_party(self):
-        assert _classify("pdf", "extracted text", None) == "third_party"
+    def test_pdf_is_unknown(self):
+        assert _classify("pdf", "extracted text", None) == "unknown"
 
     def test_unknown_source_is_unknown(self):
         assert _classify("novel_format_7", "body", None) == "unknown"
@@ -112,14 +119,29 @@ class TestAuthorshipScoring:
         items = [
             _make_item("first_person", 1.0),
             _make_item("mixed", 1.0),
-            _make_item("third_party", 1.0),
             _make_item("unknown", 1.0),
+            # #218: third_party is retired. An unreadable tag takes the
+            # conservative default, not a hard exclusion.
+            _make_item("third_party", 1.0),
         ]
         ranker.apply_authorship_scoring(items, "what is my son's name")
         assert items[0].score == pytest.approx(1.0)
         assert items[1].score == pytest.approx(0.3)
-        assert items[2].score == pytest.approx(0.0)
+        assert items[2].score == pytest.approx(0.5)
         assert items[3].score == pytest.approx(0.5)
+
+    def test_no_multiplier_zeroes_a_record(self):
+        """The 0.0 multiplier is gone, and nothing replaced it.
+
+        Consequence worth pinning: zero_hit_signal.all_non_profile_zeroed
+        required a score of exactly 0.0 and third_party was its only
+        source, so that signal is now unreachable through authorship.
+        """
+        ranker = ContextRanker()
+        items = [_make_item(tag, 1.0)
+                 for tag in ("first_person", "mixed", "unknown", "anything_else")]
+        ranker.apply_authorship_scoring(items, "what is my son's name")
+        assert all(i.score > 0.0 for i in items)
 
     def test_no_op_on_non_relational_query(self):
         ranker = ContextRanker()
@@ -161,8 +183,8 @@ class TestAuthorshipScoring:
             item_type="ingested",
             memory_type="ingested",
             score=1.0,
-            metadata={"authorship": "third_party"},
+            metadata={"authorship": "mixed"},
         )
         item.authorship = ""  # simulate attribute not populated
         ranker.apply_authorship_scoring([item], "tell me about my child")
-        assert item.score == pytest.approx(0.0)
+        assert item.score == pytest.approx(0.3)

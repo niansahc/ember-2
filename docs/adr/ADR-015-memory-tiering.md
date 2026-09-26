@@ -407,6 +407,54 @@ metadata is present on every record in the corpus, so the marking is
 mechanically verifiable before the migration runs, and it should be verified
 first.
 
+**Correction (2026-09-26): this position governs, and the third_party class
+is retired.**
+
+The paragraph above and commit f9f5dda disagreed, and the disagreement was
+live in the code. f9f5dda established `authorship='third_party'` with a
+multiplier of 0.0 -- a hard exclusion on relational queries -- and the only
+code that assigned it, `scripts/rebuild_authorship_index.py`, mapped
+imported ChatGPT assistant turns into it. This ADR says those turns are part
+of Ember's own continuity. Both could not hold.
+
+**This ADR governs.** Issue #218 closes on that basis and the class is
+retired from the ranker.
+
+The evidence that it was already dead rather than merely contested:
+
+- zero rows at `third_party` in the production index, against 9,034 at
+  `mixed`, of which 9,023 are imported assistant turns -- the exact
+  population the class was created for
+- no live path could assign it. `classify_authorship`, which every write
+  goes through, has no such branch and says so in its own docstring. The
+  only assigner was a standalone backfill.
+- guard counters over 36 turns: `ranker.authorship.branch` evaluated 55
+  times, arms taken were `first_person` 40 and `unknown` 15. `mixed`,
+  `third_party` and `unrecognised` were never taken.
+
+A 0.0 multiplier with no population and no way to acquire one is worse than
+no multiplier, because it reads as protection that is in force.
+
+**What owns genuine third-party content.** This ADR already answered that,
+two paragraphs up: "The `ingested` type remains, and means genuine
+third-party material -- documents, articles, other people's writing." That
+is a write-time provenance fact carried by memory type, and ADR-018 type
+gating can suppress it per policy. It does not need a second expression as a
+rank-time authorship multiplier. If document ingestion resumes, such records
+arrive as `ingested` and are governed there; on the authorship column they
+take `unknown` (0.5) rather than a hard exclusion, which is a deliberate
+reduction in the ceiling of that protection and is recorded here as one.
+
+**What this does not resolve.** UAT-005's relational contamination concern
+is real and is now owned by the `mixed` multiplier (0.3) plus the cosine
+gap, not by an exclusion. PR #217 measured relational contamination passing
+in every arm including the fully reduced one, so the capability does not
+depend on the retired class -- but the decoy in that suite was tagged
+`third_party`, a value with no production rows, so the arm was being held
+out by a mechanism that could not have fired on real data. The fixture is
+retagged to `mixed` alongside this change and still passes, which is the
+first time that result describes the deployed configuration.
+
 This resolves two standing contradictions. The first is internal to the code:
 `ContextRanker._NO_DECAY_TYPES` classes `ingested` as reference-grade and
 exempts it from temporal decay entirely, alongside `profile` and `reference`,

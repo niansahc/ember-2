@@ -213,7 +213,7 @@ def test_policy_preference_defaults_match_shipped():
 def test_authorship_and_project_defaults_match_shipped():
     ranker = ContextRanker()
     relational = "tell me about my partner"
-    for branch in ("first_person", "mixed", "third_party", "unknown"):
+    for branch in ("first_person", "mixed", "unknown"):
         item = _item(score=1.0, authorship=branch)
         ranker.apply_authorship_scoring([item], relational)
         assert item.score == pytest.approx(P[f"auth.{branch}"])

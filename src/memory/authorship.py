@@ -37,10 +37,11 @@ def classify_authorship(
 ) -> str:
     """Derive an authorship label for a record about to be written.
 
-    Returns one of: first_person, mixed, unknown. (third_party is reserved
-    for ingested/imported content, classified separately by
-    scripts/rebuild_authorship_index.py -- nothing on the live write path
-    writes third-party content.)
+    Returns one of: first_person, mixed, unknown.
+
+    These are the only values the column carries. third_party was retired
+    in #218: it had no rows and no live path to acquire any, and its only
+    assigner contradicted ADR-015 on imported assistant turns.
     """
     metadata = metadata or {}
 

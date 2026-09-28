@@ -1,8 +1,8 @@
 # ADR-044: Retrieval Score Composition Contract
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-09-19
-**Amended:** 2026-09-21 (decision 4, role -- see 4a); 2026-09-25 (production cosine spread measured -- figures only, no decision changed)
+**Amended:** 2026-09-21 (decision 4, role -- see 4a); 2026-09-25 (production cosine spread measured -- figures only, no decision changed); 2026-09-28 (implemented; bound derived, reachability measured, two implementation defects recorded, one Consequences claim falsified)
 **Target:** v0.19.0
 **Related:** ADR-005 (context ranking), ADR-015 (memory tiering, and its 2026-09-19 corrections), ADR-007 (project-scoped retrieval), ADR-018 (intent-aware type gating), issues #204, #205, #206, #211, #218, PR #217 (experiment 2), PR #236 (production cosine spread)
 
@@ -216,6 +216,19 @@ has zero rows behind it (issue #218), so whichever predicate ships must be
 written against the values the column actually carries rather than the ones
 f9f5dda assigned.
 
+**Settled on implementation (2026-09-28).** Exclusion outright, unconditionally,
+which is what experiment 2 measured. The untested quota case stays untested and
+out of scope: a hedge shipped in advance of the measurement that would justify
+it is how the constants this ADR is about got there. On the column values, the
+predicate keys on metadata `role` rather than on an `authorship` value, because
+`third_party` has no rows behind it.
+
+A third thing, which this amendment did not anticipate because it did not occur
+to anyone that the predicate might be scoped more narrowly than the measurement:
+the first implementation gated exclusion to relational queries and therefore did
+not fire on the self-echo incident at all. See "Defect found: 4a's predicate did
+not cover 4a's incident" below.
+
 ## The bound, and what it is asserted against
 
 The prior is bounded, and **the bound is asserted against the measured cosine
@@ -315,7 +328,11 @@ and defended against the same drift that produced the present state.
 
 Recorded explicitly so the gaps are not mistaken for oversights.
 
-**Prior magnitudes.** Which multiplier each type, role and `content_kind` takes.
+**Prior magnitudes.** ~~Which multiplier each type, role and `content_kind`
+takes.~~ Closed 2026-09-28 -- derived from Sobol ST on the delivery endpoint;
+see "Closed: prior magnitudes" in the amendment below. The original text
+follows.
+
 Pending the **read-only inversion and score-composition census** (experiment 1)
 against the real vault: how often the pipeline overturns its own cosine
 ordering, which terms are responsible, and what share of final-score variance
@@ -325,11 +342,16 @@ unblocked, but should run after #211's index rebuild -- a census over an index
 missing 1,787 records, including every profile record, would describe a
 transitional state.
 
-**Per-type halflife values.** Which halflife each memory type takes under
+**Per-type halflife values.** ~~Which halflife each memory type takes under
 decision 3, and whether the absorbed curve keeps `_temporal_decay_weight`'s
-stepwise form or adopts tier's exponential one. Same dependency. The functional
-form should be settled before the values: two curves of different functional
-form cannot be compared by tuning.
+stepwise form or adopts tier's exponential one.~~ Closed 2026-09-28.
+Exponential form, fitted at the knee of each replaced ladder: ephemeral 15
+days, default 52, reflection 122. See "Defect found: three fitted halflives,
+two implemented" below, which is also where the form question is answered. The
+original text follows.
+
+Same dependency. The functional form should be settled before the values: two
+curves of different functional form cannot be compared by tuning.
 
 **Role.** ~~Decision 4, pending experiment 2.~~ Settled by the 2026-09-21
 amendment above: role leaves the budget for a predicate on the `authorship`
@@ -350,14 +372,313 @@ reference value at the low end. A continuity layer arguably *should* return
 overlapping records across related questions about one life. This is a
 judgement call, not an empirical question, and this ADR does not make it.
 
+## Amendment (2026-09-28): implementation, measurement, and four corrections
+
+The contract shipped. This section records the numbers it was asserted against,
+two defects found while implementing it, two findings about the test suite that
+are worth more than the tests they came from, and one claim above that the
+measurement falsifies.
+
+### The tier bound, derived
+
+`prior x tier` is bounded to `[0.8722, 1.1278]`, which is `1 +/- B` where
+
+```
+B = 0.0815 / 0.6375 = 0.12784
+```
+
+is the measured production top-8 raw cosine spread over the mean rank-1 cosine
+(#236). The budget is split evenly **in the multiplicative sense**, `sqrt(0.87216)`
+to each factor:
+
+```
+tier  in [0.9339, 1.0]
+prior in [0.9339, 1.1278]
+```
+
+Even, because that is the only split under which the composed assertion and the
+per-factor floors are the same statement: the worst case of both factors
+together lands exactly on the bound. An arithmetic split would leave the product
+below the floor, and the bound would then be two different claims depending on
+which one you checked.
+
+The split is **asymmetric at the top on purpose**. Tier's ceiling is 1.0 while
+the prior reaches `COMPOSED_MAX`, so tier can only ever discount. A record
+should be spared the cold discount, not promoted for being hot.
+
+Tier weights become `0.9339 / 0.9664 / 1.0`, replacing `0.3 / 0.7 / 1.0`. Warm
+is the geometric midpoint, not the arithmetic one, for the same reason the
+contract is multiplicative: the three tiers are points on a ratio scale.
+
+### Reachability: two corpora, two numbers, and why
+
+The property `COLD_MULTIPLIER`'s rationale claimed -- that a highly relevant
+cold record can outrank a weakly relevant hot one -- holds exactly when
+
+```
+(c1 - ck) / c1 > 1 - composed_floor
+```
+
+for a query's top-k raw cosines. Under the bound the threshold is `B` itself,
+0.1278; a cold record needs a cosine advantage of `1/0.8722 - 1` = 14.7%.
+
+|  | mean rank-1 cosine | mean top-8 spread | mean relative spread | reachable |
+|---|---|---|---|---|
+| production (#236, 36 queries) | 0.6375 | 0.0815 | 0.1278 | **16 / 36** |
+| synthetic corpus (2026-09-28, 36 queries) | 0.5817 | 0.0540 | 0.0910 | **7 / 36** |
+
+Both figures stand. They are not reconciled here and neither supersedes the
+other, because they measure different corpora.
+
+**Reachability yield is corpus-dependent, by construction.** `B` is derived from
+a measured mean relative spread, so a corpus whose own mean relative spread sits
+below `B` clears the threshold on fewer of its queries. Production's mean
+relative spread is 0.1278, which is `B`, so roughly the above-mean half of its
+queries clear it. The synthetic corpus resolves 0.0910, below `B`, so fewer do.
+Neither number is a property of the contract on its own; each is a property of
+the contract composed with an embedder and a corpus.
+
+What is NOT corpus-dependent is the baseline. On the synthetic corpus the old
+contracts reproduce exactly:
+
+| contract | threshold | reachable |
+|---|---|---|
+| `0.3 x 0.10` as shipped | > 0.9700 | **0 / 36** |
+| `0.3` tier alone, decay absorbed | > 0.7000 | **0 / 36** |
+| `prior x tier` bounded | > 0.1278 | 7 / 36 |
+
+The intermediate row is the one worth keeping. Absorbing the temporal decay
+raises the composed floor from 0.03 to 0.30 and still delivers nothing, which
+is why decision 3 on its own was never the remedy.
+
+### The Morris inversion
+
+Sensitivity screening over the migrated harness, on a synthetic trace, ranked by
+mu* on the score endpoint:
+
+```
+ret.lexical.term_hit    0.1296   query-DEPENDENT
+prior.kind.experience   0.0580   query-independent, bounded
+prior.recency.d7        0.0541   query-independent, bounded
+tier.hot                0.0219
+tier.cold               0.0110
+tier.profile_bypass     0.0030
+```
+
+Before this change `tier.cold` was the dominant parameter in the table, and the
+screening harness's own test asserted it: `ranked.index("tier.cold") <
+ranked.index(...)`. That assertion has been inverted rather than repaired.
+
+The mechanism is the sweep interval. Under the old ranges `tier.cold` was
+screened over `[0, 1]`, a width of 1.0. Under the bound it sweeps
+`[0.9339, 1.0]`, a width of 0.066 -- among the narrowest in the vector.
+
+This is ADR-044's central claim with a number attached for the first time. The
+Context section above states it qualitatively: a query-independent additive
+swing of 0.98 against a spread of 0.0815 is roughly 12:1, so "the metadata was
+the ranking signal and cosine was the tiebreaker." The table above is the
+reverse relation, measured: a query-dependent term at the top, tier near the
+bottom. The test now asserts that ordering, so a future change that returns
+authority to query-independent metadata fails rather than being discovered by
+the next census.
+
+The honest caveat: mu* is computed over the sweep intervals, and those
+intervals changed in this PR. The comparison is therefore not
+apples-to-apples with the pre-ADR-044 screening runs, and it is not meant to
+be -- screening a bounded term outside its bound measures a system the contract
+forbids. The break in comparability is deliberate and is recorded in
+`tools/retrieval_trace/ranges.py`.
+
+### Defect found: 4a's predicate did not cover 4a's incident
+
+Amendment 4a decided that role leaves the scoring budget for a hard predicate,
+on the measurement that a predicate suppresses the self-echo incident
+completely. As first implemented, the predicate was gated to relational
+queries -- narrower than 4a measured, on the reasoning that UAT-005 was a
+relational incident.
+
+**The self-echo incident's query is not relational.** `_matches_relational_query`
+returns False for it. So the predicate did not fire on the one incident this
+amendment cites as the single capability role had no second owner for, the role
+pile was gone, and nothing replaced it. Assistant self-echo -- a named Key
+Design Risk with a documented production incident -- was unprotected on every
+non-relational query.
+
+Two things made it invisible. The relational incident passes in every arm 4a
+measured, including the fully reduced one, so the surviving coverage looked
+like evidence the predicate worked. And `tests/test_incident_reproduction.py`
+applied its own local filter rather than calling the shipped function, so the
+permanent regression suite reported a PASS for code it never executed.
+
+Corrected: exclusion is unconditional, and the suite calls
+`role_predicate.apply`. A regression suite that reimplements the thing it
+protects protects nothing.
+
+### Defect found: three fitted halflives, two implemented
+
+Decision 3 absorbs `_temporal_decay_weight` into `TieringService` as a per-type
+halflife. Three were fitted, at the knee of each ladder they replace:
+
+```
+ephemeral   x0.25 at 30 days  ->  30 / log2(1/0.25)  =  15 days
+default     x0.30 at 90 days  ->  90 / log2(1/0.30)  =  52 days
+reflection  x0.60 at 90 days  ->  90 / log2(1/0.60)  = 122 days
+```
+
+Two were implemented. The default family fell through to the configured global
+`TIER_RECENCY_HALFLIFE_DAYS`, which is 30 -- so the fitted 52 was stated in a
+comment and never used, and the absorbed `_DEFAULT_DECAY` ladder was replaced by
+a curve nobody derived. Fixed: the catch-all is 52.0.
+
+`_DEFAULT_DECAY` was itself the catch-all, so every type falls in exactly one
+of the three families and a configurable fallback could never be reached. The
+parameter is therefore gone rather than left unreachable.
+`TIER_RECENCY_HALFLIFE_DAYS` no longer affects tier decay. It keeps its other
+consumer, so it is not dead config, but the nightly age curve is now fitted
+rather than configured.
+
+This also settles what "What this ADR does not settle" left open on functional
+form: exponential, not stepwise. Tier's own recency was already exponential and
+the point of decision 3 is to have one age model; keeping the stepwise form
+would have been two forms inside one mechanism.
+
+### What the removed terms were actually doing
+
+The clearest demonstration in the record that the metadata was the ranking
+signal, found by removing it.
+
+A test fixture writes four records with a flat `[0.1]*768` vector and searches
+with a query embedded for real. Raw cosine between them is **0.0052** -- every
+record a total non-match. Before this change, two of the four cleared
+`_apply_type_gate`'s `>= 0.25` **similarity** floor:
+
+| record | raw cosine | score before | score after | gate before | gate after |
+|---|---|---|---|---|---|
+| conversation / user | 0.0052 | 0.5352 | 0.1352 | **PASS** | DROP |
+| journal / user | 0.0052 | 0.3352 | 0.0352 | **PASS** | DROP |
+| conversation / assistant | 0.0052 | -0.1748 | 0.0652 | DROP | DROP |
+| profile | 0.0052 | 0.0752 | 0.0352 | DROP | DROP |
+
+`memory_type_adjustment` and `source_quality_adjustment` contributed up to
+**+0.40** of query-independent lift -- enough to carry a record with 0.0052
+similarity across a similarity threshold. The Context section argues the
+metadata outweighed cosine by roughly 12:1; here it was sufficient on its own,
+with cosine contributing nothing.
+
+This is also why the type gate's pass rate barely moves in production-shaped
+data (93.08% to 91.00%, -2.09pp): where raw cosines are genuinely above the
+floor the pile was padding records that would have passed anyway. The floor is
+unchanged and should stay unchanged.
+
+### Test-suite finding: six tests green over an empty packet
+
+Four `build_context` tests patched `src.retrieval.semantic_search.embed_text`
+but not `src.retrieval.embed_memory.embed_text`, which is the binding
+`ContextRetriever.retrieve` actually uses. The stored records were stubbed and
+the query vector was not, so those tests searched their corpus at 0.0052
+cosine. One failed outright once the additive lift was removed. **Six were
+green, and none were testing what they claimed.**
+
+The pattern is the finding, and it generalises past this defect:
+
+> A test asserting an ABSENCE needs a positive precondition that the thing
+> could have happened.
+
+"No stats write", "records nothing", and `commit_delivery() == 0` are all
+trivially true of zero delivered items. Each is now paired with an assertion
+that the packet is non-empty. The non-vacuity guard is the durable fix; the
+patch path was only the proximate cause, and the next way to empty a packet
+will not be a patch path.
+
+Worth recording separately: **the correct pattern already existed in the
+repository.** `tests/test_debug_context_read_only.py` and
+`tests/test_retrieval_stats_read_only.py` both patch both bindings and both
+carry a comment describing this exact defect, including the observation that it
+stays invisible until something downstream starts excluding on score. The two
+broken files did not use it. A fix documented in one place does not propagate
+to another by being correct.
+
+### Short user-authored content is net-penalised
+
+A consequence of deriving prior magnitudes from Sobol ST without checking how
+the retained terms interact by sign.
+
+```
+LEN_UNDER_50       0.9339      (ST 0.1930, the largest retained term)
+KIND_USER_CONTENT  1.0248      (ST 0.0724)
+product            0.9570
+```
+
+A 46-character user turn entering at 0.5 finalizes at **0.4785**. The length
+term is the larger of the two and points down, so user-authored content short
+enough to trip it is demoted overall -- despite `content_kind` being the term
+meant to favour it.
+
+This matters more than the arithmetic suggests, because most user turns in a
+conversational vault are short. The magnitudes are individually defensible and
+their composition was not checked; ST measures each term's effect on delivery
+independently, and nothing in the derivation asks whether two retained terms
+routinely co-occur on the same records and cancel.
+
+Not fixed here. The open question is whether the length term should apply to
+user-authored content at all, which is a change to the prior's structure rather
+than a retune of a constant, and it needs its own measurement. Tracked as
+issue #250.
+
+Not a regression, and worth saying why: the old additive ladder had the same
+sign problem (`rank.len.lt50` -0.04 against `rank.kind.user_content` +0.05),
+but `rank.role.user` at +0.12 dominated both and carried short user turns
+anyway. Role has since left score space for a predicate, so the protection
+that masked this interaction is gone. The interaction is newly VISIBLE rather
+than newly introduced.
+
+### Closed: prior magnitudes
+
+"What this ADR does not settle" listed these as pending the read-only inversion
+and score-composition census. They are now derived from Sobol total-order
+indices on the DELIVERY endpoint (#232), which measures whether a term changes
+what the model receives rather than whether it moves a number:
+
+```
+deviation_i = (1 - PRIOR_MIN) * (ST_i / ST_max)
+```
+
+`ST_max` is the largest ST among retained terms. So the term the measurement
+says matters most may consume the prior's entire half of the bound on its own,
+and everything else scales below it in proportion. Direction is carried over
+from the previous constant's sign; only magnitude is re-derived.
+
+Terms whose ST says they never reorder delivery are set to 1.0 and gone. The
+type ladder is the whole of that group.
+
+### The type ladder: a defect fix, not pruning on low sensitivity
+
+Stated explicitly because the amendment above could be read as reversing
+decision 1, and it does not.
+
+Decision 1 rejects "the layers double-count" as a sufficient remedy and records
+that removing the doubled type term at both stages moves delivered nDCG by
+0.0000. That finding stands. The type ladder is removed **because it was
+counted twice** -- once in `semantic_search`, once in `_score_memory_item` --
+which is a conformance defect against ADR-005's single ranking stage. Its zero
+sensitivity is why removing it is SAFE, not why it is right.
+
+The distinction is load-bearing for anything that follows. "Low sensitivity,
+therefore delete" would license deleting any term the current corpus does not
+exercise, which is the reasoning `parameter_coverage` exists to prevent: a zero
+index means "this corpus never exercised it" at least as often as it means
+"this term does not matter."
+
 ## Consequences
 
 **Positive**
 
 - One owner for the metadata prior, one for age, and a stated bound for each.
 - The 0.03 reachability floor goes, by construction rather than by retuning.
-- The confidence hedge and vault citation badge start reporting match quality
-  again, with no threshold changes.
+  Measured: the lowest delivered composed score rose from 0.0452 to 0.1810.
+- ~~The confidence hedge and vault citation badge start reporting match quality
+  again, with no threshold changes.~~ **Falsified 2026-09-28. This moved in the
+  opposite direction and is now a negative, below.**
 - The double-count is resolved as a side effect of consolidation rather than as
   a separate cleanup.
 - ADR-015 becomes true as written.
@@ -366,10 +687,29 @@ judgement call, not an empirical question, and this ADR does not make it.
 
 **Negative**
 
+- **The vault citation badge is suppressed on MORE turns than before, not
+  fewer.** Added 2026-09-28, replacing the positive claim struck out above.
+  Both the confidence hedge (`prompt_builder.py:1131`) and the badge gate
+  (`openai_adapter.py:1837`) threshold a per-query MEAN of the delivered
+  scores, and that mean fell: 12 of 36 queries cleared 0.6 before, 8 of 36
+  after. Removing the additive pile lowered the mean by more than removing the
+  decay multiplier raised it.
+
+  The reasoning behind the original claim was not wrong about the mechanism --
+  aged records really were finalizing at 0.03-0.15x raw cosine, and that really
+  was the badge reporting decay rather than match quality. What it missed is
+  that the pile was also inflating the mean on everything else, so removing
+  both moved the average down. The prediction was made without a measurement
+  and a measurement contradicts it.
+
+  Nothing is retuned here. The thresholds stay where they are, for the reason
+  this ADR gives for not moving them in the first place: they are calibrated
+  against a composed score in cosine units, and re-deriving them is its own
+  change with its own evidence. Tracked as issue #249.
 - Every scoring constant in the repo is re-expressed. Roughly 142 tests across
   nine files assert current behaviour and will need review; those that pin a
   magnitude rather than an ordering are the ones to re-derive rather than
-  re-fit.
+  re-fit. (Measured on implementation: 117 failures across 11 files.)
 - The bound is a new maintenance obligation. It is embedder-dependent and must
   be re-measured when the embedding model changes.
 - Absorbing `_temporal_decay_weight` moves a per-request computation into a

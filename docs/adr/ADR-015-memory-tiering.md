@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-04-02
 **Version:** v0.13.0
+**Amended:** v0.19.0, issues #150 and #175 (activation model); 2026-09-19 (two corrections: cold headroom, type-keyed decay); 2026-09-28 (tier weights re-derived under ADR-044's bound; the one-age-model claim becomes true)
 
 ## Context
 
@@ -63,6 +64,12 @@ importance_score is set at write time based on memory_type heuristics. heat_scor
 ### Retrieval Integration
 
 ContextRetriever applies tier as scoring modifier. Hot: no penalty. Warm: score × 0.7. Cold: excluded unless `include_cold=True`. Profile memory bypasses tier scoring entirely.
+
+> **Superseded twice.** The amendment below replaced cold's exclusion with a
+> reduced weight, and the 2026-09-28 amendment replaced both multipliers under
+> ADR-044's bound. Current values: cold 0.9339, warm 0.9664, hot 1.0, applied
+> in `ContextRanker.apply_policy` rather than in `ContextRetriever`. Profile
+> still bypasses. See "Cold is a weight, not exclusion".
 
 ### TieringService
 
@@ -355,6 +362,55 @@ intended. What is wrong is the claim about cold-versus-hot headroom, and the
 assumption that a single multiplier placed before the additive stages behaves
 as a weight.
 
+**Amendment (2026-09-28): the weights are superseded, and the headroom claim is
+falsified by measurement rather than by argument.**
+
+`COLD_MULTIPLIER = 0.3` and warm's `0.7` are replaced by **0.9339 / 0.9664 /
+1.0**, re-derived under ADR-044's bound. Cold takes tier's whole half of the
+budget, `sqrt(0.87216)`; warm is the geometric midpoint, not the arithmetic
+one, because the three tiers are points on a ratio scale.
+
+The 2026-09-19 correction above showed the headroom claim was false by
+arithmetic: `0.3 x 0.10 = 0.03` against a cosine bounded by 1.0. That argument
+is sound but narrower than it looks, because it depends on the second
+multiplier. The measurement is stronger and does not:
+
+> Within a query, the rank-8 / rank-1 raw cosine ratio has a median of 0.893
+> and a minimum of 0.658 on the production corpus. A cold record therefore
+> needs to survive a 0.30 multiplier on a cosine advantage that never exceeds
+> about 34% and is usually nearer 11%. **A 0.30 multiplier permitted the
+> property in 0 of 36 queries.**
+
+And critically, removing the second multiplier does not rescue it. Absorbing
+the temporal decay under ADR-044 decision 3 lifts the composed floor from 0.03
+to 0.30 and leaves reachability at **0 of 36**. The headroom this section
+promised was never available at 0.3, with or without the decay compounding on
+top of it. What made it unreachable was the size of the discount relative to
+what the embedder resolves, not only the fact that two discounts multiplied.
+
+Under the bound the property holds for the first time: 16 of 36 on the
+production corpus, 7 of 36 on a synthetic one. Both figures are in ADR-044's
+2026-09-28 amendment with the corpus statistics that explain the difference;
+the yield is corpus-dependent because the bound is derived from a measured
+relative spread.
+
+**The cost, accepted explicitly: tier is no longer a ranking force. It is a
+tiebreaker.**
+
+This is a real reduction in what tier can do, and it should not be read as a
+free improvement. Sensitivity screening now ranks `tier.cold` fifth of six
+exercised parameters, below both of the metadata prior's terms and far below
+the lexical term; before the bound it was the dominant parameter in the table.
+Tier moves records that are otherwise close, and no longer moves records that
+are not.
+
+That trade is accepted because the alternative on offer was never the one this
+section described. A multiplier large enough to be a ranking force is also
+large enough to overturn the similarity ordering it is supposed to modulate,
+which is the defect ADR-044 documents at 12:1. A tiebreaker that works on 16 of
+36 queries is worth more than a ranking force that delivered the stated
+property on 0 of 36.
+
 ### The importance ladder is flattened
 
 `IMPORTANCE_BY_TYPE` contributes nothing to heat. Every job it was doing is now
@@ -381,6 +437,34 @@ after this ADR was accepted, and this document references it exactly once --
 at the start of "Timestamps and prior-substrate conversation" below, while
 describing a contradiction it creates, never as something this ADR governs.
 Two independent per-type age curves now exist and this ADR owns one of them.
+
+**Resolved (2026-09-28).** There is one age curve again, and this ADR owns it.
+
+ADR-044 decision 3 absorbed `_temporal_decay_weight` into `TieringService` as a
+per-type halflife rather than deleting it, so the type-keyed age signal this
+paragraph was wrong to disclaim is preserved -- in tier, where this document
+governs it. `ContextRanker` applies exactly one age multiplier now, and it is
+tier.
+
+The halflives are fitted at the knee of each ladder they replace:
+
+```
+ephemeral   (conversation, journal, session, decision)   15 days
+default     (everything else)                            52 days
+reflection                                              122 days
+profile, reference, ingested                             exempt, as before
+```
+
+Exponential rather than stepwise, because tier's recency was already
+exponential and the point of having one age model is not to carry two
+functional forms inside it.
+
+So the original paragraph's claim -- type no longer affects *tier* decay via
+`IMPORTANCE_BY_TYPE`, and type still affects ranking through other mechanisms
+-- is now true as written, and the 2026-09-19 correction to it describes a
+state that no longer exists. Both are kept above rather than deleted: the
+sequence is the record of how a false statement in an accepted ADR survived
+five months, which is worth more than a clean document.
 
 ### Timestamps and prior-substrate conversation
 

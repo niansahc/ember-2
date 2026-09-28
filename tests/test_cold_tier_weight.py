@@ -183,12 +183,23 @@ class TestRelationalQueryEmptyFlagNotSpuriouslyAffected:
     around apply_authorship_scoring's third_party: 0.0 multiplier, not
     tier. Confirms a cold-tier, first-person-authored item stays nonzero.
 
-    The reason it stays nonzero changed with ADR-044 and is now simpler. It
-    used to be that the additive ladder and decay contributed real terms on
-    top of the tier base, so the sum happened not to be zero. Now every stage
-    after the retrieval score is a strictly positive multiplier, so a nonzero
-    input cannot reach zero at all -- except through the authorship gate's
-    deliberate 0.0, which is the one case this signal is for."""
+    TWO changes have since removed every source of an exact 0.0 here, and they
+    arrived independently:
+
+    #218 retired the `third_party` authorship class, which was the 0.0
+    multiplier this check was built around -- see the second test.
+
+    ADR-044 then made the reasoning structural rather than arithmetic. It used
+    to be that the additive ladder and decay contributed real terms on top of
+    the tier base, so the sum happened not to be zero. Now every stage after
+    the retrieval score is a strictly positive multiplier, so a nonzero input
+    cannot reach zero at all.
+
+    So the signal has no live trigger. That is worth stating plainly rather
+    than leaving these tests to assert the absence of something nothing can
+    produce: the `relational_query_empty` flag now fires only via
+    `zero_hit_signal.profile_only`, and whether the score-based half should
+    remain is a question this file cannot answer."""
 
     def test_cold_first_person_item_is_not_spuriously_zero_after_full_pipeline(self):
         ranker = ContextRanker()
@@ -204,20 +215,31 @@ class TestRelationalQueryEmptyFlagNotSpuriouslyAffected:
 
         assert ranked_memory[0].score != 0.0
 
-    def test_cold_third_party_item_still_zeroes_on_relational_query(self):
-        """The flag's actual trigger (third_party authorship on a relational
-        query) is unaffected by the tier change -- it was never driven by
-        tier in the first place."""
+    def test_nothing_zeroes_on_a_relational_query_since_218(self):
+        """The flag's only trigger is gone.
+
+        It was third_party authorship at multiplier 0.0, a class with zero
+        rows in production and no live path to acquire any, retired in
+        #218. Tier never drove this check and still does not. So
+        relational_query_empty can now only be reached through its
+        profile_only arm, and the all_non_profile_zeroed arm is
+        unreachable -- consistent with it firing 0 times in 5 evaluations
+        on the personal-vault window before the retirement.
+
+        Asserted rather than left implicit so that restoring any 0.0
+        multiplier flips this test and forces the signal to be
+        reconsidered with it.
+        """
         ranker = ContextRanker()
         policy = ContextPolicy(name="test", memory_weight=1.0)
 
-        item = _item("cold-third-party", score=0.5, tier="cold", memory_type="ingested")
-        item.authorship = "third_party"
+        item = _item("cold-ingested", score=0.5, tier="cold", memory_type="ingested")
+        item.authorship = "third_party"  # the retired tag, if it somehow appears
 
         adjusted = ranker.apply_policy([item], policy)
         authored = ranker.apply_authorship_scoring(adjusted, "what has my son been up to")
 
-        assert authored[0].score == 0.0
+        assert authored[0].score > 0.0
 
 
 class TestProfileBypassStillWorks:

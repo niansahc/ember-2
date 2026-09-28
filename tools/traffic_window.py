@@ -103,7 +103,7 @@ QUERY_SET: tuple[dict, ...] = (
      "intent": "any", "targets": ["ranker.authorship.relational_query"]},
     {"query": "what matters to my partner",
      "intent": "any", "targets": ["ranker.authorship.relational_query",
-                                  "ranker.authorship.branch=third_party"]},
+                                  "ranker.authorship.branch=mixed"]},
     {"query": "who am i",
      "intent": "any", "targets": ["profile.identity_query", "type_gate.profile_bypass",
                                   "reserved_slots.profile_present"]},
@@ -188,7 +188,7 @@ QUERY_SET: tuple[dict, ...] = (
     #    surviving the relevance gate at all.
     {"query": "what has my partner said about work lately",
      "intent": "any", "targets": ["zero_hit_signal.all_non_profile_zeroed",
-                                  "ranker.authorship.branch=third_party"]},
+                                  "ranker.authorship.branch=mixed"]},
     {"query": "my hamster's firmware update schedule",
      "intent": "any", "targets": ["zero_hit_signal.profile_only",
                                   "relevance_gate.suppressed_non_profile"]},

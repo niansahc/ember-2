@@ -1,14 +1,15 @@
 """
 src/context/ranker.py
 
-ContextRanker applies policy-based scoring adjustments to retrieved
-items and produces the final ranked ordering. Scoring encodes a clear
-priority hierarchy: user-authored experiences > conversation turns >
-reflections > ingested content > assistant responses. All scoring
-constants are empirical and documented inline with rationale.
+ContextRanker applies policy-based scoring adjustments to retrieved items
+and produces the final ranked ordering.
 
-See the class-level docstring on ContextRanker for the full scoring
-philosophy and tuning guidance.
+See the class-level docstring on ContextRanker for what remains here and
+where each part of it gets its authority. This docstring used to describe a
+"clear priority hierarchy" of type and role boosts, and to claim all the
+constants were empirical -- a claim the class docstring immediately below
+now exists to refute. Two docstrings, one contradicting the other, is worse
+than either alone.
 """
 
 from __future__ import annotations
@@ -147,8 +148,8 @@ class ContextRanker:
             mem_type = getattr(item, "memory_type", "")
 
             if mem_type == "profile":
+                # The branch record IS the body: profile takes no multiplier.
                 branch("ranker.tier", "profile_bypass")
-                pass  # profile bypasses tier scoring
             elif tier == "cold":
                 branch("ranker.tier", "cold")
                 # ADR-015 amendment step 3: reduced weight, not exclusion.
@@ -169,7 +170,6 @@ class ContextRanker:
             else:
                 # hot, or an unrecognised tier falling through to no change.
                 branch("ranker.tier", "hot_or_unrecognised")
-            # hot: no change
 
             item.score = score
             adjusted.append(item)
@@ -189,11 +189,24 @@ class ContextRanker:
         conversations) must not be allowed to answer as if it were about
         the user. See UAT-005 root cause analysis.
 
-        Multipliers — applied only when _matches_relational_query is True:
-          first_person: 1.0  (user-authored — conversation/journal/profile)
+        Multipliers -- applied only when _matches_relational_query is True:
+          first_person: 1.0  (user-authored -- conversation/journal/profile)
           mixed:        0.3  (content of uncertain authorship)
-          third_party:  0.0  (books, articles, other voices — filtered out)
           unknown:      0.5  (conservative middle pending re-tag)
+
+        third_party (0.0) was retired in #218. It had zero rows in the
+        production index and no live path to acquire any: classify_authorship
+        never returns it, and the only code that assigned it was a standalone
+        backfill whose ChatGPT rule contradicted ADR-015. See ADR-015's
+        2026-09-26 correction. Genuine third-party material -- documents,
+        articles, other people's writing -- is owned by the `ingested`
+        memory type and ADR-018 type gating, which is a write-time
+        provenance fact rather than a rank-time multiplier.
+
+        An unrecognised authorship value now takes the 0.5 default rather
+        than a hard exclusion, which is the conservative direction: a
+        record with an unreadable tag competes at a discount instead of
+        being silently erased.
 
         On non-relational queries this is a no-op — ingested content remains
         useful for general knowledge questions.
@@ -207,7 +220,6 @@ class ContextRanker:
         multipliers = {
             "first_person": 1.0,
             "mixed": 0.3,
-            "third_party": 0.0,
             "unknown": 0.5,
         }
 

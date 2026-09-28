@@ -193,15 +193,17 @@ def synthetic_run() -> TraceRun:
 # Ranges: derived from each parameter's own scale
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("name", ["auth.mixed", "auth.unknown", "auth.third_party"])
+@pytest.mark.parametrize("name", ["auth.mixed", "auth.unknown", "auth.first_person"])
 def test_multiplier_family_is_swept_over_the_unit_interval(name):
     """Only the authorship weights are in this family now.
 
     The tier weights and the reflection discount used to be here, swept over
     [0, 1]. ADR-044 brought both under a stated contract, so they moved to
     FAMILY_BOUNDED and are swept over the contract interval instead. The
-    authorship multiplier stays: it is a gate rather than a class constant,
-    third_party is legitimately 0.0, and the contract does not cover it.
+    authorship multiplier stays: it is a gate rather than a class constant and
+    the contract does not cover it. (third_party, the 0.0 arm that made the
+    [0, 1] span obviously right, was retired by #218 for having no population;
+    the remaining arms still span a fraction's range.)
     """
     parameter = range_for(name, default_params()[name])
     assert parameter.family == FAMILY_MULTIPLIER

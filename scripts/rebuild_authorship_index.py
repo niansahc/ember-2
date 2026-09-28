@@ -10,10 +10,14 @@ value is a derived fact, rebuildable at any time from source + role signals.
 Rules
 -----
 - source == "chatgpt_export", text body begins with "user:" → first_person
-- source == "chatgpt_export", text body begins with "assistant:" → third_party
+- source == "chatgpt_export", text body begins with "assistant:" -> mixed
+  (was third_party until #218; ADR-015 governs -- the imported assistant
+  side is Ember's own continuity, not third-party material)
 - source == "obsidian_export" → first_person
 - source == "journal" → first_person
-- source in {"pdf", "docx", "book", "epub", "html", "article"} → third_party
+- source in {"pdf", "docx", "book", "epub", "html", "article"} -> unknown
+  (genuine third-party material is owned by the `ingested` memory type
+  and ADR-018 type gating, not by an authorship multiplier -- #218)
 - anything else → unknown (the column default)
 
 ChatGPT role detection is text-prefix based for now. The dedicated normalizer
@@ -40,12 +44,12 @@ from pathlib import Path
 _SOURCE_AUTHORSHIP: dict[str, str] = {
     "obsidian_export": "first_person",
     "journal": "first_person",
-    "pdf": "third_party",
-    "docx": "third_party",
-    "book": "third_party",
-    "epub": "third_party",
-    "html": "third_party",
-    "article": "third_party",
+    "pdf": "unknown",
+    "docx": "unknown",
+    "book": "unknown",
+    "epub": "unknown",
+    "html": "unknown",
+    "article": "unknown",
 }
 
 
@@ -66,7 +70,11 @@ def _classify(source: str | None, text: str | None, metadata_str: str | None) ->
         if body.startswith("user:"):
             return "first_person"
         if body.startswith("assistant:"):
-            return "third_party"
+            # #218: mixed, not third_party. ADR-015 holds that the imported
+            # assistant side is part of Ember's own continuity rather than
+            # third-party material, and classify_authorship already returns
+            # mixed for the same record on the live path.
+            return "mixed"
 
         # metadata.role fallback — task #25 landed: the importer now sets
         # metadata.roles per-message and the chunker propagates to
@@ -78,7 +86,7 @@ def _classify(source: str | None, text: str | None, metadata_str: str | None) ->
             if role == "user":
                 return "first_person"
             if role == "assistant":
-                return "third_party"
+                return "mixed"  # #218, as above
         except (json.JSONDecodeError, TypeError):
             pass
 
@@ -162,7 +170,7 @@ def main() -> int:
     mode = "WROTE" if args.confirm else "DRY-RUN"
     print(f"[REBUILD] {mode} authorship labels at {db_path}")
     total = sum(counts.values())
-    for label in ("first_person", "third_party", "mixed", "unknown"):
+    for label in ("first_person", "mixed", "unknown"):
         if label in counts:
             pct = counts[label] * 100 / total if total else 0
             print(f"  {label:13s} {counts[label]:>6d}  ({pct:5.1f}%)")

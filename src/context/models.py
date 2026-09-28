@@ -25,7 +25,8 @@ class ContextItem:
     # backward compatibility with items that predate tiering.
     tier: str = "hot"
     # authorship signal sourced from the SQLite
-    # index column. One of: first_person, third_party, mixed, unknown.
+    # index column. One of: first_person, mixed, unknown.
+    # third_party retired in #218 (no population, no live assigner).
     # Defaults to "unknown" — the ranker's authorship multiplier falls
     # back to a conservative 0.5x for unknown items on relational queries.
     authorship: str = "unknown"

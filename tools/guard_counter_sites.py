@@ -76,10 +76,11 @@ def _dynamic_arms() -> dict[str, tuple[str, ...]]:
         "prior.recency": tuple(RECENCY),
         # ranker.py: the authorship multiplier keys, plus the arm taken by
         # a value outside that set.
+        # third_party retired in #218; an unreadable tag takes the
+        # "unrecognised" arm and the 0.5 default.
         "ranker.authorship.branch": (
             "first_person",
             "mixed",
-            "third_party",
             "unknown",
             "unrecognised",
         ),

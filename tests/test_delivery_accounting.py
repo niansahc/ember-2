@@ -32,6 +32,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.conftest import stub_both_embed_bindings
+
 from src.context.models import ContextItem, ContextPacket
 from src.context.service import ContextService
 
@@ -160,18 +162,8 @@ def seeded_vault():
 
 @pytest.fixture
 def stub_query_embedding(seeded_vault):
-    """Both bindings. See tests/test_debug_context_read_only.py for the why.
-
-    ContextRetriever.retrieve() embeds the query through
-    src.retrieval.embed_memory.embed_text, so patching only the
-    semantic_search binding left the query vector real against a stubbed
-    corpus -- cosine 0.0052, every record a non-match. Two tests in this class
-    ("no write happened", "commit_delivery() == 0") are trivially true of an
-    empty candidate set, so they were passing without ever exercising a
-    delivery. The additive terms ADR-044 removed had been carrying those
-    non-matches over the type gate and hiding it.
-    """
-    with patch("src.retrieval.semantic_search.embed_text", return_value=seeded_vault),          patch("src.retrieval.embed_memory.embed_text", return_value=seeded_vault):
+    """Both embedding bindings. See conftest.stub_both_embed_bindings."""
+    with stub_both_embed_bindings(seeded_vault):
         yield seeded_vault
 
 

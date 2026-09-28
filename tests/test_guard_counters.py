@@ -27,6 +27,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.conftest import stub_both_embed_bindings
+
 from src.context.models import ContextItem
 from src.context.policies import ContextPolicy
 from src.context.ranker import ContextRanker
@@ -227,28 +229,8 @@ def seeded_vault():
 
 @pytest.fixture
 def stub_query_embedding(seeded_vault):
-    """Both bindings, or the corpus is searched with a real query vector.
-
-    ContextRetriever.retrieve() computes the query embedding through
-    src.retrieval.embed_memory.embed_text and passes it down, so patching only
-    the semantic_search binding left the QUERY vector real while the records
-    stayed stubbed -- a measured cosine of 0.0052 against this fixture's flat
-    vector, i.e. every record a total non-match.
-
-    That was invisible here until ADR-044 removed memory_type_adjustment and
-    source_quality_adjustment from semantic_search. Those two contributed up to
-    +0.40 of query-independent lift, which was enough to carry a 0.0052-cosine
-    record across _apply_type_gate's 0.25 similarity floor. The additive pile
-    was manufacturing a score floor out of nothing, and these tests were green
-    on it -- three of them asserting things that are trivially true of an empty
-    candidate set.
-
-    tests/test_debug_context_read_only.py and
-    tests/test_retrieval_stats_read_only.py already carried this fixture and
-    this explanation. This file simply did not use it.
-    """
-    with patch("src.retrieval.semantic_search.embed_text", return_value=seeded_vault), \
-         patch("src.retrieval.embed_memory.embed_text", return_value=seeded_vault):
+    """Both embedding bindings. See conftest.stub_both_embed_bindings."""
+    with stub_both_embed_bindings(seeded_vault):
         yield seeded_vault
 
 

@@ -13,7 +13,9 @@ KeyboardInterrupt, or crash, the override is cleared and the system
 reverts to the .env vault path.
 """
 
+import contextlib
 import os
+from unittest.mock import patch
 
 import pytest
 from pathlib import Path
@@ -387,3 +389,41 @@ def deliver_packet(packet, memory_slice: int = 4, reflection_slice: int = 1) -> 
     packet.record_rendered(profile + other[:memory_slice])
     packet.record_rendered(packet.reflection_items[:reflection_slice])
     return packet.commit_delivery()
+
+
+# ---------------------------------------------------------------------------
+# Query-embedding stubs (ADR-044 patch-path defect)
+# ---------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def stub_both_embed_bindings(vector):
+    """Patch BOTH embedding bindings a build_context test depends on.
+
+    There are two, and patching one is the defect this helper exists to make
+    impossible. `semantic_search.embed_text` is the one everybody reaches for;
+    `ContextRetriever.retrieve` computes the query embedding through
+    `src.retrieval.embed_memory.embed_text` and passes it down. Patching only
+    the first leaves the stored records stubbed and the QUERY vector real, so
+    the search runs at a measured cosine of 0.0052 against a flat fixture
+    vector -- every record a total non-match.
+
+    That was invisible until ADR-044 removed `memory_type_adjustment` and
+    `source_quality_adjustment` from `semantic_search`. Those two contributed up
+    to +0.40 of query-independent lift, enough to carry a 0.0052-cosine record
+    across `_apply_type_gate`'s 0.25 similarity floor. One test then failed
+    outright and six more turned out to have been green over an empty packet,
+    asserting things ("no stats write", "records nothing",
+    `commit_delivery() == 0`) that are trivially true of zero delivered items.
+
+    Promoted here from five copies. Two of those copies already carried this
+    explanation and the three that needed it did not have it -- a fix
+    documented in one file does not reach another by being correct. If a third
+    binding ever appears, it is added once.
+
+    Callers that assert an ABSENCE still need their own positive precondition
+    that the thing could have happened; this helper makes retrieval work, it
+    does not make a vacuous assertion non-vacuous.
+    """
+    with patch("src.retrieval.semantic_search.embed_text", return_value=vector), \
+         patch("src.retrieval.embed_memory.embed_text", return_value=vector):
+        yield vector

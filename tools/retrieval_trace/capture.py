@@ -8,7 +8,7 @@ Two rules hold this together.
 
 1. PREDICATES ARE IMPORTED, NEVER REIMPLEMENTED. Every "did this branch
    fire" question is answered by calling the shipped function --
-   is_question_like, _looks_like_active_work, _matches_relational_query,
+   _looks_like_active_work, _matches_relational_query,
    _parse_age_days, and the rest. Only the CONSTANTS are modeled, in
    params.py. A trace can therefore go stale on a retune, which
    tests/test_retrieval_trace.py catches, but it cannot go stale on a
@@ -41,19 +41,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.context.policies import _matches_relational_query, classify_query
-from src.context import role_predicate
+from src.context import prior, role_predicate
 from src.context.ranker import ContextRanker
 from src.context.service import ContextService
 from src.core.config import get_private_vault_path
 from src.retrieval.retrieval_stats import retrieval_stats_disabled
 from src.retrieval.semantic_search import (
-    contains_clarification_language,
     extract_query_terms,
-    is_question_like,
     is_reflective_query,
     is_task_or_work_query,
-    looks_like_concrete_experience,
-    looks_like_summary_or_instruction,
     normalize_text,
 )
 
@@ -148,7 +144,6 @@ def vault_fingerprint() -> str:
 # ---------------------------------------------------------------------------
 
 _RETRIEVAL_TYPE_BRANCHES = {"conversation", "reflection", "memory", "ingested"}
-_RANK_TYPE_BRANCHES = {"conversation", "reflection", "memory", "ingested"}
 
 
 def _retrieval_metadata(item, channel: str) -> dict:
@@ -166,27 +161,6 @@ def _retrieval_metadata(item, channel: str) -> dict:
     if channel == CHANNEL_PROFILE and isinstance(metadata.get("metadata"), dict):
         return metadata["metadata"]
     return metadata
-
-
-def _role_branch(content: str, metadata: dict) -> str:
-    """The authorship role, as the role predicate reads it.
-
-    Was source_quality_adjustment's role ladder, feeding a score term. Under
-    ADR-044 4a role is a hard predicate, so this records the record's
-    authorship for a SELECTION decision rather than for a magnitude. The
-    prefix fallback is retained because the corpus carries records whose role
-    lives only in a "user:" / "assistant:" content prefix.
-    """
-    role = metadata.get("role", "")
-    if role == "user":
-        return "user"
-    if role == "assistant":
-        return "assistant"
-    if content.startswith("user:"):
-        return "user"
-    if content.startswith("assistant:"):
-        return "assistant"
-    return "none"
 
 
 def _content_prefix(content: str) -> str:
@@ -226,7 +200,6 @@ def _retrieval_activation(item, channel: str, query: str) -> RetrievalActivation
         lexical_term_hits=sum(1 for term in query_terms if term in normalized_content),
         lexical_entity_hits=entity_hits,
         type_branch=mem_type if mem_type in _RETRIEVAL_TYPE_BRANCHES else "other",
-        role=_role_branch(normalized_content, metadata),
         intent_reflective=is_reflective_query(normalized_query),
         intent_task=is_task_or_work_query(normalized_query),
         content_prefix=_content_prefix(normalized_content),
@@ -287,50 +260,32 @@ def _authorship_activation(item, query: str, project_id: str | None) -> Authorsh
     )
 
 
-def _rank_activation(item, channel: str, ranker: ContextRanker) -> RankActivation:
+def _rank_activation(item, channel: str, bucket: str) -> RankActivation:
     """Which prior factors this candidate takes.
 
-    The bucket comes from ranker._recency_bucket rather than from a local
-    ladder. This file used to reimplement the bucket boundaries, which broke
-    the module's own rule 1 -- predicates are imported, never reimplemented --
-    and was only survivable because the boundaries happened to agree. Under
-    ADR-044 the shipped function returns the bucket NAME, so there is nothing
-    left to restate.
+    Every branch domain is read from src.context.prior rather than restated
+    here. This file used to reimplement the recency ladder, which broke its own
+    rule 1 -- predicates are imported, never reimplemented -- and was only
+    survivable because the boundaries happened to agree; restating the kind and
+    length domains instead would have been the same mistake with the same
+    excuse. prior.kind_branch and prior.length_branch exist for this caller.
+
+    The reflection path differs by ONE flag, not by which factors apply. It
+    used to be a genuinely separate scoring function -- a 0.95 base discount, a
+    short-reflection penalty, recency at half weight -- so this returned early
+    with none of the memory path's activations. Under ADR-044 both paths call
+    the same prior.assemble, so returning early here dropped the kind and
+    length factors from every reflection candidate. capture's own stage check
+    caught it: pipeline 1.6860 against model 1.6452, a ratio of exactly
+    KIND_USER_CONTENT.
     """
-    content = (getattr(item, "content", "") or "").lower().strip()
-    bucket = ranker._recency_bucket(getattr(item, "timestamp", None))
     metadata = getattr(item, "metadata", {}) or {}
-    content_kind = metadata.get("content_kind")
+    content = (getattr(item, "content", "") or "").strip()
 
-    kind_branch = (
-        content_kind
-        if content_kind in {"experience", "user_content", "answer", "question"}
-        else "none"
-    )
-
-    # Two branches, not three. The <20 arm is gone with the additive ladder;
-    # the prior has one short branch at <50.
-    if len(content) < 50:
-        length_branch = "lt50"
-    elif len(content) > 1200:
-        length_branch = "gt1200"
-    else:
-        length_branch = "none"
-
-    # The reflection path differs by ONE flag, not by which factors apply.
-    #
-    # It used to be a genuinely separate scoring function -- a 0.95 base
-    # discount, a short-reflection penalty, and recency at half weight -- so
-    # this branch returned early with none of the memory path's activations.
-    # Under ADR-044 both paths call the same prior.assemble and differ only in
-    # is_reflection, so returning early here dropped the kind and length
-    # factors from every reflection candidate. capture's own stage check caught
-    # it: pipeline 1.6860 against model 1.6452, a ratio of exactly
-    # KIND_USER_CONTENT.
     return RankActivation(
         reflection_path=channel == CHANNEL_REFLECTION,
-        kind_branch=kind_branch,
-        length_branch=length_branch,
+        kind_branch=prior.kind_branch(metadata.get("content_kind")),
+        length_branch=prior.length_branch(len(content)),
         recency_bucket=bucket,
     )
 
@@ -376,7 +331,7 @@ def _walk_stages(items, channel, policy, query, project_id, ranker, include_cont
             retrieval=_retrieval_activation(item, channel, query),
             policy=_policy_activation(item, policy, ranker),
             author=_authorship_activation(item, query, project_id),
-            rank=_rank_activation(item, channel, ranker),
+            rank=_rank_activation(item, channel, ranker._bucket_for_age(age_days)),
         )
 
         # Stage 0: whatever retrieval produced. For memory and profile that

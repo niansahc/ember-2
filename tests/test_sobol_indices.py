@@ -275,7 +275,6 @@ def test_saltelli_matrices_differ_in_exactly_one_column():
 # ---------------------------------------------------------------------------
 
 def _candidate(ref: str, *, memory_type="conversation", tier="hot", raw_cosine=0.4,
-               role="user", decay_family="ephemeral", decay_bucket="d7",
                content="a synthetic candidate body of perfectly ordinary length"):
     candidate = CandidateTrace(
         ref=ref,
@@ -295,7 +294,6 @@ def _candidate(ref: str, *, memory_type="conversation", tier="hot", raw_cosine=0
             raw_cosine=raw_cosine,
             lexical_term_hits=2,
             type_branch=memory_type if memory_type in {"conversation", "reflection"} else "other",
-            role=role,
         ),
         policy=PolicyActivation(
             weight_field="memory_weight",
@@ -337,10 +335,10 @@ def synthetic_run() -> TraceRun:
     q1 = _query("q1", [
         _candidate("m0", raw_cosine=0.55, tier="hot"),
         _candidate("m1", raw_cosine=0.42, tier="cold"),
-        _candidate("m2", raw_cosine=0.31, tier="hot", role="assistant"),
+        _candidate("m2", raw_cosine=0.31, tier="hot"),
     ])
     q2 = _query("q2", [
-        _candidate("m0", raw_cosine=0.50, tier="cold", decay_bucket="older"),
+        _candidate("m0", raw_cosine=0.50, tier="cold"),
         _candidate("m1", raw_cosine=0.47, tier="hot"),
     ])
     run = TraceRun(

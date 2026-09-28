@@ -43,6 +43,9 @@ from src.context.ranker import COLD_MULTIPLIER, ContextRanker
 from src.tiering.tiering_service import (
     _DEFAULT_FAMILY_HALFLIFE_DAYS,
     _EPHEMERAL_HALFLIFE_DAYS,
+    _EPHEMERAL_TYPES,
+    _NO_DECAY_TYPES,
+    _TYPE_HALFLIFE_DAYS,
     _recency_score,
     halflife_for_type,
 )
@@ -77,14 +80,28 @@ def _days_ago(days: int) -> str:
 class TestReferenceClassesDoNotDecay:
     """The exemption, preserved across the move from ranker to TieringService."""
 
-    @pytest.mark.parametrize("memory_type", ["profile", "reference", "ingested"])
+    @pytest.mark.parametrize("memory_type", sorted(_NO_DECAY_TYPES))
     def test_reference_class_has_no_halflife(self, memory_type):
+        """Parametrized off _NO_DECAY_TYPES itself.
+
+        A hand-written list would still pass if a type were moved out of the
+        exemption, which is the change most worth catching here.
+        """
         assert halflife_for_type(memory_type) is None
 
-    @pytest.mark.parametrize("memory_type", ["profile", "reference", "ingested"])
-    def test_the_exemption_is_age_independent(self, memory_type):
-        """None is returned for the type, so no age can produce a decay."""
-        assert halflife_for_type(memory_type) is None
+    def test_the_exemption_covers_exactly_the_reference_classes(self):
+        """Nothing outside the set is exempt.
+
+        The other half of the claim, and the half a per-type parametrize cannot
+        make. Replaces a test whose assertion was byte-identical to the one
+        above it.
+        """
+        exempt = {
+            t for t in (*_NO_DECAY_TYPES, *_EPHEMERAL_TYPES, *_TYPE_HALFLIFE_DAYS,
+                        "state", "task", "summary")
+            if halflife_for_type(t) is None
+        }
+        assert exempt == set(_NO_DECAY_TYPES)
 
 
 class TestPerTypeHalflife:
@@ -96,14 +113,15 @@ class TestPerTypeHalflife:
     ladder's shape was implicit in the set of them.
     """
 
-    @pytest.mark.parametrize(
-        "memory_type", ["conversation", "journal", "session", "decision"]
-    )
+    @pytest.mark.parametrize("memory_type", sorted(_EPHEMERAL_TYPES))
     def test_ephemeral_types_take_the_short_halflife(self, memory_type):
         assert halflife_for_type(memory_type) == _EPHEMERAL_HALFLIFE_DAYS
 
-    def test_reflection_takes_the_long_halflife(self):
-        assert halflife_for_type("reflection") == 122.0
+    @pytest.mark.parametrize("memory_type", sorted(_TYPE_HALFLIFE_DAYS))
+    def test_named_types_take_their_own_halflife(self, memory_type):
+        """Reflection is the only entry today. Read off the table so a second
+        one is covered without an edit here."""
+        assert halflife_for_type(memory_type) == _TYPE_HALFLIFE_DAYS[memory_type]
 
     @pytest.mark.parametrize("memory_type", ["state", "task", "summary", "unknown_type"])
     def test_everything_else_takes_the_default_family(self, memory_type):

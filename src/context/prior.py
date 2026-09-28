@@ -114,20 +114,22 @@ def _deviation(term: str) -> float:
 LEN_UNDER_50 = 1.0 - _deviation("len_under_50")        # 0.9339
 LEN_OVER_1200 = 1.0 - _deviation("len_over_1200")      # 0.9845
 
-_LENGTH_FACTORS = {
-    "lt50": LEN_UNDER_50,
-    "gt1200": LEN_OVER_1200,
-    "none": 1.0,
-}
 KIND_EXPERIENCE = 1.0 + _deviation("kind_experience")  # 1.0581
 KIND_USER_CONTENT = 1.0 + _deviation("kind_user_content")  # 1.0248
-KIND_QUESTION = 1.0 - _deviation("kind_user_content")  # 0.9752, mirrored
-KIND_ANSWER = 1.0 - _deviation("kind_user_content")    # 0.9752, mirrored
+# Mirrored: a question or an answer is discounted by what user_content is
+# credited. One expression, not two copies of it.
+KIND_QUESTION = 1.0 - _deviation("kind_user_content")  # 0.9752
+KIND_ANSWER = KIND_QUESTION
 
 # Term tables, so assemble() reads its factor and its counter arm from one
 # place. The "none" entries are the identity and exist so every candidate
 # takes a named branch -- an unnamed fall-through is a hole in the traffic
 # window, which is how ranker.tier's arms came to be under-declared.
+#
+# Two consumers besides assemble(): tools/guard_counter_sites.py reads the arm
+# domains off these tables so the counter inventory follows the code, and
+# tools/retrieval_trace/params.py imports the values so the sensitivity vector
+# does not copy them.
 _KIND_FACTORS = {
     "experience": KIND_EXPERIENCE,
     "user_content": KIND_USER_CONTENT,
@@ -135,6 +137,50 @@ _KIND_FACTORS = {
     "answer": KIND_ANSWER,
     "none": 1.0,
 }
+
+_LENGTH_FACTORS = {
+    "lt50": LEN_UNDER_50,
+    "gt1200": LEN_OVER_1200,
+    "none": 1.0,
+}
+
+SHORT_CHARS = 50
+LONG_CHARS = 1200
+
+
+def kind_branch(content_kind: str | None) -> str:
+    """Which content_kind arm this record takes, or "none".
+
+    Exported because the trace harness needs the same classification to record
+    an activation, and a second copy of the branch names would drift. capture.py
+    reimplemented the recency ladder once already and got away with it only
+    because the boundaries happened to agree.
+    """
+    return content_kind if content_kind in _KIND_FACTORS else "none"
+
+
+def length_branch(content_length: int) -> str:
+    """Which length arm this record takes, or "none".
+
+    Two arms, not three: the additive ladder's <20 branch is gone.
+    """
+    if content_length < SHORT_CHARS:
+        return "lt50"
+    if content_length > LONG_CHARS:
+        return "gt1200"
+    return "none"
+
+
+def recency_bucket_or_unparsed(recency_bucket: str) -> str:
+    """Normalise a recency bucket name to one RECENCY carries.
+
+    An unrecognised name means the caller and this table disagree about the
+    ladder, which is a bug rather than a neutral record. It resolves to
+    "unparsed" -- whose multiplier is 1.0, the same answer a `.get` default
+    would give -- but as a NAMED branch, so the traffic window shows it
+    happening instead of the count vanishing into the identity.
+    """
+    return recency_bucket if recency_bucket in RECENCY else "unparsed"
 
 # Recency. Five buckets, scaled so the widest-ST bucket carries the full
 # recency deviation and the ladder keeps its previous relative ordering
@@ -195,20 +241,15 @@ def assemble(
     # have made the whole metadata prior invisible to the traffic window --
     # the one part of the scoring path it could not see. Branch names mirror
     # the term names so a counter row reads back as a multiplier.
-    kind = content_kind if content_kind in _KIND_FACTORS else "none"
-    branch("prior.kind", kind)
-    prior *= _KIND_FACTORS.get(kind, 1.0)
-
-    if content_length < 50:
-        length = "lt50"
-    elif content_length > 1200:
-        length = "gt1200"
-    else:
-        length = "none"
-    branch("prior.length", length)
-    prior *= _LENGTH_FACTORS[length]
-
-    prior *= RECENCY.get(branch("prior.recency", recency_bucket), 1.0)
+    #
+    # Each arm is normalised to a table key first, then indexed directly. No
+    # `.get(..., default)` fallbacks: the normalisers guarantee a hit, and a
+    # defensive default would quietly turn a typo into the identity instead of
+    # raising -- which is how an unmatched recency bucket would have become a
+    # silent 1.0.
+    prior *= _KIND_FACTORS[branch("prior.kind", kind_branch(content_kind))]
+    prior *= _LENGTH_FACTORS[branch("prior.length", length_branch(content_length))]
+    prior *= RECENCY[branch("prior.recency", recency_bucket_or_unparsed(recency_bucket))]
 
     if count("prior.reflection_path", is_reflection):
         prior *= REFLECTION_DISCOUNT

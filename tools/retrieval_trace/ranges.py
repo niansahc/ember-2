@@ -84,8 +84,11 @@ FAMILY_ADDITIVE = "additive"
 _BOUNDED_PREFIXES = ("prior.", "tier.")
 
 # Fractions of a score, unbounded by the contract.
+#
+# An exact-name escape hatch stood beside this for refl.base_discount and
+# refl.recency_scale, both retired by ADR-044. It is gone rather than left as
+# an empty frozenset: an unused hook reads as a supported extension point.
 _MULTIPLIER_PREFIXES = ("auth.",)
-_MULTIPLIER_NAMES: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -113,7 +116,7 @@ class ParameterRange:
 def family_of(name: str) -> str:
     if name.startswith(_BOUNDED_PREFIXES):
         return FAMILY_BOUNDED
-    if name in _MULTIPLIER_NAMES or name.startswith(_MULTIPLIER_PREFIXES):
+    if name.startswith(_MULTIPLIER_PREFIXES):
         return FAMILY_MULTIPLIER
     return FAMILY_ADDITIVE
 

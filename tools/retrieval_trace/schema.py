@@ -67,11 +67,11 @@ class RetrievalActivation:
     # query_intent_adjustment still keys on it. It is no longer a selector for
     # a type term of its own.
     type_branch: str = "other"           # conversation|reflection|memory|ingested|other
-    # role is the role predicate's input (ADR-044 4a), not a score branch.
-    # Recorded so a replay can reproduce the SELECTION the predicate makes;
-    # the four quality_* booleans that stood beside it are gone with
-    # source_quality_adjustment.
-    role: str = "none"                   # user|assistant|none
+    # No role field. The four quality_* booleans went with
+    # source_quality_adjustment, and role followed them: under ADR-044 4a role
+    # is a SELECTION decision, and CandidateTrace.excluded_by_role records its
+    # outcome from the shipped predicate. A descriptive copy of the role column
+    # here would be a second reading of it that nothing consumes.
     intent_reflective: bool = False
     intent_task: bool = False
     content_prefix: str = "none"         # user|assistant|none

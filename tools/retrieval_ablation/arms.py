@@ -39,8 +39,9 @@ a number. `A_quality-off` patched `source_quality_adjustment`, which
 All three are replaced by `A_prior-off`. That is not a renaming: recency,
 content_kind and length were three separable levers and are now one bounded
 multiplier, so an arm per mechanism would be reporting a separability the
-system no longer has. ENTANGLED_LEVERS below used to record recency and decay
-as inseparable-by-construction; they are now not two mechanisms.
+system no longer has. The ENTANGLED_LEVERS table that recorded recency and
+decay as inseparable-by-construction is deleted with them: they are no longer
+two mechanisms.
 
 `A0_FULL` also needed correcting rather than migrating. It added
 `memory_type_adjustment` and `source_quality_adjustment` to the retrieval score
@@ -667,31 +668,24 @@ LEVER_FOR_CLASS: dict[str, str] = {
     "entity_bait": "A_lexical-off",
 }
 
-# Empty, and that is the finding rather than a gap.
+# An ENTANGLED_LEVERS table stood here, recording A_recency-off and A_decay-off
+# as inseparable by construction: two mechanisms keyed on the same input (age)
+# pulling opposite ways, which no minimal pair could tell apart because holding
+# age constant disabled both. ADR-044 decision 3 removed the premise -- there is
+# no longer an additive freshness bonus and a multiplicative decay penalty, only
+# one multiplier, with the compounding curve moved to a nightly tier input.
 #
-# This used to record A_recency-off and A_decay-off as inseparable by
-# construction: two mechanisms keyed on the same input (age) pulling opposite
-# ways, which no minimal pair could tell apart because holding age constant
-# disabled both. ADR-044 decision 3 removed the premise. There is no longer an
-# additive freshness bonus and a multiplicative decay penalty; there is one
-# multiplier, and the age curve that used to compound with it is a nightly
-# input to tier.
+# The table is deleted rather than emptied. An empty one kept three things alive
+# that could no longer fire: a helper that always returned its own argument, an
+# "entangled" row key that was unconditionally False, and a caveat block in
+# report.py that could never render. A reader had to trace three files to learn
+# the flag was dead.
 #
-# So the entanglement did not get solved by better fixtures -- the two
-# mechanisms stopped being two. What replaces it is coarser rather than
-# sharper: A_prior-off now removes recency, content_kind and length together,
-# so those three cannot be separated either. That is recorded in LEVER_FOR_CLASS
-# above by three classes sharing one arm, which is the honest encoding, instead
-# of here as arms that cannot be disentangled.
-ENTANGLED_LEVERS: tuple[frozenset[str], ...] = ()
-
-
-def _entangled_with(arm_name: str) -> set[str]:
-    out = {arm_name}
-    for group in ENTANGLED_LEVERS:
-        if arm_name in group:
-            out |= set(group)
-    return out
+# The entanglement was not solved by better fixtures; the two mechanisms stopped
+# being two. What replaces it is coarser, not sharper -- A_prior-off removes
+# recency, content_kind and length together, so those three are not separable
+# either. That is encoded above, as three classes sharing one arm, which says it
+# where a reader is already looking.
 
 
 def measure_lever_attribution(stratum: Stratum) -> list[dict]:
@@ -766,8 +760,6 @@ def measure_lever_attribution(stratum: Stratum) -> list[dict]:
                 "labelled_swing": swings[target],
                 "dominant_lever": dominant,
                 "dominant_swing": swings[dominant],
-                "entangled": dominant != target
-                and dominant in _entangled_with(target),
                 "swings": swings,
             }
         )

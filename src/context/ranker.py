@@ -330,15 +330,7 @@ class ContextRanker:
           tokens<5    removed. Subsumed by the length term it duplicates
                       and never separately measured.
         """
-        content = item.content.lower().strip()
-        metadata = getattr(item, "metadata", {}) or {}
-
-        item.score = float(item.score) * prior.assemble(
-            content_kind=metadata.get("content_kind"),
-            content_length=len(content),
-            recency_bucket=self._recency_bucket(item.timestamp),
-        )
-        return item
+        return self._apply_prior(item, is_reflection=False)
 
     def _score_reflection_item(self, item: ContextItem) -> ContextItem:
         """Reflections take the same prior, flagged as derived.
@@ -348,15 +340,27 @@ class ContextRanker:
         list, and ranker.reflection.under_30_chars fired 0 times in the
         personal-vault window. Neither has a defensible magnitude, so both
         take the smallest value consistent with the contract.
+
+        Delegates rather than duplicating. The two paths were byte-identical
+        apart from one keyword, and during this refactor the trace harness's
+        copy of the reflection path silently lost two factors for exactly that
+        reason -- two near-identical bodies are two places to keep in step.
         """
-        content = item.content.lower().strip()
+        return self._apply_prior(item, is_reflection=True)
+
+    def _apply_prior(self, item: ContextItem, *, is_reflection: bool) -> ContextItem:
+        """score = score x prior. The one place the prior is applied."""
         metadata = getattr(item, "metadata", {}) or {}
 
+        # strip() without lower(): only the LENGTH is read. The lowered copy
+        # fed the content-prefix term and the tokenizer, both of which ADR-044
+        # deleted, so lowering allocated a full second copy of every record
+        # body to measure it.
         item.score = float(item.score) * prior.assemble(
             content_kind=metadata.get("content_kind"),
-            content_length=len(content),
+            content_length=len(item.content.strip()),
             recency_bucket=self._recency_bucket(item.timestamp),
-            is_reflection=True,
+            is_reflection=is_reflection,
         )
         return item
 
@@ -440,18 +444,34 @@ class ContextRanker:
         once at half weight per reflection -- which is why #207 counted
         recency three times over on the additive side alone.
         """
-        age_days = self._parse_age_days(timestamp)
+        return self._bucket_for_age(self._parse_age_days(timestamp))
+
+    @staticmethod
+    def _bucket_for_age(age_days: int | None) -> str:
+        """The ladder itself, on an age a caller has already parsed.
+
+        Split out so a caller holding `age_days` does not have to hand back a
+        timestamp string to have it re-parsed. The trace harness holds exactly
+        that, and was paying a third parse of the same timestamp per candidate
+        to get a bucket name.
+
+        No guard counter here. `prior.recency` records the same decision on the
+        same value one call later, and two counter rows for one branch means
+        the traffic-window inventory accounts the same fact twice -- which it
+        was doing, with `ranker.recency.bucket=d7` and `prior.recency=d7` both
+        declared as if they were independent observations.
+        """
         if age_days is None:
-            return branch("ranker.recency.bucket", "unparsed")
+            return "unparsed"
         if age_days <= 7:
-            return branch("ranker.recency.bucket", "d7")
+            return "d7"
         if age_days <= 30:
-            return branch("ranker.recency.bucket", "d30")
+            return "d30"
         if age_days <= 90:
-            return branch("ranker.recency.bucket", "d90")
+            return "d90"
         if age_days <= 365:
-            return branch("ranker.recency.bucket", "d365")
-        return branch("ranker.recency.bucket", "older")
+            return "d365"
+        return "older"
 
     def _looks_like_experience(self, content: str) -> bool:
         markers = (

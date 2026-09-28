@@ -42,7 +42,7 @@ from src.context.models import ContextItem
 from src.context.policies import ContextPolicy
 from src.context.ranker import COLD_MULTIPLIER, WARM_MULTIPLIER, ContextRanker
 from src.context.service import ContextService
-from tests.conftest import deliver_packet
+from tests.conftest import deliver_packet, stub_both_embed_bindings
 from src.core.config import get_private_vault_path
 from src.memory.write_memory import write_memory
 from src.context import prior
@@ -335,11 +335,9 @@ def seeded_vault():
 
 @pytest.fixture
 def stub_query_embedding(seeded_vault):
-    # Both bindings -- retrieve() embeds through src.retrieval.embed_memory
-    # and passes the result down, so patching only the semantic_search
-    # binding leaves the query vector real against stubbed records.
-    with patch("src.retrieval.semantic_search.embed_text", return_value=seeded_vault),             patch("src.retrieval.embed_memory.embed_text", return_value=seeded_vault):
-        yield
+    """Both embedding bindings. See conftest.stub_both_embed_bindings."""
+    with stub_both_embed_bindings(seeded_vault):
+        yield seeded_vault
 
 
 @pytest.fixture

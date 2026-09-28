@@ -304,27 +304,16 @@ def render_report(raw: dict) -> tuple[str, dict]:
     add("")
     add(f"{'bait':32} {'class':22} {'labelled':>9} {'dominant lever':>18} {'swing':>7}")
     attribution = arms[REFERENCE_ARM].get("attribution", {})
-    entangled_rows = 0
     for stratum_name, rows in attribution.items():
         for row in rows:
-            flag = " *" if row.get("entangled") else ""
-            entangled_rows += 1 if row.get("entangled") else 0
             add(
                 f"{row['bait'][:32]:32} {row['class']:22} "
                 f"{row['labelled_swing']:+9.3f} "
-                f"{row['dominant_lever']:>18} {row['dominant_swing']:+7.3f}{flag}"
+                f"{row['dominant_lever']:>18} {row['dominant_swing']:+7.3f}"
             )
-    if entangled_rows:
-        add("")
-        add("  * recency and decay are NOT separable by construction, and no corpus")
-        add("    can make them so. Both key on the same input -- the record's age --")
-        add("    but act on opposite sides of the pair: the additive freshness bonus")
-        add("    lifts the fresh distractor, and the multiplicative decay penalty")
-        add("    pushes down the older relevant record it displaces. A fresh bait is")
-        add("    helped twice by two mechanisms a minimal pair cannot tell apart,")
-        add("    because holding age constant disables both at once. That is a")
-        add("    property of the pipeline, not a limit of these fixtures, and it is")
-        add("    printed rather than tuned away.")
+    # A recency-versus-decay entanglement caveat printed here until ADR-044
+    # merged those two mechanisms into one term. Its flag could no longer fire,
+    # so the block is gone with it -- see arms.py where the table used to be.
 
     add("")
     add("-" * 78)

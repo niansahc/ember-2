@@ -565,10 +565,10 @@ similarity across a similarity threshold. The Context section argues the
 metadata outweighed cosine by roughly 12:1; here it was sufficient on its own,
 with cosine contributing nothing.
 
-This is also why the type gate's pass rate barely moves in production-shaped
-data (93.08% to 91.00%, -2.09pp): where raw cosines are genuinely above the
-floor the pile was padding records that would have passed anyway. The floor is
-unchanged and should stay unchanged.
+This is also why the type gate's pass rate barely moves on a corpus with
+realistic cosines (93.08% to 91.00%, -2.09pp): where raw cosines are genuinely
+above the floor the pile was padding records that would have passed anyway. The
+floor is unchanged and should stay unchanged.
 
 ### Test-suite finding: six tests green over an empty packet
 
@@ -597,6 +597,49 @@ carry a comment describing this exact defect, including the observation that it
 stays invisible until something downstream starts excluding on score. The two
 broken files did not use it. A fix documented in one place does not propagate
 to another by being correct.
+
+### The clamp is enforcement, not a safety net
+
+`clamp`'s docstring states the test for this: "If it fires often, the budget is
+under-specified rather than merely tight, and that is a finding about the
+derivation." It fires often, at shipped magnitudes.
+
+Over the reachable branch space -- 5 content kinds x 3 length bands x 6 recency
+buckets = 90 combinations -- **9 clamp low and 0 clamp high.** All nine are
+short records, which is **30% of the short-record space**. Inside that region
+the prior is a CONSTANT at `PRIOR_MIN`: `content_kind` and recency are erased,
+because the product has already passed the floor before they are considered.
+
+The cause is that the budget is allocated per term and spent multiplicatively.
+`deviation_i = (1 - PRIOR_MIN) * ST_i / ST_max` gives each term independently
+the right to consume the prior's entire half of the bound, and the largest-ST
+term takes exactly that -- `LEN_UNDER_50 == PRIOR_MIN` by construction. Any
+short record that also takes a downward kind or recency term is therefore
+outside the bound before it is clamped back to it.
+
+This is the same defect as the short-user-content finding below, one level up
+and stated generally: the derivation allocates per term while the composition
+multiplies terms. The remedy is to allocate in log space across the three
+mutually-exclusive families, so the product is inside the bound by
+construction and the clamp becomes unreachable:
+
+```
+log_dev_i = log(PRIOR_MIN) * ST_i / sum(ST over the worst one-per-family case)
+```
+
+Terms within `_KIND_FACTORS`, `_LENGTH_FACTORS` and `RECENCY` are mutually
+exclusive, so the worst case sums three terms rather than six and the headroom
+cost is small. The clamp would then remain as an assertion rather than as the
+enforcement.
+
+Not done here: it re-derives every prior magnitude, which is a change with its
+own measurement, and this PR's remit was to implement the contract as derived
+rather than to re-derive it. Recorded instead, with two tests --
+`test_the_clamp_fires_on_short_records_at_shipped_magnitudes` pins the rate so
+the fact is asserted rather than rediscovered, and `test_the_clamp_rate_is_observable`
+pins that `prior.clamped_low` reaches the traffic window, because the counters
+were added and then targeted by no query, so the mechanism built to surface
+this would not have surfaced it.
 
 ### Short user-authored content is net-penalised
 

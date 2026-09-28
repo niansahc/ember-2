@@ -45,9 +45,21 @@ from src.context.ranker import COLD_MULTIPLIER, WARM_MULTIPLIER, ContextRanker
 # Every branch prior.assemble can take, enumerated rather than sampled. The
 # space is small enough to cover exhaustively, and a sampled bound test can
 # miss exactly the corner where the clamp is load-bearing.
-CONTENT_KINDS = [None, "experience", "user_content", "question", "answer", "unrecognised"]
-CONTENT_LENGTHS = [0, 1, 49, 50, 51, 600, 1200, 1201, 5000]
-RECENCY_BUCKETS = ["d7", "d30", "d90", "d365", "older", "unparsed", "unrecognised"]
+#
+# The domains are READ OFF the prior's own term tables, not written out here.
+# A hand-written copy would let a term added to _KIND_FACTORS or RECENCY leave
+# this test passing AND still claiming exhaustiveness -- and exhaustiveness is
+# the one property the count assertion below exists to protect. "unrecognised"
+# and None are appended because they are inputs the tables deliberately do not
+# carry, and the normalisers' handling of them is part of the contract.
+CONTENT_KINDS = [None, *prior._KIND_FACTORS, "unrecognised"]
+CONTENT_LENGTHS = [
+    0, 1,
+    prior.SHORT_CHARS - 1, prior.SHORT_CHARS, prior.SHORT_CHARS + 1,
+    600,
+    prior.LONG_CHARS, prior.LONG_CHARS + 1, 5000,
+]
+RECENCY_BUCKETS = [*prior.RECENCY, "unrecognised"]
 REFLECTION_FLAGS = [False, True]
 
 # The tier multipliers as apply_policy applies them, including the identity
@@ -79,6 +91,15 @@ def _out_of_contract_kind(kind: str, value: float):
         prior._KIND_FACTORS.update(original)
 
 
+def _raw_product(content_kind, content_length: int, recency_bucket: str) -> float:
+    """The prior BEFORE the clamp, so the clamp's own firing can be measured."""
+    return (
+        prior._KIND_FACTORS[prior.kind_branch(content_kind)]
+        * prior._LENGTH_FACTORS[prior.length_branch(content_length)]
+        * prior.RECENCY[prior.recency_bucket_or_unparsed(recency_bucket)]
+    )
+
+
 def _priors():
     for kind, length, bucket, is_reflection in itertools.product(
         CONTENT_KINDS, CONTENT_LENGTHS, RECENCY_BUCKETS, REFLECTION_FLAGS
@@ -98,39 +119,37 @@ def _priors():
 
 
 class TestTheBoundItself:
-    def test_the_interval_matches_the_figures_the_adr_states(self):
-        """0.8722 and 1.1278, to four places.
-
-        Pinned against the literals so that changing COSINE_SPREAD without
-        re-deriving the ADR's stated interval fails here rather than silently
-        moving the contract.
-        """
-        assert prior.COMPOSED_MIN == pytest.approx(0.8722, abs=5e-5)
-        assert prior.COMPOSED_MAX == pytest.approx(1.1278, abs=5e-5)
-
     def test_the_interval_is_derived_from_the_measured_spread(self):
-        """B = 0.0815 / 0.6375, not a number someone liked.
+        """B = spread / mean rank-1 cosine, not a number someone liked.
 
         This is the assertion that makes the bound auditable: it ties the
         interval to the two measured quantities (#236) rather than to a
         constant that could drift away from them.
+
+        Deliberately NOT a literal pin on 0.8722 / 1.1278. ADR-044 requires the
+        spread be re-measured per embedder, so a literal here would fail on a
+        legitimate re-measurement while asserting nothing about behaviour --
+        and would be "fixed" by editing the number, which is the habit the
+        whole contract exists to break. The relationship is what must hold.
         """
-        assert prior.COSINE_SPREAD == 0.0815
-        assert prior.COSINE_MEAN_RANK1 == 0.6375
-        assert prior.RELATIVE_SPREAD == pytest.approx(0.0815 / 0.6375)
+        assert prior.RELATIVE_SPREAD == pytest.approx(
+            prior.COSINE_SPREAD / prior.COSINE_MEAN_RANK1
+        )
         assert prior.COMPOSED_MIN == pytest.approx(1.0 - prior.RELATIVE_SPREAD)
         assert prior.COMPOSED_MAX == pytest.approx(1.0 + prior.RELATIVE_SPREAD)
 
     def test_the_budget_is_split_evenly_in_the_multiplicative_sense(self):
-        """sqrt(COMPOSED_MIN) to each factor.
+        """The worst case of both factors together lands ON the bound.
 
-        An even split means the WORST CASE OF BOTH TOGETHER lands exactly on
-        the bound -- which is the only split under which the composed
-        assertion and the per-factor floors are the same statement. An
-        arithmetic split would leave the product below the floor.
+        That is the behavioural content of an even split, and the only form of
+        it worth asserting: it is what makes the composed bound and the
+        per-factor floors the same statement rather than two. An arithmetic
+        split would leave the product below the floor.
+
+        `PRIOR_MIN == COMPOSED_MIN ** 0.5` is NOT asserted -- it restates
+        prior.py's own definition, and params.py argues in this same change
+        that an identity is not a test.
         """
-        assert prior.PRIOR_MIN == pytest.approx(prior.COMPOSED_MIN ** 0.5)
-        assert prior.TIER_MIN == pytest.approx(prior.COMPOSED_MIN ** 0.5)
         assert prior.PRIOR_MIN * prior.TIER_MIN == pytest.approx(prior.COMPOSED_MIN)
 
     def test_tier_carries_no_upward_half(self):
@@ -195,6 +214,71 @@ class TestTheBoundItself:
                 content_kind="experience", content_length=600, recency_bucket="d7"
             )
         assert escaped == pytest.approx(prior.PRIOR_MIN)
+
+    def test_the_clamp_fires_on_short_records_at_shipped_magnitudes(self):
+        """The clamp is ENFORCEMENT, not a safety net, and this pins the rate.
+
+        `clamp`'s own docstring says that if it fires often, "the budget is
+        under-specified rather than merely tight, and that is a finding about
+        the derivation". It fires often, at shipped magnitudes, and this test
+        exists so that fact is asserted rather than discovered again.
+
+        The cause is that `_deviation` allocates the budget PER TERM -- the
+        largest-ST term (len_under_50) is given the prior's entire half of it,
+        so `LEN_UNDER_50 == PRIOR_MIN` exactly -- while `assemble` composes
+        terms by MULTIPLYING. Any short record that also takes a downward kind
+        or recency term therefore leaves the bound and is clamped, and inside
+        that region the prior is a CONSTANT: kind and recency are erased.
+
+        Recorded in ADR-044's amendment and not fixed here. The fix is to
+        allocate in log space across the three mutually-exclusive families so
+        the product is inside the bound by construction and the clamp becomes
+        unreachable -- a re-derivation of the magnitudes, which is its own
+        change with its own measurement. This test will need updating when that
+        lands, and the update is the point: the rate should go to zero.
+        """
+        clamped = [
+            (kind, length, bucket)
+            for kind, length, bucket, is_reflection, _value in _priors()
+            if not is_reflection
+            and _raw_product(kind, length, bucket) < prior.PRIOR_MIN - 1e-12
+        ]
+        assert clamped, (
+            "the clamp no longer fires at shipped magnitudes -- if the "
+            "derivation was fixed to compose within the bound, delete this test"
+        )
+        # Every clamped combination is a short record. If that stops being
+        # true, a second term has grown past the budget and the derivation
+        # needs revisiting for a different reason.
+        assert {length for _kind, length, _bucket in clamped} == {"lt50"} or all(
+            length < prior.SHORT_CHARS for _kind, length, _bucket in clamped
+        )
+
+    def test_the_clamp_rate_is_observable(self):
+        """The counters that surface the finding above must exist.
+
+        prior.clamped_low / prior.clamped_high were added with the instrument
+        and then appeared in no traffic-window target, so the mechanism
+        designed to surface a saturating budget would not have surfaced it.
+        """
+        import sys
+        from pathlib import Path
+
+        tools = str(Path(__file__).resolve().parents[1] / "tools")
+        if tools not in sys.path:
+            sys.path.insert(0, tools)
+        import guard_counter_sites as sites
+        import traffic_window as window
+
+        declared = {row["site"] for row in sites.declared_sites()}
+        assert "prior.clamped_low" in declared
+        assert "prior.clamped_high" in declared
+
+        targeted = {t for entry in window.QUERY_SET for t in entry.get("targets", ())}
+        assert "prior.clamped_low" in targeted, (
+            "no query in the traffic window targets the clamp; a saturating "
+            "budget would not show up in the window that exists to show it"
+        )
 
 
 class TestReachability:
@@ -293,13 +377,10 @@ class TestReachability:
         """
         old_cold, old_decay_floor = 0.3, 0.10
         best_possible_cold = 1.0 * old_cold * old_decay_floor
-        assert best_possible_cold == pytest.approx(0.03)
 
-        # Any hot record above this cosine was unbeatable by any cold record.
-        assert best_possible_cold < 0.0815, (
-            "the old floor was not below the measured cosine spread; the "
-            "unreachability argument does not hold as stated"
-        )
-
-        # And under the new contract the same comparison is winnable.
-        assert 1.0 * prior.COMPOSED_MIN > 0.0815
+        # The claim that matters is about LIVE code: the current floor leaves a
+        # cold record above the measured cosine spread, where the old one did
+        # not. Asserting 0.3 * 0.10 == 0.03 on its own would be arithmetic over
+        # deleted constants, which cannot fail for any change to the system.
+        assert best_possible_cold < prior.COSINE_SPREAD
+        assert prior.COMPOSED_MIN > prior.COSINE_SPREAD

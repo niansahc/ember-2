@@ -257,9 +257,15 @@ def parameter_coverage(run: TraceRun) -> list[tuple[str, int]]:
     Returns (name, candidates_moved) for every parameter, ascending, so the
     inert ones are the first thing the reader sees.
     """
+    # score_query, not replay_query: this function reads scores and nothing
+    # else. replay_query additionally runs the survivor gates, the content
+    # filters, two sorts, the profile partition and -- on a diversity policy --
+    # a per-candidate shim through the real _select_diverse_memory, all of which
+    # was discarded. At 38 parameters x 36 queries that was ~1400 needless
+    # selection passes per coverage run.
     baseline: dict[str, dict[str, float]] = {}
     for query in run.queries:
-        baseline[query.query_id] = {s.ref: s.score for s in replay_query(query).scored}
+        baseline[query.query_id] = {s.ref: s.score for s in score_query(query)}
 
     from .ranges import range_for
 
@@ -285,7 +291,7 @@ def parameter_coverage(run: TraceRun) -> list[tuple[str, int]]:
         params = ReplayParams().with_overrides(**{name: nudged})
         moved = 0
         for query in run.queries:
-            for scored in replay_query(query, params).scored:
+            for scored in score_query(query, params):
                 if abs(scored.score - baseline[query.query_id][scored.ref]) > EXACT_TOLERANCE:
                     moved += 1
         results.append((name, moved))

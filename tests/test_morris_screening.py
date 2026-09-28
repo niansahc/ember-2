@@ -74,9 +74,6 @@ def _candidate(
     item_type: str = "conversation",
     tier: str = "hot",
     raw_cosine: float = 0.4,
-    role: str = "user",
-    decay_family: str = "ephemeral",
-    decay_bucket: str = "d7",
     policy_name: str = "default",
     content: str = "a synthetic candidate body of a perfectly ordinary length",
 ) -> CandidateTrace:
@@ -98,7 +95,6 @@ def _candidate(
             raw_cosine=raw_cosine,
             lexical_term_hits=2,
             type_branch=memory_type if memory_type in {"conversation", "reflection"} else "other",
-            role=role,
         ),
         policy=PolicyActivation(
             weight_field="memory_weight",
@@ -168,17 +164,17 @@ def synthetic_run() -> TraceRun:
         [
             _candidate("m0", raw_cosine=0.55, tier="hot"),
             _candidate("m1", raw_cosine=0.42, tier="cold"),
-            _candidate("m2", raw_cosine=0.31, tier="hot", role="assistant"),
+            _candidate("m2", raw_cosine=0.31, tier="hot"),
             _candidate("m3", raw_cosine=0.28, memory_type="profile", item_type="profile"),
         ],
     )
     q2 = _query(
         "q2",
         [
-            _candidate("m0", raw_cosine=0.50, tier="cold", decay_bucket="older"),
+            _candidate("m0", raw_cosine=0.50, tier="cold"),
             _candidate("m1", raw_cosine=0.47, tier="hot"),
             _candidate("m2", raw_cosine=0.45, memory_type="reflection",
-                       item_type="reflection", decay_family="reflection", decay_bucket="d30"),
+                       item_type="reflection"),
         ],
     )
     run = _run([q1, q2])
@@ -490,7 +486,13 @@ def test_query_dependent_signal_now_outranks_query_independent_metadata(syntheti
         "a query-independent tier weight outranks the lexical term; metadata "
         "has regained authority over similarity"
     )
-    assert ranked.index("prior.kind.experience") < ranked.index("tier.cold")
+    # Only that one relation is asserted. `prior.kind.experience` above
+    # `tier.cold` was asserted here too and has been dropped: both are
+    # query-independent bounded terms, so their order against each OTHER
+    # carries no contract meaning and is a fixture artefact -- and it would
+    # break on any re-derivation of the prior's magnitudes (issue #250 proposes
+    # exactly that) without a defect behind it. The docstring's claim that this
+    # test survives a re-derivation was false of that line.
 
 
 def test_a_score_only_parameter_is_reported_as_no_effect_on_delivery(synthetic_run):

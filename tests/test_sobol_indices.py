@@ -57,7 +57,6 @@ from tools.retrieval_trace.sobol import (
 from tools.retrieval_trace.schema import (
     SCHEMA_VERSION,
     CandidateTrace,
-    DecayActivation,
     PolicyActivation,
     QueryTrace,
     RankActivation,
@@ -276,7 +275,6 @@ def test_saltelli_matrices_differ_in_exactly_one_column():
 # ---------------------------------------------------------------------------
 
 def _candidate(ref: str, *, memory_type="conversation", tier="hot", raw_cosine=0.4,
-               role="user", decay_family="ephemeral", decay_bucket="d7",
                content="a synthetic candidate body of perfectly ordinary length"):
     candidate = CandidateTrace(
         ref=ref,
@@ -296,23 +294,16 @@ def _candidate(ref: str, *, memory_type="conversation", tier="hot", raw_cosine=0
             raw_cosine=raw_cosine,
             lexical_term_hits=2,
             type_branch=memory_type if memory_type in {"conversation", "reflection"} else "other",
-            quality_role=role,
-            quality_experience=True,
         ),
         policy=PolicyActivation(
             weight_field="memory_weight",
             weight_captured=1.0,
-            recency_bias_captured=0.0,
-            recency_bucket="d7",
             tier_branch="profile_bypass" if memory_type == "profile" else tier,
         ),
         rank=RankActivation(
-            type_branch=memory_type if memory_type in {"conversation", "reflection"} else "other",
-            role_branch=role if role in {"user", "assistant"} else "none",
             kind_branch="experience",
             recency_bucket="d7",
         ),
-        decay=DecayActivation(family=decay_family, bucket=decay_bucket),
     )
     result = compose(candidate, ReplayParams(), "default")
     candidate.stage_scores = dict(result.stage_scores)
@@ -344,10 +335,10 @@ def synthetic_run() -> TraceRun:
     q1 = _query("q1", [
         _candidate("m0", raw_cosine=0.55, tier="hot"),
         _candidate("m1", raw_cosine=0.42, tier="cold"),
-        _candidate("m2", raw_cosine=0.31, tier="hot", role="assistant"),
+        _candidate("m2", raw_cosine=0.31, tier="hot"),
     ])
     q2 = _query("q2", [
-        _candidate("m0", raw_cosine=0.50, tier="cold", decay_bucket="older"),
+        _candidate("m0", raw_cosine=0.50, tier="cold"),
         _candidate("m1", raw_cosine=0.47, tier="hot"),
     ])
     run = TraceRun(
@@ -371,7 +362,7 @@ def synthetic_run() -> TraceRun:
     return run
 
 
-NAMES = ["tier.cold", "tier.hot", "decay.ephemeral.d7", "rank.role.user"]
+NAMES = ["tier.cold", "tier.hot", "prior.recency.d7", "prior.kind.experience"]
 UNEXERCISED = ["ret.type.ingested", "proj.boost"]
 
 
@@ -618,7 +609,7 @@ def test_check_pair_reports_whether_the_interval_excludes_zero(synthetic_run):
         start_samples=32, max_samples=32, st_ci_target=1.0,
     )
     value, decided, reason = check_pair(
-        sobol, ENDPOINT_SCORE, "tier.cold", "decay.ephemeral.d7"
+        sobol, ENDPOINT_SCORE, "tier.cold", "prior.recency.d7"
     )
     assert isinstance(value, float)
     assert isinstance(decided, bool)
@@ -738,7 +729,7 @@ def test_two_additive_terms_cannot_interact_with_each_other():
 
     def double_counted(x):
         # a enters inside the multiply, b after it -- the same arrangement
-        # as ret.type.* versus rank.type.* around the tier multiply. The
+        # as ret.intent.* versus prior.* around the tier multiply. The
         # factor of 10 gives the multiplicative part enough of the variance
         # that the three claims below separate under plain Monte Carlo; at
         # unit scale they sit inside the sampling noise and the test would

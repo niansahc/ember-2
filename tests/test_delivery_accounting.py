@@ -32,6 +32,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.conftest import stub_both_embed_bindings
+
 from src.context.models import ContextItem, ContextPacket
 from src.context.service import ContextService
 
@@ -158,33 +160,36 @@ def seeded_vault():
     yield vector
 
 
+@pytest.fixture
+def stub_query_embedding(seeded_vault):
+    """Both embedding bindings. See conftest.stub_both_embed_bindings."""
+    with stub_both_embed_bindings(seeded_vault):
+        yield seeded_vault
+
+
 class TestBuildContext:
-    def test_build_context_no_longer_writes_by_itself(self, seeded_vault):
+    def test_build_context_no_longer_writes_by_itself(self, stub_query_embedding):
         """The defect, stated as a test.
 
         A build that writes on its own cannot distinguish a delivery from a
         candidate set, because at that point the slice has not happened.
         """
         service = ContextService()
-        with patch("src.retrieval.semantic_search.embed_text",
-                   return_value=seeded_vault):
-            with patch.object(service, "_update_retrieval_stats") as stats:
-                service.build_context(QUERY)
+        with patch.object(service, "_update_retrieval_stats") as stats:
+            packet = service.build_context(QUERY)
+        assert packet.memory_items, "nothing retrieved; no-write would be vacuous"
         stats.assert_not_called()
 
-    def test_build_context_arms_the_recorder(self, seeded_vault):
+    def test_build_context_arms_the_recorder(self, stub_query_embedding):
         service = ContextService()
-        with patch("src.retrieval.semantic_search.embed_text",
-                   return_value=seeded_vault):
-            packet = service.build_context(QUERY)
+        packet = service.build_context(QUERY)
         assert packet._delivery_recorder is not None
 
-    def test_read_only_arms_nothing(self, seeded_vault):
+    def test_read_only_arms_nothing(self, stub_query_embedding):
         """#206 stays structural: no writer exists to be reached."""
         service = ContextService()
-        with patch("src.retrieval.semantic_search.embed_text",
-                   return_value=seeded_vault):
-            packet = service.build_context(QUERY, read_only=True)
+        packet = service.build_context(QUERY, read_only=True)
+        assert packet.memory_items, "nothing retrieved; the count would be vacuous"
         assert packet._delivery_recorder is None
         packet.begin_render()
         packet.record_rendered(packet.memory_items)

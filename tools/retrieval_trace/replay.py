@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .compose import STAGE_DECAY, STAGE_RETRIEVAL, Composition, compose
+from .compose import STAGE_FINAL, STAGE_RETRIEVAL, Composition, compose
 from .params import ReplayParams
 from .schema import CHANNEL_REFLECTION, CandidateTrace, QueryTrace, TraceRun
 
@@ -65,8 +65,20 @@ def score_query(query: QueryTrace, params: ReplayParams | None = None) -> list[S
 
 
 def _content_filtered(c: CandidateTrace) -> bool:
-    """The filters that read content, never a score. Fixed under perturbation."""
-    return bool(c.filtered_echo_or_meta or c.filtered_low_value or c.deduped_out)
+    """The filters that read metadata or content, never a score.
+
+    Fixed under perturbation, which is exactly why the role predicate belongs
+    here rather than anywhere else: it reads the authorship column and no
+    number, so no scoring parameter can move it. Omitting it was a real
+    fidelity gap -- replay reproduced every score and still delivered
+    assistant turns the shipped pipeline had already dropped.
+    """
+    return bool(
+        c.filtered_echo_or_meta
+        or c.filtered_low_value
+        or c.deduped_out
+        or c.excluded_by_role
+    )
 
 
 def _gate_survivor(scored: ScoredCandidate, query: QueryTrace) -> bool:
@@ -207,7 +219,7 @@ def check_fidelity(run: TraceRun) -> FidelityReport:
         replay = replay_query(query)
         for scored in replay.scored:
             checked += 1
-            captured = scored.candidate.stage_scores[STAGE_DECAY]
+            captured = scored.candidate.stage_scores[STAGE_FINAL]
             if abs(captured - scored.score) > EXACT_TOLERANCE:
                 score_mismatches.append(
                     f"{query.query_id}/{scored.ref}: captured {captured!r} "
@@ -245,20 +257,41 @@ def parameter_coverage(run: TraceRun) -> list[tuple[str, int]]:
     Returns (name, candidates_moved) for every parameter, ascending, so the
     inert ones are the first thing the reader sees.
     """
+    # score_query, not replay_query: this function reads scores and nothing
+    # else. replay_query additionally runs the survivor gates, the content
+    # filters, two sorts, the profile partition and -- on a diversity policy --
+    # a per-candidate shim through the real _select_diverse_memory, all of which
+    # was discarded. At 38 parameters x 36 queries that was ~1400 needless
+    # selection passes per coverage run.
     baseline: dict[str, dict[str, float]] = {}
     for query in run.queries:
-        baseline[query.query_id] = {s.ref: s.score for s in replay_query(query).scored}
+        baseline[query.query_id] = {s.ref: s.score for s in score_query(query)}
+
+    from .ranges import range_for
 
     defaults = run.param_defaults
     results: list[tuple[str, int]] = []
     for name in sorted(defaults):
-        # +1.0 rather than a proportional nudge: some defaults are 0.0, and
-        # a proportional nudge would leave those pinned and report them
-        # inert for a reason that belongs to the probe, not the corpus.
-        params = ReplayParams().with_overrides(**{name: defaults[name] + 1.0})
+        # Range-aware, not a flat +1.0.
+        #
+        # +1.0 was right while every parameter was an additive term near zero:
+        # some defaults ARE 0.0, and a proportional nudge would leave those
+        # pinned and report them inert for a reason belonging to the probe
+        # rather than the corpus. Under ADR-044 most of the vector is
+        # multipliers near 1.0, where +1.0 doubles the parameter and sweeps it
+        # far outside the bound the contract asserts -- so a bounded term
+        # would be probed over territory it can never occupy, and could read
+        # as moving candidates it cannot actually move.
+        #
+        # Each parameter is nudged to the far end of its own declared range
+        # instead, which is the largest change the contract permits it and
+        # therefore the right question to ask of it.
+        spread = range_for(name, defaults[name])
+        nudged = spread.high if defaults[name] < spread.high else spread.low
+        params = ReplayParams().with_overrides(**{name: nudged})
         moved = 0
         for query in run.queries:
-            for scored in replay_query(query, params).scored:
+            for scored in score_query(query, params):
                 if abs(scored.score - baseline[query.query_id][scored.ref]) > EXACT_TOLERANCE:
                     moved += 1
         results.append((name, moved))

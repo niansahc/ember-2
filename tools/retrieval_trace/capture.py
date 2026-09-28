@@ -8,7 +8,7 @@ Two rules hold this together.
 
 1. PREDICATES ARE IMPORTED, NEVER REIMPLEMENTED. Every "did this branch
    fire" question is answered by calling the shipped function --
-   is_question_like, _looks_like_active_work, _matches_relational_query,
+   _looks_like_active_work, _matches_relational_query,
    _parse_age_days, and the rest. Only the CONSTANTS are modeled, in
    params.py. A trace can therefore go stale on a retune, which
    tests/test_retrieval_trace.py catches, but it cannot go stale on a
@@ -16,7 +16,7 @@ Two rules hold this together.
 
 2. EVERY STAGE IS CHECKED AGAINST THE REAL PIPELINE. The stage walk below
    calls ContextRanker.apply_policy, apply_authorship_scoring,
-   apply_project_boost, _score_memory_item and _temporal_decay_weight
+   apply_project_boost and _score_memory_item
    directly and reads the score off the item after each one. Then
    compose.py recomputes the same stages from the recorded activations at
    default parameters, and capture refuses to write a trace where the two
@@ -41,18 +41,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.context.policies import _matches_relational_query, classify_query
+from src.context import prior, role_predicate
 from src.context.ranker import ContextRanker
 from src.context.service import ContextService
 from src.core.config import get_private_vault_path
 from src.retrieval.retrieval_stats import retrieval_stats_disabled
 from src.retrieval.semantic_search import (
-    contains_clarification_language,
     extract_query_terms,
-    is_question_like,
     is_reflective_query,
     is_task_or_work_query,
-    looks_like_concrete_experience,
-    looks_like_summary_or_instruction,
     normalize_text,
 )
 
@@ -65,7 +62,6 @@ from .schema import (
     SCHEMA_VERSION,
     AuthorshipActivation,
     CandidateTrace,
-    DecayActivation,
     PolicyActivation,
     QueryTrace,
     RankActivation,
@@ -148,7 +144,6 @@ def vault_fingerprint() -> str:
 # ---------------------------------------------------------------------------
 
 _RETRIEVAL_TYPE_BRANCHES = {"conversation", "reflection", "memory", "ingested"}
-_RANK_TYPE_BRANCHES = {"conversation", "reflection", "memory", "ingested"}
 
 
 def _retrieval_metadata(item, channel: str) -> dict:
@@ -168,60 +163,12 @@ def _retrieval_metadata(item, channel: str) -> dict:
     return metadata
 
 
-def _role_branch(content: str, metadata: dict) -> str:
-    """source_quality_adjustment's role ladder: metadata first, prefix second."""
-    role = metadata.get("role", "")
-    if role == "user":
-        return "user"
-    if role == "assistant":
-        return "assistant"
-    if content.startswith("user:"):
-        return "user"
-    if content.startswith("assistant:"):
-        return "assistant"
-    return "none"
-
-
 def _content_prefix(content: str) -> str:
     if content.startswith("user:"):
         return "user"
     if content.startswith("assistant:"):
         return "assistant"
     return "none"
-
-
-def _recency_bucket(age_days: int | None) -> str:
-    if age_days is None:
-        return "unparsed"
-    if age_days <= 7:
-        return "d7"
-    if age_days <= 30:
-        return "d30"
-    if age_days <= 90:
-        return "d90"
-    if age_days <= 365:
-        return "d365"
-    return "older"
-
-
-def _decay_activation(item, ranker: ContextRanker, age_days: int | None) -> DecayActivation:
-    mem_type = getattr(item, "memory_type", "") or ""
-    if mem_type in ranker._NO_DECAY_TYPES or age_days is None:
-        return DecayActivation(family="none", bucket="none")
-
-    if mem_type == "reflection":
-        family, tiers = "reflection", ranker._REFLECTION_DECAY
-    elif mem_type in ranker._EPHEMERAL_TYPES:
-        family, tiers = "ephemeral", ranker._EPHEMERAL_DECAY
-    else:
-        family, tiers = "default", ranker._DEFAULT_DECAY
-
-    for max_age, _weight in tiers:
-        if max_age is None:
-            return DecayActivation(family=family, bucket="older")
-        if age_days <= max_age:
-            return DecayActivation(family=family, bucket=f"d{max_age}")
-    return DecayActivation(family="none", bucket="none")
 
 
 def _retrieval_activation(item, channel: str, query: str) -> RetrievalActivation:
@@ -253,18 +200,13 @@ def _retrieval_activation(item, channel: str, query: str) -> RetrievalActivation
         lexical_term_hits=sum(1 for term in query_terms if term in normalized_content),
         lexical_entity_hits=entity_hits,
         type_branch=mem_type if mem_type in _RETRIEVAL_TYPE_BRANCHES else "other",
-        quality_role=_role_branch(normalized_content, metadata),
-        quality_is_question=is_question_like(normalized_content),
-        quality_clarification=contains_clarification_language(normalized_content),
-        quality_experience=looks_like_concrete_experience(normalized_content),
-        quality_summary=looks_like_summary_or_instruction(normalized_content),
         intent_reflective=is_reflective_query(normalized_query),
         intent_task=is_task_or_work_query(normalized_query),
         content_prefix=_content_prefix(normalized_content),
     )
 
 
-def _policy_activation(item, policy, ranker: ContextRanker, age_days: int | None) -> PolicyActivation:
+def _policy_activation(item, policy, ranker: ContextRanker) -> PolicyActivation:
     content = (getattr(item, "content", "") or "").lower()
     metadata = getattr(item, "metadata", {}) or {}
     content_kind = metadata.get("content_kind")
@@ -286,8 +228,6 @@ def _policy_activation(item, policy, ranker: ContextRanker, age_days: int | None
     return PolicyActivation(
         weight_field=weight_field,
         weight_captured=float(getattr(policy, weight_field, 1.0)),
-        recency_bias_captured=float(getattr(policy, "recency_bias", 0.0) or 0.0),
-        recency_bucket=_recency_bucket(age_days),
         prefer_experience_fired=bool(
             getattr(policy, "prefer_experiences", False)
             and (content_kind == "experience" or ranker._looks_like_experience(content))
@@ -320,54 +260,32 @@ def _authorship_activation(item, query: str, project_id: str | None) -> Authorsh
     )
 
 
-def _rank_activation(item, channel: str, ranker: ContextRanker, age_days: int | None) -> RankActivation:
-    content = (getattr(item, "content", "") or "").lower().strip()
-    bucket = _recency_bucket(age_days)
+def _rank_activation(item, channel: str, bucket: str) -> RankActivation:
+    """Which prior factors this candidate takes.
 
-    if channel == CHANNEL_REFLECTION:
-        return RankActivation(
-            reflection_path=True,
-            recency_bucket=bucket,
-            reflection_short=len(content) < 30,
-        )
+    Every branch domain is read from src.context.prior rather than restated
+    here. This file used to reimplement the recency ladder, which broke its own
+    rule 1 -- predicates are imported, never reimplemented -- and was only
+    survivable because the boundaries happened to agree; restating the kind and
+    length domains instead would have been the same mistake with the same
+    excuse. prior.kind_branch and prior.length_branch exist for this caller.
 
+    The reflection path differs by ONE flag, not by which factors apply. It
+    used to be a genuinely separate scoring function -- a 0.95 base discount, a
+    short-reflection penalty, recency at half weight -- so this returned early
+    with none of the memory path's activations. Under ADR-044 both paths call
+    the same prior.assemble, so returning early here dropped the kind and
+    length factors from every reflection candidate. capture's own stage check
+    caught it: pipeline 1.6860 against model 1.6452, a ratio of exactly
+    KIND_USER_CONTENT.
+    """
     metadata = getattr(item, "metadata", {}) or {}
-    item_type = getattr(item, "item_type", "")
-    role = metadata.get("role")
-    content_kind = metadata.get("content_kind")
-
-    if role == "user":
-        role_branch = "user"
-    elif role == "assistant":
-        role_branch = "assistant"
-    elif role in {"tool", "system"}:
-        role_branch = "tool_system"
-    else:
-        role_branch = "none"
-
-    kind_branch = (
-        content_kind
-        if content_kind in {"experience", "user_content", "answer", "question"}
-        else "none"
-    )
-
-    if len(content) < 20:
-        length_branch = "lt20"
-    elif len(content) < 50:
-        length_branch = "lt50"
-    elif len(content) > 1200:
-        length_branch = "gt1200"
-    else:
-        length_branch = "none"
+    content = (getattr(item, "content", "") or "").strip()
 
     return RankActivation(
-        reflection_path=False,
-        type_branch=item_type if item_type in _RANK_TYPE_BRANCHES else "other",
-        role_branch=role_branch,
-        kind_branch=kind_branch,
-        user_prefix=content.startswith("user:"),
-        length_branch=length_branch,
-        tokens_lt5=len(ranker._tokenize(content)) < 5,
+        reflection_path=channel == CHANNEL_REFLECTION,
+        kind_branch=prior.kind_branch(metadata.get("content_kind")),
+        length_branch=prior.length_branch(len(content)),
         recency_bucket=bucket,
     )
 
@@ -411,10 +329,9 @@ def _walk_stages(items, channel, policy, query, project_id, ranker, include_cont
             content_length=len(content),
             content=content if include_content else None,
             retrieval=_retrieval_activation(item, channel, query),
-            policy=_policy_activation(item, policy, ranker, age_days),
+            policy=_policy_activation(item, policy, ranker),
             author=_authorship_activation(item, query, project_id),
-            rank=_rank_activation(item, channel, ranker, age_days),
-            decay=_decay_activation(item, ranker, age_days),
+            rank=_rank_activation(item, channel, ranker._bucket_for_age(age_days)),
         )
 
         # Stage 0: whatever retrieval produced. For memory and profile that
@@ -442,6 +359,13 @@ def _walk_stages(items, channel, policy, query, project_id, ranker, include_cont
         ranker.apply_policy([item], policy)
         trace.stage_scores["policy"] = float(item.score)
 
+        # ADR-044 4a. A membership stage, not a score stage, so it records an
+        # outcome flag and no stage_score. build_context applies it here --
+        # between apply_policy and apply_authorship_scoring -- and this walk
+        # did not, which meant a replay reproduced every score correctly and
+        # still over-delivered assistant turns with nothing to explain why.
+        trace.excluded_by_role = role_predicate.excluded_by_role(item)
+
         ranker.apply_authorship_scoring([item], query)
         trace.stage_scores["authorship"] = float(item.score)
 
@@ -453,9 +377,6 @@ def _walk_stages(items, channel, policy, query, project_id, ranker, include_cont
         else:
             ranker._score_memory_item(item)
         trace.stage_scores["rank"] = float(item.score)
-
-        item.score = float(item.score) * ranker._temporal_decay_weight(item)
-        trace.stage_scores["decay"] = float(item.score)
         trace.composed_score = float(item.score)
 
         walked.append(_Walked(trace=trace, item=item))
@@ -653,7 +574,6 @@ def capture_query(
             "name": policy.name,
             "memory_weight": policy.memory_weight,
             "reflection_weight": policy.reflection_weight,
-            "recency_bias": policy.recency_bias,
             "diversity": policy.diversity,
             "prefer_experiences": policy.prefer_experiences,
             "prefer_active_work": policy.prefer_active_work,

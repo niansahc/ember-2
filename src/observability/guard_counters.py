@@ -117,6 +117,30 @@ def recording_enabled() -> bool:
     return getattr(_local, "pending", None) is not None
 
 
+# Fast negative gate, read before the thread-local in _bump.
+#
+# A threading.local attribute lookup costs ~314ns against ~8ns for a module
+# global, and the gate is paid nine times per candidate inside
+# prior.assemble() alone -- 93% of that function's runtime was the off-switch
+# rather than the arithmetic. This is not a regression introduced by ADR-044:
+# the per-candidate counter volume is unchanged (12 before, 12 after). The
+# refactor concentrated those calls into one function, which is what made a
+# single gate worth adding.
+#
+# A COUNTER, not a bool, and that distinction is load-bearing. FastAPI runs
+# sync endpoints on a threadpool, so two turns can hold scopes concurrently; a
+# bool would be cleared by whichever finished first and silently stop recording
+# for the other. Guarded by a lock because `+= 1` on an int is not atomic under
+# the GIL -- cheap, since scopes open once per turn, not once per counter call.
+#
+# Safe as a NEGATIVE only, by design: zero means nobody anywhere is recording,
+# so skip. Nonzero falls through to the per-thread check, which remains the
+# thing that decides whether THIS thread records. One thread recording must
+# never make another thread's calls record, and it does not.
+_ACTIVE_SCOPES = 0
+_SCOPE_LOCK = threading.Lock()
+
+
 @contextmanager
 def recording(enabled: bool = True):
     """Open a recording scope for one live turn.
@@ -133,12 +157,17 @@ def recording(enabled: bool = True):
         yield False
         return
 
+    global _ACTIVE_SCOPES
     _local.pending = {}
+    with _SCOPE_LOCK:
+        _ACTIVE_SCOPES += 1
     try:
         yield True
     finally:
         pending = _local.pending
         _local.pending = None
+        with _SCOPE_LOCK:
+            _ACTIVE_SCOPES -= 1
         try:
             if pending:
                 flush(pending)
@@ -153,6 +182,8 @@ def recording(enabled: bool = True):
 # ---------------------------------------------------------------------------
 
 def _bump(site: str, kind: str, parent: str | None, evaluations: int, firings: int) -> None:
+    if not _ACTIVE_SCOPES:
+        return
     pending = getattr(_local, "pending", None)
     if pending is None:
         return

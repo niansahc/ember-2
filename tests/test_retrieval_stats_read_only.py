@@ -25,7 +25,7 @@ from unittest.mock import patch
 import pytest
 
 from src.context.service import ContextService
-from tests.conftest import deliver_packet
+from tests.conftest import deliver_packet, stub_both_embed_bindings
 from src.core.config import get_private_vault_path
 from src.memory.write_memory import write_memory
 from src.retrieval.retrieval_stats import (
@@ -85,15 +85,9 @@ def seeded_vault():
 
 @pytest.fixture
 def stub_query_embedding(seeded_vault):
-    # Both bindings. ContextRetriever.retrieve() computes the query
-    # embedding through src.retrieval.embed_memory.embed_text and passes it
-    # down, so patching only the semantic_search binding left the query
-    # vector real while the records stayed stubbed -- cosine near zero. That
-    # was invisible until the main path started passing a min_score floor,
-    # which then excluded every record and emptied the window. The fixture's
-    # own promise is cosine 1.0; this is what makes it true.
-    with patch("src.retrieval.semantic_search.embed_text", return_value=seeded_vault),             patch("src.retrieval.embed_memory.embed_text", return_value=seeded_vault):
-        yield
+    """Both embedding bindings. See conftest.stub_both_embed_bindings."""
+    with stub_both_embed_bindings(seeded_vault):
+        yield seeded_vault
 
 
 @pytest.fixture

@@ -10,26 +10,48 @@ drift when a weight is retuned.
 
   - tier off        -> set item.tier = "hot". ranker reads tier at exactly one
                        place (apply_policy) and nowhere else, so this is exact.
-  - type boost off  -> swap item.item_type to a sentinel during the scoring
-                       call. Inside _score_memory_item, item_type is read once
-                       and used only for the type boost.
   - weight split off-> set policy.reflection_weight = policy.memory_weight.
-  - decay off       -> _temporal_decay_weight returns 1.0 uniformly. NOT
-                       collapsed to _DEFAULT_DECAY, which would strip the
-                       no-decay exemption that `ingested` and `profile` rely on
-                       and can flip delta_T's sign.
+  - prior off       -> prior.assemble returns 1.0, the multiplicative neutral.
+  - role off        -> role_predicate.apply returns its input unchanged.
   - profile privilege off
-                    -> relabel profile as "reference". Both are in
-                       _NO_DECAY_TYPES, so decay is unchanged, but "reference"
-                       is not "profile" so it loses the guaranteed slot, the
-                       type-gate bypass and the tier bypass. Relabelling to a
-                       decaying type instead would have applied a 10x decay
-                       change as a side effect and contaminated the arm.
+                    -> relabel profile as "reference". Both are exempt from
+                       tier decay, so the age curve is unchanged, but
+                       "reference" is not "profile" so it loses the guaranteed
+                       slot, the type-gate bypass and the tier bypass.
 
 The retrieval-stage score is computed here rather than patched, because
 patching `retriever.retrieve` bypasses `semantic_search` entirely -- which
 would silently drop the retrieval-stage half of typing AND make the lexical
 baseline unimplementable. The real scoring functions are called directly.
+
+WHAT ADR-044 DID TO THIS HARNESS
+--------------------------------
+Three levers this file ablated no longer exist, and one arm was measuring a
+pipeline that had stopped shipping.
+
+`A_decay-off` patched `_temporal_decay_weight`, which is deleted: the per-type
+age curve is absorbed into TieringService as a nightly halflife, so it is an
+INPUT to tier rather than a query-time multiplier and is not patchable at this
+layer at all. `A_recency-off` patched `_recency_boost`, which no longer returns
+a number. `A_quality-off` patched `source_quality_adjustment`, which
+`semantic_search` no longer calls; its role half is now a hard predicate.
+
+All three are replaced by `A_prior-off`. That is not a renaming: recency,
+content_kind and length were three separable levers and are now one bounded
+multiplier, so an arm per mechanism would be reporting a separability the
+system no longer has. The ENTANGLED_LEVERS table that recorded recency and
+decay as inseparable-by-construction is deleted with them: they are no longer
+two mechanisms.
+
+`A0_FULL` also needed correcting rather than migrating. It added
+`memory_type_adjustment` and `source_quality_adjustment` to the retrieval score
+after `semantic_search` had stopped calling either, so the reference arm modelled
+a stage that no longer existed and `assert_pristine` certified it. Those two terms
+now live in `A_PRE_ADR044_RETRIEVAL`, whose job is to be the before-measurement
+that Task 3's threshold comparison needs. That arm reconstructs the retrieval
+stage only -- the pre-ADR-044 ranker pile is deleted source and cannot be
+rebuilt here -- which is sufficient, because the thresholds it exists to measure
+(`_apply_type_gate`'s 0.25 floor) sit between retrieval and the ranker.
 """
 
 from __future__ import annotations
@@ -52,11 +74,6 @@ from src.retrieval.semantic_search import (
 from .corpus import FIXTURES, FIXTURES_BY_ID, Fixture, Stratum
 from .metrics import Delivered
 
-# An item_type that scores +0.00 in _score_memory_item's type ladder. Any
-# unlisted value falls through; this one is named so it cannot be mistaken for
-# a real type in a debugger.
-NEUTRAL_ITEM_TYPE = "__type_ablated__"
-
 # query_intent_adjustment mixes a type-keyed term with a content-prefix term.
 # Passing a type that both of its branches ignore isolates the prefix term, so
 # the type contribution can be removed by subtraction rather than by
@@ -71,43 +88,52 @@ class Arm:
     """One treatment.
 
     Retrieval-stage switches (what the harness adds to the base cosine):
-      type_terms     -- memory_type_adjustment + the type half of
-                        query_intent_adjustment
+      type_terms     -- the type half of query_intent_adjustment. No longer
+                        includes memory_type_adjustment, which semantic_search
+                        stopped calling (ADR-044).
       lexical_terms  -- lexical_relevance_bonus (substring, term hits, entity)
-      source_quality -- source_quality_adjustment (role/content heuristics)
+                        plus the content-prefix half of query_intent_adjustment
 
     Post-retrieval switches:
       ranker_stages  -- run the ranker at all. False is the naive baseline:
                         deliver by retrieval score alone.
-      type_scoring   -- policy weight split + _score_memory_item type boost
+      type_scoring   -- the policy weight split. This used to also cover
+                        _score_memory_item's type ladder, which is gone.
       type_policy    -- type-gate eligible/suppress filtering + profile
                         guaranteed slots
       tier_scoring   -- cold/warm multipliers
-      decay          -- temporal decay curves
-      recency        -- _recency_boost, the ADDITIVE freshness bonus
+      prior          -- the bounded metadata prior (content_kind, length,
+                        recency). One switch, because it is one multiplier.
+      role_predicate -- assistant-authored exclusion (ADR-044 4a)
 
-    `recency` and `decay` are two different mechanisms and need separate
-    switches. _recency_boost adds a bonus for being new (ranker.py:46, :317,
-    :340, scaled by policy.recency_bias); _temporal_decay_weight multiplies a
-    penalty for being old, and exempts profile/reference/ingested. Ablating
-    decay leaves the recency bonus fully intact, which is why the recency-bait
-    distractors showed a measured swing of exactly 0.000 under A_decay-off:
-    they were baiting a lever no arm removed, so their leakage counts could
-    not attribute to anything. The corpus test that pins bait reachability is
-    what surfaced that.
+    Baseline switch:
+      pre_adr044_retrieval
+                     -- add back memory_type_adjustment and
+                        source_quality_adjustment, reconstructing the retrieval
+                        stage as it shipped before 7d04e49. Only meaningful on
+                        A_PRE_ADR044_RETRIEVAL; it is a before-measurement, not
+                        an ablation, which is why it defaults False and every
+                        other arm leaves it alone.
+
+    `prior` is deliberately ONE switch where there were three. Under ADR-044
+    recency, content_kind and length compose multiplicatively inside a single
+    bounded term, so there is no arm that removes the freshness bonus while
+    leaving the length penalty -- not because the fixtures cannot express it
+    but because the pipeline no longer does. An arm per mechanism would report
+    a separability that does not exist.
     """
 
     name: str
     label: str
     type_terms: bool = True
     lexical_terms: bool = True
-    source_quality: bool = True
     ranker_stages: bool = True
     type_scoring: bool = True
     type_policy: bool = True
     tier_scoring: bool = True
-    decay: bool = True
-    recency: bool = True
+    prior: bool = True
+    role_predicate: bool = True
+    pre_adr044_retrieval: bool = False
 
 
 ARMS: tuple[Arm, ...] = (
@@ -131,14 +157,19 @@ ARMS: tuple[Arm, ...] = (
         tier_scoring=False,
     ),
     Arm(
-        name="A_decay-off",
-        label="temporal decay off (second type-keyed age mechanism)",
-        decay=False,
+        name="A_prior-off",
+        label="bounded metadata prior off (content_kind, length, recency)",
+        prior=False,
     ),
     Arm(
-        name="A_recency-off",
-        label="additive freshness bonus off (distinct from temporal decay)",
-        recency=False,
+        name="A_role-off",
+        label="assistant-exclusion predicate off (ADR-044 4a)",
+        role_predicate=False,
+    ),
+    Arm(
+        name="A_PRE_ADR044_RETRIEVAL",
+        label="shipped, plus the retrieval-stage terms ADR-044 removed",
+        pre_adr044_retrieval=True,
     ),
     # The lexical and quality terms needed isolating arms of their own. Without
     # them the lexical, entity and experience distractor classes had no arm that
@@ -154,11 +185,6 @@ ARMS: tuple[Arm, ...] = (
         lexical_terms=False,
     ),
     Arm(
-        name="A_quality-off",
-        label="source-quality (role and content-kind) scoring off",
-        source_quality=False,
-    ),
-    Arm(
         name="A_T-off_H-off",
         label="typed scoring and tiering both off",
         type_terms=False,
@@ -170,7 +196,6 @@ ARMS: tuple[Arm, ...] = (
         label="bare cosine, no ranker",
         type_terms=False,
         lexical_terms=False,
-        source_quality=False,
         ranker_stages=False,
     ),
     Arm(
@@ -178,7 +203,6 @@ ARMS: tuple[Arm, ...] = (
         label="cosine plus lexical and entity terms, no typing",
         type_terms=False,
         lexical_terms=True,
-        source_quality=False,
         ranker_stages=False,
     ),
 )
@@ -209,14 +233,16 @@ def retrieval_score(fixture: Fixture, stratum: Stratum, arm: Arm) -> float:
     """What semantic_search would have produced for this fixture under this arm.
 
     Base cosine is stipulated by the corpus; every adjustment is the real
-    production function.
+    production function. Which adjustments semantic_search actually calls is
+    the thing that changed under ADR-044, so this function is the harness's
+    fidelity boundary: if it adds a term the shipped search does not, every
+    number downstream describes a pipeline nobody is running.
     """
     normalized_query = " ".join(stratum.query.lower().split())
     normalized_content = " ".join(fixture.text.lower().split())
     score = stratum.cosine(fixture.id)
 
     if arm.type_terms:
-        score += memory_type_adjustment(fixture.memory_type)
         score += _type_component(stratum.query, fixture.memory_type, normalized_content)
 
     # The content-prefix half of query_intent_adjustment is role/lexical, not
@@ -232,7 +258,12 @@ def retrieval_score(fixture: Fixture, stratum: Stratum, arm: Arm) -> float:
             raw_query=stratum.query,
         )
 
-    if arm.source_quality:
+    # The before-measurement, not an ablation. These two are the terms ADR-044
+    # removed from semantic_search; adding them back here reconstructs the
+    # retrieval score as it shipped at 52bec4f, which is what the threshold
+    # comparison needs a baseline for.
+    if arm.pre_adr044_retrieval:
+        score += memory_type_adjustment(fixture.memory_type)
         score += source_quality_adjustment(
             normalized_content, {"role": fixture.role} if fixture.role else {}
         )
@@ -437,24 +468,6 @@ def _patched_type_gate(arm: Arm):
     return _gate
 
 
-def _patched_score_memory_item(original, arm: Arm):
-    """Neutralise the type boost by swapping item_type for the duration of the
-    call. item_type is read once inside _score_memory_item and used only for
-    the type ladder, so this removes exactly that term and nothing else."""
-
-    def _scored(self, item):
-        if arm.type_scoring:
-            return original(self, item)
-        real_type = item.item_type
-        item.item_type = NEUTRAL_ITEM_TYPE
-        try:
-            return original(self, item)
-        finally:
-            item.item_type = real_type
-
-    return _scored
-
-
 # ---------------------------------------------------------------------------
 # Running one cell
 # ---------------------------------------------------------------------------
@@ -521,9 +534,6 @@ def run_cell(stratum: Stratum, arm: Arm) -> CellResult:
 
     service = ContextService()
     policy = _policy_for(stratum, arm)
-    original_score = ContextRanker._score_memory_item
-    original_decay = ContextRanker._temporal_decay_weight
-    original_recency = ContextRanker._recency_boost
     original_rank = ContextRanker.rank
     captured: list[Delivered] = []
 
@@ -546,23 +556,27 @@ def run_cell(stratum: Stratum, arm: Arm) -> CellResult:
         patch.object(service.retriever, "retrieve", side_effect=_retrieve),
         patch("src.context.service.classify_query", return_value=policy),
         patch.object(ContextService, "_apply_type_gate", _patched_type_gate(arm)),
-        patch.object(
-            ContextRanker,
-            "_score_memory_item",
-            _patched_score_memory_item(original_score, arm),
-        ),
         patch.object(ContextRanker, "rank", _capturing_rank),
     ]
-    if not arm.decay:
+    if not arm.prior:
+        # 1.0, not 0.0: the prior is MULTIPLICATIVE, so the neutral element is
+        # one. This is the inverse of the note that used to stand here for
+        # _recency_boost, where the neutral was zero because the term was
+        # additive -- the same mechanism, now composed differently, needs the
+        # opposite constant. Getting it wrong would zero every score rather
+        # than remove a term.
+        #
+        # Patched at src.context.prior.assemble because the ranker holds a
+        # module reference (`from src.context import prior`) and calls through
+        # it, so patching the attribute on the module reaches the call site.
         stack.append(
-            patch.object(ContextRanker, "_temporal_decay_weight", lambda self, item: 1.0)
+            patch("src.context.prior.assemble", lambda **kwargs: 1.0)
         )
-    if not arm.recency:
-        # 0.0, not 1.0: _recency_boost is ADDITIVE, so the neutral element is
-        # zero. Returning 1.0 would hand every record a flat bonus and change
-        # the scale rather than remove the mechanism.
+    if not arm.role_predicate:
+        # Identity on the list: this is a SELECTION lever, not a score one, so
+        # its neutral element is "change no membership" rather than any number.
         stack.append(
-            patch.object(ContextRanker, "_recency_boost", lambda self, timestamp: 0.0)
+            patch("src.context.service.role_predicate.apply", lambda items: items)
         )
 
     for ctx in stack:
@@ -580,9 +594,6 @@ def run_cell(stratum: Stratum, arm: Arm) -> CellResult:
     finally:
         for ctx in reversed(stack):
             ctx.stop()
-        ContextRanker._score_memory_item = original_score
-        ContextRanker._temporal_decay_weight = original_decay
-        ContextRanker._recency_boost = original_recency
         ContextRanker.rank = original_rank
 
     return CellResult(
@@ -643,33 +654,38 @@ def residual_quota(stratum: Stratum, arm: Arm, delivered: list[Delivered]) -> di
 LEVER_FOR_CLASS: dict[str, str] = {
     "type_boost_bait": "A_T-off_scoring",
     "reflection_weight_bait": "A_T-off_scoring",
-    "decay_bait": "A_decay-off",
-    "recency_bait": "A_recency-off",
+    # decay, recency and experience all resolve to the prior now. Three
+    # classes, one lever, because ADR-044 merged the three mechanisms they
+    # were designed to bait into a single bounded multiplier. The corpus still
+    # distinguishes them as baits; the pipeline no longer distinguishes them
+    # as levers, and the report should say the second thing rather than imply
+    # the first.
+    "decay_bait": "A_prior-off",
+    "recency_bait": "A_prior-off",
+    "experience_bait": "A_prior-off",
     "tier_bait": "A_H-off",
     "lexical_bait": "A_lexical-off",
     "entity_bait": "A_lexical-off",
-    "experience_bait": "A_quality-off",
 }
 
-# Recency and decay are NOT separable by construction, and no corpus can make
-# them so. Both key on the same input -- the record's age -- but pull in
-# opposite directions on different sides of the pair: the additive freshness
-# bonus lifts a new distractor, and the multiplicative decay penalty pushes down
-# the older relevant record it displaces. A fresh bait is therefore helped twice
-# over by two mechanisms that a minimal pair cannot tell apart, because holding
-# age constant disables both at once. This is a property of the pipeline, not a
-# limitation of the fixtures, and the report says so rather than tuning it away.
-ENTANGLED_LEVERS: tuple[frozenset[str], ...] = (
-    frozenset({"A_recency-off", "A_decay-off"}),
-)
-
-
-def _entangled_with(arm_name: str) -> set[str]:
-    out = {arm_name}
-    for group in ENTANGLED_LEVERS:
-        if arm_name in group:
-            out |= set(group)
-    return out
+# An ENTANGLED_LEVERS table stood here, recording A_recency-off and A_decay-off
+# as inseparable by construction: two mechanisms keyed on the same input (age)
+# pulling opposite ways, which no minimal pair could tell apart because holding
+# age constant disabled both. ADR-044 decision 3 removed the premise -- there is
+# no longer an additive freshness bonus and a multiplicative decay penalty, only
+# one multiplier, with the compounding curve moved to a nightly tier input.
+#
+# The table is deleted rather than emptied. An empty one kept three things alive
+# that could no longer fire: a helper that always returned its own argument, an
+# "entangled" row key that was unconditionally False, and a caveat block in
+# report.py that could never render. A reader had to trace three files to learn
+# the flag was dead.
+#
+# The entanglement was not solved by better fixtures; the two mechanisms stopped
+# being two. What replaces it is coarser, not sharper -- A_prior-off removes
+# recency, content_kind and length together, so those three are not separable
+# either. That is encoded above, as three classes sharing one arm, which says it
+# where a reader is already looking.
 
 
 def measure_lever_attribution(stratum: Stratum) -> list[dict]:
@@ -744,8 +760,6 @@ def measure_lever_attribution(stratum: Stratum) -> list[dict]:
                 "labelled_swing": swings[target],
                 "dominant_lever": dominant,
                 "dominant_swing": swings[dominant],
-                "entangled": dominant != target
-                and dominant in _entangled_with(target),
                 "swings": swings,
             }
         )

@@ -236,14 +236,18 @@ class TestCorpusValidity:
 
     @pytest.mark.skip(
         reason=(
-            "ADR-015 amendment step 3 (cold as weight, COLD_MULTIPLIER=0.3) "
-            "made d03/d04 (ingested/cold, decay_bait) reachable for the "
-            "first time -- previously score=0.0 kept them from outranking "
-            "any relevant record, so this check never ran for them. Now "
-            "reachable, it correctly finds A_decay-off cannot move them "
-            "(ingested is decay-exempt, always was); their real dominant "
-            "lever is A_quality-off. Corpus recalibration, not a ranker "
-            "bug -- see issue #184."
+            "Corpus recalibration, not a ranker bug -- see issue #184. "
+            "ADR-015 amendment step 3 made d03/d04 (ingested/cold, "
+            "decay_bait) reachable for the first time, and this check then "
+            "correctly found that no arm could move them: ingested is exempt "
+            "from the age curve and always was. ADR-044 did not fix that and "
+            "narrowed the lever set further -- the three arms whose absence "
+            "this test was written to catch (decay, recency, quality) are now "
+            "one arm, A_prior-off, because the mechanisms were merged into a "
+            "single bounded multiplier. So a bait for any one of the three "
+            "cannot be separated from the other two by construction, which "
+            "is a stronger reason to recalibrate the corpus than the original "
+            "one and not something the lever set can be extended to fix."
         )
     )
     def test_every_designed_bait_is_reachable_by_its_lever(self):
@@ -255,9 +259,15 @@ class TestCorpusValidity:
         could never attribute to anything -- it would read zero whether the
         mechanism were airtight or wide open. That is how the three missing arms
         were found: recency baits measured exactly 0.000 under every arm,
-        because _recency_boost is a different mechanism from
-        _temporal_decay_weight and nothing ablated it; the lexical, entity and
-        experience classes had the same problem.
+        because the additive freshness bonus was a different mechanism from the
+        multiplicative decay penalty and nothing ablated it; the lexical,
+        entity and experience classes had the same problem.
+
+        Under ADR-044 those two age mechanisms are one bounded multiplier, and
+        the recency, decay and experience baits all resolve to A_prior-off. The
+        gap this test found is closed by consolidation rather than by adding
+        arms -- at the cost of the three no longer being separable from each
+        other at all.
 
         What is NOT asserted here is that the labelled lever is the DOMINANT
         one. Several fixtures are carried by a lever other than their label --

@@ -304,27 +304,16 @@ def render_report(raw: dict) -> tuple[str, dict]:
     add("")
     add(f"{'bait':32} {'class':22} {'labelled':>9} {'dominant lever':>18} {'swing':>7}")
     attribution = arms[REFERENCE_ARM].get("attribution", {})
-    entangled_rows = 0
     for stratum_name, rows in attribution.items():
         for row in rows:
-            flag = " *" if row.get("entangled") else ""
-            entangled_rows += 1 if row.get("entangled") else 0
             add(
                 f"{row['bait'][:32]:32} {row['class']:22} "
                 f"{row['labelled_swing']:+9.3f} "
-                f"{row['dominant_lever']:>18} {row['dominant_swing']:+7.3f}{flag}"
+                f"{row['dominant_lever']:>18} {row['dominant_swing']:+7.3f}"
             )
-    if entangled_rows:
-        add("")
-        add("  * recency and decay are NOT separable by construction, and no corpus")
-        add("    can make them so. Both key on the same input -- the record's age --")
-        add("    but act on opposite sides of the pair: the additive freshness bonus")
-        add("    lifts the fresh distractor, and the multiplicative decay penalty")
-        add("    pushes down the older relevant record it displaces. A fresh bait is")
-        add("    helped twice by two mechanisms a minimal pair cannot tell apart,")
-        add("    because holding age constant disables both at once. That is a")
-        add("    property of the pipeline, not a limit of these fixtures, and it is")
-        add("    printed rather than tuned away.")
+    # A recency-versus-decay entanglement caveat printed here until ADR-044
+    # merged those two mechanisms into one term. Its flag could no longer fire,
+    # so the block is gone with it -- see arms.py where the table used to be.
 
     add("")
     add("-" * 78)
@@ -334,10 +323,12 @@ def render_report(raw: dict) -> tuple[str, dict]:
         ("typing, scoring only     ", "A_T-off_scoring"),
         ("typing, incl. gating     ", "A_T-off_policy"),
         ("tiering                  ", "A_H-off"),
-        ("temporal decay           ", "A_decay-off"),
-        ("recency bonus            ", "A_recency-off"),
+        # One row where there were three: ADR-044 merged recency,
+        # content_kind and length into one bounded multiplier, so there is
+        # no separate decay or source-quality cost left to report.
+        ("metadata prior           ", "A_prior-off"),
+        ("role predicate           ", "A_role-off"),
         ("lexical and entity terms ", "A_lexical-off"),
-        ("source quality           ", "A_quality-off"),
     ):
         a = summaries[arm_name]["aggregates"]
         d_ranked = a["ranked_ndcg_at_6"]

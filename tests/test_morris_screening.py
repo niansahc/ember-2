@@ -41,6 +41,7 @@ from tools.retrieval_trace.morris import (
 )
 from tools.retrieval_trace.params import ReplayParams, default_params
 from tools.retrieval_trace.ranges import (
+    FAMILY_BOUNDED,
     ADDITIVE_FLOOR,
     FAMILY_ADDITIVE,
     FAMILY_MULTIPLIER,
@@ -51,7 +52,6 @@ from tools.retrieval_trace.ranges import (
 from tools.retrieval_trace.schema import (
     SCHEMA_VERSION,
     CandidateTrace,
-    DecayActivation,
     PolicyActivation,
     QueryTrace,
     RankActivation,
@@ -74,9 +74,6 @@ def _candidate(
     item_type: str = "conversation",
     tier: str = "hot",
     raw_cosine: float = 0.4,
-    role: str = "user",
-    decay_family: str = "ephemeral",
-    decay_bucket: str = "d7",
     policy_name: str = "default",
     content: str = "a synthetic candidate body of a perfectly ordinary length",
 ) -> CandidateTrace:
@@ -98,23 +95,16 @@ def _candidate(
             raw_cosine=raw_cosine,
             lexical_term_hits=2,
             type_branch=memory_type if memory_type in {"conversation", "reflection"} else "other",
-            quality_role=role,
-            quality_experience=True,
         ),
         policy=PolicyActivation(
             weight_field="memory_weight",
             weight_captured=1.0,
-            recency_bias_captured=0.0,
-            recency_bucket="d7",
             tier_branch="profile_bypass" if memory_type == "profile" else tier,
         ),
         rank=RankActivation(
-            type_branch=item_type if item_type in {"conversation", "reflection"} else "other",
-            role_branch=role if role in {"user", "assistant"} else "none",
             kind_branch="experience",
             recency_bucket="d7",
         ),
-        decay=DecayActivation(family=decay_family, bucket=decay_bucket),
     )
     # Stage scores are what capture would have recorded: the model at
     # shipped defaults. Building them any other way would make the fixture
@@ -174,17 +164,17 @@ def synthetic_run() -> TraceRun:
         [
             _candidate("m0", raw_cosine=0.55, tier="hot"),
             _candidate("m1", raw_cosine=0.42, tier="cold"),
-            _candidate("m2", raw_cosine=0.31, tier="hot", role="assistant"),
+            _candidate("m2", raw_cosine=0.31, tier="hot"),
             _candidate("m3", raw_cosine=0.28, memory_type="profile", item_type="profile"),
         ],
     )
     q2 = _query(
         "q2",
         [
-            _candidate("m0", raw_cosine=0.50, tier="cold", decay_bucket="older"),
+            _candidate("m0", raw_cosine=0.50, tier="cold"),
             _candidate("m1", raw_cosine=0.47, tier="hot"),
             _candidate("m2", raw_cosine=0.45, memory_type="reflection",
-                       item_type="reflection", decay_family="reflection", decay_bucket="d30"),
+                       item_type="reflection"),
         ],
     )
     run = _run([q1, q2])
@@ -203,19 +193,66 @@ def synthetic_run() -> TraceRun:
 # Ranges: derived from each parameter's own scale
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize(
-    "name",
-    ["tier.cold", "tier.hot", "auth.mixed", "decay.ephemeral.d7", "refl.base_discount",
-     "refl.recency_scale"],
-)
+@pytest.mark.parametrize("name", ["auth.mixed", "auth.unknown", "auth.first_person"])
 def test_multiplier_family_is_swept_over_the_unit_interval(name):
+    """Only the authorship weights are in this family now.
+
+    The tier weights and the reflection discount used to be here, swept over
+    [0, 1]. ADR-044 brought both under a stated contract, so they moved to
+    FAMILY_BOUNDED and are swept over the contract interval instead. The
+    authorship multiplier stays: it is a gate rather than a class constant and
+    the contract does not cover it. (third_party, the 0.0 arm that made the
+    [0, 1] span obviously right, was retired by #218 for having no population;
+    the remaining arms still span a fraction's range.)
+    """
     parameter = range_for(name, default_params()[name])
     assert parameter.family == FAMILY_MULTIPLIER
     assert (parameter.low, parameter.high) == (0.0, 1.0)
 
 
 @pytest.mark.parametrize(
-    "name", ["ret.type.conversation", "rank.role.assistant", "recency.d7", "proj.boost"]
+    "name",
+    ["prior.kind.experience", "prior.recency.d7", "prior.len.lt50",
+     "prior.reflection_discount"],
+)
+def test_prior_parameters_are_swept_inside_the_contract(name):
+    """Sweeping a bounded term outside its bound measures a forbidden system.
+
+    Two failures this prevents, and they point in opposite directions. [0, 1]
+    cannot express prior.kind.experience at 1.0581, so the shipped value would
+    fall outside its own sweep range. And sweeping down to 0.0 would let one
+    metadata term annihilate a score, which is the unbounded authority the
+    whole contract exists to remove -- a term screened there can top the
+    sensitivity table for movement it is not permitted to make.
+    """
+    from src.context import prior
+
+    parameter = range_for(name, default_params()[name])
+    assert parameter.family == FAMILY_BOUNDED
+    assert (parameter.low, parameter.high) == (prior.PRIOR_MIN, prior.PRIOR_MAX)
+    assert parameter.low <= parameter.default <= parameter.high
+
+
+@pytest.mark.parametrize("name", ["tier.cold", "tier.warm", "tier.hot"])
+def test_tier_parameters_are_swept_up_to_one_only(name):
+    """Tier's ceiling is 1.0, not the prior's ceiling.
+
+    The contract splits its budget so tier only ever discounts and the prior
+    carries the whole upward half. Screening tier above 1.0 would let a cold
+    record be PROMOTED for being cold, which is not a retune of the contract
+    but a different contract.
+    """
+    from src.context import prior
+
+    parameter = range_for(name, default_params()[name])
+    assert parameter.family == FAMILY_BOUNDED
+    assert (parameter.low, parameter.high) == (prior.TIER_MIN, 1.0)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["ret.intent.reflective_conversation", "ret.lexical.substring",
+     "pol.prefer_experience", "proj.boost"],
 )
 def test_additive_family_is_swept_over_its_own_magnitude(name):
     default = default_params()[name]
@@ -228,7 +265,7 @@ def test_additive_family_is_swept_over_its_own_magnitude(name):
 
 def test_a_zero_default_still_gets_a_range_to_move_in():
     """A proportional rule alone would pin every zero-valued constant."""
-    parameter = range_for("rank.type.ingested", 0.0)
+    parameter = range_for("ret.intent.task_ingested", 0.0)
     assert parameter.width == pytest.approx(2 * ADDITIVE_FLOOR)
     assert parameter.low < 0 < parameter.high
 
@@ -240,6 +277,10 @@ def test_no_uniform_range_across_families():
     for parameter in ranges.values():
         widths[parameter.family].add(round(parameter.width, 6))
     assert widths[FAMILY_MULTIPLIER] == {1.0}
+    # The bounded family is two widths, not one: the prior's interval and
+    # tier's narrower one. Asserting a single width here would forbid the
+    # asymmetry the contract's even split requires.
+    assert len(widths[FAMILY_BOUNDED]) == 2
     assert len(widths[FAMILY_ADDITIVE]) > 1, (
         "every additive parameter got the same width; the range is not "
         "deriving from each parameter's own scale"
@@ -253,7 +294,7 @@ def test_unit_mapping_round_trips():
 
 def test_family_classification_covers_every_parameter():
     for name in default_params():
-        assert family_of(name) in {FAMILY_ADDITIVE, FAMILY_MULTIPLIER}
+        assert family_of(name) in {FAMILY_ADDITIVE, FAMILY_MULTIPLIER, FAMILY_BOUNDED}
 
 
 # ---------------------------------------------------------------------------
@@ -344,11 +385,15 @@ def test_a_step_that_moves_two_factors_is_rejected():
 def test_unexercised_parameters_are_identified(synthetic_run):
     unexercised = find_unexercised(synthetic_run)
     # No ingested candidates and no project id anywhere in the fixture.
-    assert "ret.type.ingested" in unexercised
+    # ret.type.ingested was the ingested probe here and is retired; the
+    # surviving ingested-keyed parameter is the intent term. A retired
+    # parameter would have satisfied this assertion for a third reason -- no
+    # call site -- which is exactly the conflation this test exists to stop.
+    assert "ret.intent.reflective_ingested" in unexercised
     assert "proj.boost" in unexercised
     # Exercised, and must not appear.
     assert "tier.cold" not in unexercised
-    assert "ret.type.conversation" not in unexercised
+    assert "prior.recency.d7" not in unexercised
 
 
 def test_unexercised_parameters_are_excluded_from_the_ranking(synthetic_run):
@@ -408,12 +453,48 @@ def test_evaluation_count_is_r_times_k_plus_one(synthetic_run):
     assert screening.evaluations == 3 * (len(screening.screened) + 1)
 
 
-def test_a_dominant_parameter_outranks_a_marginal_one(synthetic_run):
-    """Sanity anchor: tier.cold multiplies whole scores, the token floor
-    subtracts a small constant from short records the fixture does not have."""
+def test_query_dependent_signal_now_outranks_query_independent_metadata(synthetic_run):
+    """The inversion ADR-044 set out to produce, measured.
+
+    This test used to read `ranked.index("tier.cold") < ranked.index(...)`,
+    anchored on tier.cold being the dominant parameter in the vector. It was,
+    and it no longer is -- not because the screening changed but because the
+    contract did. Under the old ranges tier.cold swept [0, 1], a width of 1.0;
+    under the bound it sweeps [0.9339, 1.0], a width of 0.066, which is among
+    the narrowest in the table.
+
+    So the anchor is inverted rather than repaired. On this fixture the
+    ordering is:
+
+        ret.lexical.term_hit    0.1296   query-DEPENDENT
+        prior.kind.experience   0.0580   query-independent, bounded
+        prior.recency.d7        0.0541   query-independent, bounded
+        tier.hot                0.0219
+        tier.cold               0.0110
+        tier.profile_bypass     0.0030
+
+    A query-dependent term at the top and tier near the bottom is the whole
+    point of the contract: "a prior permitted to move a record further than
+    the entire observable similarity range is not a tiebreaker, it is the
+    ranking signal." Before this change the metadata swung 0.98 against a
+    cosine spread of 0.0815, roughly 12:1. This asserts the relation, not the
+    magnitudes, so it survives a re-derivation of the prior but fails if
+    metadata regains authority over similarity.
+    """
     screening = screen(synthetic_run, trajectories=6, levels=8, seed=15)
     ranked = [r.name for r in screening.ranked(ENDPOINT_SCORE)]
-    assert ranked.index("tier.cold") < ranked.index("ret.quality.not_question")
+
+    assert ranked.index("ret.lexical.term_hit") < ranked.index("tier.cold"), (
+        "a query-independent tier weight outranks the lexical term; metadata "
+        "has regained authority over similarity"
+    )
+    # Only that one relation is asserted. `prior.kind.experience` above
+    # `tier.cold` was asserted here too and has been dropped: both are
+    # query-independent bounded terms, so their order against each OTHER
+    # carries no contract meaning and is a fixture artefact -- and it would
+    # break on any re-derivation of the prior's magnitudes (issue #250 proposes
+    # exactly that) without a defect behind it. The docstring's claim that this
+    # test survives a re-derivation was false of that line.
 
 
 def test_a_score_only_parameter_is_reported_as_no_effect_on_delivery(synthetic_run):
@@ -518,8 +599,15 @@ def test_the_delivery_endpoint_moves_when_delivery_moves(synthetic_run):
 def test_the_score_endpoint_responds_to_a_score_parameter(synthetic_run):
     evaluator = EndpointEvaluator(run=synthetic_run)
     baseline = evaluator.evaluate(ReplayParams())[ENDPOINT_SCORE]
+    # prior.kind.experience, raised to the contract ceiling. Every candidate
+    # in the fixture carries kind_branch="experience", so this moves all of
+    # them. Its default (1.0581) is below PRIOR_MAX, which is what makes the
+    # perturbation a lift rather than a no-op -- the previous probe set
+    # prior.recency.unparsed to 1.0, which is already its default.
+    from src.context import prior
+
     lifted = evaluator.evaluate(
-        ReplayParams().with_overrides(**{"rank.type.conversation": 1.0})
+        ReplayParams().with_overrides(**{"prior.kind.experience": prior.PRIOR_MAX})
     )[ENDPOINT_SCORE]
     assert lifted > baseline
 

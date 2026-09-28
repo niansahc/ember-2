@@ -47,6 +47,8 @@ INSTRUMENTED_MODULES = (
     "src/context/ranker.py",
     "src/context/retriever.py",
     "src/context/low_value.py",
+    "src/context/prior.py",
+    "src/context/role_predicate.py",
     "src/retrieval/semantic_search.py",
     "src/retrieval/vector_index.py",
 )
@@ -54,29 +56,24 @@ INSTRUMENTED_MODULES = (
 _RECORDERS = {"count", "branch", "reached"}
 
 
-def _decay_buckets(tiers) -> tuple[str, ...]:
-    """Bucket arm names for one decay ladder, in the ladder's own terms."""
-    return tuple("older" if max_age is None else f"d{max_age}" for max_age, _ in tiers)
-
-
 def _dynamic_arms() -> dict[str, tuple[str, ...]]:
-    from src.context.ranker import ContextRanker
+    from src.context.prior import _KIND_FACTORS, _LENGTH_FACTORS, RECENCY
 
     return {
+        # prior.py: all three arm domains are read off the prior's own term
+        # tables, for the reason the decay arms used to be read off the decay
+        # ladders -- a copied domain drifts silently and then the inventory
+        # reports a missing arm that does not exist, or misses one that does.
+        # The tables include their own "none" identity entry, so a candidate
+        # taking no term is a named arm rather than a fall-through.
+        "prior.kind": tuple(_KIND_FACTORS),
+        "prior.length": tuple(_LENGTH_FACTORS),
         # service.py: the group names are the literal tuple the selection
         # loop iterates.
         "diversity.group_yielded": ("conversation", "ingested", "other"),
         # service.py: the two selection modes, chosen by policy.diversity.
         "selection.mode": ("diversity", "score_order"),
-        # ranker.py: the three decay families and the ladder each one uses.
-        "ranker.decay.family": ("reflection", "ephemeral", "default"),
-        # Two levels: the site name carries the family, the arm carries the
-        # bucket, so a bucket that only the ephemeral ladder has is not
-        # reported as missing from the default one.
-        "ranker.decay.bucket": ("reflection", "ephemeral", "default"),
-        "ranker.decay.bucket.reflection": _decay_buckets(ContextRanker._REFLECTION_DECAY),
-        "ranker.decay.bucket.ephemeral": _decay_buckets(ContextRanker._EPHEMERAL_DECAY),
-        "ranker.decay.bucket.default": _decay_buckets(ContextRanker._DEFAULT_DECAY),
+        "prior.recency": tuple(RECENCY),
         # ranker.py: the authorship multiplier keys, plus the arm taken by
         # a value outside that set.
         # third_party retired in #218; an unreadable tag takes the

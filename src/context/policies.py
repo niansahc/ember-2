@@ -69,7 +69,17 @@ class ContextPolicy:
     name: str
     memory_weight: float = 1.0
     reflection_weight: float = 1.0
-    recency_bias: float = 0.0
+    # recency_bias was removed here (ADR-044). It scaled a second additive
+    # copy of the recency ladder in apply_policy -- the third of the three
+    # places recency reached ranking -- and that term is gone. Recency now
+    # reaches ranking once, inside the bounded prior, which is
+    # query-independent by definition and therefore cannot be policy-scaled.
+    #
+    # The consequence is deliberate and worth stating: per-policy recency
+    # weighting no longer exists. "recent" (which carried 1.2) and "default"
+    # (0.0) now weight recency identically. Reinstating it means a
+    # policy-conditioned term outside the prior, with its own bound, not
+    # restoring this field.
     diversity: bool = False
     prefer_experiences: bool = False
     prefer_active_work: bool = False
@@ -193,7 +203,6 @@ def _web_search_policy(explicit: bool) -> ContextPolicy:
         name="web_search",
         memory_weight=0.5,
         reflection_weight=0.3,
-        recency_bias=0.0,
         diversity=False,
         use_web_search=True,
         explicit_search_request=explicit,
@@ -268,7 +277,6 @@ def classify_query(user_message: str) -> ContextPolicy:
             name="task_status",
             memory_weight=0.6,
             reflection_weight=0.5,
-            recency_bias=0.8,
             diversity=False,
             prefer_active_work=True,
             state_boost=2.0,
@@ -371,7 +379,6 @@ def classify_query(user_message: str) -> ContextPolicy:
             name="status_state",
             memory_weight=0.6,
             reflection_weight=0.5,
-            recency_bias=0.8,
             diversity=False,
             prefer_active_work=True,
             state_boost=2.0,
@@ -384,7 +391,6 @@ def classify_query(user_message: str) -> ContextPolicy:
             name="reflective",
             memory_weight=0.7,
             reflection_weight=1.4,
-            recency_bias=0.2,
             diversity=True,
             prefer_experiences=True,
         )
@@ -394,7 +400,6 @@ def classify_query(user_message: str) -> ContextPolicy:
             name="factual_recall",
             memory_weight=1.2,
             reflection_weight=0.4,
-            recency_bias=0.3,
             diversity=False,
             prefer_exact_matches=True,
             # Factual queries want information records
@@ -408,7 +413,6 @@ def classify_query(user_message: str) -> ContextPolicy:
             name="recent_activity",
             memory_weight=1.3,
             reflection_weight=0.7,
-            recency_bias=1.2,
             diversity=True,
             prefer_active_work=True,
         )
@@ -418,7 +422,6 @@ def classify_query(user_message: str) -> ContextPolicy:
             name="recent",
             memory_weight=1.1,
             reflection_weight=0.9,
-            recency_bias=1.0,
             diversity=True,
         )
 
@@ -427,7 +430,6 @@ def classify_query(user_message: str) -> ContextPolicy:
             name="activity",
             memory_weight=1.2,
             reflection_weight=0.6,
-            recency_bias=0.5,
             diversity=True,
             prefer_active_work=True,
         )

@@ -340,6 +340,23 @@ def lexical_relevance_bonus(
 
 
 def memory_type_adjustment(mem_type: str) -> float:
+    """RETIRED from the live path (ADR-044). Retained as a baseline arm.
+
+    Not called by `semantic_search` any more. The type term was one of the
+    two counted twice -- once here and once in `_score_memory_item` -- and
+    ADR-044 decision 2 consolidates both into `src/context/prior.py`, where
+    the type ladder is 1.0 because every arm of it appears in Sobol's
+    no_solo_delivery_effect list.
+
+    It is kept, rather than deleted, because two measurements need to
+    reconstruct the pre-ADR-044 retrieval stage to compare against:
+    `tools/retrieval_ablation/arms.py`'s A_PRE_ADR044 arm and
+    `tests/test_incident_reproduction.py`'s `shipped` arm. Deleting this
+    would delete the baseline, not the behaviour.
+
+    Do not reintroduce a call site. If a type signal is wanted at the
+    retrieval stage again, it goes through the bounded prior.
+    """
     if mem_type == "conversation":
         return 0.10
     if mem_type == "reflection":
@@ -352,6 +369,25 @@ def memory_type_adjustment(mem_type: str) -> float:
 
 
 def source_quality_adjustment(content: str, metadata: dict | None = None) -> float:
+    """RETIRED from the live path (ADR-044). Retained as a baseline arm.
+
+    Not called by `semantic_search` any more. This carried the -0.20 half of
+    the role pile; ADR-044 amendment 4a moved role out of score space to
+    `src/context/role_predicate.py`, on the measurement that a predicate
+    suppresses the self-echo incident completely at no cost against a bounded
+    budget, where the pile cost five and a half times the entire observable
+    cosine spread.
+
+    Its removal is also what exposed the fixture defect recorded in the
+    ADR's 2026-09-26 amendment: this function plus `memory_type_adjustment`
+    contributed up to +0.40 of query-independent lift, enough to carry a
+    record with a raw cosine of 0.0052 across `_apply_type_gate`'s 0.25
+    similarity floor. That is the clearest demonstration in the record that
+    the metadata was the ranking signal rather than a tiebreaker.
+
+    Kept as the baseline arm for the same reason as
+    `memory_type_adjustment` above. Do not reintroduce a call site.
+    """
     score = 0.0
     metadata = metadata or {}
 

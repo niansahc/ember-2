@@ -334,10 +334,12 @@ def render_report(raw: dict) -> tuple[str, dict]:
         ("typing, scoring only     ", "A_T-off_scoring"),
         ("typing, incl. gating     ", "A_T-off_policy"),
         ("tiering                  ", "A_H-off"),
-        ("temporal decay           ", "A_decay-off"),
-        ("recency bonus            ", "A_recency-off"),
+        # One row where there were three: ADR-044 merged recency,
+        # content_kind and length into one bounded multiplier, so there is
+        # no separate decay or source-quality cost left to report.
+        ("metadata prior           ", "A_prior-off"),
+        ("role predicate           ", "A_role-off"),
         ("lexical and entity terms ", "A_lexical-off"),
-        ("source quality           ", "A_quality-off"),
     ):
         a = summaries[arm_name]["aggregates"]
         d_ranked = a["ranked_ndcg_at_6"]

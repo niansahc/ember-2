@@ -29,7 +29,13 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+# Bumped to 2 for ADR-044. load_run refuses anything but exact equality and
+# reconstructs every sub-record by keyword, so removing DecayActivation and
+# the dead activation fields makes older traces unloadable -- which is the
+# intended behaviour, not a migration to write: a trace captured under the
+# old composition describes a pipeline that no longer exists, and
+# reinterpreting it would produce numbers about nothing.
+SCHEMA_VERSION = 2
 
 # Channels a candidate can arrive through. They score differently and must
 # not be pooled: the reflection channel never passes through
@@ -57,12 +63,15 @@ class RetrievalActivation:
     lexical_substring: bool = False
     lexical_term_hits: int = 0
     lexical_entity_hits: int = 0
+    # type_branch survives the removal of ret.type.* because
+    # query_intent_adjustment still keys on it. It is no longer a selector for
+    # a type term of its own.
     type_branch: str = "other"           # conversation|reflection|memory|ingested|other
-    quality_role: str = "none"           # user|assistant|none
-    quality_is_question: bool = False
-    quality_clarification: bool = False
-    quality_experience: bool = False
-    quality_summary: bool = False
+    # role is the role predicate's input (ADR-044 4a), not a score branch.
+    # Recorded so a replay can reproduce the SELECTION the predicate makes;
+    # the four quality_* booleans that stood beside it are gone with
+    # source_quality_adjustment.
+    role: str = "none"                   # user|assistant|none
     intent_reflective: bool = False
     intent_task: bool = False
     content_prefix: str = "none"         # user|assistant|none
@@ -72,8 +81,9 @@ class RetrievalActivation:
 class PolicyActivation:
     weight_field: str = "memory_weight"  # memory_weight|reflection_weight
     weight_captured: float = 1.0
-    recency_bias_captured: float = 0.0
-    recency_bucket: str = "unparsed"     # d7|d30|d90|d365|older|unparsed
+    # recency_bias_captured and a policy-stage recency_bucket stood here. Both
+    # existed only for the `recency * recency_bias` term, which ADR-044
+    # removed along with ContextPolicy.recency_bias.
     prefer_experience_fired: bool = False
     prefer_active_work_fired: bool = False
     exact_branch: str = "none"           # question|other|none
@@ -92,20 +102,9 @@ class RankActivation:
     """_score_memory_item, or _score_reflection_item on the reflection channel."""
 
     reflection_path: bool = False
-    type_branch: str = "other"
-    role_branch: str = "none"            # user|assistant|tool_system|none
     kind_branch: str = "none"            # experience|user_content|answer|question|none
-    user_prefix: bool = False
-    length_branch: str = "none"          # lt20|lt50|gt1200|none
-    tokens_lt5: bool = False
+    length_branch: str = "none"          # lt50|gt1200|none
     recency_bucket: str = "unparsed"
-    reflection_short: bool = False
-
-
-@dataclass
-class DecayActivation:
-    family: str = "none"                 # none|reflection|ephemeral|default
-    bucket: str = "none"                 # d3|d7|d14|d30|d90|older|none
 
 
 @dataclass
@@ -136,7 +135,6 @@ class CandidateTrace:
     policy: PolicyActivation = field(default_factory=PolicyActivation)
     author: AuthorshipActivation = field(default_factory=AuthorshipActivation)
     rank: RankActivation = field(default_factory=RankActivation)
-    decay: DecayActivation = field(default_factory=DecayActivation)
 
     # Ground truth, one entry per stage boundary.
     stage_scores: dict[str, float] = field(default_factory=dict)
@@ -150,6 +148,12 @@ class CandidateTrace:
     relevance_gated_out: bool = False
     filtered_echo_or_meta: bool = False
     filtered_low_value: bool = False
+    # ADR-044 4a. The role predicate drops assistant-authored records between
+    # apply_policy and the authorship multiplier, which is a membership change
+    # with no score signature -- so without this flag a replay reconstructs
+    # the scores correctly and over-delivers, and the fidelity check cannot
+    # see why.
+    excluded_by_role: bool = False
     deduped_out: bool = False
     delivered: bool = False
 
@@ -232,8 +236,7 @@ def load_run(path: Path) -> TraceRun:
                     "policy": PolicyActivation(**c["policy"]),
                     "author": AuthorshipActivation(**c["author"]),
                     "rank": RankActivation(**c["rank"]),
-                    "decay": DecayActivation(**c["decay"]),
-                }
+                    }
             )
             for c in q.pop("candidates", [])
         ]

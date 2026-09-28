@@ -251,9 +251,10 @@ class ContextService:
         # answers don't synthesize from books or the user's old ChatGPT
         # dialogue about other people.
         # ADR-044 4a: role is a predicate, not a score term. Applied before
-        # the authorship multiplier so an assistant turn on a relational
-        # query is gone rather than discounted.
-        memory_items = role_predicate.apply(memory_items, user_message)
+        # the authorship multiplier so an assistant turn is gone rather than
+        # discounted. Unconditional, not scoped to relational queries -- see
+        # role_predicate's "why this is not scoped by query".
+        memory_items = role_predicate.apply(memory_items)
         memory_items = self.ranker.apply_authorship_scoring(memory_items, user_message)
 
         # Boost memories from the active project (ADR-007)

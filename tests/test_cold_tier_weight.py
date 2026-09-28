@@ -11,9 +11,12 @@ the relational_query_empty score==0.0 sentinel is not spuriously affected.
 
 from __future__ import annotations
 
+import pytest
+
+from src.context import prior
 from src.context.models import ContextItem
 from src.context.policies import ContextPolicy
-from src.context.ranker import COLD_MULTIPLIER, ContextRanker
+from src.context.ranker import COLD_MULTIPLIER, WARM_MULTIPLIER, ContextRanker
 
 
 def _item(item_id: str, score: float, tier: str = "cold", memory_type: str = "conversation") -> ContextItem:
@@ -30,7 +33,33 @@ def _item(item_id: str, score: float, tier: str = "cold", memory_type: str = "co
 
 class TestColdMultiplierValue:
     def test_cold_multiplier_is_nonzero_and_less_than_warm(self):
-        assert 0.0 < COLD_MULTIPLIER < 0.7
+        """The ordering, stated without copying warm's value.
+
+        The upper bound used to be the literal 0.7, which was a copy of the
+        then-current WARM_MULTIPLIER. ADR-044 re-derived both under the bound
+        (0.9339 / 0.9664) and the literal went stale, which is what a copied
+        constant does. The test's own name says "less than warm", so compare
+        against warm.
+        """
+        assert 0.0 < COLD_MULTIPLIER < WARM_MULTIPLIER < 1.0
+
+    def test_cold_multiplier_is_the_contract_floor(self):
+        """Cold takes tier's whole half of the bound, by construction."""
+        assert COLD_MULTIPLIER == prior.TIER_MIN
+
+    def test_warm_is_the_geometric_midpoint(self):
+        """Warm sits between cold and hot multiplicatively, not additively.
+
+        An arithmetic midpoint would be 0.967, which is close enough to look
+        right and wrong for the reason the whole contract is multiplicative:
+        the three tiers are points on a ratio scale, so the step from cold to
+        warm and from warm to hot should be the same RATIO, not the same
+        difference.
+        """
+        assert WARM_MULTIPLIER == pytest.approx(COLD_MULTIPLIER ** 0.5)
+        assert WARM_MULTIPLIER / COLD_MULTIPLIER == pytest.approx(
+            1.0 / WARM_MULTIPLIER
+        )
 
 
 class TestOrderingPreservedWithinCold:
@@ -51,10 +80,15 @@ class TestOrderingPreservedWithinCold:
         assert by_id["strong"] != by_id["weak"]
 
     def test_end_to_end_through_rank_preserves_order(self):
-        """Not just apply_policy in isolation -- the additive type/role
-        ladder and temporal decay run afterward in rank(), on top of the
-        now-distinct per-item bases. Confirms ordering survives the full
-        pipeline, not just algebraically."""
+        """Not just apply_policy in isolation -- the bounded prior multiplies
+        afterward in rank(), on top of the now-distinct per-item bases.
+        Confirms ordering survives the full pipeline, not just algebraically.
+
+        Stronger than it was: the additive ladder this used to run through
+        could reorder two items outright, so order preservation was a real
+        risk. A strictly positive multiplier applied uniformly cannot, which
+        means the remaining risk is the prior varying BETWEEN the two items --
+        which it does, on length and content_kind."""
         ranker = ContextRanker()
         policy = ContextPolicy(name="test", memory_weight=1.0)
 
@@ -120,8 +154,14 @@ class TestTypeGateHasNoInteractionWithTierMultiplier:
 
         policy = ContextPolicy(name="test", memory_weight=1.0)
         # policies.py default min_score is 0.25. Raw score clears it;
-        # raw * COLD_MULTIPLIER would not (0.3 * 0.3 = 0.09 < 0.25).
-        item = _item("borderline", score=0.3, tier="cold")
+        # raw * COLD_MULTIPLIER would not (0.26 * 0.9339 = 0.2428 < 0.25).
+        #
+        # The fixture was 0.3, chosen against the old 0.3 multiplier
+        # (0.3 * 0.3 = 0.09). Under 0.9339 that becomes 0.28, which clears the
+        # floor -- so the test still passed while no longer demonstrating
+        # anything: a gate reading the tier-adjusted score would have kept the
+        # item too. 0.26 is the value that makes the two readings differ again.
+        item = _item("borderline", score=0.26, tier="cold")
 
         service = ContextService.__new__(ContextService)
         gated = service._apply_type_gate([item], policy)
@@ -131,19 +171,24 @@ class TestTypeGateHasNoInteractionWithTierMultiplier:
             "reading the tier-adjusted score this item would be dropped"
         )
         # And confirm the gate did not mutate the score out from under us.
-        assert gated[0].score == 0.3
+        assert gated[0].score == 0.26
+        # Non-vacuity: the tier-adjusted score really is below the floor, so
+        # the assertion above distinguishes the two readings.
+        assert 0.26 * COLD_MULTIPLIER < policy.min_score
 
 
 class TestRelationalQueryEmptyFlagNotSpuriouslyAffected:
     """service.py's relational_query_empty check
     (`all(float(item.score) == 0.0 for item in non_profile)`) was designed
     around apply_authorship_scoring's third_party: 0.0 multiplier, not
-    tier. Confirms a cold-tier, first-person-authored item -- which used to
-    reach this check at exactly 0.0 only when the additive ladder happened
-    to net to zero, and now never reaches exactly 0.0 from tier alone --
-    behaves the same representative way either way: nonzero, because the
-    additive ladder and decay contribute real terms on top of the tier
-    base regardless of which multiplier tier used."""
+    tier. Confirms a cold-tier, first-person-authored item stays nonzero.
+
+    The reason it stays nonzero changed with ADR-044 and is now simpler. It
+    used to be that the additive ladder and decay contributed real terms on
+    top of the tier base, so the sum happened not to be zero. Now every stage
+    after the retrieval score is a strictly positive multiplier, so a nonzero
+    input cannot reach zero at all -- except through the authorship gate's
+    deliberate 0.0, which is the one case this signal is for."""
 
     def test_cold_first_person_item_is_not_spuriously_zero_after_full_pipeline(self):
         ranker = ContextRanker()

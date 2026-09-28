@@ -2,13 +2,16 @@
 tests/test_self_echo.py
 
 Tests for assistant self-echo prevention.
-Ensures assistant conversation turns are penalized in scoring and
-labeled correctly in the prompt so the model doesn't attribute
-Ember's own words back to the user.
+
+Ensures assistant conversation turns are excluded from the candidate set
+(ADR-044 4a) and, where they reach the prompt by another path, labeled
+correctly, so the model doesn't attribute Ember's own words back to the
+user.
 """
 
 import pytest
 
+from src.context import role_predicate
 from src.context.ranker import ContextRanker
 from src.context.models import ContextItem
 
@@ -24,41 +27,79 @@ def make_item(content="test", score=0.5, role="user", content_kind="user_content
     )
 
 
-class TestRankerAssistantPenalty:
-    """Assistant turns should score significantly lower than user turns."""
+class TestAssistantContentIsExcluded:
+    """Assistant turns are removed from the candidate set, not outscored.
 
-    def test_assistant_gets_strong_penalty(self):
-        ranker = ContextRanker()
+    This class used to assert a score gap of more than 0.30, produced by the
+    -0.25 role and -0.10 content_kind penalties in _score_memory_item. Both
+    are gone: ADR-044 amendment 4a moved role out of the scoring budget to a
+    predicate, on the measurement that a WHERE clause suppresses the
+    self-echo incident completely while the pile cost five and a half times
+    the entire observable cosine spread to do it.
+
+    A score gap can no longer express this property at all. The prior is
+    bounded to [0.9339, 1.1278], so two records entering at 0.5 can finish at
+    most 0.5 * (1.1278 - 0.9339) = 0.097 apart. Asserting "more than 0.30"
+    against a mechanism whose ceiling is 0.097 would be asserting that the
+    contract is broken. The property is now exclusion, so that is what is
+    tested. See tests/test_role_predicate.py for the predicate's own contract.
+    """
+
+    def test_assistant_turn_never_becomes_a_candidate(self):
+        asst_item = make_item(
+            "I can help with the retrieval pipeline",
+            score=0.5, role="assistant", content_kind="answer",
+        )
+        assert role_predicate.excluded_by_role(asst_item) is True
+
+    def test_user_turn_survives_alongside_it(self):
         user_item = make_item("I'm working on the retrieval pipeline", score=0.5, role="user")
-        asst_item = make_item("I can help with the retrieval pipeline", score=0.5, role="assistant", content_kind="answer")
+        asst_item = make_item(
+            "I can help with the retrieval pipeline",
+            score=0.5, role="assistant", content_kind="answer",
+        )
 
-        ranked, _ = ranker.rank([user_item, asst_item], [])
+        kept = role_predicate.apply([user_item, asst_item])
 
-        user_score = next(i.score for i in ranked if i.metadata["role"] == "user")
-        asst_score = next(i.score for i in ranked if i.metadata["role"] == "assistant")
+        assert [i.metadata["role"] for i in kept] == ["user"]
 
-        # Assistant should be at least 0.30 below user (role penalty + content_kind penalty)
-        assert user_score - asst_score > 0.30
+    def test_an_assistant_answer_that_did_reach_ranking_is_still_discounted(self):
+        """Defence in depth, not the primary mechanism.
 
-    def test_assistant_answer_gets_double_penalty(self):
+        content_kind=answer keeps a discount inside the prior (KIND_ANSWER,
+        0.9752), so an assistant answer reaching the ranker through some path
+        the predicate does not cover is still disadvantaged. Small by design:
+        the predicate is what does this job now.
+        """
         ranker = ContextRanker()
         item = make_item(
             "Here are the patterns I've noticed in your work",
             score=0.5, role="assistant", content_kind="answer",
         )
         scored = ranker._score_memory_item(item)
-        # role=assistant: -0.25, content_kind=answer: -0.10 = -0.35 total
-        # conversation type: +0.10, so net should be well below starting score
+
         assert scored.score < 0.5
 
-    def test_user_gets_positive_boost(self):
+    def test_user_content_is_favoured_over_a_neutral_record(self):
+        """KIND_USER_CONTENT (1.0248) lifts user-authored content.
+
+        The fixture is deliberately over 50 characters. Under 50 it is NET
+        PENALISED -- LEN_UNDER_50 (0.9339) outweighs KIND_USER_CONTENT, so a
+        46-character user turn entering at 0.5 finalizes at 0.4785. That is a
+        real consequence of deriving the prior's magnitudes from Sobol ST
+        without a sign-interaction check, and most user turns in a
+        conversational vault are short. It is recorded in ADR-044's 2026-09-26
+        amendment and tracked as a follow-up, NOT worked around here: this
+        test states the property the term was meant to have, and the ADR
+        states what it actually does.
+        """
         ranker = ContextRanker()
         item = make_item(
-            "I've been focused on the state layer this week",
+            "I've been focused on the state layer this week and it is going well",
             score=0.5, role="user", content_kind="user_content",
         )
         scored = ranker._score_memory_item(item)
-        # role=user: +0.12, content_kind=user_content: +0.05, conversation: +0.10
+
         assert scored.score > 0.5
 
 

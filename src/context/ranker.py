@@ -13,12 +13,11 @@ philosophy and tuning guidance.
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 
 from src.context import prior
 from src.context.models import ContextItem
-from src.observability.guard_counters import branch, count, reached
+from src.observability.guard_counters import branch, count
 from src.state.models import StateItem
 
 # ADR-015 tier weights, re-derived under ADR-044's bound.
@@ -48,12 +47,32 @@ WARM_MULTIPLIER = prior.TIER_MIN ** 0.5
 class ContextRanker:
     """Applies policy-based scoring adjustments and ranks context items.
 
-    All scoring constants in this class were tuned empirically against
-    the retrieval eval (tools/eval_retrieval.py, 15 benchmark cases) and
-    manual conversation testing. They are not arbitrary — each addresses
-    a specific failure mode observed during development. The constants
-    are documented inline so future tuning can understand the rationale
-    before adjusting values.
+    This docstring used to claim every constant here was "tuned empirically
+    against the retrieval eval (tools/eval_retrieval.py, 15 benchmark cases)".
+    That provenance does not exist: the eval has 5 cases and no graded
+    relevance, so it could not have produced the numbers attributed to it.
+    ADR-044 records the finding, and it is the reason the prior's magnitudes
+    were re-derived rather than carried forward.
+
+    What remains here, and where its authority comes from:
+
+      the tier multipliers    ADR-015, re-derived under ADR-044's bound. See
+                              COLD_MULTIPLIER above.
+      the policy preference
+      terms (+0.20, +0.22,
+      -0.05, +0.03)           still undefended magnitudes. They are
+                              query-CONDITIONAL rather than query-independent,
+                              so the ADR-044 bound does not cover them, and
+                              they were not re-derived. Treat any number in
+                              apply_policy as provisional.
+      the authorship
+      multipliers             UAT-005. A gate, not a class constant.
+      the project boost       ADR-007, declared by ADR-015's amendment to be
+                              the activation model's context term.
+
+    The metadata prior is not here at all. It lives in src/context/prior.py,
+    where its magnitudes are derived from Sobol ST on the delivery endpoint
+    and its authority over similarity is capped by a tested bound.
     """
 
     def apply_policy(self, items: list[ContextItem], policy) -> list[ContextItem]:
@@ -348,7 +367,12 @@ class ContextRanker:
     # ranker.decay.bucket.ephemeral=older fired 256 of 256 times, a flat
     # x0.10 on nearly everything that reached it. Age now reaches ranking
     # once, through tier.
-    _NO_DECAY_TYPES = frozenset({"profile", "reference", "ingested"})
+    #
+    # _NO_DECAY_TYPES went with them. The reference-class exemption it encoded
+    # is preserved, in TieringService, which is the module that now owns the
+    # age curve -- keeping a copy here would have left two sources of truth
+    # for which types decay, which is the defect ADR-044 decision 3 exists to
+    # remove.
 
     def _parse_age_days(self, timestamp: str | None) -> int | None:
         """Parse a timestamp string and return age in days, or None on failure.
@@ -479,5 +503,7 @@ class ContextRanker:
             marker in title for marker in markers
         )
 
-    def _tokenize(self, text: str) -> list[str]:
-        return re.findall(r"\b[a-z0-9]{3,}\b", text)
+    # _tokenize went with the token-count penalty it existed for (ADR-044: the
+    # <5-token term was subsumed by the length term it duplicated and was
+    # never separately measured). ContextRetriever and ContextService keep
+    # their own tokenizers for Jaccard overlap, which is a different job.

@@ -66,6 +66,8 @@ src/context/role_predicate.py.
 
 from __future__ import annotations
 
+from src.observability.guard_counters import branch, count
+
 # Measured production top-8 raw cosine spread and mean rank-1 cosine (#236,
 # tools/cosine_spread.py). The bound is asserted against these, not against
 # the 0.1504 fixture figure ADR-044 originally carried.
@@ -111,10 +113,28 @@ def _deviation(term: str) -> float:
 # the magnitude is re-derived.
 LEN_UNDER_50 = 1.0 - _deviation("len_under_50")        # 0.9339
 LEN_OVER_1200 = 1.0 - _deviation("len_over_1200")      # 0.9845
+
+_LENGTH_FACTORS = {
+    "lt50": LEN_UNDER_50,
+    "gt1200": LEN_OVER_1200,
+    "none": 1.0,
+}
 KIND_EXPERIENCE = 1.0 + _deviation("kind_experience")  # 1.0581
 KIND_USER_CONTENT = 1.0 + _deviation("kind_user_content")  # 1.0248
 KIND_QUESTION = 1.0 - _deviation("kind_user_content")  # 0.9752, mirrored
 KIND_ANSWER = 1.0 - _deviation("kind_user_content")    # 0.9752, mirrored
+
+# Term tables, so assemble() reads its factor and its counter arm from one
+# place. The "none" entries are the identity and exist so every candidate
+# takes a named branch -- an unnamed fall-through is a hole in the traffic
+# window, which is how ranker.tier's arms came to be under-declared.
+_KIND_FACTORS = {
+    "experience": KIND_EXPERIENCE,
+    "user_content": KIND_USER_CONTENT,
+    "question": KIND_QUESTION,
+    "answer": KIND_ANSWER,
+    "none": 1.0,
+}
 
 # Recency. Five buckets, scaled so the widest-ST bucket carries the full
 # recency deviation and the ladder keeps its previous relative ordering
@@ -141,7 +161,16 @@ REFLECTION_DISCOUNT = 1.0
 
 
 def clamp(value: float) -> float:
-    """Hold the prior inside its half of the bound."""
+    """Hold the prior inside its half of the bound.
+
+    Instrumented because the clamp firing is the signal that a combination
+    of terms wants more authority than the contract allows. If it fires
+    often, the budget is under-specified rather than merely tight, and that
+    is a finding about the derivation -- not something to discover by
+    reading the code and reasoning about it.
+    """
+    count("prior.clamped_low", value < PRIOR_MIN)
+    count("prior.clamped_high", value > PRIOR_MAX)
     return max(PRIOR_MIN, min(PRIOR_MAX, value))
 
 
@@ -161,23 +190,27 @@ def assemble(
     """
     prior = 1.0
 
-    if content_kind == "experience":
-        prior *= KIND_EXPERIENCE
-    elif content_kind == "user_content":
-        prior *= KIND_USER_CONTENT
-    elif content_kind == "question":
-        prior *= KIND_QUESTION
-    elif content_kind == "answer":
-        prior *= KIND_ANSWER
+    # Instrumented. The additive terms these replaced were each a counted
+    # guard site, so consolidating them into straight-line arithmetic would
+    # have made the whole metadata prior invisible to the traffic window --
+    # the one part of the scoring path it could not see. Branch names mirror
+    # the term names so a counter row reads back as a multiplier.
+    kind = content_kind if content_kind in _KIND_FACTORS else "none"
+    branch("prior.kind", kind)
+    prior *= _KIND_FACTORS.get(kind, 1.0)
 
     if content_length < 50:
-        prior *= LEN_UNDER_50
+        length = "lt50"
     elif content_length > 1200:
-        prior *= LEN_OVER_1200
+        length = "gt1200"
+    else:
+        length = "none"
+    branch("prior.length", length)
+    prior *= _LENGTH_FACTORS[length]
 
-    prior *= RECENCY.get(recency_bucket, 1.0)
+    prior *= RECENCY.get(branch("prior.recency", recency_bucket), 1.0)
 
-    if is_reflection:
+    if count("prior.reflection_path", is_reflection):
         prior *= REFLECTION_DISCOUNT
 
     return clamp(prior)

@@ -15,28 +15,44 @@ whole design.
 Composition order, which is the part that is easy to get subtly wrong:
 
     s0 = raw cosine
-    s1 = s0 + lexical + type + source_quality + query_intent    (retrieval)
+    s1 = s0 + lexical + query_intent                            (retrieval)
     s2 = s1 * policy weight
-    s3 = s2 + recency * recency_bias + preference terms
+    s3 = s2 + preference terms
     s4 = s3 * tier                                              (policy)
+         role predicate: SELECTION, not a score -- no stage
     s5 = s4 * authorship                                        (authorship)
     s6 = s5 + project boost                                     (project)
-    s7 = s6 + type + role + kind + prefix + length + tokens + recency   (rank)
-    s8 = s7 * temporal decay                                    (decay, final)
+    s7 = s6 * prior                                             (rank, final)
 
-Two things about that order are load-bearing and were the subject of the
-#204 grill. The tier multiply lands at s4, BEFORE the additive pile at s7,
-so a cold discount only ever shrinks the cosine-derived half of a score and
-leaves the constant half untouched. And the decay multiply lands last, on
-everything, so `0.3 * 0.10 = 0.03` is reachable for an aged cold record.
-Neither is a bug this file may quietly fix: the model has to be wrong in
-exactly the ways the system is wrong, or the sensitivity analysis describes
-a system nobody is running.
+WHAT ADR-044 CHANGED HERE, and what it did not
+
+The previous version of this docstring recorded two properties as
+load-bearing: that the tier multiply landed BEFORE the ranker's additive
+pile, so a cold discount shrank only the cosine-derived half of a score;
+and that a temporal-decay multiply landed last on everything, so
+`0.3 * 0.10 = 0.03` was reachable for an aged cold record. Both were
+defects rather than design, and both are gone -- the additive pile is one
+bounded multiplier and there is no decay stage at all.
+
+The rule those notes existed to protect has not changed and is the reason
+this file is a MODEL and not a second implementation: it has to be wrong in
+exactly the ways the system is wrong. capture.py checks every stage
+boundary against the shipped functions at 1e-12 and refuses to write a
+trace where they disagree, so a mistake here fails a capture rather than
+biasing an analysis.
+
+One residual, recorded rather than fixed. `proj.boost` still lands at s6,
+AFTER the tier multiply at s4, so tier does not attenuate it -- the same
+ordering defect ADR-044 decision 1 names, reduced from a whole additive
+pile to one term. The prior at s7 does attenuate it. Not this file's to
+change.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from src.context import prior as _prior
 
 from .params import ReplayParams
 from .schema import CandidateTrace
@@ -46,16 +62,22 @@ STAGE_POLICY = "policy"
 STAGE_AUTHORSHIP = "authorship"
 STAGE_PROJECT = "project"
 STAGE_RANK = "rank"
-STAGE_DECAY = "decay"
 
+# STAGE_DECAY is gone. It was a real pipeline boundary -- the ranker
+# multiplied by _temporal_decay_weight after scoring -- and ADR-044 decision 3
+# absorbed that curve into TieringService, where it is a nightly input to tier
+# rather than a query-time stage. There is nothing left to trace at that
+# boundary, so the boundary is removed rather than kept at a constant 1.0.
 STAGES: tuple[str, ...] = (
     STAGE_RETRIEVAL,
     STAGE_POLICY,
     STAGE_AUTHORSHIP,
     STAGE_PROJECT,
     STAGE_RANK,
-    STAGE_DECAY,
 )
+
+# The final stage, named once so consumers do not have to know which it is.
+STAGE_FINAL = STAGE_RANK
 
 
 @dataclass
@@ -67,11 +89,11 @@ class Composition:
 
     @property
     def final(self) -> float:
-        return self.stage_scores[STAGE_DECAY]
+        return self.stage_scores[STAGE_FINAL]
 
 
 def _recency_value(bucket: str, p: ReplayParams) -> float:
-    return p[f"recency.{bucket}"] if bucket != "unparsed" else p["recency.unparsed"]
+    return p.values.get(f"prior.recency.{bucket}", 1.0)
 
 
 def compose(candidate: CandidateTrace, p: ReplayParams, policy_name: str) -> Composition:
@@ -84,13 +106,16 @@ def compose(candidate: CandidateTrace, p: ReplayParams, policy_name: str) -> Com
     if r.applies:
         terms["raw_cosine"] = r.raw_cosine
 
-        # Grouped, not flattened. semantic_search adds three aggregates --
-        # lexical_relevance_bonus, source_quality_adjustment,
-        # query_intent_adjustment -- each of which accumulates internally
-        # first. Float addition is not associative, so summing the leaves in
-        # a different grouping lands a few ulps away from the shipped score
-        # and "matches exactly" stops being true. The grouping here is the
-        # shipped grouping, in the shipped order.
+        # Grouped, not flattened. semantic_search adds two aggregates --
+        # lexical_relevance_bonus and query_intent_adjustment -- each of which
+        # accumulates internally first. Float addition is not associative, so
+        # summing the leaves in a different grouping lands a few ulps away
+        # from the shipped score and "matches exactly" stops being true. The
+        # grouping here is the shipped grouping, in the shipped order.
+        #
+        # It used to be three aggregates. memory_type_adjustment and
+        # source_quality_adjustment were the other two and are no longer
+        # called, so both their groups are gone from the sum.
         lexical = 0.0
         if r.lexical_substring:
             terms["ret.lexical.substring"] = p["ret.lexical.substring"]
@@ -110,31 +135,6 @@ def compose(candidate: CandidateTrace, p: ReplayParams, policy_name: str) -> Com
             )
             terms["ret.lexical.entity_hit"] = entity
             lexical += entity
-
-        type_term = p[f"ret.type.{r.type_branch}"]
-        terms["ret.type"] = type_term
-
-        quality = 0.0
-        if r.quality_role == "user":
-            terms["ret.quality.role"] = p["ret.quality.role_user"]
-            quality += p["ret.quality.role_user"]
-        elif r.quality_role == "assistant":
-            terms["ret.quality.role"] = p["ret.quality.role_assistant"]
-            quality += p["ret.quality.role_assistant"]
-        question_term = (
-            p["ret.quality.question"] if r.quality_is_question else p["ret.quality.not_question"]
-        )
-        terms["ret.quality.question"] = question_term
-        quality += question_term
-        if r.quality_clarification:
-            terms["ret.quality.clarification"] = p["ret.quality.clarification"]
-            quality += p["ret.quality.clarification"]
-        if r.quality_experience:
-            terms["ret.quality.experience"] = p["ret.quality.experience"]
-            quality += p["ret.quality.experience"]
-        if r.quality_summary:
-            terms["ret.quality.summary"] = p["ret.quality.summary"]
-            quality += p["ret.quality.summary"]
 
         intent = 0.0
         if r.intent_reflective:
@@ -163,8 +163,6 @@ def compose(candidate: CandidateTrace, p: ReplayParams, policy_name: str) -> Com
 
         score = r.raw_cosine
         score += lexical
-        score += type_term
-        score += quality
         score += intent
     else:
         # Reflection channel: the base score is a Jaccard overlap computed in
@@ -179,11 +177,9 @@ def compose(candidate: CandidateTrace, p: ReplayParams, policy_name: str) -> Com
     terms[f"pol.{pol.weight_field}"] = weight
     score = score * weight
 
-    bias = p.policy_field(policy_name, "recency_bias", pol.recency_bias_captured)
-    if bias:
-        contribution = _recency_value(pol.recency_bucket, p) * bias
-        terms["pol.recency"] = contribution
-        score += contribution
+    # The recency * recency_bias contribution that stood here is gone with
+    # ContextPolicy.recency_bias (ADR-044). It was the third additive copy of
+    # the recency ladder.
     if pol.prefer_experience_fired:
         terms["pol.prefer_experience"] = p["pol.prefer_experience"]
         score += p["pol.prefer_experience"]
@@ -217,45 +213,35 @@ def compose(candidate: CandidateTrace, p: ReplayParams, policy_name: str) -> Com
     stages[STAGE_PROJECT] = score
 
     # -------------------------------------------------------------------- rank
+    #
+    # One multiply, built in prior.assemble's own order for the same
+    # associativity reason as the retrieval group above. Both the individual
+    # factors and the clamped product are recorded: the product is what the
+    # score actually took, and the factors are what a sensitivity pass needs
+    # to attribute it. Recording only the product would make every prior term
+    # indistinguishable from every other.
     k = candidate.rank
-    if k.reflection_path:
-        terms["refl.base_discount"] = p["refl.base_discount"]
-        score = score * p["refl.base_discount"]
-        if k.reflection_short:
-            terms["refl.short"] = p["refl.short"]
-            score += p["refl.short"]
-        contribution = _recency_value(k.recency_bucket, p) * p["refl.recency_scale"]
-        terms["refl.recency"] = contribution
-        score += contribution
-    else:
-        # Sequential, in _score_memory_item's own order, for the same
-        # associativity reason as the retrieval group above.
-        terms["rank.type"] = p[f"rank.type.{k.type_branch}"]
-        score += terms["rank.type"]
-        if k.role_branch != "none":
-            terms["rank.role"] = p[f"rank.role.{k.role_branch}"]
-            score += terms["rank.role"]
-        if k.kind_branch != "none":
-            terms["rank.kind"] = p[f"rank.kind.{k.kind_branch}"]
-            score += terms["rank.kind"]
-        if k.user_prefix:
-            terms["rank.user_prefix"] = p["rank.user_prefix"]
-            score += terms["rank.user_prefix"]
-        if k.length_branch != "none":
-            terms["rank.length"] = p[f"rank.len.{k.length_branch}"]
-            score += terms["rank.length"]
-        if k.tokens_lt5:
-            terms["rank.tokens_lt5"] = p["rank.tokens_lt5"]
-            score += terms["rank.tokens_lt5"]
-        terms["rank.recency"] = _recency_value(k.recency_bucket, p)
-        score += terms["rank.recency"]
-    stages[STAGE_RANK] = score
 
-    # ------------------------------------------------------------------- decay
-    d = candidate.decay
-    factor = p["decay.none"] if d.family == "none" else p[f"decay.{d.family}.{d.bucket}"]
-    terms["decay"] = factor
-    score = score * factor
-    stages[STAGE_DECAY] = score
+    prior_factor = 1.0
+    if k.kind_branch != "none":
+        terms["prior.kind"] = p[f"prior.kind.{k.kind_branch}"]
+        prior_factor *= terms["prior.kind"]
+    if k.length_branch != "none":
+        terms["prior.length"] = p[f"prior.len.{k.length_branch}"]
+        prior_factor *= terms["prior.length"]
+    terms["prior.recency"] = _recency_value(k.recency_bucket, p)
+    prior_factor *= terms["prior.recency"]
+    if k.reflection_path:
+        terms["prior.reflection_discount"] = p["prior.reflection_discount"]
+        prior_factor *= terms["prior.reflection_discount"]
+
+    # The clamp is part of the contract, not a safety net, so the model has to
+    # apply it -- a composition that skipped it would disagree with the
+    # pipeline exactly when the bound is doing its job, which is the one case
+    # that matters.
+    clamped = _prior.clamp(prior_factor)
+    terms["prior"] = clamped
+    score = score * clamped
+    stages[STAGE_RANK] = score
 
     return Composition(stage_scores=stages, terms=terms)

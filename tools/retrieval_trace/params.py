@@ -8,26 +8,50 @@ This is the surface a sensitivity pass perturbs. It is deliberately flat
 and dotted rather than nested, because a Sobol or Morris design wants one
 index per dimension and no structure to unpack.
 
-The defaults here are a SECOND copy of numbers that live inline in
-src/retrieval/semantic_search.py and src/context/ranker.py, which is a real
-hazard: a copy that drifts is worse than no copy, because it fails quietly
-and every downstream sensitivity number is then wrong about the system it
-claims to describe. tests/test_retrieval_trace.py pins each default by
-calling the shipped function and reading the value back out, so a retune in
-src/ fails the suite here rather than silently biasing an analysis.
+Two kinds of default live here, and the difference is the point.
 
-Policy-scoped values (memory_weight, reflection_weight, recency_bias) are
-NOT in this table. They vary per policy and are captured per query from the
-policy object in effect; replay overrides them through
-ReplayParams.policy_overrides.
+The retrieval, policy and authorship terms are still a SECOND copy of
+numbers written inline in src/retrieval/semantic_search.py and
+src/context/ranker.py. That is a real hazard -- a copy that drifts is worse
+than no copy, because it fails quietly and every downstream sensitivity
+number is then wrong about the system it claims to describe. So
+tests/test_retrieval_trace.py pins each of those by calling the shipped
+function and reading the value back out.
+
+The prior and tier terms are IMPORTED rather than copied. Under ADR-044
+their values are derived -- from the measured cosine spread and from Sobol
+ST on the delivery endpoint -- rather than authored, so there is no
+independent number for a test to pin them against; a pinning test would
+just restate the derivation and pass by construction. Importing removes the
+copy instead of guarding it, which is strictly better where it is available.
+The pinning tests for those parameters were deleted rather than migrated,
+because an identity is not a test.
+
+Policy-scoped values (memory_weight, reflection_weight) are NOT in this
+table. They vary per policy and are captured per query from the policy
+object in effect; replay overrides them through
+ReplayParams.policy_overrides. recency_bias was a third such value until
+ADR-044 removed it from ContextPolicy: it scaled a second additive copy of
+the recency ladder, and recency now reaches ranking once, inside the prior.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from src.context import prior as _prior
+from src.context.ranker import COLD_MULTIPLIER, WARM_MULTIPLIER
+
 # ---------------------------------------------------------------------------
 # Retrieval stage -- src/retrieval/semantic_search.py
+#
+# ret.type.* and ret.quality.* stood here until ADR-044. semantic_search no
+# longer calls memory_type_adjustment or source_quality_adjustment, so those
+# twelve parameters had no call site to be sensitive at: sweeping them moved
+# nothing, which would have read as twelve inert parameters rather than as a
+# stale table. The type signal is in the prior; the role signal is a
+# predicate (src/context/role_predicate.py) and therefore not a parameter at
+# all.
 # ---------------------------------------------------------------------------
 
 RETRIEVAL_DEFAULTS: dict[str, float] = {
@@ -37,20 +61,6 @@ RETRIEVAL_DEFAULTS: dict[str, float] = {
     "ret.lexical.term_cap": 0.18,
     "ret.lexical.entity_hit": 0.20,
     "ret.lexical.entity_cap": 0.40,
-    # memory_type_adjustment
-    "ret.type.conversation": 0.10,
-    "ret.type.reflection": 0.05,
-    "ret.type.memory": 0.03,
-    "ret.type.ingested": -0.02,
-    "ret.type.other": 0.0,
-    # source_quality_adjustment
-    "ret.quality.role_user": 0.16,
-    "ret.quality.role_assistant": -0.20,
-    "ret.quality.question": -0.10,
-    "ret.quality.not_question": 0.04,
-    "ret.quality.clarification": -0.12,
-    "ret.quality.experience": 0.10,
-    "ret.quality.summary": -0.14,
     # query_intent_adjustment
     "ret.intent.reflective_conversation": 0.10,
     "ret.intent.reflective_reflection": 0.08,
@@ -70,11 +80,12 @@ POLICY_DEFAULTS: dict[str, float] = {
     "pol.prefer_active_work": 0.22,
     "pol.exact.question": -0.05,
     "pol.exact.other": 0.03,
-    # ADR-015 tier multipliers. hot is listed even though the shipped code
+    # ADR-015 tier multipliers, re-derived under ADR-044's bound and imported
+    # rather than restated. hot is listed even though the shipped code
     # expresses it as "no change": a sensitivity pass needs the identity
     # element to be a dimension it can move, or hot is silently pinned.
-    "tier.cold": 0.3,
-    "tier.warm": 0.7,
+    "tier.cold": COLD_MULTIPLIER,
+    "tier.warm": WARM_MULTIPLIER,
     "tier.hot": 1.0,
     "tier.profile_bypass": 1.0,
 }
@@ -93,72 +104,47 @@ AUTHORSHIP_DEFAULTS: dict[str, float] = {
 }
 
 # ---------------------------------------------------------------------------
-# Rank stage -- ContextRanker._score_memory_item / _score_reflection_item
+# Rank stage -- the bounded metadata prior, src/context/prior.py
+#
+# Seventeen additive rank.* terms and three refl.* terms stood here. ADR-044
+# decision 2 replaced them with one multiplier, so the parameter vector
+# shrinks to the factors that multiplier is built from. What went where:
+#
+#   rank.type.*        deleted. Every arm is in Sobol's
+#                      no_solo_delivery_effect list, and it was one of the
+#                      two terms counted twice.
+#   rank.role.*        not a parameter any more. Role is a predicate.
+#   rank.kind.*        below, as multipliers.
+#   rank.len.lt20      deleted. The branch is gone; the prior has <50 and
+#                      >1200 only.
+#   rank.tokens_lt5    deleted. Subsumed by the length term it duplicated.
+#   rank.user_prefix   deleted, with the rest of the content-prefix scoring.
+#   refl.short,
+#   refl.recency_scale deleted. Neither has a defensible magnitude.
+#
+# These are IMPORTED, not copied. See the module docstring.
 # ---------------------------------------------------------------------------
 
-RANK_DEFAULTS: dict[str, float] = {
-    "rank.type.conversation": 0.10,
-    "rank.type.reflection": 0.06,
-    "rank.type.memory": 0.04,
-    "rank.type.ingested": 0.0,
-    "rank.type.other": 0.0,
-    "rank.role.user": 0.12,
-    "rank.role.assistant": -0.25,
-    "rank.role.tool_system": -0.20,
-    "rank.kind.experience": 0.14,
-    "rank.kind.user_content": 0.05,
-    "rank.kind.answer": -0.10,
-    "rank.kind.question": -0.10,
-    "rank.user_prefix": 0.04,
-    "rank.len.lt20": -0.10,
-    "rank.len.lt50": -0.04,
-    "rank.len.gt1200": -0.03,
-    "rank.tokens_lt5": -0.05,
-    # _score_reflection_item
-    "refl.base_discount": 0.95,
-    "refl.short": -0.08,
-    "refl.recency_scale": 0.5,
+PRIOR_DEFAULTS: dict[str, float] = {
+    "prior.kind.experience": _prior.KIND_EXPERIENCE,
+    "prior.kind.user_content": _prior.KIND_USER_CONTENT,
+    "prior.kind.question": _prior.KIND_QUESTION,
+    "prior.kind.answer": _prior.KIND_ANSWER,
+    "prior.len.lt50": _prior.LEN_UNDER_50,
+    "prior.len.gt1200": _prior.LEN_OVER_1200,
+    "prior.reflection_discount": _prior.REFLECTION_DISCOUNT,
 }
 
 # ---------------------------------------------------------------------------
-# Recency -- ContextRanker._recency_boost
+# Recency -- one table, now exactly one consumer.
 #
-# One table, two consumers: apply_policy scales it by policy.recency_bias,
-# _score_memory_item adds it unscaled. Both read the same buckets, so they
-# are one set of parameters and a sensitivity pass must move them together
-# or it is measuring a system that does not exist.
+# It had two: apply_policy scaled it by policy.recency_bias and
+# _score_memory_item added it unscaled, which was two of the three counts
+# #207 found. Both are gone; the buckets are multipliers inside the prior.
 # ---------------------------------------------------------------------------
 
 RECENCY_DEFAULTS: dict[str, float] = {
-    "recency.d7": 0.18,
-    "recency.d30": 0.12,
-    "recency.d90": 0.06,
-    "recency.d365": 0.02,
-    "recency.older": -0.03,
-    "recency.unparsed": 0.0,
-}
-
-# ---------------------------------------------------------------------------
-# Temporal decay -- ContextRanker._temporal_decay_weight
-# ---------------------------------------------------------------------------
-
-DECAY_DEFAULTS: dict[str, float] = {
-    "decay.none": 1.0,
-    "decay.reflection.d7": 1.0,
-    "decay.reflection.d30": 0.80,
-    "decay.reflection.d90": 0.60,
-    "decay.reflection.older": 0.40,
-    "decay.ephemeral.d3": 1.0,
-    "decay.ephemeral.d7": 0.70,
-    "decay.ephemeral.d14": 0.45,
-    "decay.ephemeral.d30": 0.25,
-    "decay.ephemeral.older": 0.10,
-    "decay.default.d3": 1.0,
-    "decay.default.d7": 0.85,
-    "decay.default.d14": 0.70,
-    "decay.default.d30": 0.50,
-    "decay.default.d90": 0.30,
-    "decay.default.older": 0.15,
+    f"prior.recency.{bucket}": value for bucket, value in _prior.RECENCY.items()
 }
 
 
@@ -169,9 +155,8 @@ def default_params() -> dict[str, float]:
         RETRIEVAL_DEFAULTS,
         POLICY_DEFAULTS,
         AUTHORSHIP_DEFAULTS,
-        RANK_DEFAULTS,
+        PRIOR_DEFAULTS,
         RECENCY_DEFAULTS,
-        DECAY_DEFAULTS,
     ):
         overlap = merged.keys() & table.keys()
         if overlap:
@@ -188,8 +173,8 @@ class ReplayParams:
     """A perturbed parameter vector for one replay.
 
     `values` starts from the shipped defaults; anything not overridden keeps
-    its default, so a one-at-a-time sweep does not have to restate 55
-    numbers. `policy_overrides` reaches the per-policy weights, keyed by
+    its default, so a one-at-a-time sweep does not have to restate every
+    number. `policy_overrides` reaches the per-policy weights, keyed by
     policy name then field, e.g. {"reflective": {"memory_weight": 0.9}}.
     """
 

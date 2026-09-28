@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import pytest
 
+import src.retrieval.semantic_search as ss
 from src.context.models import ContextItem
 from src.context.ranker import ContextRanker
 from tools.retrieval_ablation.arms import (
     ARMS,
     ARMS_BY_NAME,
-    NEUTRAL_ITEM_TYPE,
     PristineScoreError,
     _candidate_fixtures,
     _patched_type_gate,
@@ -32,7 +32,13 @@ from tools.retrieval_ablation.arms import (
 from tools.retrieval_ablation.corpus import FIXTURES_BY_ID, STRATA, STRATA_BY_NAME
 
 A0 = ARMS_BY_NAME["A0_FULL"]
-TREATMENTS = [a for a in ARMS if a.name != "A0_FULL"]
+
+# A_PRE_ADR044_RETRIEVAL is not a treatment. It ADDS the two retrieval terms
+# ADR-044 removed, to serve as the before-measurement, so "does this arm
+# ablate something" is the wrong question to ask it -- it has its own test
+# below asserting it moves the score in the additive direction.
+BASELINES = {"A0_FULL", "A_PRE_ADR044_RETRIEVAL"}
+TREATMENTS = [a for a in ARMS if a.name not in BASELINES]
 
 
 class TestEveryArmActuallyAblates:
@@ -81,66 +87,136 @@ class TestConstantFreeAblations:
     """Each ablation removes a mechanism's INPUT rather than restating its
     constants, so none can drift when a weight is retuned."""
 
-    def test_neutral_item_type_scores_zero_type_boost(self):
-        """The sentinel must fall through _score_memory_item's type ladder.
-        Checked against the real function, not against a copied table."""
-        ranker = ContextRanker()
+    def test_prior_off_is_uniform_one_not_a_flattened_curve(self):
+        """The neutral element of a multiplier is 1.0, and it must be exact.
 
-        def probe(item_type):
-            item = ContextItem(
-                id="p", content="a sufficiently long probe body for the scorer to accept",
-                source=item_type, item_type=item_type, memory_type=item_type,
-                score=0.0, timestamp=None, metadata={},
-            )
-            return ranker._score_memory_item(item).score
-
-        assert probe(NEUTRAL_ITEM_TYPE) == pytest.approx(probe("ingested"))
-        assert probe("conversation") > probe(NEUTRAL_ITEM_TYPE)
-
-    def test_decay_off_is_uniform_one_not_the_default_curve(self):
-        """Collapsing to _DEFAULT_DECAY would strip the no-decay exemption that
-        ingested and profile rely on and can flip delta_T's sign."""
-        ranker = ContextRanker()
+        Replaces a test of the same shape written against
+        `_temporal_decay_weight`, whose neutral was also 1.0 but whose hazard
+        was different: collapsing to _DEFAULT_DECAY would have stripped the
+        no-decay exemption. The prior has no exemptions, so the hazard here is
+        the opposite one -- an ablation that returns 0.0 (the additive neutral,
+        correct for the term this replaced) would zero every score rather than
+        remove a term, and the arm would look enormously effective.
+        """
         stratum = STRATA_BY_NAME["factual_recall_retrieval_theory"]
-        arm = ARMS_BY_NAME["A_decay-off"]
 
-        real_weights = set()
-        for item in build_candidates(stratum, arm):
-            real_weights.add(ranker._temporal_decay_weight(item))
-        assert len(real_weights) > 1, "corpus must span several decay buckets"
+        from src.context import prior
+
+        real = {
+            prior.assemble(
+                content_kind=(i.metadata or {}).get("content_kind"),
+                content_length=len(i.content.lower().strip()),
+                recency_bucket=ContextRanker()._recency_bucket(i.timestamp),
+            )
+            for i in build_candidates(stratum, A0)
+        }
+        assert len(real) > 1, "corpus must span several prior values"
 
         from unittest.mock import patch
 
-        with patch.object(ContextRanker, "_temporal_decay_weight", lambda self, i: 1.0):
+        with patch("src.context.prior.assemble", lambda **kwargs: 1.0):
             off = {
-                ContextRanker()._temporal_decay_weight(i)
-                for i in build_candidates(stratum, arm)
+                prior.assemble(content_kind=None, content_length=len(i.content),
+                               recency_bucket="unparsed")
+                for i in build_candidates(stratum, ARMS_BY_NAME["A_prior-off"])
             }
         assert off == {1.0}
 
-    def test_profile_relabel_preserves_decay(self):
+    def test_profile_relabel_preserves_the_age_exemption(self):
         """T-off_policy strips profile privilege by relabelling to "reference".
-        Both are in _NO_DECAY_TYPES, so decay is unchanged -- relabelling to a
-        decaying type would have applied a 10x side effect and contaminated
-        the arm."""
-        ranker = ContextRanker()
+
+        Both are exempt from the age curve, so relabelling changes the
+        privilege and nothing else. Under ADR-044 decision 3 the curve moved
+        from the ranker to TieringService, so the invariant is now asserted
+        against halflife_for_type -- same claim, new owner. Relabelling to a
+        decaying type instead would apply an age change as a side effect and
+        contaminate the arm.
+        """
+        from src.tiering.tiering_service import halflife_for_type
+
         stratum = STRATA_BY_NAME["default_identity_question"]
 
-        full = {
-            i.id: ranker._temporal_decay_weight(i)
-            for i in build_candidates(stratum, A0)
-        }
-        stripped = {
-            i.id: ranker._temporal_decay_weight(i)
-            for i in build_candidates(stratum, ARMS_BY_NAME["A_T-off_policy"])
-        }
+        full = {i.id: halflife_for_type(i.memory_type)
+                for i in build_candidates(stratum, A0)}
+        stripped = {i.id: halflife_for_type(i.memory_type)
+                    for i in build_candidates(stratum, ARMS_BY_NAME["A_T-off_policy"])}
         profile_ids = [
             f.id for f in _candidate_fixtures(stratum)
             if f.memory_type == "profile"
         ]
         assert profile_ids
         for pid in profile_ids:
-            assert full[pid] == stripped[pid] == 1.0
+            assert full[pid] is None and stripped[pid] is None
+
+    def test_the_baseline_arm_adds_the_terms_adr044_removed(self):
+        """A_PRE_ADR044_RETRIEVAL is the before-measurement, so it must be
+        strictly additive relative to the reference and must not be mistaken
+        for an ablation.
+
+        This is the test that would have caught the defect it was created to
+        fix: A0_FULL used to add these two terms itself, so it modelled a
+        retrieval stage semantic_search had stopped running, and nothing
+        compared the two. Asserting a DIFFERENCE between the arms is what
+        makes A0_FULL's fidelity checkable at all.
+        """
+        baseline = ARMS_BY_NAME["A_PRE_ADR044_RETRIEVAL"]
+        stratum = STRATA_BY_NAME["factual_recall_retrieval_theory"]
+
+        differed = 0
+        for fixture in _candidate_fixtures(stratum):
+            shipped = retrieval_score(fixture, stratum, A0)
+            before = retrieval_score(fixture, stratum, baseline)
+            if before != shipped:
+                differed += 1
+                # memory_type_adjustment is negative for ingested, so the
+                # direction is per-record rather than uniformly upward. What
+                # must hold is that the two arms are not the same arm.
+                assert before == pytest.approx(
+                    shipped
+                    + ss.memory_type_adjustment(fixture.memory_type)
+                    + ss.source_quality_adjustment(
+                        " ".join(fixture.text.lower().split()),
+                        {"role": fixture.role} if fixture.role else {},
+                    )
+                )
+        assert differed > 0, (
+            "the baseline arm scores identically to the reference, so the "
+            "pre-ADR-044 retrieval stage is not being reconstructed"
+        )
+
+    def test_the_reference_arm_adds_exactly_what_semantic_search_adds(self):
+        """A0_FULL must model the SHIPPED retrieval stage, term for term.
+
+        Built from the real production functions in semantic_search's own
+        order, so the assertion is an independent reconstruction rather than a
+        restatement of retrieval_score. If someone re-adds a call to
+        semantic_search without updating the harness -- or the reverse, which
+        is the defect this replaces -- the two expressions diverge here.
+        """
+        stratum = STRATA_BY_NAME["factual_recall_retrieval_theory"]
+        checked = 0
+
+        for fixture in _candidate_fixtures(stratum):
+            normalized_query = " ".join(stratum.query.lower().split())
+            normalized_content = " ".join(fixture.text.lower().split())
+
+            expected = stratum.cosine(fixture.id)
+            expected += ss.lexical_relevance_bonus(
+                normalized_query,
+                ss.extract_query_terms(normalized_query),
+                normalized_content,
+                raw_query=stratum.query,
+            )
+            expected += ss.query_intent_adjustment(
+                stratum.query, fixture.memory_type, normalized_content
+            )
+
+            assert retrieval_score(fixture, stratum, A0) == pytest.approx(expected), (
+                f"A0_FULL disagrees with semantic_search on {fixture.id}"
+            )
+            checked += 1
+
+        assert checked > 0
 
     def test_profile_relabel_removes_the_privilege(self):
         stratum = STRATA_BY_NAME["default_identity_question"]
@@ -218,10 +294,10 @@ class TestPristineScores:
         """Running an arm after another must give the same answer as running it
         alone, or multipliers are leaking between arms."""
         stratum = STRATA_BY_NAME["activity_pipeline_work"]
-        alone = run_cell(stratum, ARMS_BY_NAME["A_decay-off"])
+        alone = run_cell(stratum, ARMS_BY_NAME["A_prior-off"])
         run_cell(stratum, A0)
         run_cell(stratum, ARMS_BY_NAME["A_T-off_policy"])
-        after = run_cell(stratum, ARMS_BY_NAME["A_decay-off"])
+        after = run_cell(stratum, ARMS_BY_NAME["A_prior-off"])
         assert [i.id for i in after.delivered] == [i.id for i in alone.delivered]
         assert [round(i.score, 9) for i in after.delivered] == [
             round(i.score, 9) for i in alone.delivered

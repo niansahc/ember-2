@@ -158,33 +158,46 @@ def seeded_vault():
     yield vector
 
 
+@pytest.fixture
+def stub_query_embedding(seeded_vault):
+    """Both bindings. See tests/test_debug_context_read_only.py for the why.
+
+    ContextRetriever.retrieve() embeds the query through
+    src.retrieval.embed_memory.embed_text, so patching only the
+    semantic_search binding left the query vector real against a stubbed
+    corpus -- cosine 0.0052, every record a non-match. Two tests in this class
+    ("no write happened", "commit_delivery() == 0") are trivially true of an
+    empty candidate set, so they were passing without ever exercising a
+    delivery. The additive terms ADR-044 removed had been carrying those
+    non-matches over the type gate and hiding it.
+    """
+    with patch("src.retrieval.semantic_search.embed_text", return_value=seeded_vault),          patch("src.retrieval.embed_memory.embed_text", return_value=seeded_vault):
+        yield seeded_vault
+
+
 class TestBuildContext:
-    def test_build_context_no_longer_writes_by_itself(self, seeded_vault):
+    def test_build_context_no_longer_writes_by_itself(self, stub_query_embedding):
         """The defect, stated as a test.
 
         A build that writes on its own cannot distinguish a delivery from a
         candidate set, because at that point the slice has not happened.
         """
         service = ContextService()
-        with patch("src.retrieval.semantic_search.embed_text",
-                   return_value=seeded_vault):
-            with patch.object(service, "_update_retrieval_stats") as stats:
-                service.build_context(QUERY)
+        with patch.object(service, "_update_retrieval_stats") as stats:
+            packet = service.build_context(QUERY)
+        assert packet.memory_items, "nothing retrieved; no-write would be vacuous"
         stats.assert_not_called()
 
-    def test_build_context_arms_the_recorder(self, seeded_vault):
+    def test_build_context_arms_the_recorder(self, stub_query_embedding):
         service = ContextService()
-        with patch("src.retrieval.semantic_search.embed_text",
-                   return_value=seeded_vault):
-            packet = service.build_context(QUERY)
+        packet = service.build_context(QUERY)
         assert packet._delivery_recorder is not None
 
-    def test_read_only_arms_nothing(self, seeded_vault):
+    def test_read_only_arms_nothing(self, stub_query_embedding):
         """#206 stays structural: no writer exists to be reached."""
         service = ContextService()
-        with patch("src.retrieval.semantic_search.embed_text",
-                   return_value=seeded_vault):
-            packet = service.build_context(QUERY, read_only=True)
+        packet = service.build_context(QUERY, read_only=True)
+        assert packet.memory_items, "nothing retrieved; the count would be vacuous"
         assert packet._delivery_recorder is None
         packet.begin_render()
         packet.record_rendered(packet.memory_items)

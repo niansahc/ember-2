@@ -6,10 +6,19 @@ Coverage for the per-term trace capture and replay harness.
 Three things are under test, in order of how badly they matter.
 
 1. THE DEFAULTS ARE THE SHIPPED CONSTANTS. params.py is a second copy of
-   numbers that live inline in src/. A copy that drifts is worse than no
-   copy: every sensitivity number computed from it would be confidently
-   wrong. Each default is pinned by calling the shipped function and
-   reading the value back, so a retune in src/ fails here.
+   the retrieval, policy and authorship constants that live inline in src/.
+   A copy that drifts is worse than no copy: every sensitivity number
+   computed from it would be confidently wrong. Each of those is pinned by
+   calling the shipped function and reading the value back, so a retune in
+   src/ fails here.
+
+   The prior and tier parameters are handled differently, because after
+   ADR-044 their values are derived rather than authored -- params.py
+   IMPORTS them, so there is no copy to guard and a pinning test would only
+   assert an identity. What is tested instead is coverage (every factor the
+   prior applies is in the vector), absence (no retired parameter lingers),
+   and expressibility (each bounded parameter's shipped value lies inside
+   its own sweep range).
 
 2. REPLAY REPRODUCES CAPTURE EXACTLY. Over a synthetic vault, with the
    score checked to 1e-12 and the delivered set checked by identity.
@@ -31,16 +40,15 @@ import pytest
 
 from src.context.models import ContextItem
 from src.context.policies import ContextPolicy
-from src.context.ranker import COLD_MULTIPLIER, ContextRanker
+from src.context.ranker import COLD_MULTIPLIER, WARM_MULTIPLIER, ContextRanker
 from src.context.service import ContextService
 from tests.conftest import deliver_packet
 from src.core.config import get_private_vault_path
 from src.memory.write_memory import write_memory
+from src.context import prior
 from src.retrieval.semantic_search import (
     lexical_relevance_bonus,
-    memory_type_adjustment,
     query_intent_adjustment,
-    source_quality_adjustment,
 )
 from tools.retrieval_trace import capture as capture_mod
 from tools.retrieval_trace.params import PARAM_NAMES, ReplayParams, default_params
@@ -61,20 +69,6 @@ P = default_params()
 
 def test_no_duplicate_parameter_names():
     assert len(PARAM_NAMES) == len(set(PARAM_NAMES))
-
-
-@pytest.mark.parametrize(
-    "mem_type,param",
-    [
-        ("conversation", "ret.type.conversation"),
-        ("reflection", "ret.type.reflection"),
-        ("memory", "ret.type.memory"),
-        ("ingested", "ret.type.ingested"),
-        ("journal", "ret.type.other"),
-    ],
-)
-def test_retrieval_type_defaults_match_shipped(mem_type, param):
-    assert memory_type_adjustment(mem_type) == P[param]
 
 
 def test_lexical_defaults_match_shipped():
@@ -98,38 +92,6 @@ def test_lexical_defaults_match_shipped():
         "zzz", [], "alpha beta gamma", raw_query="x Alpha Beta Gamma"
     )
     assert three == pytest.approx(P["ret.lexical.entity_cap"])
-
-
-def _quality(content: str, metadata: dict | None = None) -> float:
-    return source_quality_adjustment(content, metadata)
-
-
-def test_source_quality_defaults_match_shipped():
-    neutral = "a plain statement of fact with no markers of any kind at all"
-    base = _quality(neutral)
-    assert base == pytest.approx(P["ret.quality.not_question"])
-    assert _quality(neutral, {"role": "user"}) - base == pytest.approx(
-        P["ret.quality.role_user"]
-    )
-    assert _quality(neutral, {"role": "assistant"}) - base == pytest.approx(
-        P["ret.quality.role_assistant"]
-    )
-    question = "why does the plain statement of fact carry no markers at all"
-    assert _quality(question) == pytest.approx(P["ret.quality.question"])
-    # Both sides are question-like on purpose: "could you clarify" trips the
-    # question ladder as well, so a non-question baseline would measure the
-    # clarification term plus the question term and call it one number.
-    clarify = "why is this, and could you clarify the rest of it for me please"
-    plain_question = "why is this, and where is the rest of it written out"
-    assert _quality(clarify) - _quality(plain_question) == pytest.approx(
-        P["ret.quality.clarification"]
-    )
-    assert _quality("today the plain statement carried no markers") - base == pytest.approx(
-        P["ret.quality.experience"]
-    )
-    assert _quality("here's a summary of the plain statement") - _quality(
-        "a restatement of the plain statement"
-    ) == pytest.approx(P["ret.quality.summary"])
 
 
 def test_query_intent_defaults_match_shipped():
@@ -223,134 +185,70 @@ def test_authorship_and_project_defaults_match_shipped():
     assert item.score == pytest.approx(P["proj.boost"])
 
 
-@pytest.mark.parametrize(
-    "item_type,param",
-    [
-        ("conversation", "rank.type.conversation"),
-        ("reflection", "rank.type.reflection"),
-        ("memory", "rank.type.memory"),
-        ("ingested", "rank.type.ingested"),
-    ],
-)
-def test_rank_type_defaults_match_shipped(item_type, param):
-    ranker = ContextRanker()
-    item = _item(score=0.0, item_type=item_type)
-    ranker._score_memory_item(item)
-    assert item.score == pytest.approx(P[param])
+def test_the_prior_vector_covers_every_factor_the_prior_applies():
+    """No prior factor may be missing from the parameter vector.
+
+    The prior's magnitudes are DERIVED (from the measured cosine spread and
+    from Sobol ST on delivery), so params.py imports them instead of copying
+    them, and the pinning tests that guarded the old additive terms were
+    deleted rather than migrated: asserting that an imported value equals
+    itself is not a test.
+
+    What still needs guarding is COVERAGE. A factor added to prior.py that
+    nobody adds to the vector would be swept by nothing and report a
+    sensitivity of exactly zero -- indistinguishable from a term the corpus
+    never exercised, which is the confusion parameter_coverage exists to
+    prevent.
+    """
+    expected = (
+        {f"prior.kind.{k}" for k in prior._KIND_FACTORS if k != "none"}
+        | {f"prior.len.{k}" for k in prior._LENGTH_FACTORS if k != "none"}
+        | {f"prior.recency.{b}" for b in prior.RECENCY}
+        | {"prior.reflection_discount"}
+    )
+    actual = {n for n in PARAM_NAMES if n.startswith("prior.")}
+    assert actual == expected
 
 
-@pytest.mark.parametrize(
-    "role,param",
-    [("user", "rank.role.user"), ("assistant", "rank.role.assistant"),
-     ("tool", "rank.role.tool_system"), ("system", "rank.role.tool_system")],
-)
-def test_rank_role_defaults_match_shipped(role, param):
-    ranker = ContextRanker()
-    item = _item(score=0.0, metadata={"role": role})
-    ranker._score_memory_item(item)
-    assert item.score == pytest.approx(P[param])
+def test_no_retired_parameter_lingers_in_the_vector():
+    """The parameters ADR-044 retired are gone, not left at their old values.
+
+    A retired parameter kept in the table is the worst outcome available: it
+    sweeps, moves nothing, and reports as an inert parameter -- so a reader
+    concludes the TERM does not matter, when the truth is that the term has no
+    call site at all. That is the reading this test exists to make impossible.
+    """
+    retired_prefixes = (
+        "ret.type.",       # memory_type_adjustment, no longer called
+        "ret.quality.",    # source_quality_adjustment, no longer called
+        "rank.",           # the additive pile
+        "refl.",           # the reflection discount and its recency scale
+        "decay.",          # _temporal_decay_weight, absorbed into tiering
+        "recency.",        # the additive ladder; now prior.recency.*
+    )
+    lingering = sorted(n for n in PARAM_NAMES if n.startswith(retired_prefixes))
+    assert not lingering, f"retired parameters still in the vector: {lingering}"
 
 
-@pytest.mark.parametrize(
-    "kind,param",
-    [("experience", "rank.kind.experience"), ("user_content", "rank.kind.user_content"),
-     ("answer", "rank.kind.answer"), ("question", "rank.kind.question")],
-)
-def test_rank_kind_defaults_match_shipped(kind, param):
-    ranker = ContextRanker()
-    item = _item(score=0.0, metadata={"content_kind": kind})
-    ranker._score_memory_item(item)
-    assert item.score == pytest.approx(P[param])
+def test_the_bound_is_expressible_by_every_bounded_parameter():
+    """Each bounded parameter's shipped value lies inside its sweep range.
 
+    The failure this prevents is concrete and was live before ADR-044's range
+    family was added: the multiplier family swept [0, 1], which cannot express
+    prior.kind.experience at 1.0581. A parameter screened over an interval
+    that excludes its own shipped value reports sensitivity for a system
+    nobody runs.
+    """
+    from tools.retrieval_trace.ranges import FAMILY_BOUNDED, build_ranges
 
-def test_rank_length_and_token_defaults_match_shipped():
-    ranker = ContextRanker()
-    # Under 20 characters also trips the token floor, so the two are read
-    # together rather than pretending they separate.
-    short = _item(score=0.0, content="tiny")
-    ranker._score_memory_item(short)
-    assert short.score == pytest.approx(P["rank.len.lt20"] + P["rank.tokens_lt5"])
-
-    mid = _item(score=0.0, content="one two three four five six seven")
-    ranker._score_memory_item(mid)
-    assert mid.score == pytest.approx(P["rank.len.lt50"])
-
-    long_item = _item(score=0.0, content="word " * 300)
-    ranker._score_memory_item(long_item)
-    assert long_item.score == pytest.approx(P["rank.len.gt1200"])
-
-
-def test_rank_user_prefix_default_matches_shipped():
-    ranker = ContextRanker()
-    plain = "a record body long enough to avoid every length penalty there is"
-    with_prefix = _item(score=0.0, content=f"user: {plain}")
-    without = _item(score=0.0, content=plain)
-    ranker._score_memory_item(with_prefix)
-    ranker._score_memory_item(without)
-    assert with_prefix.score - without.score == pytest.approx(P["rank.user_prefix"])
-
-
-@pytest.mark.parametrize(
-    "age_days,param",
-    [(0, "recency.d7"), (7, "recency.d7"), (8, "recency.d30"), (30, "recency.d30"),
-     (31, "recency.d90"), (90, "recency.d90"), (91, "recency.d365"),
-     (365, "recency.d365"), (366, "recency.older")],
-)
-def test_recency_defaults_match_shipped(age_days, param):
-    ranker = ContextRanker()
-    with patch.object(ContextRanker, "_parse_age_days", return_value=age_days):
-        assert ranker._recency_boost("ignored") == pytest.approx(P[param])
-
-
-def test_unparsed_recency_default_matches_shipped():
-    assert ContextRanker()._recency_boost(None) == P["recency.unparsed"]
-
-
-@pytest.mark.parametrize(
-    "mem_type,age_days,param",
-    [
-        ("profile", 1000, "decay.none"),
-        ("reference", 1000, "decay.none"),
-        ("ingested", 1000, "decay.none"),
-        ("reflection", 7, "decay.reflection.d7"),
-        ("reflection", 30, "decay.reflection.d30"),
-        ("reflection", 90, "decay.reflection.d90"),
-        ("reflection", 91, "decay.reflection.older"),
-        ("conversation", 3, "decay.ephemeral.d3"),
-        ("conversation", 7, "decay.ephemeral.d7"),
-        ("conversation", 14, "decay.ephemeral.d14"),
-        ("conversation", 30, "decay.ephemeral.d30"),
-        ("conversation", 31, "decay.ephemeral.older"),
-        ("state", 3, "decay.default.d3"),
-        ("state", 7, "decay.default.d7"),
-        ("state", 14, "decay.default.d14"),
-        ("state", 30, "decay.default.d30"),
-        ("state", 90, "decay.default.d90"),
-        ("state", 91, "decay.default.older"),
-    ],
-)
-def test_decay_defaults_match_shipped(mem_type, age_days, param):
-    ranker = ContextRanker()
-    item = _item(memory_type=mem_type, timestamp="whatever")
-    with patch.object(ContextRanker, "_parse_age_days", return_value=age_days):
-        assert ranker._temporal_decay_weight(item) == pytest.approx(P[param])
-
-
-def test_reflection_scoring_defaults_match_shipped():
-    ranker = ContextRanker()
-    plain = "a reflection body long enough to clear the short-reflection floor"
-    item = _item(score=1.0, content=plain, item_type="reflection", memory_type="reflection")
-    ranker._score_reflection_item(item)
-    assert item.score == pytest.approx(P["refl.base_discount"])
-
-    short = _item(score=1.0, content="brief", item_type="reflection", memory_type="reflection")
-    ranker._score_reflection_item(short)
-    assert short.score == pytest.approx(P["refl.base_discount"] + P["refl.short"])
-
-    dated = _item(score=0.0, content=plain, item_type="reflection", memory_type="reflection")
-    with patch.object(ContextRanker, "_parse_age_days", return_value=0):
-        ranker._score_reflection_item(dated)
-    assert dated.score == pytest.approx(P["recency.d7"] * P["refl.recency_scale"])
+    ranges = build_ranges(P)
+    bounded = [r for r in ranges.values() if r.family == FAMILY_BOUNDED]
+    assert bounded, "no bounded parameters; the family is not wired up"
+    for r in bounded:
+        assert r.low <= r.default <= r.high, (
+            f"{r.name} default {r.default} outside sweep range "
+            f"[{r.low}, {r.high}]"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +351,7 @@ def traced_run(stub_query_embedding):
     something a unit test should depend on.
     """
     policy = ContextPolicy(name="reflective", memory_weight=0.7, reflection_weight=1.4,
-                           recency_bias=0.2, diversity=True, prefer_experiences=True)
+                           diversity=True, prefer_experiences=True)
     with patch("tools.retrieval_trace.capture.classify_query", return_value=policy), \
          patch("src.context.service.classify_query", return_value=policy):
         yield capture_mod.capture_run(
@@ -523,8 +421,23 @@ def test_terms_are_individually_attributable(traced_run):
     result = compose(candidate, ReplayParams(), traced_run.queries[0].policy_name)
     assert len(result.terms) >= 6
     assert "raw_cosine" in result.terms
-    assert any(name.startswith("rank.") for name in result.terms)
-    assert "decay" in result.terms
+
+    # The prior's FACTORS, not just its product. Consolidating the additive
+    # pile into one multiplier put per-term attribution at risk: recording
+    # only the composed "prior" would make every metadata term
+    # indistinguishable from every other, which is precisely the granularity
+    # this test exists to defend. So both are required.
+    assert "prior" in result.terms
+    assert any(name.startswith("prior.") for name in result.terms)
+
+    # And the product really is the product of the factors it reports, so the
+    # attribution is not decorative.
+    factors = [v for k, v in result.terms.items() if k.startswith("prior.")]
+    assert factors
+    product = 1.0
+    for value in factors:
+        product *= value
+    assert result.terms["prior"] == pytest.approx(prior.clamp(product))
 
 
 def test_perturbing_a_parameter_moves_the_score(traced_run):
@@ -555,7 +468,13 @@ def test_parameter_coverage_separates_inert_from_exercised(traced_run):
     # cannot be exercised. Asserting that they come back inert is what
     # proves the report distinguishes the two cases rather than reporting
     # every parameter as live.
-    assert "ret.type.ingested" in inert
+    #
+    # ret.type.ingested used to be the ingested-record probe here. It is
+    # retired (semantic_search no longer calls memory_type_adjustment), and a
+    # retired parameter is inert for a THIRD reason -- no call site -- which
+    # would have made this assertion pass while testing nothing. The
+    # ingested-specific parameter that survives is the intent term.
+    assert "ret.intent.reflective_ingested" in inert
     assert "proj.boost" in inert
 
 
@@ -619,7 +538,11 @@ def test_capture_raises_when_the_model_disagrees_with_the_pipeline(stub_query_em
     """
     policy = ContextPolicy(name="default")
     broken = dict(default_params())
-    broken["rank.type.conversation"] = 99.0
+    # A live parameter every candidate activates. Was rank.type.conversation,
+    # which ADR-044 retired -- poisoning a parameter with no call site would
+    # perturb nothing, so the meta-test would pass by failing to detect a
+    # disagreement that never occurred.
+    broken["prior.recency.unparsed"] = 99.0
 
     with patch("tools.retrieval_trace.capture.classify_query", return_value=policy), \
          patch("src.context.service.classify_query", return_value=policy), \

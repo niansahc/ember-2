@@ -79,7 +79,6 @@ from src.core.config import (
     get_private_vault_path,
     get_tier_access_ceiling,
     get_tier_hot_threshold,
-    get_tier_recency_halflife_days,
     get_tier_warm_threshold,
 )
 from src.core.timestamps import parse_vault_timestamp
@@ -131,26 +130,54 @@ def _recency_score(
 #   reflection x0.60 at 90 days  -> 90 / log2(1/0.60) = 122 days
 # The reference-class types keep the exemption they had: profile,
 # reference and ingested did not decay before and do not now.
+#
+# Functional form is exponential, not the stepwise form of the ladders.
+# ADR-044 leaves that open and says the form should be settled before the
+# values, because two curves of different form cannot be compared by
+# tuning. Exponential, because tier's own recency was already exponential
+# and the point of decision 3 is to have ONE age model -- keeping the
+# stepwise form would have been two forms in one mechanism. Fitting at the
+# knee is what makes the two comparable at the age that mattered most in
+# production: ranker.decay.bucket.ephemeral=older fired 256 of 256 times,
+# so the ephemeral curve's behaviour past 30 days is the part that was
+# actually load-bearing.
 _EPHEMERAL_TYPES = frozenset({"conversation", "journal", "session", "decision"})
 _NO_DECAY_TYPES = frozenset({"profile", "reference", "ingested"})
+
+_EPHEMERAL_HALFLIFE_DAYS = 15.0
+_DEFAULT_FAMILY_HALFLIFE_DAYS = 52.0
 
 _TYPE_HALFLIFE_DAYS = {
     "reflection": 122.0,
 }
 
 
-def halflife_for_type(memory_type: str, default_halflife: float) -> float | None:
+def halflife_for_type(memory_type: str) -> float | None:
     """Per-type halflife, or None for the reference classes that do not decay.
 
-    default_halflife is the configured global value; a type with no entry
-    of its own takes it, which keeps the existing behaviour for anything
-    the absorbed ladders did not name.
+    All three fitted values above are applied, the default family's 52 days
+    included. An earlier version took `default_halflife` for that family,
+    which meant the fitted 52 was stated in the comment and never used: the
+    configured global (30) governed instead, so the absorbed `_DEFAULT_DECAY`
+    ladder had been replaced by a curve nobody derived.
+
+    There is no `default_halflife` parameter for the same reason there was no
+    fourth ladder: `_DEFAULT_DECAY` was the catch-all, so every type is in
+    exactly one of these families by construction and a fallback could never
+    be reached. A parameter that cannot be reached is worse than no
+    parameter -- it reads as a configuration point that does nothing.
+
+    TIER_RECENCY_HALFLIFE_DAYS therefore no longer affects tier decay. It
+    keeps its other consumer (`sqlite_vector_store.py:503`), so it is not
+    dead config, but the nightly age curve is now fitted rather than
+    configured. That is the trade ADR-044 decision 3 makes: one age model,
+    derived from the ladders it replaces, rather than two that compound.
     """
     if memory_type in _NO_DECAY_TYPES:
         return None
     if memory_type in _EPHEMERAL_TYPES:
-        return 15.0
-    return _TYPE_HALFLIFE_DAYS.get(memory_type, default_halflife)
+        return _EPHEMERAL_HALFLIFE_DAYS
+    return _TYPE_HALFLIFE_DAYS.get(memory_type, _DEFAULT_FAMILY_HALFLIFE_DAYS)
 
 
 def _access_score(frequency_score: float, ceiling: int) -> float:
@@ -222,7 +249,8 @@ class TieringService:
             {"hot_to_warm": N, "warm_to_cold": N, ...}
         """
         vault = get_private_vault_path()
-        halflife = get_tier_recency_halflife_days()
+        # No global halflife is read here any more: the age curve is per type
+        # (ADR-044 decision 3, halflife_for_type above).
         ceiling = get_tier_access_ceiling()
         hot_threshold = get_tier_hot_threshold()
         warm_threshold = get_tier_warm_threshold()
@@ -280,7 +308,7 @@ class TieringService:
                 # curve as recency (same reference timestamp, same
                 # halflife) -- see module docstring's "Activation model".
                 # ADR-044 decision 3: one age model, per type.
-                type_halflife = halflife_for_type(memory_type, halflife)
+                type_halflife = halflife_for_type(memory_type)
                 if type_halflife is None:
                     recency = 1.0  # reference classes do not decay
                 else:

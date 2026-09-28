@@ -71,6 +71,7 @@ from unittest.mock import patch
 
 import pytest
 
+import src.context.role_predicate as role_predicate_module
 import src.retrieval.semantic_search as ss
 from src.context.models import ContextItem, ContextPacket
 from src.context.ranker import ContextRanker
@@ -331,9 +332,10 @@ def _arm(name: str):
 
     The predicate is applied by the runner rather than patched in, because
     `should_exclude_result` takes content only (`semantic_search.py:465`) and
-    has no metadata to test. A real implementation would be a WHERE clause on
-    the `authorship` column, which exists; filtering the candidate list stands
-    in for that here.
+    has no metadata to test. Filtering the candidate list is where a WHERE
+    clause would land in this harness -- but the filter itself is the shipped
+    `role_predicate.apply`, not a restatement of it. See the comment at the
+    call site for what the restatement cost.
     """
     if name == "shipped":
         yield False
@@ -401,13 +403,14 @@ def _model_visible_text(incident: Incident, arm: str) -> str:
             items.append(item)
 
         if role_predicate:
-            # Stand-in for a WHERE clause: assistant-authored conversation
-            # never becomes a candidate at all.
-            items = [
-                i for i in items
-                if not (i.memory_type == "conversation"
-                        and (i.metadata or {}).get("role") == "assistant")
-            ]
+            # The SHIPPED predicate, not a local copy of it. This arm used to
+            # apply its own filter here, and that is how a real defect stayed
+            # invisible: the predicate as first shipped was gated to
+            # relational queries, the self-echo incident's query is not
+            # relational, so the shipped code did not fire on the incident
+            # this arm reports a PASS for. A permanent regression suite that
+            # reimplements the thing it protects protects nothing.
+            items = role_predicate_module.apply(items)
 
         ranker = ContextRanker()
 

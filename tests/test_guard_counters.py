@@ -181,11 +181,17 @@ def test_the_scope_refuses_to_open_under_pytest(counter_db):
     assert gc.read_all(counter_db) == []
 
 
-def test_a_build_context_in_the_suite_records_nothing(counter_db, seeded_vault):
-    """End to end: the suite must not be able to pollute the population."""
+def test_a_build_context_in_the_suite_records_nothing(counter_db, stub_query_embedding):
+    """End to end: the suite must not be able to pollute the population.
+
+    Takes stub_query_embedding rather than seeded_vault so the build actually
+    retrieves something. With the query vector unstubbed this asserted that no
+    counters were written by a build that delivered nothing, which is true for
+    the wrong reason.
+    """
     service = ContextService()
-    with patch("src.retrieval.semantic_search.embed_text", return_value=seeded_vault):
-        service.build_context("what have i been reading about lately")
+    packet = service.build_context("what have i been reading about lately")
+    assert packet.memory_items, "the build delivered nothing; the assertion would be vacuous"
     assert gc.read_all(counter_db) == []
 
 
@@ -219,6 +225,33 @@ def seeded_vault():
     yield vector
 
 
+@pytest.fixture
+def stub_query_embedding(seeded_vault):
+    """Both bindings, or the corpus is searched with a real query vector.
+
+    ContextRetriever.retrieve() computes the query embedding through
+    src.retrieval.embed_memory.embed_text and passes it down, so patching only
+    the semantic_search binding left the QUERY vector real while the records
+    stayed stubbed -- a measured cosine of 0.0052 against this fixture's flat
+    vector, i.e. every record a total non-match.
+
+    That was invisible here until ADR-044 removed memory_type_adjustment and
+    source_quality_adjustment from semantic_search. Those two contributed up to
+    +0.40 of query-independent lift, which was enough to carry a 0.0052-cosine
+    record across _apply_type_gate's 0.25 similarity floor. The additive pile
+    was manufacturing a score floor out of nothing, and these tests were green
+    on it -- three of them asserting things that are trivially true of an empty
+    candidate set.
+
+    tests/test_debug_context_read_only.py and
+    tests/test_retrieval_stats_read_only.py already carried this fixture and
+    this explanation. This file simply did not use it.
+    """
+    with patch("src.retrieval.semantic_search.embed_text", return_value=seeded_vault), \
+         patch("src.retrieval.embed_memory.embed_text", return_value=seeded_vault):
+        yield seeded_vault
+
+
 def _packet_fingerprint(packet):
     return [
         (item.store_id, item.memory_type, round(float(item.score), 12))
@@ -229,18 +262,17 @@ def _packet_fingerprint(packet):
     ]
 
 
-def test_recording_does_not_change_the_packet(counter_db, seeded_vault):
+def test_recording_does_not_change_the_packet(counter_db, stub_query_embedding):
     """Verified by comparison, not by reading the diff and hoping."""
     service = ContextService()
-    with patch("src.retrieval.semantic_search.embed_text", return_value=seeded_vault):
-        # Like for like: both runs take the same path through build_context,
-        # differing only in whether the recorder is live. Comparing a
-        # read_only run against a writing one would confound the counters
-        # with the stats write.
-        with patch.object(gc, "_under_pytest", return_value=False):
-            with_counting = _packet_fingerprint(service.build_context(QUERY))
-            with patch.object(gc, "recording_enabled", return_value=False),                  patch.object(gc, "count", side_effect=lambda site, fired: fired),                  patch.object(gc, "branch", side_effect=lambda site, which: which):
-                without = _packet_fingerprint(service.build_context(QUERY))
+    # Like for like: both runs take the same path through build_context,
+    # differing only in whether the recorder is live. Comparing a read_only
+    # run against a writing one would confound the counters with the stats
+    # write.
+    with patch.object(gc, "_under_pytest", return_value=False):
+        with_counting = _packet_fingerprint(service.build_context(QUERY))
+        with patch.object(gc, "recording_enabled", return_value=False),              patch.object(gc, "count", side_effect=lambda site, fired: fired),              patch.object(gc, "branch", side_effect=lambda site, which: which):
+            without = _packet_fingerprint(service.build_context(QUERY))
 
     assert with_counting == without
     assert without, "nothing delivered; the comparison would be vacuous"
@@ -248,7 +280,7 @@ def test_recording_does_not_change_the_packet(counter_db, seeded_vault):
 
 def test_recording_does_not_change_ranker_scores(counter_db):
     ranker = ContextRanker()
-    policy = ContextPolicy(name="reflective", memory_weight=0.7, recency_bias=0.2,
+    policy = ContextPolicy(name="reflective", memory_weight=0.7,
                            prefer_experiences=True)
 
     def _items():
@@ -381,7 +413,7 @@ def test_the_window_override_is_off_unless_declared(monkeypatch):
     assert gc.window_override_active() is True
 
 
-def test_a_declared_window_records_under_suppressed_stats(counter_db, monkeypatch, seeded_vault):
+def test_a_declared_window_records_under_suppressed_stats(counter_db, monkeypatch, stub_query_embedding):
     """The point of the override.
 
     Suppressed stats normally mean an investigative caller, whose traffic
@@ -394,8 +426,7 @@ def test_a_declared_window_records_under_suppressed_stats(counter_db, monkeypatc
     monkeypatch.setenv(gc.ENV_WINDOW, "1")
     service = ContextService()
 
-    with patch.object(gc, "_under_pytest", return_value=False), \
-            patch("src.retrieval.semantic_search.embed_text", return_value=seeded_vault):
+    with patch.object(gc, "_under_pytest", return_value=False):
         with retrieval_stats_disabled():
             service.build_context(QUERY, read_only=True)
 
@@ -403,13 +434,12 @@ def test_a_declared_window_records_under_suppressed_stats(counter_db, monkeypatc
     assert rows, "a declared window recorded nothing"
 
 
-def test_without_the_window_a_read_only_build_records_nothing(counter_db, monkeypatch, seeded_vault):
+def test_without_the_window_a_read_only_build_records_nothing(counter_db, monkeypatch, stub_query_embedding):
     monkeypatch.setenv(gc.ENV_DB_PATH, str(counter_db))
     monkeypatch.delenv(gc.ENV_WINDOW, raising=False)
     service = ContextService()
 
-    with patch.object(gc, "_under_pytest", return_value=False), \
-            patch("src.retrieval.semantic_search.embed_text", return_value=seeded_vault):
+    with patch.object(gc, "_under_pytest", return_value=False):
         service.build_context(QUERY, read_only=True)
 
     assert gc.read_all(counter_db) == []
@@ -470,14 +500,24 @@ def test_first_and_last_seen_are_recorded(counter_db):
 # Inventory: the instrumented sites are actually wired up
 # ---------------------------------------------------------------------------
 
-INSTRUMENTED_MODULES = (
-    "src/retrieval/semantic_search.py",
-    "src/retrieval/vector_index.py",
-    "src/context/service.py",
-    "src/context/ranker.py",
-    "src/context/retriever.py",
-    "src/context/low_value.py",
-)
+# Imported, not restated. This was a second hand-maintained copy of
+# tools/guard_counter_sites.py's list, and both copies drifted the same way:
+# ADR-044 4a added an instrumented module (role_predicate) and neither list
+# gained it. The canonical list's own test catches an omission there; a private
+# duplicate here could not, because it was the thing being compared against.
+#
+# The regex scan below stays independent of the AST-based parser in
+# guard_counter_sites -- two implementations checking each other is the point.
+# What does not need to be independent is WHICH FILES they scan.
+def _instrumented_modules() -> tuple[str, ...]:
+    import sys
+
+    tools = str(Path(__file__).resolve().parents[1] / "tools")
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    from guard_counter_sites import INSTRUMENTED_MODULES as canonical
+
+    return tuple(canonical)
 
 # The sites the brief names as the minimum coverage, by prefix.
 REQUIRED_PREFIXES = (
@@ -490,8 +530,14 @@ REQUIRED_PREFIXES = (
     "low_value_filter.",
     "low_value.",
     "ranker.authorship.",
-    "ranker.decay.no_decay_type",
     "ranker.tier",
+    # ADR-044. "ranker.decay.no_decay_type" stood here; the decay family
+    # is deleted and these two are what must be instrumented instead --
+    # the prior is where the metadata terms went, and the predicate is
+    # where role went. Both were uninstrumented in 7d04e49, which is what
+    # this list exists to catch.
+    "prior.",
+    "role_predicate.",
     "reserved_slots.",
     "diversity.",
     "profile.",
@@ -504,7 +550,7 @@ def _declared_sites() -> set[str]:
     repo_root = Path(__file__).resolve().parents[1]
     pattern = re.compile(r'(?:count|branch|reached)\(\s*f?"([^"]+)"')
     sites: set[str] = set()
-    for relative in INSTRUMENTED_MODULES:
+    for relative in _instrumented_modules():
         source = (repo_root / relative).read_text(encoding="utf-8")
         sites.update(pattern.findall(source))
     return sites
@@ -532,7 +578,7 @@ def test_site_names_are_unique_per_call_site():
     repo_root = Path(__file__).resolve().parents[1]
     pattern = re.compile(r'(?:count|reached)\(\s*"([^"]+)"')
     seen: dict[str, int] = {}
-    for relative in INSTRUMENTED_MODULES:
+    for relative in _instrumented_modules():
         source = (repo_root / relative).read_text(encoding="utf-8")
         for site in pattern.findall(source):
             seen[site] = seen.get(site, 0) + 1

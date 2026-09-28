@@ -36,8 +36,8 @@ if str(TOOLS) not in sys.path:
 import guard_counter_sites as sites  # noqa: E402
 import traffic_window as window  # noqa: E402
 
+from src.context import prior  # noqa: E402
 from src.context.policies import classify_query  # noqa: E402
-from src.context.ranker import ContextRanker  # noqa: E402
 from src.observability.guard_counters import (  # noqa: E402
     KIND_BRANCH,
     KIND_PARENT,
@@ -99,37 +99,92 @@ class TestDeclaredInventory:
             else:
                 assert row["parent"] is None
 
-    def test_decay_bucket_arms_come_from_the_ladders(self):
-        """The arm domain is the ladder, not a copy of it.
+    def test_prior_term_arms_come_from_the_term_tables(self):
+        """The arm domain is the term table, not a copy of it.
 
-        A bucket added to _EPHEMERAL_DECAY should appear in the inventory
-        without anyone remembering to add it here.
+        Replaces the same test written against the three decay ladders, which
+        ADR-044 deleted. The principle it was protecting is unchanged and now
+        applies to the prior: a content_kind added to _KIND_FACTORS, or a
+        bucket added to RECENCY, must appear in the inventory without anyone
+        remembering to add it here. A copied domain drifts silently, and then
+        the window reports arms that do not exist and misses ones that do.
         """
         declared = {row["site"] for row in sites.declared_sites()}
-        for family, tiers in (
-            ("reflection", ContextRanker._REFLECTION_DECAY),
-            ("ephemeral", ContextRanker._EPHEMERAL_DECAY),
-            ("default", ContextRanker._DEFAULT_DECAY),
+        for site, table in (
+            ("prior.kind", prior._KIND_FACTORS),
+            ("prior.length", prior._LENGTH_FACTORS),
+            ("prior.recency", prior.RECENCY),
         ):
-            for max_age, _weight in tiers:
-                arm = "older" if max_age is None else f"d{max_age}"
-                assert f"ranker.decay.bucket.{family}={arm}" in declared
+            for arm in table:
+                assert f"{site}={arm}" in declared, f"{site}={arm} not declared"
+
+    def test_no_target_names_a_retired_guard_site(self):
+        """The query set's `targets` must not name sites that cannot fire.
+
+        Nothing checked this before and it drifted: five entries named
+        `ranker.decay.*`, `ranker.length.*` and
+        `ranker.reflection.under_30_chars` after ADR-044 deleted all three
+        families. A target naming a site that cannot fire is worse than no
+        target -- the window reports the query reached nothing, and that reads
+        as a coverage gap in the QUERY rather than a stale label.
+
+        Scoped deliberately. `targets` is a mixed vocabulary: guard-counter
+        site names, `policy:<name>` assertions, globs, and loose conceptual
+        labels like `recency` or `state_boost` that name a concern rather than
+        a row. Only the first kind is checkable, so only the first kind is
+        checked -- a target is held to the inventory when it starts with the
+        prefix of an instrumented module's site namespace. Asserting over the
+        whole vocabulary is what made the first version of this test fail on
+        21 entries that were never site names at all.
+        """
+        declared = {row["site"] for row in sites.declared_sites()}
+        namespaces = tuple(sorted({site.split(".")[0] + "." for site in declared}))
+
+        stale: list[str] = []
+        checked = 0
+        for entry in window.QUERY_SET:
+            for target in entry.get("targets", ()):
+                if "*" in target or target.startswith("policy:"):
+                    continue
+                if not target.startswith(namespaces):
+                    continue
+                checked += 1
+                if target in declared:
+                    continue
+                if any(site.startswith(target + ".") or site.startswith(target + "=")
+                       for site in declared):
+                    continue
+                stale.append(f"{entry['query'][:40]!r} -> {target}")
+
+        # Without this the scoping above could narrow to zero and the test
+        # would pass by examining nothing.
+        assert checked >= 10, (
+            f"only {checked} targets were checked; the namespace filter has "
+            "narrowed to the point where this test measures nothing"
+        )
+        assert not stale, (
+            "targets naming guard sites that do not exist:\n" + "\n".join(stale)
+        )
 
     def test_a_dynamic_site_without_an_arm_domain_is_refused(self, monkeypatch):
         """Silence is the failure mode to avoid.
 
         An undeclared dynamic site would otherwise contribute no rows and
         read as fully accounted for.
+
+        Repointed from ranker.decay.family to prior.kind. The refusal
+        mechanism is what matters and it is unchanged; the site it was
+        demonstrated on is gone.
         """
         original = sites._dynamic_arms
 
         def _missing_one():
             arms = dict(original())
-            arms.pop("ranker.decay.family")
+            arms.pop("prior.kind")
             return arms
 
         monkeypatch.setattr(sites, "_dynamic_arms", _missing_one)
-        with pytest.raises(KeyError, match="ranker.decay.family"):
+        with pytest.raises(KeyError, match="prior.kind"):
             sites.declared_sites()
 
     def test_unreached_sites_are_reported_not_omitted(self):
@@ -152,8 +207,12 @@ class TestDeclaredInventory:
         by_site = {row["site"]: row for row in rows}
         assert len(rows) == len(sites.declared_sites())
         assert by_site["type_gate.profile_bypass"]["evaluations"] == 12
-        # Everything else is present at zero rather than missing.
-        untouched = by_site["ranker.decay.ladder_fell_through"]
+        # Everything else is present at zero rather than missing. The sentinel
+        # was ranker.decay.ladder_fell_through, which ADR-044 deleted;
+        # prior.clamped_high serves the same purpose and is a better one -- if
+        # the prior ever saturates its upper bound in normal traffic that is a
+        # finding about the budget, so a row reading zero is worth having.
+        untouched = by_site["prior.clamped_high"]
         assert untouched["evaluations"] == 0
         assert untouched["firings"] == 0
 

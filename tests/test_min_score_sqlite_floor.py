@@ -86,17 +86,31 @@ def test_floor_applies_on_the_sqlite_path(patched_search):
 def test_floor_gates_raw_cosine_not_the_adjusted_score(patched_search):
     """The load-bearing property.
 
-    This row's raw cosine is below the floor, but the constant pile applied
-    after it (type, role, content and lexical terms) lifts the adjusted score
-    well above. If the floor were applied to the adjusted score the record
-    would survive, and the floor would be decorative.
-    """
-    patched_search([_store_row("low_cosine", "user: " + _LONG, 0.12)])
+    This row's raw cosine is below the floor, but the terms applied after it
+    lift the adjusted score above. If the floor were applied to the adjusted
+    score the record would survive, and the floor would be decorative.
 
-    kept = ss.semantic_search("q", memory_type="profile", min_score=0.30)
+    The lift is now LEXICAL, and that is the whole reason this fixture
+    changed. It used to come from memory_type_adjustment and
+    source_quality_adjustment, on the query "q" -- which earns no lexical
+    bonus at all, because extract_query_terms requires three characters. When
+    ADR-044 removed those two adjusters, adjusted became equal to raw and the
+    test's own self-check fired.
+
+    Rebuilt rather than relaxed. The property is real and still holds; what it
+    needed was a query that earns a surviving term. That is also a sharper
+    demonstration than the original: a lexical bonus is QUERY-DEPENDENT, so
+    this now shows the floor resisting a lift that genuinely reflects the
+    query, not one the record would have received no matter what was asked.
+    """
+    query = "retrieval scoring design notes"
+    content = _LONG + " " + query
+    patched_search([_store_row("low_cosine", "user: " + content, 0.12)])
+
+    kept = ss.semantic_search(query, memory_type="profile", min_score=0.30)
     assert kept == []
 
-    unfloored = ss.semantic_search("q", memory_type="profile", min_score=None)
+    unfloored = ss.semantic_search(query, memory_type="profile", min_score=None)
     assert len(unfloored) == 1
     assert unfloored[0]["raw_score"] == pytest.approx(0.12)
     assert unfloored[0]["score"] > 0.30, (

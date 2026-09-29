@@ -493,6 +493,7 @@ def analyse(
     seed: int = 20260923,
     probe_delivery: bool = True,
     sampler: str = "auto",
+    stop_endpoints: tuple[str, ...] | None = None,
     progress=None,
 ) -> SobolRun:
     """Double N until the top of the ST ranking is resolved, then stop.
@@ -502,34 +503,80 @@ def analyse(
     pass runs until the top-k intervals are narrow enough to order and the
     membership of that top-k has stopped changing between doublings. What
     it costs to get there is a result, not an input.
+
+    EVERY endpoint has to clear the target, not just `score`.
+
+    This rule used to read `indices["score"]` alone, which is a footgun that
+    already fired. The delivery endpoint is a step function -- its variance
+    sits in a few jumps -- so it is substantially noisier than score at the
+    same N. A run could therefore report "met_target" on score while delivery
+    was still wide, and delivery is the endpoint the prior's magnitudes are
+    derived from. The #232 run's six ST values have been load-bearing since
+    they were taken, at a delivery half-width of 0.0495 against a 0.020
+    target.
+
+    Converging on all of them is the conservative direction: it can only ask
+    for more samples than the old rule, never fewer, and it makes it
+    impossible to derive a magnitude from an endpoint the run never resolved.
+    `stop_endpoints` narrows it for a caller who genuinely only needs one, and
+    naming one is then a deliberate act recorded in the run.
     """
     analysis = SobolAnalysis(run, names, seed=seed, sampler=sampler)
     convergence: list[dict] = []
     samples = start_samples
     indices = None
-    previous_top: list[str] = []
+    previous_top: dict[str, list[str]] = {}
 
     while True:
         indices = analysis.indices(samples, progress)
-        score_top = [p.name for p in indices["score"].ranked()[:top_k]]
-        widest = max(
-            p.st_ci.half_width for p in indices["score"].ranked()[:top_k]
+        watched = stop_endpoints or tuple(indices)
+
+        per_endpoint: dict[str, dict] = {}
+        for endpoint in watched:
+            top = [p.name for p in indices[endpoint].ranked()[:top_k]]
+            widest = max(p.st_ci.half_width for p in indices[endpoint].ranked()[:top_k])
+            per_endpoint[endpoint] = {
+                "widest_st_ci_half_width_top_k": widest,
+                "top_k_membership_unchanged": set(top) == set(previous_top.get(endpoint, [])),
+                "top_k": top,
+            }
+
+        met = all(
+            e["widest_st_ci_half_width_top_k"] <= st_ci_target
+            and e["top_k_membership_unchanged"]
+            for e in per_endpoint.values()
         )
-        stable_membership = set(score_top) == set(previous_top)
+        worst = max(
+            per_endpoint.items(), key=lambda kv: kv[1]["widest_st_ci_half_width_top_k"]
+        )
         convergence.append(
             {
                 "samples": samples,
                 "evaluations": analysis.evaluations,
-                "widest_st_ci_half_width_top_k": widest,
-                "top_k_membership_unchanged": stable_membership,
-                "met_target": widest <= st_ci_target and stable_membership,
+                # Kept at the top level for backward compatibility with saved
+                # runs and the report: it is now the WORST endpoint's width,
+                # which is the one that decides.
+                "widest_st_ci_half_width_top_k": worst[1]["widest_st_ci_half_width_top_k"],
+                "widest_endpoint": worst[0],
+                "top_k_membership_unchanged": all(
+                    e["top_k_membership_unchanged"] for e in per_endpoint.values()
+                ),
+                "met_target": met,
+                "per_endpoint": {
+                    name: {k: v for k, v in e.items() if k != "top_k"}
+                    for name, e in per_endpoint.items()
+                },
             }
         )
         if progress:
-            progress(analysis.evaluations, note=f"N={samples} widest CI {widest:.4f}")
-        if (widest <= st_ci_target and stable_membership) or samples >= max_samples:
+            progress(
+                analysis.evaluations,
+                note=f"N={samples} widest CI {worst[1]['widest_st_ci_half_width_top_k']:.4f}"
+                f" on {worst[0]}",
+            )
+        if met or samples >= max_samples:
             break
-        previous_top = score_top
+        previous_top = {name: e["top_k"] for name, e in per_endpoint.items()}
         samples *= 2
 
     return SobolRun(

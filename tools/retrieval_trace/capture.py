@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -597,6 +598,45 @@ def capture_query(
             w.trace.ref for w in walked_reflections if w.trace.delivered
         ],
     )
+
+
+def discover_project_id(vault: Path) -> str | None:
+    """The most-used project id in the corpus, or None.
+
+    `proj.boost` cannot be measured without one. Until this existed, the
+    capture CLI had no way to supply a project id, `capture_run` always took
+    `project_id=None`, so `project_match` was always False and every
+    sensitivity pass reported `proj.boost` as unexercised -- correctly, but
+    permanently. ADR-007's boost was the one scoring term the harness could
+    say nothing about.
+
+    Resolved at run time and held in memory. It is vault-derived, so it is
+    never printed, logged or written into a trace -- the caller only needs to
+    pass it in, not to know what it says.
+
+    Ported from tools/traffic_window.py, which had the same need first and
+    solved it for itself; that module now imports this one rather than
+    keeping a second copy.
+    """
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    memory = vault / "memory"
+    if not memory.is_dir():
+        return None
+    for path in memory.rglob("*.json"):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 -- a malformed record is not our business
+            continue
+        if not isinstance(record, dict):
+            continue
+        project_id = (record.get("metadata") or {}).get("project_id")
+        if isinstance(project_id, str) and project_id:
+            counts[project_id] += 1
+    if not counts:
+        return None
+    return counts.most_common(1)[0][0]
 
 
 def capture_run(

@@ -537,9 +537,9 @@ def run_cell(stratum: Stratum, arm: Arm) -> CellResult:
     original_rank = ContextRanker.rank
     captured: list[Delivered] = []
 
-    def _capturing_rank(self, memory_items, reflection_items):
+    def _capturing_rank(self, memory_items, reflection_items, policy=None):
         ranked_memory, ranked_reflections = original_rank(
-            self, memory_items, reflection_items
+            self, memory_items, reflection_items, policy
         )
         captured.clear()
         captured.extend(_to_delivered(ranked_memory))

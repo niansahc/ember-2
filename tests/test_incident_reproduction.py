@@ -321,7 +321,8 @@ def _no_constant_piles():
     with patch.object(ss, "memory_type_adjustment", lambda *a, **k: 0.0), \
          patch.object(ss, "source_quality_adjustment", lambda *a, **k: 0.0), \
          patch.object(ss, "query_intent_adjustment", lambda *a, **k: 0.0), \
-         patch.object(ContextRanker, "_score_memory_item", lambda self, item: item):
+         patch.object(ContextRanker, "_score_memory_item",
+                      lambda self, item, policy=None: item):
         yield
 
 

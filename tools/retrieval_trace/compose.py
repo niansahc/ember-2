@@ -180,18 +180,10 @@ def compose(candidate: CandidateTrace, p: ReplayParams, policy_name: str) -> Com
     # The recency * recency_bias contribution that stood here is gone with
     # ContextPolicy.recency_bias (ADR-044). It was the third additive copy of
     # the recency ladder.
-    if pol.prefer_experience_fired:
-        terms["pol.prefer_experience"] = p["pol.prefer_experience"]
-        score += p["pol.prefer_experience"]
-    if pol.prefer_active_work_fired:
-        terms["pol.prefer_active_work"] = p["pol.prefer_active_work"]
-        score += p["pol.prefer_active_work"]
-    if pol.exact_branch == "question":
-        terms["pol.exact"] = p["pol.exact.question"]
-        score += p["pol.exact.question"]
-    elif pol.exact_branch == "other":
-        terms["pol.exact"] = p["pol.exact.other"]
-        score += p["pol.exact.other"]
+    # The three preference terms that were added here are now arms of the
+    # prior's policy family and compose at the rank stage with everything else.
+    # The activations are still recorded on PolicyActivation, because that is
+    # the stage that KNOWS them; only where they are spent has moved.
 
     tier_factor = p[f"tier.{pol.tier_branch}"]
     terms["tier"] = tier_factor
@@ -207,9 +199,10 @@ def compose(candidate: CandidateTrace, p: ReplayParams, policy_name: str) -> Com
     stages[STAGE_AUTHORSHIP] = score
 
     # ----------------------------------------------------------------- project
-    if a.project_match:
-        terms["proj.boost"] = p["proj.boost"]
-        score += p["proj.boost"]
+    # No longer additive. project_match is read at the rank stage as an arm of
+    # the prior's project family. The stage boundary is kept because the
+    # pipeline still has a call there (apply_project_boost records the marker),
+    # and a stage that provably changes nothing is worth being able to assert.
     stages[STAGE_PROJECT] = score
 
     # -------------------------------------------------------------------- rank
@@ -223,6 +216,26 @@ def compose(candidate: CandidateTrace, p: ReplayParams, policy_name: str) -> Com
     k = candidate.rank
 
     prior_factor = 1.0
+
+    # The policy arm, derived from the activations recorded at the policy
+    # stage. prior.policy_branch is the shipped classifier, so the model does
+    # not restate the precedence between the three flags.
+    arm = _prior.policy_branch(
+        prefer_experiences=pol.prefer_experience_fired,
+        prefer_active_work=pol.prefer_active_work_fired,
+        prefer_exact_matches=pol.exact_branch != "none",
+        experience_fired=pol.prefer_experience_fired,
+        active_work_fired=pol.prefer_active_work_fired,
+        is_question=pol.exact_branch == "question",
+    )
+    if arm != "none":
+        terms[f"prior.policy.{arm}"] = p[f"prior.policy.{arm}"]
+        prior_factor *= terms[f"prior.policy.{arm}"]
+
+    if a.project_match:
+        terms["prior.project.match"] = p["prior.project.match"]
+        prior_factor *= terms["prior.project.match"]
+
     if k.kind_branch != "none":
         terms["prior.kind"] = p[f"prior.kind.{k.kind_branch}"]
         prior_factor *= terms["prior.kind"]

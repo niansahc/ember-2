@@ -151,25 +151,35 @@ def test_tier_defaults_match_shipped():
     assert profile.score == pytest.approx(P["tier.profile_bypass"])
 
 
-def test_policy_preference_defaults_match_shipped():
+def test_the_policy_arm_is_multiplicative_and_matches_the_vector():
+    """The preference terms are prior arms now, not additive terms in apply_policy.
+
+    They were pinned here as `score == P["pol.prefer_experience"]` on an item
+    seeded at 0.0 -- which only reads as a magnitude while the term is additive.
+    As multipliers they are pinned as a RATIO against a neutral record, which is
+    what a multiplier means and what survives a re-derivation of the value.
+    """
     ranker = ContextRanker()
     plain = "a record body long enough to avoid every length penalty there is"
 
-    item = _item(score=0.0, content="today i noticed something", tier="hot")
-    ranker.apply_policy([item], ContextPolicy(name="x", prefer_experiences=True))
-    assert item.score == pytest.approx(P["pol.prefer_experience"])
-
-    item = _item(score=0.0, content="working on the next step", tier="hot")
-    ranker.apply_policy([item], ContextPolicy(name="x", prefer_active_work=True))
-    assert item.score == pytest.approx(P["pol.prefer_active_work"])
-
-    item = _item(score=0.0, content=plain, metadata={"content_kind": "question"})
-    ranker.apply_policy([item], ContextPolicy(name="x", prefer_exact_matches=True))
-    assert item.score == pytest.approx(P["pol.exact.question"])
-
-    item = _item(score=0.0, content=plain, metadata={"content_kind": "user_content"})
-    ranker.apply_policy([item], ContextPolicy(name="x", prefer_exact_matches=True))
-    assert item.score == pytest.approx(P["pol.exact.other"])
+    cases = [
+        ("today i noticed something", {}, ContextPolicy(name="x", prefer_experiences=True),
+         "prior.policy.prefer_experience"),
+        ("working on the next step", {}, ContextPolicy(name="x", prefer_active_work=True),
+         "prior.policy.prefer_active_work"),
+        (plain, {"content_kind": "question"},
+         ContextPolicy(name="x", prefer_exact_matches=True),
+         "prior.policy.exact_question"),
+        (plain, {"content_kind": "user_content"},
+         ContextPolicy(name="x", prefer_exact_matches=True),
+         "prior.policy.exact_other"),
+    ]
+    for content, metadata, policy, param in cases:
+        armed = _item(score=1.0, content=content, tier="hot", metadata=dict(metadata))
+        bare = _item(score=1.0, content=content, tier="hot", metadata=dict(metadata))
+        ranker.rank([armed], [], policy)
+        ranker.rank([bare], [], None)      # no policy: the arm is the identity
+        assert armed.score / bare.score == pytest.approx(P[param], rel=1e-9), param
 
 
 def test_authorship_and_project_defaults_match_shipped():
@@ -180,9 +190,15 @@ def test_authorship_and_project_defaults_match_shipped():
         ranker.apply_authorship_scoring([item], relational)
         assert item.score == pytest.approx(P[f"auth.{branch}"])
 
-    item = _item(score=0.0, metadata={"project_id": "p1"})
-    ranker.apply_project_boost([item], "p1")
-    assert item.score == pytest.approx(P["proj.boost"])
+    # The project boost is a prior arm too, so it is a ratio against an
+    # unmatched record rather than an additive magnitude.
+    matched = _item(score=1.0, metadata={"project_id": "p1"})
+    unmatched = _item(score=1.0, metadata={"project_id": "other"})
+    ranker.apply_project_boost([matched, unmatched], "p1")
+    ranker.rank([matched, unmatched], [], None)
+    assert matched.score / unmatched.score == pytest.approx(
+        P["prior.project.match"], rel=1e-9
+    )
 
 
 def test_the_prior_vector_covers_every_factor_the_prior_applies():
@@ -204,7 +220,8 @@ def test_the_prior_vector_covers_every_factor_the_prior_applies():
         {f"prior.kind.{k}" for k in prior._KIND_FACTORS if k != "none"}
         | {f"prior.len.{k}" for k in prior._LENGTH_FACTORS if k != "none"}
         | {f"prior.recency.{b}" for b in prior.RECENCY}
-        | {"prior.reflection_discount"}
+        | {f"prior.policy.{k}" for k in prior._POLICY_FACTORS if k != "none"}
+        | {"prior.project.match", "prior.reflection_discount"}
     )
     actual = {n for n in PARAM_NAMES if n.startswith("prior.")}
     assert actual == expected
@@ -473,7 +490,7 @@ def test_parameter_coverage_separates_inert_from_exercised(traced_run):
     # would have made this assertion pass while testing nothing. The
     # ingested-specific parameter that survives is the intent term.
     assert "ret.intent.reflective_ingested" in inert
-    assert "proj.boost" in inert
+    assert "prior.project.match" in inert
 
 
 def test_sweep_reports_delivery_changes(traced_run):

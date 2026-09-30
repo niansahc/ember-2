@@ -53,6 +53,8 @@ from src.context.ranker import COLD_MULTIPLIER, WARM_MULTIPLIER, ContextRanker
 # and None are appended because they are inputs the tables deliberately do not
 # carry, and the normalisers' handling of them is part of the contract.
 CONTENT_KINDS = [None, *prior._KIND_FACTORS, "unrecognised"]
+POLICY_ARMS = [*prior._POLICY_FACTORS, "unrecognised"]
+PROJECT_MATCHES = [False, True]
 CONTENT_LENGTHS = [
     0, 1,
     prior.SHORT_CHARS - 1, prior.SHORT_CHARS, prior.SHORT_CHARS + 1,
@@ -91,29 +93,38 @@ def _out_of_contract_kind(kind: str, value: float):
         prior._KIND_FACTORS.update(original)
 
 
-def _raw_product(content_kind, content_length: int, recency_bucket: str) -> float:
+def _raw_product(content_kind, content_length: int, recency_bucket: str,
+                 policy_arm: str = "none", project_match: bool = False,
+                 is_reflection: bool = False) -> float:
     """The prior BEFORE the clamp, so the clamp's own firing can be measured."""
-    return (
+    arm = policy_arm if policy_arm in prior._POLICY_FACTORS else "none"
+    value = (
         prior._KIND_FACTORS[prior.kind_branch(content_kind)]
         * prior._LENGTH_FACTORS[prior.length_branch(content_length)]
         * prior.RECENCY[prior.recency_bucket_or_unparsed(recency_bucket)]
+        * prior._POLICY_FACTORS[arm]
+        * prior._PROJECT_FACTORS["match" if project_match else "none"]
     )
+    if is_reflection:
+        value *= prior.REFLECTION_DISCOUNT
+    return value
 
 
 def _priors():
-    for kind, length, bucket, is_reflection in itertools.product(
-        CONTENT_KINDS, CONTENT_LENGTHS, RECENCY_BUCKETS, REFLECTION_FLAGS
+    """Every combination the pipeline can produce, across all five families."""
+    for kind, length, bucket, is_reflection, arm, proj in itertools.product(
+        CONTENT_KINDS, CONTENT_LENGTHS, RECENCY_BUCKETS, REFLECTION_FLAGS,
+        POLICY_ARMS, PROJECT_MATCHES,
     ):
         yield (
-            kind,
-            length,
-            bucket,
-            is_reflection,
+            kind, length, bucket, is_reflection, arm, proj,
             prior.assemble(
                 content_kind=kind,
                 content_length=length,
                 recency_bucket=bucket,
                 is_reflection=is_reflection,
+                policy_arm=arm,
+                project_match=proj,
             ),
         )
 
@@ -168,17 +179,17 @@ class TestTheBoundItself:
         """The contract, over every combination the pipeline can produce."""
         tier = TIER_MULTIPLIERS[tier_name]
         checked = 0
-        for kind, length, bucket, is_reflection, value in _priors():
+        for kind, length, bucket, is_reflection, arm, proj, value in _priors():
             composed = value * tier
             assert prior.COMPOSED_MIN - 1e-12 <= composed <= prior.COMPOSED_MAX + 1e-12, (
                 f"prior x tier left the bound: kind={kind!r} length={length} "
-                f"bucket={bucket!r} reflection={is_reflection} tier={tier_name} "
-                f"-> {composed}"
+                f"bucket={bucket!r} reflection={is_reflection} policy={arm!r} "
+                f"project={proj} tier={tier_name} -> {composed}"
             )
             checked += 1
         assert checked == (
-            len(CONTENT_KINDS) * len(CONTENT_LENGTHS)
-            * len(RECENCY_BUCKETS) * len(REFLECTION_FLAGS)
+            len(CONTENT_KINDS) * len(CONTENT_LENGTHS) * len(RECENCY_BUCKETS)
+            * len(REFLECTION_FLAGS) * len(POLICY_ARMS) * len(PROJECT_MATCHES)
         )
 
     def test_the_bound_is_reached_and_not_merely_respected(self):
@@ -189,10 +200,13 @@ class TestTheBoundItself:
         reason than the one it reports.
         """
         values = [v for *_rest, v in _priors()]
-        assert min(values) == pytest.approx(prior.PRIOR_MIN), (
-            "no combination reaches the prior's floor; the clamp is inert"
+        assert min(values) == pytest.approx(prior.PRIOR_MIN, abs=1e-9), (
+            "no combination reaches the prior's floor, so the bound is looser "
+            "than the terms can use and the budget is being wasted"
         )
-        assert max(values) > 1.0, "no combination promotes a record"
+        assert max(values) == pytest.approx(prior.PRIOR_MAX, abs=1e-9), (
+            "no combination reaches the prior's ceiling"
+        )
 
     def test_a_term_cannot_escape_the_clamp(self):
         """The clamp is the enforcement, not the derivation.
@@ -215,43 +229,116 @@ class TestTheBoundItself:
             )
         assert escaped == pytest.approx(prior.PRIOR_MIN)
 
-    def test_the_clamp_fires_on_short_records_at_shipped_magnitudes(self):
-        """The clamp is ENFORCEMENT, not a safety net, and this pins the rate.
+    def test_the_clamp_is_unreachable_at_shipped_magnitudes(self):
+        """The clamp cannot fire. That is the point of the log-space allocation.
 
-        `clamp`'s own docstring says that if it fires often, "the budget is
-        under-specified rather than merely tight, and that is a finding about
-        the derivation". It fires often, at shipped magnitudes, and this test
-        exists so that fact is asserted rather than discovered again.
+        This test used to assert the OPPOSITE, and its own failure message said
+        to delete it if the derivation was ever fixed to compose within the
+        bound. It has been, so the assertion is inverted rather than removed --
+        the rate going from 9-of-90 to zero is the result, and a test that only
+        described the old state would have left nothing watching the new one.
 
-        The cause is that `_deviation` allocates the budget PER TERM -- the
-        largest-ST term (len_under_50) is given the prior's entire half of it,
-        so `LEN_UNDER_50 == PRIOR_MIN` exactly -- while `assemble` composes
-        terms by MULTIPLYING. Any short record that also takes a downward kind
-        or recency term therefore leaves the bound and is clamped, and inside
-        that region the prior is a CONSTANT: kind and recency are erased.
+        What changed: the budget was allocated per term additively
+        (`deviation_i = (1 - PRIOR_MIN) * ST_i / ST_max`) while `assemble`
+        composes by multiplying, so the largest-ST term consumed the whole
+        budget alone and any second downward term left the bound. Allocating in
+        log space across the mutually-exclusive families makes the worst case
+        land exactly on the bound instead.
 
-        Recorded in ADR-044's amendment and not fixed here. The fix is to
-        allocate in log space across the three mutually-exclusive families so
-        the product is inside the bound by construction and the clamp becomes
-        unreachable -- a re-derivation of the magnitudes, which is its own
-        change with its own measurement. This test will need updating when that
-        lands, and the update is the point: the rate should go to zero.
+        Checked on the RAW product, before the clamp, because checking the
+        clamped value would be circular -- it is clamped by definition.
         """
-        clamped = [
-            (kind, length, bucket)
-            for kind, length, bucket, is_reflection, _value in _priors()
-            if not is_reflection
-            and _raw_product(kind, length, bucket) < prior.PRIOR_MIN - 1e-12
+        escaped = [
+            (kind, length, bucket, arm, proj, raw)
+            for kind, length, bucket, is_reflection, arm, proj, _value in _priors()
+            if not (
+                prior.PRIOR_MIN - 1e-9
+                <= (raw := _raw_product(kind, length, bucket, arm, proj, is_reflection))
+                <= prior.PRIOR_MAX + 1e-9
+            )
         ]
-        assert clamped, (
-            "the clamp no longer fires at shipped magnitudes -- if the "
-            "derivation was fixed to compose within the bound, delete this test"
+        assert not escaped, (
+            f"{len(escaped)} combination(s) leave the bound before the clamp, so "
+            f"the clamp is still doing enforcement rather than assertion. First: "
+            f"{escaped[0]}"
         )
-        # Every clamped combination is a short record. If that stops being
-        # true, a second term has grown past the budget and the derivation
-        # needs revisiting for a different reason.
-        assert {length for _kind, length, _bucket in clamped} == {"lt50"} or all(
-            length < prior.SHORT_CHARS for _kind, length, _bucket in clamped
+
+    def test_the_worst_case_per_family_lands_exactly_on_the_bound(self):
+        """Tight, not merely inside -- which is what makes the clamp unreachable.
+
+        A conservative allocation would also satisfy the test above while
+        wasting budget: every term would be smaller than it is entitled to and
+        the prior would have less authority than the contract permits. So the
+        worst one-arm-per-family product has to EQUAL the bound, not just
+        respect it.
+
+        This is also the assertion that breaks if someone adds a sixth family
+        without re-deriving: the new family's arm would push the worst case past
+        the bound, and the equality fails before the clamp has to catch it.
+        """
+        worst_down = (
+            prior.KIND_QUESTION
+            * prior.LEN_UNDER_50
+            * prior.RECENCY["older"]
+            * prior.POL_EXACT_QUESTION
+            * prior.REFLECTION_DISCOUNT
+        )
+        worst_up = (
+            prior.KIND_EXPERIENCE
+            * prior.RECENCY["d7"]
+            * prior.POL_PREFER_ACTIVE_WORK
+            * prior.PROJECT_MATCH
+        )
+        assert worst_down == pytest.approx(prior.PRIOR_MIN, abs=1e-9)
+        assert worst_up == pytest.approx(prior.PRIOR_MAX, abs=1e-9)
+
+    def test_the_recency_ladder_is_monotonic(self):
+        """Fresher must never score below staler.
+
+        The one place in the prior where measurement cannot set the shape.
+        Recency arms are mutually exclusive, so they are compared ACROSS
+        records; allocating each by its own ST would invert the ladder, because
+        measured d365 (0.0903) is 8.2x measured d30 (0.0111) on the production
+        corpus. ST is an activation-weighted variance share -- it says how much
+        a term moves delivery, not which arm of an ordinal ladder ranks higher.
+
+        So the ladder's shape is carried and its magnitude measured, and this
+        asserts the shape survived.
+        """
+        r = prior.RECENCY
+        assert r["d7"] > r["d30"] > r["d90"] > r["d365"] > 1.0 > r["older"]
+        assert r["unparsed"] == 1.0
+
+    def test_the_policy_preference_flags_are_mutually_exclusive(self):
+        """The prior treats policy preference as ONE family. Verify the premise.
+
+        The worst-case allocation sums one arm per family, so if any policy set
+        two preference flags the budget would be under-allocated and the bound
+        could be exceeded by a combination the cross product above never builds
+        -- because prior.policy_branch returns a single arm by construction and
+        would hide it.
+        """
+        from src.context import policies as P
+
+        flags = ("prefer_experiences", "prefer_active_work", "prefer_exact_matches")
+        offenders = []
+        # Policies are constructed inside classify_query rather than exported,
+        # so they are reached through it -- one query per policy that sets a
+        # flag, plus a few that set none.
+        for query in (
+            "what am i working on", "what are my open loops",
+            "status of the current project", "what patterns have you noticed lately",
+            "find what i said about the retrieval design", "what was on my mind lately",
+            "am i building anything worthwhile", "tell me something useful",
+            "what do you know about me",
+        ):
+            policy = P.classify_query(query)
+            enabled = [f for f in flags if getattr(policy, f, False)]
+            if len(enabled) > 1:
+                offenders.append((policy.name, enabled))
+        assert not offenders, (
+            f"a policy sets more than one preference flag: {offenders}. The "
+            "prior allocates them as one mutually-exclusive family."
         )
 
     def test_the_clamp_rate_is_observable(self):

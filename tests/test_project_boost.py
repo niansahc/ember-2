@@ -2,6 +2,17 @@
 tests/test_project_boost.py
 
 Tests for project-scoped retrieval boost (ADR-007).
+
+The boost is a BOUNDED MULTIPLIER applied in the prior, not a +0.15 added
+here. ADR-044's 2026-09-30 amendment moved it: at +0.15 additive it was 1.8x
+the entire measured cosine spread, and it landed AFTER the tier multiply, so
+tier could not attenuate it -- the last surviving instance of the ordering
+defect ADR-044 decision 1 names.
+
+So apply_project_boost no longer changes a score. It records the match on the
+item, and rank() applies prior.PROJECT_MATCH with every other bounded factor
+in one multiply. These tests assert the marker and the multiplier separately,
+because they are now two different jobs.
 """
 
 import pytest
@@ -24,16 +35,43 @@ def make_item(content="test content", score=0.5, metadata=None):
 class TestProjectBoostMatching:
     """Items with matching project_id should get boosted."""
 
-    def test_matching_project_id_gets_boosted(self):
+    def test_matching_project_id_is_marked(self):
         ranker = ContextRanker()
         item = make_item(score=0.5, metadata={"project_id": "proj_abc"})
         result = ranker.apply_project_boost([item], "proj_abc")
-        assert result[0].score == pytest.approx(0.65)
+        assert result[0].project_match is True
+        # The marker does not move the score. The prior does.
+        assert result[0].score == pytest.approx(0.5)
+
+    def test_a_marked_item_is_boosted_by_the_prior(self):
+        """The boost itself, where it now lives."""
+        from src.context import prior
+
+        ranker = ContextRanker()
+        matched = make_item(score=0.5, metadata={"project_id": "proj_abc"})
+        unmatched = make_item(score=0.5, metadata={"project_id": "proj_other"})
+        ranker.apply_project_boost([matched, unmatched], "proj_abc")
+
+        ranked, _ = ranker.rank([matched, unmatched], [])
+        by_match = {i.project_match: i.score for i in ranked}
+
+        assert by_match[True] > by_match[False]
+        assert by_match[True] / by_match[False] == pytest.approx(
+            prior.PROJECT_MATCH, rel=1e-9
+        )
+
+    def test_the_boost_is_inside_the_composed_bound(self):
+        """The reason it moved. At +0.15 it was 1.8x the cosine spread."""
+        from src.context import prior
+
+        assert prior.PRIOR_MIN <= prior.PROJECT_MATCH <= prior.PRIOR_MAX
+        assert prior.PROJECT_MATCH - 1.0 < prior.COSINE_SPREAD
 
     def test_non_matching_project_id_unchanged(self):
         ranker = ContextRanker()
         item = make_item(score=0.5, metadata={"project_id": "proj_other"})
         result = ranker.apply_project_boost([item], "proj_abc")
+        assert result[0].project_match is False
         assert result[0].score == pytest.approx(0.5)
 
     def test_no_project_id_in_metadata_unchanged(self):
@@ -56,7 +94,8 @@ class TestProjectBoostMatching:
             make_item(content="no project", score=0.5, metadata={}),
         ]
         result = ranker.apply_project_boost(items, "proj_abc")
-        assert result[0].score == pytest.approx(0.55)  # 0.4 + 0.15
+        assert result[0].project_match is True
+        assert result[0].score == pytest.approx(0.4)  # 0.4 + 0.15
         assert result[1].score == pytest.approx(0.6)    # unchanged
         assert result[2].score == pytest.approx(0.5)    # unchanged
 
@@ -89,11 +128,13 @@ class TestBoostValue:
         ranker = ContextRanker()
         item = make_item(score=0.0, metadata={"project_id": "proj_x"})
         result = ranker.apply_project_boost([item], "proj_x")
-        assert result[0].score == pytest.approx(0.15)
+        assert result[0].project_match is True
+        assert result[0].score == pytest.approx(0.0)
 
     def test_boost_is_additive(self):
         """Boost adds to existing score, doesn't replace it."""
         ranker = ContextRanker()
         item = make_item(score=0.8, metadata={"project_id": "proj_x"})
         result = ranker.apply_project_boost([item], "proj_x")
-        assert result[0].score == pytest.approx(0.95)
+        assert result[0].project_match is True
+        assert result[0].score == pytest.approx(0.8)

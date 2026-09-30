@@ -549,38 +549,69 @@ def test_writing_inside_any_git_work_tree_is_refused(traced_run, tmp_path):
         traced_run.write(nested / "trace.json")
 
 
-def test_the_guard_names_the_nearest_work_tree_not_a_blanket_refusal(
-    traced_run, tmp_path
-):
-    """Non-vacuity, in the only form this machine can express.
+def _nearest_work_tree(path: Path) -> Path | None:
+    """The closest ancestor containing `.git`, or None. TraceRun.write's rule."""
+    for ancestor in [path, *path.parents]:
+        if (ancestor / ".git").exists():
+            return ancestor
+    return None
 
-    A guard that refused every path would pass the test above and make the tool
-    unusable -- the failure mode of a guard written from the refusal side only.
-    The obvious check is "a path outside every work tree is allowed", and it
-    cannot be written here: pytest's tmp_path lives under the home directory,
-    and on this machine the home directory IS a work tree. That is not a defect
-    in the test, it is the finding the guard exists for, and it is why the plain
-    positive case is unavailable.
 
-    What is machine-independent is WHICH ancestor the refusal names. The walk
-    goes from the path upward, so a target nested inside a nearer repository
-    must name that one rather than the outer one. Two paths that differ only in
-    whether a nearer .git exists must therefore produce different messages --
-    which cannot be true of a blanket refusal.
+def test_the_guard_is_not_a_blanket_refusal(traced_run, tmp_path):
+    """Non-vacuity. A guard that refused everything would pass the test above.
+
+    Refusing every path is the failure mode of a guard written from the refusal
+    side only, and it would make the tool unusable while looking correct.
+
+    Which assertion is available depends on where pytest puts tmp_path, so the
+    environment fact is MEASURED here rather than assumed. An earlier version
+    of this test assumed the reference machine's answer -- there tmp_path sits
+    under a home directory that is itself a work tree, so the guard refuses
+    both paths and the test passed -- and it failed on CI, where tmp_path is
+    outside every work tree and the guard correctly allowed the write. The
+    assumption, not the guard, was wrong: asserting that an outside path is
+    refused asserts exactly the behaviour that must not exist.
+
+    So both sides are asserted, each where it is true:
+
+      tmp_path outside every work tree   the write is ALLOWED. The real
+                                        positive case, and CI is the only
+                                        environment that offers it.
+      tmp_path inside one               the refusal must name the NEAREST
+                                        work tree. Two paths differing only
+                                        in whether a nearer .git exists must
+                                        produce different messages, which a
+                                        blanket refusal cannot do.
     """
     nearer_repo = tmp_path / "unrelated_project"
     (nearer_repo / ".git").mkdir(parents=True)
 
-    with pytest.raises(ValueError) as nested:
+    # True in both environments: a path inside the nearer repo is refused, and
+    # the refusal names that repo rather than anything further up.
+    with pytest.raises(ValueError, match="inside a git work tree") as nested:
         traced_run.write(nearer_repo / "data" / "trace.json")
-    with pytest.raises(ValueError) as plain:
-        traced_run.write(tmp_path / "data" / "trace.json")
-
     assert str(nearer_repo) in str(nested.value)
-    assert str(nearer_repo) not in str(plain.value), (
-        "both paths produced the same refusal; the guard is not walking to the "
-        "nearest work tree, it is refusing unconditionally"
-    )
+
+    outside_the_nearer_repo = tmp_path / "data" / "trace.json"
+    enclosing = _nearest_work_tree(tmp_path)
+
+    if enclosing is None:
+        written = traced_run.write(outside_the_nearer_repo)
+        assert written.exists(), (
+            "tmp_path is outside every git work tree, so this write is the case "
+            "the guard exists to PERMIT. Refusing it makes the tool unusable."
+        )
+        assert written.read_text(encoding="utf-8"), "wrote an empty trace"
+    else:
+        with pytest.raises(ValueError) as plain:
+            traced_run.write(outside_the_nearer_repo)
+        assert str(enclosing) in str(plain.value), (
+            f"tmp_path is inside {enclosing}, so the refusal should name it"
+        )
+        assert str(nearer_repo) not in str(plain.value), (
+            "both paths produced the same refusal; the guard is not walking to "
+            "the nearest work tree, it is refusing unconditionally"
+        )
 
 
 def test_content_is_omitted_when_not_requested(stub_query_embedding):

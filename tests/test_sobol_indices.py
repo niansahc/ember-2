@@ -487,6 +487,53 @@ def test_convergence_stops_when_the_target_is_met(synthetic_run):
     assert sobol.convergence[-1]["met_target"]
 
 
+def test_convergence_watches_every_endpoint_not_just_score(synthetic_run):
+    """The footgun this closes has already fired once.
+
+    The rule read `indices["score"]` alone. Delivery is a step function whose
+    variance sits in a few jumps, so it is materially noisier than score at the
+    same N -- a run could report met_target on score while delivery was still
+    wide, and delivery is the endpoint the prior's magnitudes in
+    src/context/prior.py are derived from. The #232 run's values have been
+    load-bearing since they were taken at a delivery half-width of 0.0495
+    against a 0.020 target.
+
+    So every endpoint's width is recorded per step, and the reported width is
+    the WORST endpoint's -- the one that decides.
+    """
+    sobol = analyse(
+        synthetic_run, NAMES, UNEXERCISED,
+        start_samples=16, max_samples=64, st_ci_target=0.0,
+    )
+    for step in sobol.convergence:
+        assert set(step["per_endpoint"]) == set(ENDPOINTS)
+        assert step["widest_endpoint"] in ENDPOINTS
+        # The headline width is the worst endpoint's, not score's.
+        assert step["widest_st_ci_half_width_top_k"] == max(
+            e["widest_st_ci_half_width_top_k"]
+            for e in step["per_endpoint"].values()
+        )
+
+
+def test_a_target_met_on_one_endpoint_alone_does_not_stop_the_run(synthetic_run):
+    """Non-vacuity for the test above: naming one endpoint must be able to
+    stop earlier than watching both, or "watch every endpoint" is not doing
+    anything."""
+    watched_one = analyse(
+        synthetic_run, NAMES, UNEXERCISED,
+        start_samples=16, max_samples=512, st_ci_target=0.02,
+        stop_endpoints=("score",),
+    )
+    watched_both = analyse(
+        synthetic_run, NAMES, UNEXERCISED,
+        start_samples=16, max_samples=512, st_ci_target=0.02,
+    )
+    assert watched_both.samples >= watched_one.samples, (
+        "watching both endpoints asked for fewer samples than watching score "
+        "alone; the stopping rule is not conservative"
+    )
+
+
 def test_required_samples_extrapolates_from_the_measured_curve():
     """A run that stops at its ceiling still has to answer "how many would
     it take" -- from the curve it measured, not from a guess."""

@@ -252,7 +252,7 @@ def test_tier_parameters_are_swept_up_to_one_only(name):
 @pytest.mark.parametrize(
     "name",
     ["ret.intent.reflective_conversation", "ret.lexical.substring",
-     "pol.prefer_experience", "proj.boost"],
+     "ret.intent.task_conversation", "ret.lexical.entity_hit"],
 )
 def test_additive_family_is_swept_over_its_own_magnitude(name):
     default = default_params()[name]
@@ -390,7 +390,7 @@ def test_unexercised_parameters_are_identified(synthetic_run):
     # parameter would have satisfied this assertion for a third reason -- no
     # call site -- which is exactly the conflation this test exists to stop.
     assert "ret.intent.reflective_ingested" in unexercised
-    assert "proj.boost" in unexercised
+    assert "prior.project.match" in unexercised
     # Exercised, and must not appear.
     assert "tier.cold" not in unexercised
     assert "prior.recency.d7" not in unexercised
@@ -589,7 +589,7 @@ def test_the_delivery_endpoint_moves_when_delivery_moves(synthetic_run):
     moved = ReplayParams().with_overrides(**{"tier.cold": 0.0, "tier.hot": 0.0})
     assert evaluator.evaluate(moved)[ENDPOINT_DELIVERY] >= 0.0
     # A parameter the fixture never activates cannot move either endpoint.
-    inert = ReplayParams().with_overrides(**{"proj.boost": 5.0})
+    inert = ReplayParams().with_overrides(**{"ret.intent.task_ingested": 5.0})
     assert evaluator.evaluate(inert)[ENDPOINT_DELIVERY] == pytest.approx(0.0)
     assert evaluator.evaluate(inert)[ENDPOINT_SCORE] == pytest.approx(
         evaluator.evaluate(ReplayParams())[ENDPOINT_SCORE]

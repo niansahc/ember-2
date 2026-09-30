@@ -357,30 +357,16 @@ def _snapshot_store(source: Path, destination: Path) -> dict:
 def _discover_project_id(vault: Path) -> str | None:
     """The most-used project id in the corpus, or None.
 
-    Resolved at run time and held in memory. It is vault-derived, so it is
-    never printed, logged or written to an artefact -- the window only
-    needs to pass it in, not to know what it says.
+    Delegates. This module needed a project id first and grew its own
+    resolver; the trace harness then needed the same thing to make
+    ADR-007's proj.boost measurable at all, so the implementation moved to
+    tools/retrieval_trace/capture.py and this is the alias. One resolver,
+    because two would disagree about what "most used" means the first time
+    either changed.
     """
-    import json
-    from collections import Counter
+    from tools.retrieval_trace.capture import discover_project_id
 
-    counts: Counter[str] = Counter()
-    memory = vault / "memory"
-    if not memory.is_dir():
-        return None
-    for path in memory.rglob("*.json"):
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 -- a malformed record is not our business
-            continue
-        if not isinstance(record, dict):
-            continue
-        project_id = (record.get("metadata") or {}).get("project_id")
-        if isinstance(project_id, str) and project_id:
-            counts[project_id] += 1
-    if not counts:
-        return None
-    return counts.most_common(1)[0][0]
+    return discover_project_id(vault)
 
 
 def cmd_run_readonly(artefacts: Path, project_id: str | None) -> int:

@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-09-19
-**Amended:** 2026-09-21 (decision 4, role -- see 4a); 2026-09-25 (production cosine spread measured -- figures only, no decision changed); 2026-09-28 (implemented; bound derived, reachability measured, two implementation defects recorded, one Consequences claim falsified)
+**Amended:** 2026-09-21 (decision 4, role -- see 4a); 2026-09-25 (production cosine spread measured -- figures only, no decision changed); 2026-09-28 (implemented; bound derived, reachability measured, two implementation defects recorded, one Consequences claim falsified); 2026-09-30 (the bound was false as written -- five out-of-bound terms closed, magnitudes re-derived in log space from the first converged Sobol run, #250 resolved)
 **Target:** v0.19.0
 **Related:** ADR-005 (context ranking), ADR-015 (memory tiering, and its 2026-09-19 corrections), ADR-007 (project-scoped retrieval), ADR-018 (intent-aware type gating), issues #204, #205, #206, #211, #218, PR #217 (experiment 2), PR #236 (production cosine spread)
 
@@ -160,9 +160,13 @@ existing `authorship` column.
 ### 4a. Amendment (2026-09-21): role moves to a hard predicate
 
 Experiment 2 has run (PR #217, `tests/test_incident_reproduction.py`). The
-deferral is closed. **Role leaves the scoring budget and becomes a hard
-predicate on the existing `authorship` column.** No schema change: the column
-was added by f9f5dda and is already populated and indexed.
+deferral is closed. **Role exclusion becomes a hard predicate on the existing
+`authorship` column, and the role PILE leaves the scoring budget.** No schema
+change: the column was added by f9f5dda and is already populated and indexed.
+
+Stated that way deliberately. The first draft of this sentence said "role
+leaves the scoring budget", and as shipped that is false -- see "What actually
+left score space, and what did not" at the end of this amendment.
 
 The measurement, at the model-visible window after the four-item slice:
 
@@ -228,6 +232,49 @@ to anyone that the predicate might be scoped more narrowly than the measurement:
 the first implementation gated exclusion to relational queries and therefore did
 not fire on the self-echo incident at all. See "Defect found: 4a's predicate did
 not cover 4a's incident" below.
+
+### What actually left score space, and what did not
+
+**Correction (2026-09-30), wording only.** This amendment said role leaves the
+scoring budget. As shipped, one half of it did.
+
+What left: `source_quality_adjustment`'s role half, a -0.20 penalty on
+assistant-prefixed content, retired with the rest of that function.
+
+What did not: `query_intent_adjustment` (`src/retrieval/semantic_search.py:436`)
+still reads the same fact off the same records, on reflective queries:
+
+```
+content.startswith("user:")       +0.10
+content.startswith("assistant:")  -0.10
+```
+
+A 0.20 swing, **2.5x the measured production cosine spread of 0.0815**, and it
+is a role term by any reading -- it branches on the authorship prefix and on
+nothing else. It is not a residue of the pile this amendment retired; it is a
+second, independent copy that predates it and was not in view when 4a was
+written, because 4a reasoned about `source_quality_adjustment` and the
+ranker-stage pile and did not audit the retrieval stage.
+
+So the accurate statement of 4a's outcome is narrower than the one it made:
+
+- **Exclusion** -- the capability the self-echo incident measured, the one with
+  no second owner -- is handled by the predicate, at no cost to the scoring
+  budget. That part is true and is what experiment 2 demonstrated.
+- **Role is not absent from score space.** A term reading authorship still
+  competes against similarity, unbounded, at 2.5x the spread, one stage earlier
+  than the pile that was retired.
+
+This is a correction to the claim, not to the design. The predicate is right,
+the retirement was right, and the incident suite still passes. What was wrong
+was the scope of the sentence describing it, and a false completeness claim is
+exactly the failure the 2026-09-30 amendment exists to fix elsewhere in this
+document -- it would be incoherent to fix the bound's inventory and leave this
+one standing.
+
+Tracked by **#254**. Not retuned, not moved, and not reopened here: the term's
+disposition needs the same treatment every other term got -- a measurement, and
+a derivation from it -- not a number chosen to look smaller.
 
 ## The bound, and what it is asserted against
 
@@ -634,7 +681,9 @@ enforcement.
 
 Not done here: it re-derives every prior magnitude, which is a change with its
 own measurement, and this PR's remit was to implement the contract as derived
-rather than to re-derive it. Recorded instead, with two tests --
+rather than to re-derive it. **Done in the 2026-09-30 amendment below**, where
+the allocation moves to log space and the clamp becomes unreachable. Recorded
+at the time with two tests --
 `test_the_clamp_fires_on_short_records_at_shipped_magnitudes` pins the rate so
 the fact is asserted rather than rediscovered, and `test_the_clamp_rate_is_observable`
 pins that `prior.clamped_low` reaches the traffic window, because the counters
@@ -711,6 +760,309 @@ therefore delete" would license deleting any term the current corpus does not
 exercise, which is the reasoning `parameter_coverage` exists to prevent: a zero
 index means "this corpus never exercised it" at least as often as it means
 "this term does not matter."
+
+## Amendment (2026-09-30): the bound was false as written; closing it
+
+The 2026-09-28 amendment recorded the contract as implemented. It also left this
+document claiming something untrue: that composition is bounded to
+`[0.8722, 1.1278]`. Five terms in the same composition sat outside it.
+
+### The full inventory, so a later reader can see whether any remain
+
+| term | was | vs spread 0.0815 | now |
+|---|---|---|---|
+| `pol.prefer_active_work` | +0.22 additive | **2.7x** | x1.0179, inside |
+| `pol.prefer_experience` | +0.20 additive | 2.5x | x1.0098, inside |
+| `pol.exact.question` / `.other` | -0.05 / +0.03 | 0.6x / 0.4x | x0.9973 / x1.0018, inside |
+| `proj.boost` | +0.15 additive, **after** the tier multiply | 1.8x | x1.0063, inside |
+| authorship | x1.0 / x0.3 / x0.5 | up to **3.33x** | outside, own bound, stated below |
+| weight split | `reflection_weight` 1.4 vs `memory_weight` 0.7 **within one list** | up to 2x | outside, root cause fixed |
+
+### Outside the bound, stated per term rather than per stage
+
+The first draft of this section exempted "the retrieval-stage lexical and intent
+terms" as a block, on the grounds that they are query-DEPENDENT: they measure
+query-record similarity, and the bound exists to stop query-INDEPENDENT metadata
+outweighing similarity. The principle is right and the exemption was too wide.
+It is a property of a TERM, not of a stage, and applying it honestly splits the
+block that was exempted. A review of the composition outside `prior.assemble`
+found three places the blanket version was covering. None is retuned here.
+
+| term | where | magnitude | vs spread 0.0815 | reads the query-record pair? |
+|---|---|---|---|---|
+| `lexical_relevance_bonus` | `semantic_search.py:309` | ceiling 0.68 (0.10 + 0.18 + 0.40 entity cap) | 8.3x | **yes** -- genuinely exempt, but unbounded |
+| `query_intent_adjustment` mem_type arms | `semantic_search.py:421` | +0.10 / +0.08 / -0.03 | 1.6x swing | **no** -- a type ladder, query-conditional |
+| `query_intent_adjustment` role prefix | `semantic_search.py:436` | +0.10 / -0.10 | 2.5x swing | **no** -- a role term |
+| `_diversity_score` | `service.py:655` | -0.08 length, 0.05/item type, 0.22/item doc, 0.08/item title, 0.70 x Jaccard | up to 8x, **uncapped** | partly |
+
+What each one means, stated plainly rather than left for the next reader:
+
+- **`lexical_relevance_bonus` is exempt and has no stated bound.** The exemption
+  holds -- it is a similarity estimate. But "not bounded by the composed bound"
+  is not the same as "unbounded", and nothing states what governs it. Its
+  ceiling is 0.68. The module docstring of `tests/test_composition_bound.py`
+  already names the 0.40 entity cap as the canonical example of an assumption
+  wrong by 4-6x, and then asserts nothing about it. A similarity-space bound is
+  owed; it is not derived here.
+- **The `mem_type` and role-prefix arms of `query_intent_adjustment` are the
+  same species as the terms this amendment just moved.** They are conditional on
+  the query's CLASS and then read the record's type or authorship prefix. That
+  is exactly what `pol.prefer_experience` was, and it was brought inside the
+  bound two paragraphs up. The role half is more pointed: it made amendment 4a's
+  headline claim false as written, and 4a has been corrected accordingly -- see
+  "What actually left score space, and what did not". Leaving these out while
+  moving their twins makes this ADR's own rule arbitrary.
+- **`_diversity_score` is a sixth additive pile, and it selects.** It runs
+  whenever `policy.diversity` is set (four policies) and it decides *which items
+  are delivered*, so it is strictly more load-bearing than the prior, whose ST
+  was measured on the delivery endpoint precisely because delivery is what
+  matters. It contains a second copy of the prior's length family (`len < 80 ->
+  -0.08`, against the prior's bounded `LEN_UNDER_50` at -1.24%, a 6.5x
+  contradiction between two length terms in one pipeline) and a type term at
+  0.05/item, on a family this ADR removed from score space. `same_doc_penalty`
+  accumulates 0.22 per prior selection with no cap. It has no stage in
+  `tools/retrieval_trace/compose.py`, so the converged Sobol run measured a
+  delivery endpoint that does not include the function that picks the delivered
+  set on those four policies.
+
+Follow-ups, not this PR: #253 (state a similarity-space bound for the lexical
+and entity terms), #254 (the `mem_type` and role arms of
+`query_intent_adjustment`), #255 (diversity as a separately-bounded selection
+objective, and a compose stage for it). The bound itself is not reopened by any
+of them.
+
+Not covered by the bound and not re-examined here: `memory_weight` itself as a
+magnitude, and the three absolute thresholds this ADR declines to retune.
+
+### The allocation was wrong under multiplication
+
+The previous rule was
+
+```
+deviation_i = (1 - PRIOR_MIN) * ST_i / ST_max
+```
+
+It hands every term independently the right to consume the prior's entire
+budget. The largest-ST term took exactly that, so `LEN_UNDER_50 == PRIOR_MIN`
+by construction -- while `assemble` composes terms by MULTIPLYING them. Any
+record taking two downward terms therefore left the bound and was clamped back
+to it.
+
+Measured over the reachable branch space at the old magnitudes: **9 of 90
+combinations clamped**, all short records, 30% of the short-record space, and
+inside that region the prior was a CONSTANT with kind and recency erased.
+
+The fix is to allocate in the space the terms compose in:
+
+```
+log_dev_i = log(BOUND) * ST_i / S
+S = sum of ST over the worst one-arm-per-family case, in that direction
+```
+
+The families are mutually exclusive, so a record takes at most one arm from
+each and the worst case is a sum over FAMILIES rather than over terms. The
+worst-case product then lands exactly on the bound -- verified to 1e-16 in both
+directions -- and the clamp becomes **unreachable**: 0 of 3920 branch
+combinations escape, against 9 of 90 before.
+
+The clamp is kept, instrumented and tested for unreachability, demoted from
+enforcement to assertion. A bound that holds by construction still needs
+something to notice when a future term breaks the construction, and the test
+that asserted the clamp fires has been inverted rather than deleted.
+
+### Magnitudes: one converged run, and the first one
+
+Every magnitude is re-derived, the six from the 2026-09-28 amendment included,
+from a single Sobol run against the **production corpus**:
+
+```
+N=4096, k=37, 212,992 evaluations
+scipy.qmc.Sobol(scrambled), seed 20260923
+1000 bootstrap resamples, 95% intervals
+st_ci_target 0.020: MET -- delivery 0.0141, score 0.0199
+the log-log extrapolation independently demanded N=4099
+```
+
+This is the first converged run in the project's history. #232 stopped at its
+ceiling with a delivery half-width of **0.0495** against the same 0.020 target,
+and its values have been load-bearing ever since. Continuing to cite it was not
+an option once the range convention changed: `tools/retrieval_trace/ranges.py`
+states that mu*/ST from the pre-ADR-044 runs are not comparable with the
+current intervals, and #232 was taken on the 45-parameter vector under the old
+ones. Extending a disowned measurement to new terms would have compounded it.
+
+The run was made possible by two harness fixes that are part of this change:
+the Sobol stopping rule read the SCORE endpoint alone, so a run could report
+convergence while delivery -- the endpoint these magnitudes come from -- was
+still wide; and `proj.boost` was structurally unmeasurable, because the capture
+CLI had no way to supply a project id, so `project_match` was always False and
+the term was always reported unexercised.
+
+Measured delivery ST, all resolved (widest half-width 0.0141):
+
+| term | ST | +/- |
+|---|---|---|
+| `kind.experience` | 0.2481 | 0.0141 |
+| `kind.question` | 0.1876 | 0.0115 |
+| `kind.user_content` | 0.1149 | 0.0078 |
+| `recency.older` | 0.1160 | 0.0077 |
+| `recency.d365` | 0.0903 | 0.0064 |
+| `len.lt50` | 0.0716 | 0.0043 |
+| `pol.prefer_active_work` | 0.0669 | 0.0051 |
+| `pol.prefer_experience` | 0.0370 | 0.0024 |
+| `proj.boost` | 0.0237 | 0.0020 |
+| `pol.exact.question` | 0.0156 | 0.0012 |
+| `recency.d30` | 0.0111 | 0.0007 |
+| `pol.exact.other` | 0.0069 | 0.0006 |
+| `reflection` | 0.0030 | 0.0003 |
+| `len.gt1200` | 0.0028 | 0.0002 |
+| `kind.answer` | 0.0000 | 0.0000 |
+
+`kind.answer` is in the run's `no_solo_delivery_effect` list and takes 1.0, by
+the rule already applied to the type ladder. It previously mirrored
+`kind.question`; the measurement separates them, so the mirror is gone.
+
+### Three corpora disagree, and by how much
+
+| term | #232 | synthetic | production | prod/#232 |
+|---|---|---|---|---|
+| `kind.experience` | 0.1696 | 0.0798 | **0.2481** | 1.46x |
+| `kind.user_content` | 0.0724 | 0.0493 | **0.1149** | 1.59x |
+| `recency.older` | 0.1559 | 0.1054 | **0.1160** | 0.74x |
+| `recency.d365` | 0.1713 | 0.1571 | **0.0903** | 0.53x |
+| `len.lt50` | 0.1930 | **0.0006** | **0.0716** | 0.37x |
+| `len.gt1200` | 0.0451 | 0.0006 | 0.0028 | 0.06x |
+
+A synthetic corpus was measured first and rejected on this evidence. It put
+`len.lt50` at 0.0006, two orders of magnitude below both other runs, which
+would have deleted the term. Activation was 3.18% of candidates on the
+production corpus and about 3% on the synthetic one -- so the discrepancy is
+not rarity. ST is a share of one corpus's variance, and a corpus that is
+unrepresentative in what its other 97% look like produces an unrepresentative
+share. **Magnitudes derived on a synthetic corpus are not production
+magnitudes**, even when the activation rates match.
+
+### The recency ladder is a MIXED derivation
+
+Stated explicitly because it must not be read as uniformly measured.
+
+```
+MEASURED (contribute the family's magnitude):  older 0.1160   d365 0.0903   d30 0.0111
+CARRIED  (ordering only, no measurement):         d7   d90
+```
+
+`d7` and `d90` are **unexercised** on the production corpus: nothing retrieved
+falls within 7 days or in the 31-90 day band. That is a corpus fact and no
+sample count fixes it -- see issue #252, where it is one symptom of a larger
+problem.
+
+The ladder's ORDERING is therefore carried from the additive ladder it replaced
+(+0.18 / +0.12 / +0.06 / +0.02 / -0.03) and its MAGNITUDE comes from the
+measured arms, scaled as one family.
+
+The alternative was tried and rejected, for a reason worth recording: per-arm
+ST allocation **inverts the ladder**. Measured `d365` (0.0903) is 8.2x measured
+`d30` (0.0111), so allocating each arm by its own ST would give a year-old
+record a larger boost than a month-old one. That is not a finding, it is a
+broken prior -- recency arms are mutually exclusive, so they are compared
+across records. ST is an activation-weighted variance share: it says how much a
+term moves delivery on this corpus, not which arm of an ordinal ladder should
+rank higher. Using it to ORDER an ordered ladder is a category error, and the
+ladder is the one place in the prior where measurement cannot set the ordering.
+
+### The two terms that stay outside, with derivations
+
+**Authorship is a suppression gate, not a tiebreaker.** Its job is to stop
+content of uncertain authorship answering as though it were the user (UAT-005),
+regardless of how relevant that content is. The cosine-spread bound governs
+terms that reorder records of comparable relevance; bounding a gate to a 6.6%
+band converts it into a nudge and breaks the incident it exists for. Amendment
+4a already established that gates live outside score space -- role was the
+first. Authorship is the second.
+
+Its stated bound is `[0, 1]`: a fraction, order-preserving toward zero. Its
+governing test is `tests/test_incident_reproduction.py`, not the spread.
+
+Recorded honestly: after #218 retired `third_party`, the surviving arms are
+`mixed` 0.3 and `unknown` 0.5, which are graded class constants rather than a
+gate's 0.0. The gate argument is weaker than it was. Converting authorship to a
+predicate as role was, measured by the incident suite, is the consistent next
+step and is not taken here.
+
+**The weight split is fixed at the root rather than bounded.** It reordered
+within one delivered list only because `reflection` is in
+`SQLITE_MEMORY_TYPES`, so reflection records reach `memory_items` and took
+`reflection_weight` (1.4 on the reflective policy) while their neighbours took
+`memory_weight` (0.7) -- a 2x swing between two records in the same list, from
+a term whose whole purpose is per-channel tuning.
+
+`apply_policy` now takes the channel weight explicitly and `build_context`
+passes it per channel, which it was already positioned to do. A uniform
+positive scale on a list cannot reorder that list, so the term is legitimately
+outside the bound -- where before, the same justification was false.
+
+### Measurement
+
+36-query traffic window, synthetic vault (500 records, real embeddings, 228
+cold / 96 warm / 112 hot), before at `main` in a worktree against the same
+corpus, both runs read-only under `retrieval_stats_disabled()`.
+
+| | before | after |
+|---|---|---|
+| delivered | 203 | 203 |
+| mean score | 0.4968 | 0.4854 |
+| median | 0.4951 | 0.4941 |
+| max | 1.4545 | **1.2088** |
+| clamp firings | 0 / 305 | 0 / 305 |
+| type gate | 92.63% | 92.63% |
+
+Score ratio: p5 0.9428, p50 1.0000, p95 1.0031. 111 of 203 unchanged, 74 fell,
+18 rose. The ceiling falling from 1.4545 is the additive terms no longer able
+to push a composed score past what the bound permits.
+
+**Delivered membership is identical. Jaccard 1.0000, all 36 queries, nothing
+gained or lost.** That deserves stating rather than burying: on this corpus the
+change is score-only. The terms brought inside the bound were not deciding
+delivery before, which is consistent with their measured ST and is the outcome
+the bound was supposed to produce -- but it also means the bound's effect on
+delivery is not observable here, and this measurement cannot claim otherwise.
+
+**The clamp fired zero times on this corpus before the fix as well.** The 9-of-90
+figure is a property of the reachable branch space, not a corpus rate. The fix
+is provable by construction and by exhaustive enumeration (0 of 3920 escapes);
+it is not visible in corpus traffic, because the combinations that clamp are
+ones this corpus does not produce. Both statements are true and neither
+substitutes for the other.
+
+The type gate is unchanged, as expected: it reads the retrieval-stage score,
+which this change does not touch.
+
+### #250 is resolved, by measurement
+
+Short user-authored content was net-penalised because `LEN_UNDER_50` outweighed
+`KIND_USER_CONTENT`: 0.9339 x 1.0248 = **0.9570**.
+
+Under the log-space allocation on production ST it is 0.9876 x 1.0309 =
+**1.0181**. Resolved, and not by the allocation alone -- on the production
+corpus `kind.user_content` (0.1149) outranks `len.lt50` (0.0716), the opposite
+of #232's ordering. Had the ST ordering held, the log-space fix would have
+reduced the penalty to 0.9942 without removing it. The fix and the
+re-measurement were both necessary; neither would have sufficed.
+
+Closed.
+
+### Two planning assumptions the measurement overrode
+
+Recorded because the plan is part of the record.
+
+`pol.exact.question` / `.other` were expected to sit at the noise floor and
+take the identity, on the strength of two earlier runs where ST was ~0.0012
+with ST < S1. On the production corpus they are 0.0156 and 0.0069, both
+resolved and neither inconsistent, so they are derived like any other term.
+
+`len.lt50`'s near-zero synthetic ST was expected to be an artefact of rare
+activation. It was not: activation is 3.18% on production too. The synthetic
+figure was wrong for a different reason -- see the three-corpus table.
 
 ## Consequences
 

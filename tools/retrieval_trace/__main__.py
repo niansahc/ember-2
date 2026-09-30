@@ -32,7 +32,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.retrieval_trace.capture import capture_run, default_output_path  # noqa: E402
+from tools.retrieval_trace.capture import (  # noqa: E402
+    capture_run,
+    default_output_path,
+    discover_project_id,
+)
 from tools.retrieval_trace.morris import (  # noqa: E402
     ENDPOINTS,
     find_unexercised,
@@ -106,6 +110,16 @@ def main() -> int:
         type=int,
         help="widen the candidate pool beyond the shipped 8. The delivered "
         "set in such a trace is the widened pipeline's, not production's.",
+    )
+    cap.add_argument(
+        "--project-id",
+        nargs="?",
+        const="auto",
+        help="capture with an active project so ADR-007's proj.boost is "
+        "exercised. Without one the term is structurally unexercised and a "
+        "sensitivity pass can say nothing about it. Pass a literal id, or "
+        "bare --project-id to take the most-used id in the vault. The id is "
+        "never written into the trace.",
     )
 
     ver = sub.add_parser("verify", help="replay a trace at defaults and compare")
@@ -198,10 +212,22 @@ def main() -> int:
         def progress(index, total, query_id):
             print(f"  [{index}/{total}] {query_id}", flush=True)
 
+        project_id = args.project_id
+        if project_id == "auto":
+            from src.core.config import get_private_vault_path
+
+            project_id = discover_project_id(get_private_vault_path())
+            # The id itself is vault-derived and stays unprinted; whether one
+            # was found is not, and the caller needs it to read the coverage
+            # report -- proj.boost unexercised means something different when
+            # no project id existed to begin with.
+            print(f"  project id       : {'resolved' if project_id else 'none found'}")
+
         run = capture_run(
             capture_pairs(),
             include_content=not args.no_content,
             pool_limit=args.pool_limit,
+            project_id=project_id,
             progress=progress,
         )
         written = run.write(out)

@@ -200,20 +200,42 @@ class TraceRun:
         return json.dumps(asdict(self), indent=2, ensure_ascii=True)
 
     def write(self, path: Path) -> Path:
-        """Write the trace, refusing any destination inside the repository.
+        """Write the trace, refusing any destination inside ANY git work tree.
 
-        The refusal is not politeness. A trace carries real query text, and
-        the one mistake that turns this tool into a vault-privacy incident
-        is writing it somewhere a commit can pick it up.
+        The refusal is not politeness. A trace carries real query text and
+        real content, and the one mistake that turns this tool into a
+        vault-privacy incident is writing it somewhere a commit can pick it
+        up.
+
+        "Inside the repository" was too narrow, and the gap was live. The
+        documented default output directory is `~/.ember_traces`, and on the
+        reference machine the home directory is itself the work tree of an
+        unrelated repository whose ignore rules do not match `.ember_traces`.
+        A trace written to the default location was therefore one `git add .`
+        in a different project away from being staged, and this guard -- which
+        only knew about ember-2 -- said nothing. Untracked is not safe;
+        untracked-and-unignored is the state `git add .` sweeps up.
+
+        So the test is "is any ancestor a git work tree", not "is it this
+        repo". The presence of `.git` in a directory is the check: one walk up
+        the path, no subprocess, so it cannot fail open because git is absent
+        from PATH.
         """
         path = Path(path).resolve()
-        repo_root = Path(__file__).resolve().parents[2]
-        if repo_root == path or repo_root in path.parents:
-            raise ValueError(
-                f"refusing to write a trace inside the repository ({path}). "
-                "Traces carry real query text; keep them outside the working "
-                "tree. See CLAUDE.md Vault Privacy Rule."
-            )
+
+        # One walk, no special case for this repo: ember-2's own root contains
+        # .git, so the general check subsumes the narrower one that stood here.
+        for ancestor in [path, *path.parents]:
+            if (ancestor / ".git").exists():
+                raise ValueError(
+                    f"refusing to write a trace inside a git work tree: "
+                    f"{ancestor} contains .git (target was {path}). A trace "
+                    "carries real query text and content. Write it somewhere "
+                    "no repository can reach -- being untracked is not enough, "
+                    "because `git add .` stages untracked files. See CLAUDE.md "
+                    "Vault Privacy Rule."
+                )
+
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self.to_json(), encoding="utf-8")
         return path

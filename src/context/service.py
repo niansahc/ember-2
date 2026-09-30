@@ -241,8 +241,19 @@ class ContextService:
         memory_items = self._apply_type_gate(memory_items, policy)
         reflection_items = self._apply_type_gate(reflection_items, policy)
 
-        memory_items = self.ranker.apply_policy(memory_items, policy)
-        reflection_items = self.ranker.apply_policy(reflection_items, policy)
+        # Per-channel weights, passed explicitly. Chosen per ITEM until
+        # ADR-044's 2026-09-30 amendment, which made a reflection record
+        # arriving through the memory channel take reflection_weight while its
+        # neighbours in the same list took memory_weight -- a 2x reordering
+        # inside one delivered list from a term meant to tune a channel. A
+        # uniform scale per list cannot reorder that list, which is what lets
+        # the weight stay outside the composed bound.
+        memory_items = self.ranker.apply_policy(
+            memory_items, policy, channel_weight=policy.memory_weight
+        )
+        reflection_items = self.ranker.apply_policy(
+            reflection_items, policy, channel_weight=policy.reflection_weight
+        )
 
         # Authorship multiplier on relational queries.
         # No-op on non-relational queries. When the query is about the user's
@@ -262,7 +273,7 @@ class ContextService:
         reflection_items = self.ranker.apply_project_boost(reflection_items, project_id)
 
         ranked_memory, ranked_reflections = self.ranker.rank(
-            memory_items, reflection_items
+            memory_items, reflection_items, policy
         )
 
         normalized_user_message = self._normalize_text(user_message)

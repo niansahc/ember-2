@@ -30,6 +30,12 @@ class ContextItem:
     # Defaults to "unknown" — the ranker's authorship multiplier falls
     # back to a conservative 0.5x for unknown items on relational queries.
     authorship: str = "unknown"
+    # ADR-007's project match, recorded by ranker.apply_project_boost and read
+    # by the prior (ADR-044, 2026-09-30). A field rather than a score change
+    # because the boost is now a bounded multiplier applied with every other
+    # factor in one place, and the stage that KNOWS about the project is not
+    # the stage that applies it. Defaults False: no active project, no match.
+    project_match: bool = False
     # ADR-015 amendment, implementation step 4: the record's actual
     # primary key in whichever SQLite store it came from (memory.db or
     # ingested.db) -- distinct from `id`, which is a different identifier

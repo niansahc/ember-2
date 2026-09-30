@@ -57,7 +57,13 @@ _RECORDERS = {"count", "branch", "reached"}
 
 
 def _dynamic_arms() -> dict[str, tuple[str, ...]]:
-    from src.context.prior import _KIND_FACTORS, _LENGTH_FACTORS, RECENCY
+    from src.context.prior import (
+        _KIND_FACTORS,
+        _LENGTH_FACTORS,
+        _POLICY_FACTORS,
+        _PROJECT_FACTORS,
+        RECENCY,
+    )
 
     return {
         # prior.py: all three arm domains are read off the prior's own term
@@ -74,6 +80,12 @@ def _dynamic_arms() -> dict[str, tuple[str, ...]]:
         # service.py: the two selection modes, chosen by policy.diversity.
         "selection.mode": ("diversity", "score_order"),
         "prior.recency": tuple(RECENCY),
+        # The two families ADR-044 brought inside the bound on
+        # 2026-09-30. Same principle: the domain is read off the
+        # term table, so an arm added there appears here without
+        # anyone remembering to.
+        "prior.policy": tuple(_POLICY_FACTORS),
+        "prior.project": tuple(_PROJECT_FACTORS),
         # ranker.py: the authorship multiplier keys, plus the arm taken by
         # a value outside that set.
         # third_party retired in #218; an unreadable tag takes the

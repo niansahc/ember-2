@@ -151,25 +151,35 @@ def test_tier_defaults_match_shipped():
     assert profile.score == pytest.approx(P["tier.profile_bypass"])
 
 
-def test_policy_preference_defaults_match_shipped():
+def test_the_policy_arm_is_multiplicative_and_matches_the_vector():
+    """The preference terms are prior arms now, not additive terms in apply_policy.
+
+    They were pinned here as `score == P["pol.prefer_experience"]` on an item
+    seeded at 0.0 -- which only reads as a magnitude while the term is additive.
+    As multipliers they are pinned as a RATIO against a neutral record, which is
+    what a multiplier means and what survives a re-derivation of the value.
+    """
     ranker = ContextRanker()
     plain = "a record body long enough to avoid every length penalty there is"
 
-    item = _item(score=0.0, content="today i noticed something", tier="hot")
-    ranker.apply_policy([item], ContextPolicy(name="x", prefer_experiences=True))
-    assert item.score == pytest.approx(P["pol.prefer_experience"])
-
-    item = _item(score=0.0, content="working on the next step", tier="hot")
-    ranker.apply_policy([item], ContextPolicy(name="x", prefer_active_work=True))
-    assert item.score == pytest.approx(P["pol.prefer_active_work"])
-
-    item = _item(score=0.0, content=plain, metadata={"content_kind": "question"})
-    ranker.apply_policy([item], ContextPolicy(name="x", prefer_exact_matches=True))
-    assert item.score == pytest.approx(P["pol.exact.question"])
-
-    item = _item(score=0.0, content=plain, metadata={"content_kind": "user_content"})
-    ranker.apply_policy([item], ContextPolicy(name="x", prefer_exact_matches=True))
-    assert item.score == pytest.approx(P["pol.exact.other"])
+    cases = [
+        ("today i noticed something", {}, ContextPolicy(name="x", prefer_experiences=True),
+         "prior.policy.prefer_experience"),
+        ("working on the next step", {}, ContextPolicy(name="x", prefer_active_work=True),
+         "prior.policy.prefer_active_work"),
+        (plain, {"content_kind": "question"},
+         ContextPolicy(name="x", prefer_exact_matches=True),
+         "prior.policy.exact_question"),
+        (plain, {"content_kind": "user_content"},
+         ContextPolicy(name="x", prefer_exact_matches=True),
+         "prior.policy.exact_other"),
+    ]
+    for content, metadata, policy, param in cases:
+        armed = _item(score=1.0, content=content, tier="hot", metadata=dict(metadata))
+        bare = _item(score=1.0, content=content, tier="hot", metadata=dict(metadata))
+        ranker.rank([armed], [], policy)
+        ranker.rank([bare], [], None)      # no policy: the arm is the identity
+        assert armed.score / bare.score == pytest.approx(P[param], rel=1e-9), param
 
 
 def test_authorship_and_project_defaults_match_shipped():
@@ -180,9 +190,15 @@ def test_authorship_and_project_defaults_match_shipped():
         ranker.apply_authorship_scoring([item], relational)
         assert item.score == pytest.approx(P[f"auth.{branch}"])
 
-    item = _item(score=0.0, metadata={"project_id": "p1"})
-    ranker.apply_project_boost([item], "p1")
-    assert item.score == pytest.approx(P["proj.boost"])
+    # The project boost is a prior arm too, so it is a ratio against an
+    # unmatched record rather than an additive magnitude.
+    matched = _item(score=1.0, metadata={"project_id": "p1"})
+    unmatched = _item(score=1.0, metadata={"project_id": "other"})
+    ranker.apply_project_boost([matched, unmatched], "p1")
+    ranker.rank([matched, unmatched], [], None)
+    assert matched.score / unmatched.score == pytest.approx(
+        P["prior.project.match"], rel=1e-9
+    )
 
 
 def test_the_prior_vector_covers_every_factor_the_prior_applies():
@@ -204,6 +220,8 @@ def test_the_prior_vector_covers_every_factor_the_prior_applies():
         {f"prior.kind.{k}" for k in prior._KIND_FACTORS if k != "none"}
         | {f"prior.len.{k}" for k in prior._LENGTH_FACTORS if k != "none"}
         | {f"prior.recency.{b}" for b in prior.RECENCY}
+        | {f"prior.policy.{k}" for k in prior._POLICY_FACTORS if k != "none"}
+        | {f"prior.project.{k}" for k in prior._PROJECT_FACTORS if k != "none"}
         | {"prior.reflection_discount"}
     )
     actual = {n for n in PARAM_NAMES if n.startswith("prior.")}
@@ -473,7 +491,7 @@ def test_parameter_coverage_separates_inert_from_exercised(traced_run):
     # would have made this assertion pass while testing nothing. The
     # ingested-specific parameter that survives is the intent term.
     assert "ret.intent.reflective_ingested" in inert
-    assert "proj.boost" in inert
+    assert "prior.project.match" in inert
 
 
 def test_sweep_reports_delivery_changes(traced_run):
@@ -507,6 +525,93 @@ def test_writing_inside_the_repository_is_refused(traced_run):
     repo_root = Path(__file__).resolve().parents[1]
     with pytest.raises(ValueError, match="refusing to write a trace inside"):
         traced_run.write(repo_root / "logs" / "trace.json")
+
+
+def test_writing_inside_any_git_work_tree_is_refused(traced_run, tmp_path):
+    """Not just ember-2. Any work tree, however unrelated.
+
+    The gap this closes was live on the reference machine: the documented
+    default output directory is `~/.ember_traces`, the home directory there is
+    itself the work tree of an unrelated repository, and `.ember_traces` is
+    matched by none of that repository's ignore rules. A trace written to the
+    default location sat untracked-but-unignored inside someone else's repo,
+    which is precisely the state `git add .` sweeps up -- and the old guard,
+    which compared against ember-2's root alone, permitted it.
+
+    Untracked is not safe. Unignored-and-untracked is the dangerous state, and
+    a trace carries real query text and real content.
+    """
+    somebody_elses_repo = tmp_path / "unrelated_project"
+    (somebody_elses_repo / ".git").mkdir(parents=True)
+    nested = somebody_elses_repo / "data" / "traces"
+
+    with pytest.raises(ValueError, match="inside a git work tree"):
+        traced_run.write(nested / "trace.json")
+
+
+def _nearest_work_tree(path: Path) -> Path | None:
+    """The closest ancestor containing `.git`, or None. TraceRun.write's rule."""
+    for ancestor in [path, *path.parents]:
+        if (ancestor / ".git").exists():
+            return ancestor
+    return None
+
+
+def test_the_guard_is_not_a_blanket_refusal(traced_run, tmp_path):
+    """Non-vacuity. A guard that refused everything would pass the test above.
+
+    Refusing every path is the failure mode of a guard written from the refusal
+    side only, and it would make the tool unusable while looking correct.
+
+    Which assertion is available depends on where pytest puts tmp_path, so the
+    environment fact is MEASURED here rather than assumed. An earlier version
+    of this test assumed the reference machine's answer -- there tmp_path sits
+    under a home directory that is itself a work tree, so the guard refuses
+    both paths and the test passed -- and it failed on CI, where tmp_path is
+    outside every work tree and the guard correctly allowed the write. The
+    assumption, not the guard, was wrong: asserting that an outside path is
+    refused asserts exactly the behaviour that must not exist.
+
+    So both sides are asserted, each where it is true:
+
+      tmp_path outside every work tree   the write is ALLOWED. The real
+                                        positive case, and CI is the only
+                                        environment that offers it.
+      tmp_path inside one               the refusal must name the NEAREST
+                                        work tree. Two paths differing only
+                                        in whether a nearer .git exists must
+                                        produce different messages, which a
+                                        blanket refusal cannot do.
+    """
+    nearer_repo = tmp_path / "unrelated_project"
+    (nearer_repo / ".git").mkdir(parents=True)
+
+    # True in both environments: a path inside the nearer repo is refused, and
+    # the refusal names that repo rather than anything further up.
+    with pytest.raises(ValueError, match="inside a git work tree") as nested:
+        traced_run.write(nearer_repo / "data" / "trace.json")
+    assert str(nearer_repo) in str(nested.value)
+
+    outside_the_nearer_repo = tmp_path / "data" / "trace.json"
+    enclosing = _nearest_work_tree(tmp_path)
+
+    if enclosing is None:
+        written = traced_run.write(outside_the_nearer_repo)
+        assert written.exists(), (
+            "tmp_path is outside every git work tree, so this write is the case "
+            "the guard exists to PERMIT. Refusing it makes the tool unusable."
+        )
+        assert written.read_text(encoding="utf-8"), "wrote an empty trace"
+    else:
+        with pytest.raises(ValueError) as plain:
+            traced_run.write(outside_the_nearer_repo)
+        assert str(enclosing) in str(plain.value), (
+            f"tmp_path is inside {enclosing}, so the refusal should name it"
+        )
+        assert str(nearer_repo) not in str(plain.value), (
+            "both paths produced the same refusal; the guard is not walking to "
+            "the nearest work tree, it is refusing unconditionally"
+        )
 
 
 def test_content_is_omitted_when_not_requested(stub_query_embedding):

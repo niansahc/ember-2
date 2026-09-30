@@ -76,10 +76,11 @@ RETRIEVAL_DEFAULTS: dict[str, float] = {
 # ---------------------------------------------------------------------------
 
 POLICY_DEFAULTS: dict[str, float] = {
-    "pol.prefer_experience": 0.20,
-    "pol.prefer_active_work": 0.22,
-    "pol.exact.question": -0.05,
-    "pol.exact.other": 0.03,
+    # pol.prefer_experience, pol.prefer_active_work and pol.exact.* were
+    # additive here until ADR-044's 2026-09-30 amendment. They are now arms of
+    # the prior's policy family, below, because at +0.20 and +0.22 the largest
+    # was 2.7x the entire measured cosine spread while sitting outside the
+    # bound the ADR claimed covered composition.
     # ADR-015 tier multipliers, re-derived under ADR-044's bound and imported
     # rather than restated. hot is listed even though the shipped code
     # expresses it as "no change": a sensitivity pass needs the identity
@@ -95,6 +96,10 @@ POLICY_DEFAULTS: dict[str, float] = {
 # apply_project_boost
 # ---------------------------------------------------------------------------
 
+# proj.boost was additive here (+0.15, 1.8x the cosine spread) and applied
+# AFTER the tier multiply, so tier could not attenuate it -- the last surviving
+# instance of the ordering defect ADR-044 decision 1 names. Now
+# prior.project.match, below.
 AUTHORSHIP_DEFAULTS: dict[str, float] = {
     "auth.first_person": 1.0,
     "auth.mixed": 0.3,
@@ -103,7 +108,6 @@ AUTHORSHIP_DEFAULTS: dict[str, float] = {
     # keeps the sensitivity passes from reporting an index for a term the
     # pipeline no longer has.
     "auth.unknown": 0.5,
-    "proj.boost": 0.15,
 }
 
 # ---------------------------------------------------------------------------
@@ -129,6 +133,12 @@ AUTHORSHIP_DEFAULTS: dict[str, float] = {
 # ---------------------------------------------------------------------------
 
 PRIOR_DEFAULTS: dict[str, float] = {
+    # The two families the 2026-09-30 amendment brought inside the bound.
+    "prior.policy.prefer_experience": _prior.POL_PREFER_EXPERIENCE,
+    "prior.policy.prefer_active_work": _prior.POL_PREFER_ACTIVE_WORK,
+    "prior.policy.exact_question": _prior.POL_EXACT_QUESTION,
+    "prior.policy.exact_other": _prior.POL_EXACT_OTHER,
+    "prior.project.match": _prior.PROJECT_MATCH,
     "prior.kind.experience": _prior.KIND_EXPERIENCE,
     "prior.kind.user_content": _prior.KIND_USER_CONTENT,
     "prior.kind.question": _prior.KIND_QUESTION,

@@ -59,74 +59,66 @@ class ContextRanker:
 
       the tier multipliers    ADR-015, re-derived under ADR-044's bound. See
                               COLD_MULTIPLIER above.
-      the policy preference
-      terms (+0.20, +0.22,
-      -0.05, +0.03)           still undefended magnitudes. They are
-                              query-CONDITIONAL rather than query-independent,
-                              so the ADR-044 bound does not cover them, and
-                              they were not re-derived. Treat any number in
-                              apply_policy as provisional.
       the authorship
       multipliers             UAT-005. A gate, not a class constant.
-      the project boost       ADR-007, declared by ADR-015's amendment to be
-                              the activation model's context term.
+
+    The four policy preference terms this list used to call provisional (+0.20
+    experience, +0.22 active work, -0.05/+0.03 exact) and the +0.15 project
+    boost are no longer here at all. They are derived, bounded arms of the
+    prior's policy and project families -- see src/context/prior.py. No
+    undefended magnitude is left in this file.
 
     The metadata prior is not here at all. It lives in src/context/prior.py,
     where its magnitudes are derived from Sobol ST on the delivery endpoint
     and its authority over similarity is capped by a tested bound.
     """
 
-    def apply_policy(self, items: list[ContextItem], policy) -> list[ContextItem]:
+    def apply_policy(
+        self,
+        items: list[ContextItem],
+        policy,
+        *,
+        channel_weight: float | None = None,
+    ) -> list[ContextItem]:
+        """Apply the channel weight and the tier multiplier. Nothing additive.
+
+        `channel_weight` is the weight for the LIST being ranked, applied
+        uniformly to every item in it. It used to be chosen per item from
+        `item.item_type == "reflection"`, and that was a defect: `reflection`
+        is in SQLITE_MEMORY_TYPES, so reflection records reach memory_items,
+        where they took reflection_weight (1.4 on the reflective policy) while
+        their neighbours took memory_weight (0.7). A 2x swing between two
+        records in the SAME delivered list, from a term that is supposed to be
+        per-channel tuning.
+
+        That is why the weight sits outside the ADR-044 bound and can stay
+        there: a uniform positive scale on a list cannot reorder that list.
+        build_context already calls this separately per channel, so the caller
+        knows which weight applies and passes it. A caller that does not gets
+        memory_weight for the whole list, not the per-item branch: that branch
+        is the defect, so keeping it as the fallback would have left the 2x
+        swing live on every path except the two that were updated -- which is
+        every path the test suite exercises.
+
+        The three additive preference terms that stood here (+0.20 experience,
+        +0.22 active work, -0.05/+0.03 exact) are gone. They are now arms of
+        the prior's policy family, bounded with everything else -- see
+        src/context/prior.py. The largest was 2.7x the entire measured cosine
+        spread, so ADR-044's claim that composition was bounded was false while
+        they were here.
+        """
         adjusted: list[ContextItem] = []
 
         for item in items:
             score = float(item.score)
 
-            if item.item_type == "reflection":
-                score *= policy.reflection_weight
-            else:
-                score *= policy.memory_weight
+            score *= (
+                policy.memory_weight if channel_weight is None else channel_weight
+            )
 
-            # The additive recency term that stood here is gone. Recency is
+            # The additive recency term that stood here is gone too. Recency is
             # in the prior once (ADR-044), and policy.recency_bias scaling a
             # second additive copy of it was the third of the three counts.
-
-            content = item.content.lower()
-            metadata = getattr(item, "metadata", {}) or {}
-            content_kind = metadata.get("content_kind")
-
-            if count("ranker.policy.prefer_experiences_enabled",
-                     bool(getattr(policy, "prefer_experiences", False))):
-                if count("ranker.policy.prefer_experiences_fired",
-                         content_kind == "experience"
-                         or self._looks_like_experience(content)):
-                    # +0.20: concrete first-person experiences ("I was", "I felt")
-                    # are more valuable than third-person summaries for reflective
-                    # queries. Tuned to be significant but not overwhelming — a
-                    # high-similarity non-experience can still win.
-                    score += 0.20
-
-            if count("ranker.policy.prefer_active_work_enabled",
-                     bool(getattr(policy, "prefer_active_work", False))):
-                if count("ranker.policy.prefer_active_work_fired",
-                         self._looks_like_active_work(content, metadata)):
-                    # +0.22: slightly above experience boost because work/task
-                    # queries need current project context to be useful. A stale
-                    # experience from weeks ago is less relevant than today's
-                    # work log for "what am I working on" queries.
-                    score += 0.22
-
-            if count("ranker.policy.prefer_exact_matches_enabled",
-                     bool(getattr(policy, "prefer_exact_matches", False))):
-                queryish_bonus = 0.0
-                if count("ranker.policy.exact_match_question",
-                         content_kind == "question"):
-                    # -0.05: questions as retrieved context are usually the user's
-                    # own prior question, not useful evidence. Mild penalty.
-                    queryish_bonus -= 0.05
-                else:
-                    queryish_bonus += 0.03
-                score += queryish_bonus
 
             # ADR-015: Tier scoring modifier. This is the base-activation
             # half of the amendment's activation model (recency + decaying
@@ -274,12 +266,11 @@ class ContextRanker:
         project_id: str | None,
     ) -> list[ContextItem]:
         """
-        Boost memories that belong to the active project (ADR-007).
+        Mark memories that belong to the active project (ADR-007).
 
-        This is a boost, not a filter — all items are returned, but items
-        whose metadata.project_id matches the active project get a score
-        increase of 0.15. This is meaningful enough to promote project-relevant
-        memories without overwhelming general recall.
+        Not a filter: every item is returned either way. The match is recorded
+        on the item and spent in rank(), as a bounded arm of the prior's
+        project family.
 
         ADR-015 amendment, implementation step 4: this boost IS the
         activation model's context-conditioning term -- the per-query half
@@ -289,16 +280,31 @@ class ContextRanker:
         The amendment does not add a second context-conditioning mechanism;
         this existing boost is declared to be it.
 
-        If project_id is None (no active project), items are returned unchanged.
+        ADR-044 (2026-09-30): this no longer touches the score. The +0.15 was the
+        last additive term in the composition and it landed AFTER the tier
+        multiply, so tier could not attenuate it -- the ordering defect
+        decision 1 names, surviving as one term after the rest of the pile was
+        consolidated. It is now an arm of the prior's project family, bounded
+        with everything else, and applied in rank() with the other factors.
+
+        What remains here is the MARKER: it records whether the record matches
+        the active project, so rank() can read it without being handed the
+        project id separately. Kept as a method rather than folded into rank()
+        because build_context calls it per channel and the guard counters that
+        record project activation are the harness's only view of ADR-007.
+
+        If project_id is None (no active project), nothing matches.
         """
+        # Nothing to clear on the inactive path: ContextItem.project_match
+        # defaults to False and items are built per request.
         if not count("ranker.project.active", bool(project_id and items)):
             return items
 
         for item in items:
             metadata = getattr(item, "metadata", {}) or {}
-            if count("ranker.project.match",
-                     metadata.get("project_id") == project_id):
-                item.score = float(item.score) + 0.15
+            item.project_match = count(
+                "ranker.project.match", metadata.get("project_id") == project_id
+            )
 
         return items
 
@@ -306,6 +312,7 @@ class ContextRanker:
         self,
         memory_items: list[ContextItem],
         reflection_items: list[ContextItem],
+        policy=None,
     ) -> tuple[list[ContextItem], list[ContextItem]]:
         """Apply the metadata prior once, then order.
 
@@ -314,16 +321,25 @@ class ContextRanker:
         pile is now a single bounded multiplier (src/context/prior.py) and
         the decay is absorbed into TieringService's per-type halflife, so
         age reaches ranking once, through tier, rather than three times.
+
+        `policy` arrived with the 2026-09-30 amendment, when the per-policy
+        preference terms moved into the prior. They are conditional on the
+        policy, so the one place that applies the prior has to know it. It is
+        optional because the prior's policy family is the identity without one,
+        which is the correct answer for a caller that has no policy rather than
+        a reason to refuse.
         """
-        ranked_memory = [self._score_memory_item(item) for item in memory_items]
-        ranked_reflections = [self._score_reflection_item(item) for item in reflection_items]
+        ranked_memory = [self._score_memory_item(item, policy) for item in memory_items]
+        ranked_reflections = [
+            self._score_reflection_item(item, policy) for item in reflection_items
+        ]
 
         ranked_memory.sort(key=lambda item: item.score, reverse=True)
         ranked_reflections.sort(key=lambda item: item.score, reverse=True)
 
         return ranked_memory, ranked_reflections
 
-    def _score_memory_item(self, item: ContextItem) -> ContextItem:
+    def _score_memory_item(self, item: ContextItem, policy=None) -> ContextItem:
         """score = similarity x prior. Tier is applied in apply_policy.
 
         ADR-044 decision 2. Every additive term that used to live here --
@@ -341,10 +357,15 @@ class ContextRanker:
                       from Sobol ST on delivery.
           tokens<5    removed. Subsumed by the length term it duplicates
                       and never separately measured.
-        """
-        return self._apply_prior(item, is_reflection=False)
 
-    def _score_reflection_item(self, item: ContextItem) -> ContextItem:
+        The 2026-09-30 amendment added two more families to the same prior --
+        the per-policy preference terms and ADR-007's project match -- so the
+        additive stages above and below this one are now empty of anything a
+        bound would have to cover.
+        """
+        return self._apply_prior(item, is_reflection=False, policy=policy)
+
+    def _score_reflection_item(self, item: ContextItem, policy=None) -> ContextItem:
         """Reflections take the same prior, flagged as derived.
 
         The 0.95 base discount and the -0.08 short-reflection penalty are
@@ -358,21 +379,102 @@ class ContextRanker:
         copy of the reflection path silently lost two factors for exactly that
         reason -- two near-identical bodies are two places to keep in step.
         """
-        return self._apply_prior(item, is_reflection=True)
+        return self._apply_prior(item, is_reflection=True, policy=policy)
 
-    def _apply_prior(self, item: ContextItem, *, is_reflection: bool) -> ContextItem:
-        """score = score x prior. The one place the prior is applied."""
+    def _policy_arm(
+        self,
+        item: ContextItem,
+        policy,
+        metadata: dict,
+        content_kind: str | None,
+    ) -> str:
+        """Which policy-preference arm this record takes, or "none".
+
+        The predicates are the same ones apply_policy used when these were
+        additive terms; only where their answer is spent has changed. Kept here
+        rather than in prior.py because they read ContextItem and prior.py
+        deliberately knows nothing about it.
+
+        `metadata` and `content_kind` come from _apply_prior, which has already
+        read them off the item. Four of the ten policies in policies.py set no
+        preference flag at all, so the flags are read -- and the enabled
+        counters fired -- before anything touches the body, and a flagless
+        policy returns without lowering it. That lowered copy is the allocation
+        _apply_prior records ADR-044 as having removed; only the two content
+        predicates below want it back.
+        """
+        if policy is None:
+            return "none"
+
+        prefer_experiences = bool(getattr(policy, "prefer_experiences", False))
+        prefer_active_work = bool(getattr(policy, "prefer_active_work", False))
+        prefer_exact = bool(getattr(policy, "prefer_exact_matches", False))
+
+        # The counters that recorded these as additive terms are kept, with the
+        # same site names, so the traffic window's history stays continuous
+        # across the change of mechanism. They record what the POLICY enabled,
+        # so they fire per candidate whether or not a flag is set, which is why
+        # they sit above the early return.
+        count("ranker.policy.prefer_experiences_enabled", prefer_experiences)
+        count("ranker.policy.prefer_active_work_enabled", prefer_active_work)
+        count("ranker.policy.prefer_exact_matches_enabled", prefer_exact)
+
+        if not (prefer_experiences or prefer_active_work or prefer_exact):
+            return "none"
+
+        experience_fired = False
+        active_work_fired = False
+        if prefer_experiences or prefer_active_work:
+            content = item.content.lower()
+            experience_fired = prefer_experiences and count(
+                "ranker.policy.prefer_experiences_fired",
+                content_kind == "experience" or self._looks_like_experience(content),
+            )
+            active_work_fired = prefer_active_work and count(
+                "ranker.policy.prefer_active_work_fired",
+                self._looks_like_active_work(content, metadata),
+            )
+
+        exact_branch = "none"
+        if prefer_exact:
+            exact_branch = (
+                "question"
+                if count(
+                    "ranker.policy.exact_match_question", content_kind == "question"
+                )
+                else "other"
+            )
+
+        return prior.policy_branch(
+            experience_fired=bool(experience_fired),
+            active_work_fired=bool(active_work_fired),
+            exact_branch=exact_branch,
+        )
+
+    def _apply_prior(
+        self, item: ContextItem, *, is_reflection: bool, policy=None
+    ) -> ContextItem:
+        """score = score x prior. The one place the prior is applied.
+
+        Every bounded factor composes here, in one multiply, which is what
+        makes the ordering defect ADR-044 decision 1 names structurally
+        impossible: multiplication commutes, so there is no longer a stage
+        order for a term to land on the wrong side of.
+        """
         metadata = getattr(item, "metadata", {}) or {}
+        content_kind = metadata.get("content_kind")
 
         # strip() without lower(): only the LENGTH is read. The lowered copy
         # fed the content-prefix term and the tokenizer, both of which ADR-044
         # deleted, so lowering allocated a full second copy of every record
         # body to measure it.
         item.score = float(item.score) * prior.assemble(
-            content_kind=metadata.get("content_kind"),
+            content_kind=content_kind,
             content_length=len(item.content.strip()),
             recency_bucket=self._recency_bucket(item.timestamp),
             is_reflection=is_reflection,
+            policy_arm=self._policy_arm(item, policy, metadata, content_kind),
+            project_match=item.project_match,
         )
         return item
 

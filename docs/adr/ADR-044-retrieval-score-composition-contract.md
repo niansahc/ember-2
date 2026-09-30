@@ -160,9 +160,13 @@ existing `authorship` column.
 ### 4a. Amendment (2026-09-21): role moves to a hard predicate
 
 Experiment 2 has run (PR #217, `tests/test_incident_reproduction.py`). The
-deferral is closed. **Role leaves the scoring budget and becomes a hard
-predicate on the existing `authorship` column.** No schema change: the column
-was added by f9f5dda and is already populated and indexed.
+deferral is closed. **Role exclusion becomes a hard predicate on the existing
+`authorship` column, and the role PILE leaves the scoring budget.** No schema
+change: the column was added by f9f5dda and is already populated and indexed.
+
+Stated that way deliberately. The first draft of this sentence said "role
+leaves the scoring budget", and as shipped that is false -- see "What actually
+left score space, and what did not" at the end of this amendment.
 
 The measurement, at the model-visible window after the four-item slice:
 
@@ -228,6 +232,49 @@ to anyone that the predicate might be scoped more narrowly than the measurement:
 the first implementation gated exclusion to relational queries and therefore did
 not fire on the self-echo incident at all. See "Defect found: 4a's predicate did
 not cover 4a's incident" below.
+
+### What actually left score space, and what did not
+
+**Correction (2026-09-30), wording only.** This amendment said role leaves the
+scoring budget. As shipped, one half of it did.
+
+What left: `source_quality_adjustment`'s role half, a -0.20 penalty on
+assistant-prefixed content, retired with the rest of that function.
+
+What did not: `query_intent_adjustment` (`src/retrieval/semantic_search.py:436`)
+still reads the same fact off the same records, on reflective queries:
+
+```
+content.startswith("user:")       +0.10
+content.startswith("assistant:")  -0.10
+```
+
+A 0.20 swing, **2.5x the measured production cosine spread of 0.0815**, and it
+is a role term by any reading -- it branches on the authorship prefix and on
+nothing else. It is not a residue of the pile this amendment retired; it is a
+second, independent copy that predates it and was not in view when 4a was
+written, because 4a reasoned about `source_quality_adjustment` and the
+ranker-stage pile and did not audit the retrieval stage.
+
+So the accurate statement of 4a's outcome is narrower than the one it made:
+
+- **Exclusion** -- the capability the self-echo incident measured, the one with
+  no second owner -- is handled by the predicate, at no cost to the scoring
+  budget. That part is true and is what experiment 2 demonstrated.
+- **Role is not absent from score space.** A term reading authorship still
+  competes against similarity, unbounded, at 2.5x the spread, one stage earlier
+  than the pile that was retired.
+
+This is a correction to the claim, not to the design. The predicate is right,
+the retirement was right, and the incident suite still passes. What was wrong
+was the scope of the sentence describing it, and a false completeness claim is
+exactly the failure the 2026-09-30 amendment exists to fix elsewhere in this
+document -- it would be incoherent to fix the bound's inventory and leave this
+one standing.
+
+Tracked by **#254**. Not retuned, not moved, and not reopened here: the term's
+disposition needs the same treatment every other term got -- a measurement, and
+a derivation from it -- not a number chosen to look smaller.
 
 ## The bound, and what it is asserted against
 
@@ -761,10 +808,9 @@ What each one means, stated plainly rather than left for the next reader:
   same species as the terms this amendment just moved.** They are conditional on
   the query's CLASS and then read the record's type or authorship prefix. That
   is exactly what `pol.prefer_experience` was, and it was brought inside the
-  bound two paragraphs up. The role half is more pointed: amendment 4a's claim
-  is that role left score space for `role_predicate.py`, and
-  `source_quality_adjustment` was retired for carrying the -0.20 half of it. The
-  +0.10 / -0.10 half is still live one function down. Leaving these out while
+  bound two paragraphs up. The role half is more pointed: it made amendment 4a's
+  headline claim false as written, and 4a has been corrected accordingly -- see
+  "What actually left score space, and what did not". Leaving these out while
   moving their twins makes this ADR's own rule arbitrary.
 - **`_diversity_score` is a sixth additive pile, and it selects.** It runs
   whenever `policy.diversity` is set (four policies) and it decides *which items

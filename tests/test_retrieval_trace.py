@@ -509,6 +509,62 @@ def test_writing_inside_the_repository_is_refused(traced_run):
         traced_run.write(repo_root / "logs" / "trace.json")
 
 
+def test_writing_inside_any_git_work_tree_is_refused(traced_run, tmp_path):
+    """Not just ember-2. Any work tree, however unrelated.
+
+    The gap this closes was live on the reference machine: the documented
+    default output directory is `~/.ember_traces`, the home directory there is
+    itself the work tree of an unrelated repository, and `.ember_traces` is
+    matched by none of that repository's ignore rules. A trace written to the
+    default location sat untracked-but-unignored inside someone else's repo,
+    which is precisely the state `git add .` sweeps up -- and the old guard,
+    which compared against ember-2's root alone, permitted it.
+
+    Untracked is not safe. Unignored-and-untracked is the dangerous state, and
+    a trace carries real query text and real content.
+    """
+    somebody_elses_repo = tmp_path / "unrelated_project"
+    (somebody_elses_repo / ".git").mkdir(parents=True)
+    nested = somebody_elses_repo / "data" / "traces"
+
+    with pytest.raises(ValueError, match="inside a git work tree"):
+        traced_run.write(nested / "trace.json")
+
+
+def test_the_guard_names_the_nearest_work_tree_not_a_blanket_refusal(
+    traced_run, tmp_path
+):
+    """Non-vacuity, in the only form this machine can express.
+
+    A guard that refused every path would pass the test above and make the tool
+    unusable -- the failure mode of a guard written from the refusal side only.
+    The obvious check is "a path outside every work tree is allowed", and it
+    cannot be written here: pytest's tmp_path lives under the home directory,
+    and on this machine the home directory IS a work tree. That is not a defect
+    in the test, it is the finding the guard exists for, and it is why the plain
+    positive case is unavailable.
+
+    What is machine-independent is WHICH ancestor the refusal names. The walk
+    goes from the path upward, so a target nested inside a nearer repository
+    must name that one rather than the outer one. Two paths that differ only in
+    whether a nearer .git exists must therefore produce different messages --
+    which cannot be true of a blanket refusal.
+    """
+    nearer_repo = tmp_path / "unrelated_project"
+    (nearer_repo / ".git").mkdir(parents=True)
+
+    with pytest.raises(ValueError) as nested:
+        traced_run.write(nearer_repo / "data" / "trace.json")
+    with pytest.raises(ValueError) as plain:
+        traced_run.write(tmp_path / "data" / "trace.json")
+
+    assert str(nearer_repo) in str(nested.value)
+    assert str(nearer_repo) not in str(plain.value), (
+        "both paths produced the same refusal; the guard is not walking to the "
+        "nearest work tree, it is refusing unconditionally"
+    )
+
+
 def test_content_is_omitted_when_not_requested(stub_query_embedding):
     policy = ContextPolicy(name="default")
     with patch("tools.retrieval_trace.capture.classify_query", return_value=policy), \

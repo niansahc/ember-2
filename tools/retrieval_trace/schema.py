@@ -223,14 +223,8 @@ class TraceRun:
         """
         path = Path(path).resolve()
 
-        repo_root = Path(__file__).resolve().parents[2]
-        if repo_root == path or repo_root in path.parents:
-            raise ValueError(
-                f"refusing to write a trace inside the repository ({path}). "
-                "Traces carry real query text; keep them outside the working "
-                "tree. See CLAUDE.md Vault Privacy Rule."
-            )
-
+        # One walk, no special case for this repo: ember-2's own root contains
+        # .git, so the general check subsumes the narrower one that stood here.
         for ancestor in [path, *path.parents]:
             if (ancestor / ".git").exists():
                 raise ValueError(

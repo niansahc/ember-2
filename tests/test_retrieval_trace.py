@@ -221,7 +221,8 @@ def test_the_prior_vector_covers_every_factor_the_prior_applies():
         | {f"prior.len.{k}" for k in prior._LENGTH_FACTORS if k != "none"}
         | {f"prior.recency.{b}" for b in prior.RECENCY}
         | {f"prior.policy.{k}" for k in prior._POLICY_FACTORS if k != "none"}
-        | {"prior.project.match", "prior.reflection_discount"}
+        | {f"prior.project.{k}" for k in prior._PROJECT_FACTORS if k != "none"}
+        | {"prior.reflection_discount"}
     )
     actual = {n for n in PARAM_NAMES if n.startswith("prior.")}
     assert actual == expected

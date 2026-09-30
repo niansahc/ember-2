@@ -364,7 +364,7 @@ def _discover_project_id(vault: Path) -> str | None:
     because two would disagree about what "most used" means the first time
     either changed.
     """
-    from retrieval_trace.capture import discover_project_id
+    from tools.retrieval_trace.capture import discover_project_id
 
     return discover_project_id(vault)
 

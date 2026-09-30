@@ -41,14 +41,16 @@ boundary against the shipped functions at 1e-12 and refuses to write a
 trace where they disagree, so a mistake here fails a capture rather than
 biasing an analysis.
 
-One residual, recorded rather than fixed. `proj.boost` still lands at s6,
-AFTER the tier multiply at s4, so tier does not attenuate it -- the same
-ordering defect ADR-044 decision 1 names, reduced from a whole additive
-pile to one term. The prior at s7 does attenuate it. Not this file's to
-change.
+The residual this docstring used to record -- `proj.boost` landing at s6,
+after the tier multiply, as the last additive term the ordering defect of
+ADR-044 decision 1 applied to -- is gone. The project term is an arm of the
+prior at s7, so s6 provably changes nothing and the stage boundary is kept
+only to assert that.
 """
 
 from __future__ import annotations
+
+from functools import lru_cache
 
 from dataclasses import dataclass
 
@@ -90,6 +92,23 @@ class Composition:
     @property
     def final(self) -> float:
         return self.stage_scores[STAGE_FINAL]
+
+
+@lru_cache(maxsize=None)
+def _policy_arm(
+    experience_fired: bool, active_work_fired: bool, exact_branch: str
+) -> str:
+    """prior.policy_branch over the three fields the trace records.
+
+    Cached on its whole input: the domain is twelve combinations, and every
+    input is fixed under perturbation, so this is one call per combination per
+    process rather than one per candidate per replay.
+    """
+    return _prior.policy_branch(
+        experience_fired=experience_fired,
+        active_work_fired=active_work_fired,
+        exact_branch=exact_branch,
+    )
 
 
 def _recency_value(bucket: str, p: ReplayParams) -> float:
@@ -220,17 +239,21 @@ def compose(candidate: CandidateTrace, p: ReplayParams, policy_name: str) -> Com
     # The policy arm, derived from the activations recorded at the policy
     # stage. prior.policy_branch is the shipped classifier, so the model does
     # not restate the precedence between the three flags.
-    arm = _prior.policy_branch(
-        prefer_experiences=pol.prefer_experience_fired,
-        prefer_active_work=pol.prefer_active_work_fired,
-        prefer_exact_matches=pol.exact_branch != "none",
-        experience_fired=pol.prefer_experience_fired,
-        active_work_fired=pol.prefer_active_work_fired,
-        is_question=pol.exact_branch == "question",
+    #
+    # Memoised because the three activation fields come off the captured trace
+    # and no sampled parameter can change them -- the same argument
+    # _content_filtered makes for the content filters. Without it the arm is
+    # re-derived to the same value on every replay of every candidate, which is
+    # ~1.7e8 identical calls over a converged Sobol run.
+    arm = _policy_arm(
+        pol.prefer_experience_fired,
+        pol.prefer_active_work_fired,
+        pol.exact_branch,
     )
     if arm != "none":
-        terms[f"prior.policy.{arm}"] = p[f"prior.policy.{arm}"]
-        prior_factor *= terms[f"prior.policy.{arm}"]
+        arm_key = f"prior.policy.{arm}"
+        terms[arm_key] = p[arm_key]
+        prior_factor *= terms[arm_key]
 
     if a.project_match:
         terms["prior.project.match"] = p["prior.project.match"]

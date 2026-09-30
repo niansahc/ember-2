@@ -533,8 +533,9 @@ def analyse(
 
         per_endpoint: dict[str, dict] = {}
         for endpoint in watched:
-            top = [p.name for p in indices[endpoint].ranked()[:top_k]]
-            widest = max(p.st_ci.half_width for p in indices[endpoint].ranked()[:top_k])
+            leaders = indices[endpoint].ranked()[:top_k]
+            top = [p.name for p in leaders]
+            widest = max(p.st_ci.half_width for p in leaders)
             per_endpoint[endpoint] = {
                 "widest_st_ci_half_width_top_k": widest,
                 "top_k_membership_unchanged": set(top) == set(previous_top.get(endpoint, [])),

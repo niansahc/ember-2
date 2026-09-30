@@ -731,10 +731,59 @@ document claiming something untrue: that composition is bounded to
 | authorship | x1.0 / x0.3 / x0.5 | up to **3.33x** | outside, own bound, stated below |
 | weight split | `reflection_weight` 1.4 vs `memory_weight` 0.7 **within one list** | up to 2x | outside, root cause fixed |
 
-Deliberately outside, and not a gap: the retrieval-stage lexical and intent
-terms. They are query-DEPENDENT -- they measure query-record similarity -- and
-the bound exists to stop query-INDEPENDENT metadata outweighing similarity. A
-term that *is* a similarity estimate is not competing with similarity.
+### Outside the bound, stated per term rather than per stage
+
+The first draft of this section exempted "the retrieval-stage lexical and intent
+terms" as a block, on the grounds that they are query-DEPENDENT: they measure
+query-record similarity, and the bound exists to stop query-INDEPENDENT metadata
+outweighing similarity. The principle is right and the exemption was too wide.
+It is a property of a TERM, not of a stage, and applying it honestly splits the
+block that was exempted. A review of the composition outside `prior.assemble`
+found three places the blanket version was covering. None is retuned here.
+
+| term | where | magnitude | vs spread 0.0815 | reads the query-record pair? |
+|---|---|---|---|---|
+| `lexical_relevance_bonus` | `semantic_search.py:309` | ceiling 0.68 (0.10 + 0.18 + 0.40 entity cap) | 8.3x | **yes** -- genuinely exempt, but unbounded |
+| `query_intent_adjustment` mem_type arms | `semantic_search.py:421` | +0.10 / +0.08 / -0.03 | 1.6x swing | **no** -- a type ladder, query-conditional |
+| `query_intent_adjustment` role prefix | `semantic_search.py:436` | +0.10 / -0.10 | 2.5x swing | **no** -- a role term |
+| `_diversity_score` | `service.py:655` | -0.08 length, 0.05/item type, 0.22/item doc, 0.08/item title, 0.70 x Jaccard | up to 8x, **uncapped** | partly |
+
+What each one means, stated plainly rather than left for the next reader:
+
+- **`lexical_relevance_bonus` is exempt and has no stated bound.** The exemption
+  holds -- it is a similarity estimate. But "not bounded by the composed bound"
+  is not the same as "unbounded", and nothing states what governs it. Its
+  ceiling is 0.68. The module docstring of `tests/test_composition_bound.py`
+  already names the 0.40 entity cap as the canonical example of an assumption
+  wrong by 4-6x, and then asserts nothing about it. A similarity-space bound is
+  owed; it is not derived here.
+- **The `mem_type` and role-prefix arms of `query_intent_adjustment` are the
+  same species as the terms this amendment just moved.** They are conditional on
+  the query's CLASS and then read the record's type or authorship prefix. That
+  is exactly what `pol.prefer_experience` was, and it was brought inside the
+  bound two paragraphs up. The role half is more pointed: amendment 4a's claim
+  is that role left score space for `role_predicate.py`, and
+  `source_quality_adjustment` was retired for carrying the -0.20 half of it. The
+  +0.10 / -0.10 half is still live one function down. Leaving these out while
+  moving their twins makes this ADR's own rule arbitrary.
+- **`_diversity_score` is a sixth additive pile, and it selects.** It runs
+  whenever `policy.diversity` is set (four policies) and it decides *which items
+  are delivered*, so it is strictly more load-bearing than the prior, whose ST
+  was measured on the delivery endpoint precisely because delivery is what
+  matters. It contains a second copy of the prior's length family (`len < 80 ->
+  -0.08`, against the prior's bounded `LEN_UNDER_50` at -1.24%, a 6.5x
+  contradiction between two length terms in one pipeline) and a type term at
+  0.05/item, on a family this ADR removed from score space. `same_doc_penalty`
+  accumulates 0.22 per prior selection with no cap. It has no stage in
+  `tools/retrieval_trace/compose.py`, so the converged Sobol run measured a
+  delivery endpoint that does not include the function that picks the delivered
+  set on those four policies.
+
+Follow-ups, not this PR: #253 (state a similarity-space bound for the lexical
+and entity terms), #254 (the `mem_type` and role arms of
+`query_intent_adjustment`), #255 (diversity as a separately-bounded selection
+objective, and a compose stage for it). The bound itself is not reopened by any
+of them.
 
 Not covered by the bound and not re-examined here: `memory_weight` itself as a
 magnitude, and the three absolute thresholds this ADR declines to retune.

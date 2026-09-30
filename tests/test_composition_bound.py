@@ -33,6 +33,7 @@ Rule).
 from __future__ import annotations
 
 import contextlib
+import inspect
 import itertools
 
 import pytest
@@ -52,8 +53,15 @@ from src.context.ranker import COLD_MULTIPLIER, WARM_MULTIPLIER, ContextRanker
 # the one property the count assertion below exists to protect. "unrecognised"
 # and None are appended because they are inputs the tables deliberately do not
 # carry, and the normalisers' handling of them is part of the contract.
+#
+# POLICY_ARMS is the exception: no "unrecognised" entry, because there is no
+# normaliser for it and there should not be. content_kind and recency_bucket
+# arrive from record metadata, which is open-domain, so an unknown value is a
+# record rather than a bug and resolves to a named identity arm. A policy arm
+# arrives from prior.policy_branch, whose return set is closed, so an unknown
+# value IS a bug and raises -- see test_an_unknown_policy_arm_raises.
 CONTENT_KINDS = [None, *prior._KIND_FACTORS, "unrecognised"]
-POLICY_ARMS = [*prior._POLICY_FACTORS, "unrecognised"]
+POLICY_ARMS = [*prior._POLICY_FACTORS]
 PROJECT_MATCHES = [False, True]
 CONTENT_LENGTHS = [
     0, 1,
@@ -93,21 +101,17 @@ def _out_of_contract_kind(kind: str, value: float):
         prior._KIND_FACTORS.update(original)
 
 
-def _raw_product(content_kind, content_length: int, recency_bucket: str,
-                 policy_arm: str = "none", project_match: bool = False,
-                 is_reflection: bool = False) -> float:
-    """The prior BEFORE the clamp, so the clamp's own firing can be measured."""
-    arm = policy_arm if policy_arm in prior._POLICY_FACTORS else "none"
-    value = (
-        prior._KIND_FACTORS[prior.kind_branch(content_kind)]
-        * prior._LENGTH_FACTORS[prior.length_branch(content_length)]
-        * prior.RECENCY[prior.recency_bucket_or_unparsed(recency_bucket)]
-        * prior._POLICY_FACTORS[arm]
-        * prior._PROJECT_FACTORS["match" if project_match else "none"]
-    )
-    if is_reflection:
-        value *= prior.REFLECTION_DISCOUNT
-    return value
+# family -> the assemble() keyword that selects its arm. The single list of
+# families in this file; test_a_sixth_family_cannot_be_added_unnoticed pins it
+# against what prior.unclamped actually multiplies.
+FAMILY_PARAMS = {
+    "kind": "content_kind",
+    "length": "content_length",
+    "recency": "recency_bucket",
+    "policy": "policy_arm",
+    "project": "project_match",
+    "reflection": "is_reflection",
+}
 
 
 def _priors():
@@ -209,12 +213,15 @@ class TestTheBoundItself:
         )
 
     def test_a_term_cannot_escape_the_clamp(self):
-        """The clamp is the enforcement, not the derivation.
+        """The clamp still holds when the construction that makes it
+        unreachable is broken.
 
-        Derived magnitudes happen to compose within the bound today. That is
-        not what makes the contract hold -- a future term, or a retune of an
-        existing one, could push the product out. This asserts the clamp
-        catches it, by handing assemble a deliberately out-of-contract term.
+        Shipped magnitudes cannot reach the clamp (see
+        test_the_clamp_is_unreachable_at_shipped_magnitudes), which is what
+        demotes it from enforcement to assertion. Unreachable is not the same
+        as inert: a future term, or a retune of an existing one, breaks the
+        allocation, and this pins what happens then by handing assemble a
+        deliberately out-of-contract arm.
         """
         with _out_of_contract_kind("experience", 5.0):
             escaped = prior.assemble(
@@ -245,15 +252,27 @@ class TestTheBoundItself:
         log space across the mutually-exclusive families makes the worst case
         land exactly on the bound instead.
 
-        Checked on the RAW product, before the clamp, because checking the
-        clamped value would be circular -- it is clamped by definition.
+        Checked on prior.unclamped -- assemble()'s own product, without the
+        clamp -- because checking the clamped value would be circular: it is
+        inside the bound by definition. Reading the shipped function rather
+        than a copy of it is deliberate; a copy would keep passing when a
+        sixth family was added to assemble() alone.
         """
         escaped = [
             (kind, length, bucket, arm, proj, raw)
             for kind, length, bucket, is_reflection, arm, proj, _value in _priors()
             if not (
                 prior.PRIOR_MIN - 1e-9
-                <= (raw := _raw_product(kind, length, bucket, arm, proj, is_reflection))
+                <= (
+                    raw := prior.unclamped(
+                        content_kind=kind,
+                        content_length=length,
+                        recency_bucket=bucket,
+                        policy_arm=arm,
+                        project_match=proj,
+                        is_reflection=is_reflection,
+                    )
+                )
                 <= prior.PRIOR_MAX + 1e-9
             )
         ]
@@ -272,9 +291,14 @@ class TestTheBoundItself:
         worst one-arm-per-family product has to EQUAL the bound, not just
         respect it.
 
-        This is also the assertion that breaks if someone adds a sixth family
-        without re-deriving: the new family's arm would push the worst case past
-        the bound, and the equality fails before the clamp has to catch it.
+        The arms are restated here rather than read off _WORST_DOWN /
+        _WORST_UP on purpose: deriving them from the tables the allocation uses
+        would make the equality true by construction. The restatement is the
+        independence.
+
+        Which means this test does NOT notice a sixth family -- its product
+        would simply omit the new arm and still equal the bound. That guard is
+        test_a_sixth_family_cannot_be_added_unnoticed.
         """
         worst_down = (
             prior.KIND_QUESTION
@@ -291,6 +315,64 @@ class TestTheBoundItself:
         )
         assert worst_down == pytest.approx(prior.PRIOR_MIN, abs=1e-9)
         assert worst_up == pytest.approx(prior.PRIOR_MAX, abs=1e-9)
+
+    def test_an_unknown_policy_arm_raises(self):
+        """A typo in an arm name must not resolve to the identity.
+
+        The counterpart to the normalisers on content_kind and recency_bucket.
+        Those inputs come off records, so an unrecognised value is data and
+        takes a named 1.0 arm. This one comes from prior.policy_branch, whose
+        return set is closed, so an unrecognised value means a caller and this
+        table disagree about the arm names -- and a silent 1.0 would turn that
+        into a term quietly not applying, which is the failure the original
+        additive pile hid a recency term in for two releases.
+        """
+        with pytest.raises(KeyError):
+            prior.assemble(
+                content_kind=None,
+                content_length=600,
+                recency_bucket="d7",
+                policy_arm="prefer_experiences",  # the flag name, not the arm
+            )
+
+    def test_a_sixth_family_cannot_be_added_unnoticed(self):
+        """Adding a family to assemble() without re-deriving must fail here.
+
+        Every other test in this class enumerates families by hand -- FAMILY_PARAMS
+        for the cross product, the five worst arms in the test above, the two
+        allocation tables in prior.py. A sixth family added to prior.unclamped
+        and to none of those would leave all of them passing while the composed
+        product exceeded the bound in production: each one would keep measuring
+        the five families it knows about.
+
+        So this reads the multiplies out of prior.unclamped's source and pins
+        the count against the family list. It is a source-text assertion, which
+        is ordinarily a bad idea -- it is the right one here because the thing
+        being guarded is that a human updated two tables and one dict after
+        editing that function, and nothing about the values can show that.
+        """
+        multiplies = [
+            line.strip()
+            for line in inspect.getsource(prior.unclamped).splitlines()
+            if "prior *=" in line
+        ]
+        assert len(multiplies) == len(FAMILY_PARAMS), (
+            f"prior.unclamped multiplies {len(multiplies)} factors but this file "
+            f"knows {len(FAMILY_PARAMS)} families {sorted(FAMILY_PARAMS)}. A family "
+            f"was added or removed without updating FAMILY_PARAMS, the worst-case "
+            f"test's arms, and prior._WORST_DOWN / _WORST_UP. Multiplies found: "
+            f"{multiplies}"
+        )
+        assert set(FAMILY_PARAMS) == set(prior._WORST_DOWN) | set(prior._WORST_UP), (
+            "the families this file tests and the families the log-space "
+            "allocation budgets for have diverged"
+        )
+        signature = inspect.signature(prior.unclamped).parameters
+        for family, keyword in FAMILY_PARAMS.items():
+            assert keyword in signature, (
+                f"family {family!r} selects its arm with {keyword!r}, which is not "
+                f"a parameter of prior.unclamped"
+            )
 
     def test_the_recency_ladder_is_monotonic(self):
         """Fresher must never score below staler.

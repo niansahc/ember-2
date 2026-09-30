@@ -266,10 +266,13 @@ def _factor(family: str, term: str, *, downward: bool) -> float:
     The family's worst arm takes the whole share; a lesser arm in the same
     family and direction takes it in proportion to its own ST. So a family
     can never exceed its allocation no matter which arm fires.
+
+    No zero-ST guard: every worst-arm entry is a non-zero measured ST, and the
+    one term whose ST is zero (kind_answer) never reaches here -- it is written
+    as the literal identity below, which is where a "this term cannot move
+    delivery" decision belongs.
     """
     worst = (_WORST_DOWN if downward else _WORST_UP)[family]
-    if worst == 0:
-        return 1.0
     return math.exp(_family_share(family, downward) * _ST[term] / worst)
 
 
@@ -298,17 +301,18 @@ PROJECT_MATCH = _factor("project", "proj_match", downward=False)            # 1.
 
 REFLECTION_DISCOUNT = _factor("reflection", "reflection", downward=True)    # 0.9995
 
-# Recency: one scale per direction, applied to the carried ladder ratios.
-_RECENCY_SCALE_DOWN = _family_share("recency", True) / abs(_RECENCY_LADDER["older"])
+# Recency. The ladder has exactly one downward arm, so it takes the family's
+# whole downward share directly and the upward arms scale against d7. Written
+# without a signed branch because a per-direction scale constant would exist
+# only to be multiplied back by the single ratio that defined it.
 _RECENCY_SCALE_UP = _family_share("recency", False) / _RECENCY_LADDER["d7"]
 
 RECENCY = {
-    bucket: math.exp(
-        (_RECENCY_SCALE_DOWN * abs(ratio)) if ratio < 0
-        else (_RECENCY_SCALE_UP * ratio)
-    )
+    bucket: math.exp(_RECENCY_SCALE_UP * ratio)
     for bucket, ratio in _RECENCY_LADDER.items()
+    if ratio > 0
 }
+RECENCY["older"] = math.exp(_family_share("recency", True))
 RECENCY["unparsed"] = 1.0
 
 # ---------------------------------------------------------------------------
@@ -393,27 +397,33 @@ def recency_bucket_or_unparsed(recency_bucket: str) -> str:
 
 def policy_branch(
     *,
-    prefer_experiences: bool,
-    prefer_active_work: bool,
-    prefer_exact_matches: bool,
     experience_fired: bool,
     active_work_fired: bool,
-    is_question: bool,
+    exact_branch: str,
 ) -> str:
     """Which policy-preference arm this record takes, or "none".
 
-    The three flags are mutually exclusive across the policy table, so this
-    returns at most one arm. It is ordered rather than branching on all three
-    because a policy that set two would otherwise silently take whichever the
-    code checked first; here the order is explicit and the exclusivity is
+    Takes the three facts a caller actually holds, not six. A *_fired value
+    already means "the policy enabled this AND the predicate matched" -- both
+    callers compute it that way -- so a separate `prefer_*` argument to AND
+    against would be the same conjunction twice. `exact_branch` is keyed the
+    way schema.PolicyActivation records it ("question" | "other" | "none"),
+    which is the exact arm domain minus the prefix, so the trace harness
+    passes it through instead of decomposing it into two booleans and having
+    this rebuild it.
+
+    The three preference flags are mutually exclusive across the policy table,
+    so this returns at most one arm. It is ordered rather than branching on all
+    three because a policy that set two would otherwise silently take whichever
+    the code checked first; here the order is explicit and the exclusivity is
     asserted by tests/test_composition_bound.py.
     """
-    if prefer_experiences and experience_fired:
+    if experience_fired:
         return "prefer_experience"
-    if prefer_active_work and active_work_fired:
+    if active_work_fired:
         return "prefer_active_work"
-    if prefer_exact_matches:
-        return "exact_question" if is_question else "exact_other"
+    if exact_branch != "none":
+        return f"exact_{exact_branch}"
     return "none"
 
 
@@ -455,6 +465,35 @@ def assemble(
     match) adjust the similarity estimate, stay at the retrieval stage, and
     are not bounded by this.
     """
+    return clamp(
+        unclamped(
+            content_kind=content_kind,
+            content_length=content_length,
+            recency_bucket=recency_bucket,
+            is_reflection=is_reflection,
+            policy_arm=policy_arm,
+            project_match=project_match,
+        )
+    )
+
+
+def unclamped(
+    *,
+    content_kind: str | None,
+    content_length: int,
+    recency_bucket: str,
+    is_reflection: bool = False,
+    policy_arm: str = "none",
+    project_match: bool = False,
+) -> float:
+    """assemble() without the clamp. The composed product itself.
+
+    Split out for tests/test_composition_bound.py, which has to assert that no
+    combination reaches the clamp -- a claim it cannot make against assemble(),
+    because assemble() clamps. It previously kept its own copy of this product,
+    which meant a sixth family added to assemble() and not to the copy would
+    leave the central assertion passing while measuring the wrong thing.
+    """
     prior = 1.0
 
     # Each arm is normalised to a table key first, then indexed directly. No
@@ -466,8 +505,7 @@ def assemble(
     prior *= _LENGTH_FACTORS[branch("prior.length", length_branch(content_length))]
     prior *= RECENCY[branch("prior.recency", recency_bucket_or_unparsed(recency_bucket))]
 
-    arm = policy_arm if policy_arm in _POLICY_FACTORS else "none"
-    prior *= _POLICY_FACTORS[branch("prior.policy", arm)]
+    prior *= _POLICY_FACTORS[branch("prior.policy", policy_arm)]
     prior *= _PROJECT_FACTORS[branch("prior.project", "match" if project_match else "none")]
 
     if count("prior.reflection_path", is_reflection):

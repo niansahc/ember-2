@@ -52,10 +52,11 @@ Activation model (ADR-015 amendment, implementation step 4):
     Base-level activation is recency plus a *decaying* frequency term,
     both on the same decay curve (same halflife), computed nightly here.
     Context conditioning -- the second half of the ACT-R structure this
-    ADR cites -- is ADR-007's existing project boost
-    (ContextRanker.apply_project_boost, +0.15), applied per-query at
+    ADR cites -- is ADR-007's existing project term, applied per-query at
     retrieval rather than baked into the nightly tier. This amendment
-    does not add a second context-conditioning mechanism.
+    does not add a second context-conditioning mechanism. (The term was
+    +0.15 additive when this was written; ADR-044 made it a bounded arm of
+    the metadata prior, so apply_project_boost now only records the match.)
 
     The frequency term is a decayed accumulator (frequency_score),
     updated at retrieval time by SqliteVectorStore.update_retrieval_stats

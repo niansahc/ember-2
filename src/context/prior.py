@@ -134,7 +134,7 @@ measured.
 
     MEASURED (contribute the family's magnitude):
         older  ST 0.1160    d365  ST 0.0903    d30  ST 0.0111
-    CARRIED (shape only, no measurement):
+    CARRIED (ordering only, no measurement):
         d7     d90
 
 d7 and d90 are UNEXERCISED on the production corpus -- nothing retrieved
@@ -143,7 +143,7 @@ is a symptom of a larger problem). An unexercised parameter has no
 measurement at any sample count; it is a corpus fact, not a convergence
 one.
 
-The ladder's SHAPE is therefore carried from the additive ladder these
+The ladder's ORDERING is therefore carried from the additive ladder these
 replaced (+0.18 / +0.12 / +0.06 / +0.02 / -0.03) and its MAGNITUDE comes
 from the measured arms, scaled as one family. That is what the previous
 version of this file already did, and here it is load-bearing rather than
@@ -158,7 +158,7 @@ preference. ST is an activation-weighted variance share -- it measures how
 much a term moves delivery on this corpus, not which arm of an ordinal
 ladder should rank higher. Using it to ORDER an ordered ladder is a
 category error, and the ladder is the one place in this file where
-measurement cannot set the shape.
+measurement cannot set the ordering.
 
 ROLE is not here. ADR-044 amendment 4a moves it out of the scoring budget
 to a hard predicate on the authorship column, measured in PR #217: the
@@ -219,7 +219,7 @@ _ST = {
 # measured signal.
 _RECENCY_FAMILY_ST = _ST["recency_older"]
 
-# The additive ladder whose SHAPE is carried. Only the ratios survive; the
+# The additive ladder whose ORDERING is carried. Only the ratios survive; the
 # magnitude comes from _RECENCY_FAMILY_ST.
 _RECENCY_LADDER = {
     "d7": 0.18,

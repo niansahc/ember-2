@@ -295,15 +295,15 @@ class TestTheBoundItself:
     def test_the_recency_ladder_is_monotonic(self):
         """Fresher must never score below staler.
 
-        The one place in the prior where measurement cannot set the shape.
+        The one place in the prior where measurement cannot set the ordering.
         Recency arms are mutually exclusive, so they are compared ACROSS
         records; allocating each by its own ST would invert the ladder, because
         measured d365 (0.0903) is 8.2x measured d30 (0.0111) on the production
         corpus. ST is an activation-weighted variance share -- it says how much
         a term moves delivery, not which arm of an ordinal ladder ranks higher.
 
-        So the ladder's shape is carried and its magnitude measured, and this
-        asserts the shape survived.
+        So the ladder's ordering is carried and its magnitude measured, and this
+        asserts the ordering survived.
         """
         r = prior.RECENCY
         assert r["d7"] > r["d30"] > r["d90"] > r["d365"] > 1.0 > r["older"]

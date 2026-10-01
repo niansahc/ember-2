@@ -21,6 +21,10 @@ import pytest
 from pathlib import Path
 
 from src.core.config import set_vault_path_override, clear_vault_path_override
+from src.context.render_window import (
+    rendered_memory_window,
+    rendered_reflection_window,
+)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -371,7 +375,7 @@ def fail_on_leaked_resolver_mock(request):
 # Delivery accounting (issue #227)
 # ---------------------------------------------------------------------------
 
-def deliver_packet(packet, memory_slice: int = 4, reflection_slice: int = 1) -> int:
+def deliver_packet(packet) -> int:
     """Render a packet the way the prompt does, then commit the stats write.
 
     build_context no longer writes retrieval stats: it arms a recorder and
@@ -380,14 +384,16 @@ def deliver_packet(packet, memory_slice: int = 4, reflection_slice: int = 1) -> 
     say so, and this is the one place that says it -- four copies of the
     same two lines would drift apart the first time the slice changes.
 
-    Defaults mirror prompt_builder: all profile items, the first four
-    non-profile, the first reflection.
+    The slice itself is no longer restated here. It was `memory_slice=4` and
+    `reflection_slice=1` as default arguments, which is a copy of the shipped
+    numbers wearing a parameter's clothes: nothing passed anything else, and the
+    copy would have gone stale silently. Both windows now come from
+    src/context/render_window.py, which the prompt builder and the trace harness
+    also use.
     """
-    profile = [i for i in packet.memory_items if i.memory_type == "profile"]
-    other = [i for i in packet.memory_items if i.memory_type != "profile"]
     packet.begin_render()
-    packet.record_rendered(profile + other[:memory_slice])
-    packet.record_rendered(packet.reflection_items[:reflection_slice])
+    packet.record_rendered(rendered_memory_window(packet.memory_items))
+    packet.record_rendered(rendered_reflection_window(packet.reflection_items))
     return packet.commit_delivery()
 
 

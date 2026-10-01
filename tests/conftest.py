@@ -392,7 +392,8 @@ def deliver_packet(packet) -> int:
     also use.
     """
     packet.begin_render()
-    packet.record_rendered(rendered_memory_window(packet.memory_items))
+    profile, other = rendered_memory_window(packet.memory_items)
+    packet.record_rendered(profile + other)
     packet.record_rendered(rendered_reflection_window(packet.reflection_items))
     return packet.commit_delivery()
 

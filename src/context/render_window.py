@@ -49,23 +49,24 @@ MEMORY_RENDER_SLOTS = 4
 REFLECTION_RENDER_SLOTS = 1
 
 
-def rendered_memory_window(memory_items) -> list:
-    """The memory records the prompt renders, in record order.
+def rendered_memory_window(memory_items) -> tuple[list, list]:
+    """The memory records the prompt renders: (profile, capped non-profile).
 
     Takes the whole mixed `memory_items` list rather than a pre-partitioned one.
     The partition is inseparable from the slice -- the cap applies to non-profile
     records only, and profile records are uncapped -- so a signature that took
-    them separately would push the partition back out to every caller and
-    recreate the drift this module removes.
+    them separately would push the partition back out to every caller.
 
-    Returns profile records followed by the first MEMORY_RENDER_SLOTS
-    non-profile ones. The prompt renders them in two separate sections, and
-    delivery membership is compared as a set, so one concatenated list in packet
-    order is the honest answer for both.
+    Returns the two lists rather than their concatenation because the prompt
+    renders them in separate sections and so needs them apart. Returning
+    `profile + other` meant the renderer immediately re-split the result by the
+    same predicate, which put the partition rule in two modules -- the drift this
+    module exists to prevent, one call frame later. Callers that want the whole
+    rendered set concatenate.
     """
     profile = [i for i in memory_items if i.memory_type == "profile"]
     other = [i for i in memory_items if i.memory_type != "profile"]
-    return profile + other[:MEMORY_RENDER_SLOTS]
+    return profile, other[:MEMORY_RENDER_SLOTS]
 
 
 def rendered_reflection_window(reflection_items) -> list:

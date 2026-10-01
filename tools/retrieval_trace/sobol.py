@@ -67,7 +67,7 @@ import numpy as np
 from .endpoints import ENDPOINT_DELIVERY, ENDPOINTS, EndpointEvaluator
 from .params import ReplayParams
 from .ranges import ParameterRange, build_ranges
-from .schema import TraceRun
+from .schema import SCHEMA_VERSION, TraceRun
 
 # Bootstrap resamples for the confidence intervals. 1000 is enough for a
 # 95% percentile interval to be stable to the third decimal, and it costs
@@ -790,8 +790,6 @@ def _wrap(text: str, width: int) -> list[str]:
 
 def to_dict(sobol: SobolRun) -> dict:
     """Serializable results: parameter names and numbers only, no vault data."""
-    from .schema import SCHEMA_VERSION
-
     return {
         # What the delivery endpoint MEANT when these numbers were taken. Added
         # for #227: the endpoint used to measure the context packet and now
@@ -868,8 +866,6 @@ def load_results(results: dict, st_ci_target: float = 0.0) -> SobolRun:
     # re-rendering it as though it were current. A pre-#227 artefact has the same
     # keys and shapes but its delivery indices describe the context packet, not
     # what the prompt renders. Absent means pre-stamp, which is also incomparable.
-    from .schema import SCHEMA_VERSION
-
     stamped = results.get("trace_schema_version")
     if stamped != SCHEMA_VERSION:
         raise ValueError(

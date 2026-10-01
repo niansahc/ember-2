@@ -162,7 +162,7 @@ def replay_query(query: QueryTrace, params: ReplayParams | None = None) -> Query
     # builder renders with and capture checks against. CandidateTrace carries
     # memory_type and ref, so it is passed straight in -- no shim, and no second
     # copy of the slice.
-    rendered_memory = rendered_memory_window(
+    rendered_profile, rendered_other = rendered_memory_window(
         [s.candidate for s in profile + selected_other]
     )
     rendered_reflections = rendered_reflection_window(
@@ -173,7 +173,7 @@ def replay_query(query: QueryTrace, params: ReplayParams | None = None) -> Query
         query_id=query.query_id,
         policy_name=query.policy_name,
         scored=scored,
-        rendered_refs=[c.ref for c in rendered_memory],
+        rendered_refs=[c.ref for c in rendered_profile + rendered_other],
         rendered_reflection_refs=[c.ref for c in rendered_reflections],
     )
 
@@ -208,6 +208,34 @@ def replay_run(run: TraceRun, params: ReplayParams | None = None) -> list[QueryR
 # itself faithful while sitting far enough from the pipeline to reorder two
 # close candidates.
 EXACT_TOLERANCE = 1e-12
+
+
+def render_mismatches(query: QueryTrace, replay: QueryReplay) -> list[str]:
+    """Where the model's rendered set disagrees with the pipeline's, per channel.
+
+    One comparison, two callers. capture._validate_render refuses to write a
+    trace that fails it, and check_fidelity reports it over a whole run. Those
+    are different responses to the same invariant, and when the invariant was
+    written out twice the two sites drifted in what they reported.
+
+    Sets, not sequences: membership is what the delivery endpoint measures, and
+    the prompt renders profile and non-profile in separate sections anyway, so
+    order within the render is not a claim this makes.
+    """
+    mismatches: list[str] = []
+    for channel, modelled_refs, captured_refs in (
+        ("memory", replay.rendered_refs, query.rendered_refs),
+        ("reflection", replay.rendered_reflection_refs, query.rendered_reflection_refs),
+    ):
+        modelled, captured = set(modelled_refs), set(captured_refs)
+        if modelled != captured:
+            mismatches.append(
+                f"{query.query_id} ({channel}): model rendered {sorted(modelled)}, "
+                f"pipeline rendered {sorted(captured)} "
+                f"(only in model: {sorted(modelled - captured)}; "
+                f"only in pipeline: {sorted(captured - modelled)})"
+            )
+    return mismatches
 
 
 @dataclass
@@ -251,17 +279,7 @@ def check_fidelity(run: TraceRun) -> FidelityReport:
                     f"!= replayed {scored.score!r}"
                 )
 
-        if set(replay.rendered_refs) != set(query.rendered_refs):
-            delivery_mismatches.append(
-                f"{query.query_id}: captured {sorted(query.rendered_refs)} "
-                f"!= replayed {sorted(replay.rendered_refs)}"
-            )
-        if set(replay.rendered_reflection_refs) != set(query.rendered_reflection_refs):
-            delivery_mismatches.append(
-                f"{query.query_id} (reflections): "
-                f"captured {sorted(query.rendered_reflection_refs)} "
-                f"!= replayed {sorted(replay.rendered_reflection_refs)}"
-            )
+        delivery_mismatches.extend(render_mismatches(query, replay))
 
     return FidelityReport(
         candidates_checked=checked,

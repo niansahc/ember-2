@@ -35,15 +35,31 @@ ENDPOINT_SCORE = "score"
 ENDPOINT_DELIVERY = "delivery"
 ENDPOINTS: tuple[str, ...] = (ENDPOINT_SCORE, ENDPOINT_DELIVERY)
 
+# ENDPOINT_DELIVERY keeps its string. It is a key in saved Sobol artefacts and in
+# no_solo_delivery_effect, so renaming it would break every stored result for a
+# vocabulary gain. What it MEASURES changed in #227 -- the rendered set, not the
+# context packet -- and results taken before that are refused by
+# sobol.load_results on the trace_schema_version stamp rather than silently
+# re-rendered.
+
+
+def rendered_keys(replay) -> set[str]:
+    """Both channels in one key space, with reflections prefixed.
+
+    One definition, because the baseline and the per-sample set must be computed
+    in the SAME key space or the Jaccard distance between them is silently
+    measuring nothing. It was written out twice.
+    """
+    return set(replay.rendered_refs) | {
+        f"refl:{ref}" for ref in replay.rendered_reflection_refs
+    }
+
 
 def rendered_sets(run: TraceRun, params: ReplayParams) -> dict[str, set[str]]:
-    sets: dict[str, set[str]] = {}
-    for query in run.queries:
-        replay = replay_query(query, params)
-        sets[query.query_id] = set(replay.rendered_refs) | {
-            f"refl:{ref}" for ref in replay.rendered_reflection_refs
-        }
-    return sets
+    return {
+        query.query_id: rendered_keys(replay_query(query, params))
+        for query in run.queries
+    }
 
 
 @dataclass
@@ -56,11 +72,11 @@ class EndpointEvaluator:
     """
 
     run: TraceRun
-    baseline_delivery: dict[str, set[str]] = field(default_factory=dict)
+    baseline_rendered: dict[str, set[str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.baseline_delivery:
-            self.baseline_delivery = rendered_sets(self.run, ReplayParams())
+        if not self.baseline_rendered:
+            self.baseline_rendered = rendered_sets(self.run, ReplayParams())
 
     def evaluate(self, params: ReplayParams) -> dict[str, float]:
         per_query_score: list[float] = []
@@ -74,13 +90,11 @@ class EndpointEvaluator:
                 # retrieved fewer.
                 per_query_score.append(fmean(s.score for s in replay.scored))
 
-            delivered = set(replay.rendered_refs) | {
-                f"refl:{ref}" for ref in replay.rendered_reflection_refs
-            }
-            baseline = self.baseline_delivery[query.query_id]
-            union = delivered | baseline
+            rendered = rendered_keys(replay)
+            baseline = self.baseline_rendered[query.query_id]
+            union = rendered | baseline
             per_query_distance.append(
-                len(delivered ^ baseline) / len(union) if union else 0.0
+                len(rendered ^ baseline) / len(union) if union else 0.0
             )
 
         return {

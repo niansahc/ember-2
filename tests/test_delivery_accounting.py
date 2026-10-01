@@ -355,9 +355,8 @@ class TestGuardrailClone:
                 from src.context.render_window import rendered_memory_window
 
                 working_packet.begin_render()
-                working_packet.record_rendered(
-                    rendered_memory_window(working_packet.memory_items)
-                )
+                profile, other = rendered_memory_window(working_packet.memory_items)
+                working_packet.record_rendered(profile + other)
                 return "PROMPT"
 
         prompt, returned, telemetry = trim_to_fit(

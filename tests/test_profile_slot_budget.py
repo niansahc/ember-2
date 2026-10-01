@@ -8,8 +8,8 @@ memory_limit, so three guaranteed profile records took three of the four to
 six non-profile slots. On the reflective policy, whose limit is 4, that left
 one.
 
-The subtraction reserved no prompt space. prompt_builder.py:978-979
-partitions profile out again at render time and caps non-profile at [:4]
+The subtraction reserved no prompt space. The prompt partitions profile out
+again at render time and caps non-profile at render_window.MEMORY_RENDER_SLOTS
 independently, so profile's space in the prompt was never in question. The
 subtraction only starved the other channel before it reached a layer that was
 going to separate them anyway -- and profile was the only always-on layer

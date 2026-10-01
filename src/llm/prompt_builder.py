@@ -995,11 +995,8 @@ class PromptBuilder:
         # lives in src/context/render_window.py, because the trace harness has
         # to measure the same slice and a second copy of it is what let the
         # delivery endpoint measure the packet instead.
-        rendered = rendered_memory_window(memory_items)
-        context_packet.record_rendered(rendered)
-
-        profile_items = [i for i in rendered if i.memory_type == "profile"]
-        other_items = [i for i in rendered if i.memory_type != "profile"]
+        profile_items, other_items = rendered_memory_window(memory_items)
+        context_packet.record_rendered(profile_items + other_items)
 
         sections: list[str] = []
 
@@ -1069,9 +1066,8 @@ class PromptBuilder:
         # replacement-packet version this saw the filtered list too, because
         # `context_packet` had been rebound; keeping the local preserves that
         # and stops the inventory advertising a type the filter just suppressed.
-        if memory_items and _is_personal_query(
-            intent_class, context_packet.user_message
-        ):
+        # No truthiness test on it: every empty-memory path returned above.
+        if _is_personal_query(intent_class, context_packet.user_message):
             inventory_block = self._build_vault_inventory(memory_items)
             if inventory_block:
                 sections.append(inventory_block)

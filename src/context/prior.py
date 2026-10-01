@@ -296,6 +296,13 @@ _ST = {
 # inputs moved, and d365 now outranks older where older led before. Only two
 # arms are measured at all, so this is the stronger of two rather than the
 # strongest of five.
+#
+# And the two are not distinguishable at this N: 0.2371 +/- 0.0147 against
+# 0.2195 +/- 0.0142, a gap of 0.0176 the intervals nearly cover. So which arm
+# "wins" is not a finding, and the allocation is close to indifferent -- taking
+# older instead moves the derived factors in the third decimal. Recorded because
+# this family sets 44% of the downward budget and the whole upward ladder, so a
+# reader is entitled to know the pick is a coin flip between tied arms.
 _RECENCY_FAMILY_ST = _ST["recency_d365"]
 
 # The additive ladder whose ORDERING is carried. Only the ratios survive; the
@@ -346,10 +353,11 @@ def _factor(family: str, term: str, *, downward: bool) -> float:
     family and direction takes it in proportion to its own ST. So a family
     can never exceed its allocation no matter which arm fires.
 
-    No zero-ST guard: every worst-arm entry is a non-zero measured ST, and the
-    one term whose ST is zero (kind_answer) never reaches here -- it is written
-    as the literal identity below, which is where a "this term cannot move
-    delivery" decision belongs.
+    No zero-ST guard: every worst-arm entry is a non-zero measured ST, and
+    neither term whose ST is zero reaches here. kind_answer is written as the
+    literal identity below, which is where a "this term cannot move delivery"
+    decision belongs; recency_d30 is an arm of the carried ladder, whose factors
+    come from _RECENCY_LADDER ratios rather than from per-arm ST.
     """
     worst = (_WORST_DOWN if downward else _WORST_UP)[family]
     return math.exp(_family_share(family, downward) * _ST[term] / worst)
@@ -504,6 +512,20 @@ def policy_branch(
     if exact_branch != "none":
         return f"exact_{exact_branch}"
     return "none"
+
+
+# #250's resolution, asserted where it is derived rather than only in a test.
+# A short user-authored record must come out net LIFTED: LEN_UNDER_50 is a
+# discount and KIND_USER_CONTENT a boost, they sit in different families, and
+# whether their product clears 1.0 depends on the family SHARES, not on the ST
+# ordering alone -- the length family's downward share fell from 18% to 10% in
+# the 2026-10-01 re-derivation and that is what moved it. So the next
+# re-derivation is stopped here rather than discovering it in CI.
+assert LEN_UNDER_50 * KIND_USER_CONTENT > 1.0, (
+    f"a short user-authored record is net penalised "
+    f"({LEN_UNDER_50:.6f} x {KIND_USER_CONTENT:.6f} = "
+    f"{LEN_UNDER_50 * KIND_USER_CONTENT:.6f}); #250 has regressed"
+)
 
 
 def clamp(value: float) -> float:

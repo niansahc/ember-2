@@ -790,7 +790,17 @@ def _wrap(text: str, width: int) -> list[str]:
 
 def to_dict(sobol: SobolRun) -> dict:
     """Serializable results: parameter names and numbers only, no vault data."""
+    from .schema import SCHEMA_VERSION
+
     return {
+        # What the delivery endpoint MEANT when these numbers were taken. Added
+        # for #227: the endpoint used to measure the context packet and now
+        # measures what the prompt renders, which rescales every delivery index
+        # and changes which parameters land in no_solo_delivery_effect. A saved
+        # result carried no way to tell the two apart -- same keys, same shapes,
+        # different quantity -- so a stale artefact was undetectable. Results
+        # whose trace_schema_version differs are not comparable.
+        "trace_schema_version": SCHEMA_VERSION,
         "samples": sobol.samples,
         "evaluations": sobol.evaluations,
         "seed": sobol.seed,
@@ -854,6 +864,21 @@ def load_results(results: dict, st_ci_target: float = 0.0) -> SobolRun:
     question being asked of the numbers, not of the numbers themselves:
     the same run answers "is this resolved to 0.02" and "to 0.05".
     """
+    # Refuse a result taken under a different endpoint definition rather than
+    # re-rendering it as though it were current. A pre-#227 artefact has the same
+    # keys and shapes but its delivery indices describe the context packet, not
+    # what the prompt renders. Absent means pre-stamp, which is also incomparable.
+    from .schema import SCHEMA_VERSION
+
+    stamped = results.get("trace_schema_version")
+    if stamped != SCHEMA_VERSION:
+        raise ValueError(
+            f"saved Sobol result was taken at trace schema {stamped!r} and this "
+            f"code speaks {SCHEMA_VERSION}; its delivery indices measure a "
+            "different quantity (#227: the endpoint measured the context packet "
+            "rather than the rendered set). Re-run rather than re-rendering."
+        )
+
     endpoints: dict[str, EndpointIndices] = {}
     for endpoint, payload in results["endpoints"].items():
         parameters = [

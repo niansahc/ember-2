@@ -106,26 +106,89 @@ the downward half is log(0.9339) and the upward half log(1.1278).
 
 WHERE THE NUMBERS COME FROM
 ---------------------------
-One Sobol run against the production corpus, 2026-09-30. It is the first
-converged run in this project's history.
+One Sobol run against the production corpus, 2026-10-01, on the CORRECTED
+delivery endpoint (#227).
 
     N=4096, k=37, 212,992 evaluations
     scipy.qmc.Sobol(scrambled), seed 20260923
     1000 bootstrap resamples, 95% intervals
-    st_ci_target 0.020: MET -- delivery 0.0141, score 0.0199
-    the extrapolation independently demanded N=4099
+    st_ci_target 0.020: MET -- delivery 0.0147, score 0.0104
+    the extrapolation independently demanded N=2098
 
-Every magnitude below is resolved: the widest 95% half-width among them is
-0.0141. This supersedes the #232 values the previous allocation used, for
-the whole prior rather than only for the new terms. #232 never converged
-(0.0495 against the same target), was taken on the pre-ADR-044 45-parameter
-vector, and used a range convention tools/retrieval_trace/ranges.py now
-declares incomparable with the current one -- so continuing to cite it for
-some terms and not others was not an option.
+This supersedes the 2026-09-30 values, which were taken on an endpoint that
+measured the context PACKET rather than what the prompt renders. The packet
+carries 4 to 6 non-profile memory records and the prompt renders 4
+(src/context/render_window.py), so that endpoint was blind to the one
+boundary that decides whether a record reaches the model at all: a candidate
+moving between rank 4 and rank 5 leaves packet membership unchanged, and the
+measured distance for the most consequential reordering there is was zero.
 
-A term whose ST says it cannot move delivery takes 1.0 and is gone. On
-this run that is KIND_ANSWER (ST 0.0000, and in the run's
-no_solo_delivery_effect list) and the unparsed recency bucket.
+The two runs were compared directly -- same trace, same 37-parameter vector,
+same seed, same sampler, the render window the only difference. 17 of 25
+swept terms moved beyond the larger of their two half-widths, so the earlier
+magnitudes are not approximately right and carrying them would repeat the
+#232 error this file already records. Score ST moved for 0 of 25, as it must:
+the score endpoint never saw a delivered set.
+
+Three terms show the correction working in both directions, and they are the
+clearest evidence the old endpoint measured the wrong quantity:
+
+    pol_exact_question  ST 0.0000 -> 0.0525   freed: its only effect is at
+    proj_match          ST 0.0000 -> 0.0080   the 4/5 boundary
+    reflection          ST 0.1482 -> 0.0208   newly solo-flat: its effect
+                                              lived at packet positions 2-3,
+                                              which are never rendered
+
+The corrected endpoint also converges FASTER, not slower: it met the target
+at N=4096 where the packet definition needed N=8192, because delivery
+variance is 4.4x higher on the rendered set. The packet definition was
+averaging a quantity that barely moved.
+
+A term whose ST says it cannot move delivery takes 1.0 and is gone. On this
+run that is KIND_ANSWER, and its justification is now repaired rather than
+inherited: ST 0.0000 and solo-flat under BOTH endpoint definitions, plus a
+direct probe -- sweeping it to either end of its range moves zero delivered
+refs, packet and rendered. Its retirement was not an artefact of the old
+endpoint.
+
+The unparsed recency bucket is 1.0 for a STRUCTURAL reason, not a measured
+one. A previous version of this docstring listed it here as ST-derived; it
+has no entry in _ST and never had one, and it was never measured. See
+recency_bucket_or_unparsed for what it actually is.
+
+WHAT THE ALLOCATION RESTS ON: ST, NOT S1
+----------------------------------------
+Seven of the fourteen measured terms are interaction-dominated -- ST-S1
+exceeds S1, so most of their total effect appears only in combination with
+other terms:
+
+    recency_older     ST 0.2195  S1 0.0535      kind_user_content ST 0.1191  S1 0.0289
+    recency_d365      ST 0.2371  S1 0.1030      pol_prefer_experience ST 0.0323  S1 0.0041
+    len_under_50      ST 0.0559  S1 0.0207      pol_exact_other   ST 0.0524  S1 0.0229
+    reflection        ST 0.0208  S1 -0.0007
+
+Allocating on ST is deliberate and it is not a caveat. The quantity this
+bound constrains is the product of one arm per family firing SIMULTANEOUSLY
+-- that is what the worst case below is, and what the clamp's unreachability
+is asserted against. Simultaneous is precisely the regime interactions
+describe, so the total-effect index is the one that matches the claim. S1
+would be the right statistic if the bound constrained each term acting
+alone, and it does not; allocating on S1 would under-fund exactly the terms
+that do their work in combination and the worst-case product would land
+inside the bound, wasting budget the contract permits.
+
+This is the opposite case to the recency ladder below, where ST is the WRONG
+statistic -- and the distinction is worth holding onto. Ordering is a
+pairwise question about which arm should rank higher, and a variance share
+cannot answer it. Magnitude under simultaneous firing is a joint-variance
+question, and a variance share is exactly what answers it.
+
+Two terms sit at the noise floor and are flagged rather than hidden:
+reflection's S1 is NEGATIVE (-0.0007), and len_over_1200's S1 (0.0127)
+exceeds its ST (0.0058), which is impossible in theory. Both are estimator
+noise at small magnitudes. Their derived factors are within 0.3% of 1.0, so
+nothing downstream turns on them, but neither is a measurement anyone should
+lean on.
 
 THE RECENCY LADDER IS A MIXED DERIVATION
 ----------------------------------------
@@ -133,15 +196,25 @@ Stated plainly because a later reader must not treat it as uniformly
 measured.
 
     MEASURED (contribute the family's magnitude):
-        older  ST 0.1160    d365  ST 0.0903    d30  ST 0.0111
-    CARRIED (ordering only, no measurement):
-        d7     d90
+        d365  ST 0.2371    older  ST 0.2195
+    NO SIGNAL (in the vector, swept, measured exactly zero):
+        d30   ST 0.0000, under both endpoint definitions
+    CARRIED (ordering only, never measured):
+        d7    d90   unexercised
+
+So FOUR OF SIX ARMS CARRY NO SIGNAL on this corpus, and the family's
+magnitude rests on TWO. That is the honest statement and it is weaker than
+"mixed derivation" suggests: this is a carried ladder with two measured
+anchors, not a measured family. d30 reading exactly 0.0000 is new -- the
+previous derivation had it at 0.0111 on the packet endpoint, and on the
+rendered endpoint it cannot move a delivered slot at all.
 
 d7 and d90 are UNEXERCISED on the production corpus -- nothing retrieved
 falls within 7 days or in the 31-90 day band (see issue #252, where that
 is a symptom of a larger problem). An unexercised parameter has no
 measurement at any sample count; it is a corpus fact, not a convergence
-one.
+one. d30 is different and the difference matters: it IS exercised, and it
+measured zero. Two kinds of zero, and the run reports them separately.
 
 The ladder's ORDERING is therefore carried from the additive ladder these
 replaced (+0.18 / +0.12 / +0.06 / +0.02 / -0.03) and its MAGNITUDE comes
@@ -149,9 +222,9 @@ from the measured arms, scaled as one family. That is what the previous
 version of this file already did, and here it is load-bearing rather than
 incidental, for a reason worth spelling out:
 
-Per-arm ST allocation would invert the ladder. Measured d365 (0.0903) is
-8.2x measured d30 (0.0111), so allocating each arm by its own ST would
-give a year-old record a LARGER boost than a month-old one. That is not a
+Per-arm ST allocation would invert the ladder. Measured d365 (0.2371)
+against d30's measured zero would give a year-old record a boost and a
+month-old one nothing at all. That is not a
 finding, it is a broken prior: recency arms are mutually exclusive, so
 they are compared ACROSS records, and inverting them inverts the
 preference. ST is an activation-weighted variance share -- it measures how
@@ -196,28 +269,34 @@ TIER_MIN = _FACTOR_MIN
 # tightly resolved without opening the run artefact.
 # ---------------------------------------------------------------------------
 
+# ST, its 95% half-width, and S1 -- S1 because seven of these are
+# interaction-dominated and a reader has to be able to see that without
+# opening the run artefact. See "what the allocation rests on" above.
 _ST = {
-    "kind_experience": 0.2481,      # +/- 0.0141
-    "kind_question": 0.1876,        # +/- 0.0115
-    "kind_user_content": 0.1149,    # +/- 0.0078
-    "kind_answer": 0.0000,          # no_solo_delivery_effect -> identity
-    "recency_older": 0.1160,        # +/- 0.0077
-    "recency_d365": 0.0903,         # +/- 0.0064
-    "recency_d30": 0.0111,          # +/- 0.0007
-    "len_under_50": 0.0716,         # +/- 0.0043
-    "len_over_1200": 0.0028,        # +/- 0.0002
-    "pol_prefer_active_work": 0.0669,   # +/- 0.0051
-    "pol_prefer_experience": 0.0370,    # +/- 0.0024
-    "pol_exact_question": 0.0156,       # +/- 0.0012
-    "pol_exact_other": 0.0069,          # +/- 0.0006
-    "proj_match": 0.0237,           # +/- 0.0020
-    "reflection": 0.0030,           # +/- 0.0003
+    "kind_experience": 0.2216,      # +/- 0.0131   S1 0.1090
+    "kind_question": 0.1687,        # +/- 0.0101   S1 0.1215
+    "kind_user_content": 0.1191,    # +/- 0.0072   S1 0.0289  interaction-dominated
+    "kind_answer": 0.0000,          # solo-flat under BOTH endpoints -> identity
+    "recency_d365": 0.2371,         # +/- 0.0147   S1 0.1030  interaction-dominated
+    "recency_older": 0.2195,        # +/- 0.0142   S1 0.0535  interaction-dominated
+    "recency_d30": 0.0000,          # measured zero, not unexercised
+    "len_under_50": 0.0559,         # +/- 0.0038   S1 0.0207  interaction-dominated
+    "len_over_1200": 0.0058,        # +/- 0.0007   S1 0.0127  noise floor: S1 > ST
+    "pol_prefer_active_work": 0.2453,   # +/- 0.0135   S1 0.2030
+    "pol_prefer_experience": 0.0323,    # +/- 0.0022   S1 0.0041  interaction-dominated
+    "pol_exact_question": 0.0525,       # +/- 0.0033   S1 0.0306
+    "pol_exact_other": 0.0524,          # +/- 0.0035   S1 0.0229  interaction-dominated
+    "proj_match": 0.0080,           # +/- 0.0008   S1 0.0054
+    "reflection": 0.0208,           # +/- 0.0022   S1 -0.0007  noise floor: S1 < 0
 }
 
 # The recency family is scaled as a whole -- see "the recency ladder is a
 # mixed derivation". This is the family's measured magnitude: its strongest
-# measured signal.
-_RECENCY_FAMILY_ST = _ST["recency_older"]
+# measured signal. The RULE is unchanged from the previous derivation; the
+# inputs moved, and d365 now outranks older where older led before. Only two
+# arms are measured at all, so this is the stronger of two rather than the
+# strongest of five.
+_RECENCY_FAMILY_ST = _ST["recency_d365"]
 
 # The additive ladder whose ORDERING is carried. Only the ratios survive; the
 # magnitude comes from _RECENCY_FAMILY_ST.

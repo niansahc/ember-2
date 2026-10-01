@@ -103,6 +103,13 @@ class PolicyActivation:
 
 @dataclass
 class AuthorshipActivation:
+    # Whether the authorship stage runs on this candidate's channel at all.
+    # False for reflections: service.py:268-269 applies role_predicate.apply and
+    # apply_authorship_scoring to memory_items only. Same role `applies` plays on
+    # RetrievalActivation, and here for the same reason -- a stage that does not
+    # run on a channel has to be recorded as absent rather than as an identity,
+    # or the model has no way to tell "ran and did nothing" from "never ran".
+    applies: bool = True
     relational_query: bool = False
     branch: str = "first_person"         # first_person|mixed|third_party|unknown
     project_match: bool = False

@@ -211,7 +211,10 @@ def compose(candidate: CandidateTrace, p: ReplayParams, policy_name: str) -> Com
 
     # -------------------------------------------------------------- authorship
     a = candidate.author
-    if a.relational_query:
+    # `applies` first: the authorship stage runs on the memory channel only
+    # (service.py:268-269), and reading relational_query alone applied a x0.3 or
+    # x0.5 to reflections that the pipeline never applies.
+    if a.applies and a.relational_query:
         factor = p[f"auth.{a.branch}"]
         terms["auth"] = factor
         score = score * factor

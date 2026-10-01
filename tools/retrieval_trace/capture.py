@@ -242,7 +242,9 @@ def _policy_activation(item, policy, ranker: ContextRanker) -> PolicyActivation:
     )
 
 
-def _authorship_activation(item, query: str, project_id: str | None) -> AuthorshipActivation:
+def _authorship_activation(
+    item, query: str, project_id: str | None, channel: str
+) -> AuthorshipActivation:
     authorship = getattr(item, "authorship", None)
     if not authorship:
         metadata = getattr(item, "metadata", {}) or {}
@@ -255,6 +257,11 @@ def _authorship_activation(item, query: str, project_id: str | None) -> Authorsh
 
     metadata = getattr(item, "metadata", {}) or {}
     return AuthorshipActivation(
+        # The stage runs on the memory channel only. project_match is recorded
+        # regardless, because apply_project_boost DOES run on both
+        # (service.py:272-273) -- which is why this is a per-stage flag and not a
+        # per-record one.
+        applies=channel != CHANNEL_REFLECTION,
         relational_query=_matches_relational_query(query),
         branch=authorship,
         project_match=bool(project_id and metadata.get("project_id") == project_id),
@@ -331,7 +338,7 @@ def _walk_stages(items, channel, policy, query, project_id, ranker, include_cont
             content=content if include_content else None,
             retrieval=_retrieval_activation(item, channel, query),
             policy=_policy_activation(item, policy, ranker),
-            author=_authorship_activation(item, query, project_id),
+            author=_authorship_activation(item, query, project_id, channel),
             rank=_rank_activation(item, channel, ranker._bucket_for_age(age_days)),
         )
 
@@ -377,9 +384,24 @@ def _walk_stages(items, channel, policy, query, project_id, ranker, include_cont
         # between apply_policy and apply_authorship_scoring -- and this walk
         # did not, which meant a replay reproduced every score correctly and
         # still over-delivered assistant turns with nothing to explain why.
-        trace.excluded_by_role = role_predicate.excluded_by_role(item)
-
-        ranker.apply_authorship_scoring([item], query)
+        #
+        # MEMORY CHANNEL ONLY, both of them. service.py:268-269 applies
+        # role_predicate.apply and apply_authorship_scoring to `memory_items`
+        # and not to `reflection_items`; this walk applied both to every
+        # channel. On a relational query a reflection whose authorship column
+        # reads `unknown` therefore took a x0.5 the pipeline never applied --
+        # measured on one query as a walk score of 0.224991 against the
+        # packet's 0.449982, exactly half -- and a reflection could be marked
+        # excluded_by_role, which _content_filtered reads, so replay dropped
+        # reflections the pipeline keeps.
+        #
+        # _validate could not catch it. It compares compose() against THIS
+        # walk's stage_scores, so a stage the walk applies and the pipeline does
+        # not is agreed upon by both sides. Nothing compared the walk to the
+        # packet until the render check did.
+        if channel != CHANNEL_REFLECTION:
+            trace.excluded_by_role = role_predicate.excluded_by_role(item)
+            ranker.apply_authorship_scoring([item], query)
         trace.stage_scores["authorship"] = float(item.score)
 
         ranker.apply_project_boost([item], project_id)

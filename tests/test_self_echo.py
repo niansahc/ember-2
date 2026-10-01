@@ -63,44 +63,93 @@ class TestAssistantContentIsExcluded:
 
         assert [i.metadata["role"] for i in kept] == ["user"]
 
-    def test_an_assistant_answer_that_did_reach_ranking_is_still_discounted(self):
-        """Defence in depth, not the primary mechanism.
+    def test_the_prior_provides_no_defence_in_depth_for_an_assistant_answer(self):
+        """There is no second layer. The predicate is the whole mechanism.
 
-        content_kind=answer keeps a discount inside the prior (KIND_ANSWER,
-        0.9752), so an assistant answer reaching the ranker through some path
-        the predicate does not cover is still disadvantaged. Small by design:
-        the predicate is what does this job now.
+        This test used to claim the opposite -- "content_kind=answer keeps a
+        discount inside the prior (KIND_ANSWER, 0.9752), so an assistant answer
+        reaching the ranker through some path the predicate does not cover is
+        still disadvantaged" -- and it asserted `score < 0.5` to prove it.
+
+        Both halves were wrong. KIND_ANSWER has been exactly 1.0 since ADR-044's
+        magnitudes were derived, and the assertion passed anyway because the
+        fixture is 46 characters, so LEN_UNDER_50 was doing the work the
+        docstring credited to the kind term. A test can pass for a reason its
+        own docstring denies, and that is what makes a stale docstring
+        load-bearing rather than cosmetic.
+
+        KIND_ANSWER's retirement is sound and was re-verified on the corrected
+        delivery endpoint (#227): ST 0.0000 and solo-flat under both endpoint
+        definitions, and a direct probe moves zero delivered refs at either end
+        of its range. So the honest statement is that role exclusion has ONE
+        owner, role_predicate, and anything reaching the ranker past it is
+        treated on its merits like any other record.
         """
-        ranker = ContextRanker()
-        item = make_item(
-            "Here are the patterns I've noticed in your work",
-            score=0.5, role="assistant", content_kind="answer",
-        )
-        scored = ranker._score_memory_item(item)
+        from src.context import prior
 
-        assert scored.score < 0.5
+        assert prior.KIND_ANSWER == 1.0, (
+            "the prior discounts content_kind=answer again; if that is "
+            "deliberate, this test and ADR-044's kind.answer rule both need "
+            "rewriting, because the predicate was made the sole owner"
+        )
+
+        ranker = ContextRanker()
+        long_enough = "Here are the patterns I have noticed across your work this month"
+        assert len(long_enough) > prior.SHORT_CHARS
+        answer = make_item(
+            long_enough, score=0.5, role="assistant", content_kind="answer"
+        )
+        # content_kind=None takes the kind family's named identity arm. NOT
+        # make_item's default, which is "user_content" and carries a boost --
+        # comparing against that would measure the user_content arm instead.
+        no_kind = make_item(long_enough, score=0.5, role="assistant", content_kind=None)
+
+        # Same body, same length, same role: the only difference is the kind,
+        # and it buys nothing.
+        assert ranker._score_memory_item(answer).score == pytest.approx(
+            ranker._score_memory_item(no_kind).score
+        )
 
     def test_user_content_is_favoured_over_a_neutral_record(self):
-        """KIND_USER_CONTENT (1.0248) lifts user-authored content.
+        """KIND_USER_CONTENT lifts user-authored content.
 
-        The fixture is deliberately over 50 characters. Under 50 it is NET
-        PENALISED -- LEN_UNDER_50 (0.9339) outweighs KIND_USER_CONTENT, so a
-        46-character user turn entering at 0.5 finalizes at 0.4785. That is a
-        real consequence of deriving the prior's magnitudes from Sobol ST
-        without a sign-interaction check, and most user turns in a
-        conversational vault are short. It is recorded in ADR-044's 2026-09-26
-        amendment and tracked as a follow-up, NOT worked around here: this
-        test states the property the term was meant to have, and the ADR
-        states what it actually does.
+        The short-content case used to contradict this and no longer does. Under
+        the magnitudes derived from #232, LEN_UNDER_50 (0.9339) outweighed
+        KIND_USER_CONTENT (1.0248), so a 46-character user turn entering at 0.5
+        finalised at 0.4785 -- net penalised for being short and
+        user-authored, which is most of a conversational vault. That was #250.
+
+        It is resolved by measurement rather than by a special case: on the
+        production corpus kind.user_content outranks len.lt50, under both the
+        packet and the corrected rendered endpoint, so the product is above 1.0
+        and a short user turn is lifted rather than penalised. The ordering, not
+        the allocation, was what decided the sign -- see ADR-044's 2026-09-30
+        and 2026-10-01 amendments.
+
+        Both the over-50 and under-50 cases are asserted below, because the
+        under-50 case is the one that was broken and a test that only covered
+        the safe length would not notice it regressing.
         """
-        ranker = ContextRanker()
-        item = make_item(
-            "I've been focused on the state layer this week and it is going well",
-            score=0.5, role="user", content_kind="user_content",
-        )
-        scored = ranker._score_memory_item(item)
+        from src.context import prior
 
-        assert scored.score > 0.5
+        ranker = ContextRanker()
+
+        long_body = "I've been focused on the state layer this week and it is going well"
+        assert len(long_body) > prior.SHORT_CHARS
+        assert ranker._score_memory_item(
+            make_item(long_body, score=0.5, role="user", content_kind="user_content")
+        ).score > 0.5
+
+        # #250: the case that used to come out net penalised.
+        short_body = "the state layer landed today"
+        assert len(short_body) < prior.SHORT_CHARS
+        assert ranker._score_memory_item(
+            make_item(short_body, score=0.5, role="user", content_kind="user_content")
+        ).score > 0.5, (
+            "a short user-authored record is net penalised again; #250 has "
+            "regressed, which means kind.user_content stopped outranking "
+            "len.lt50 in the run the magnitudes were derived from"
+        )
 
 
 class TestSourceQualityAdjustment:

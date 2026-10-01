@@ -244,6 +244,61 @@ class TestPromptBuilderRecordsTheSlice:
         self._build(packet)
         assert packet.delivered_items == []
 
+    def test_a_declined_topic_suppresses_one_record_and_records_the_rest(self):
+        """BUG-009 filtering must not take the delivery record with it.
+
+        The filter used to rebind `context_packet` to a replacement
+        ContextPacket, which carried neither delivered_items nor the recorder,
+        so record_rendered reported to a throwaway object. The caller's packet
+        kept only what _build_reflection_section had recorded earlier -- the
+        reflections -- and every memory record the model DID see was accounted
+        as not delivered. Sticky for the session, because declined_topics is
+        only cleared on session change, so one decline silently defeated #227's
+        fix for every turn that followed.
+
+        Asserts the whole contract: the declined record is suppressed from the
+        render AND absent from the record, the surviving records are both
+        rendered and recorded, and the stats write sees them.
+        """
+        from src.llm.prompt_builder import PromptBuilder
+
+        def item(store_id, content):
+            return ContextItem(
+                id=store_id, content=content, source="test",
+                item_type="conversation", memory_type="conversation",
+                store_id=store_id,
+            )
+
+        packet = _packet(
+            [
+                item("declined", "User mentioned their diet again today."),
+                item("kept", "User started a new coding project."),
+            ],
+            [_item("r0", "reflection")],
+        )
+        seen = []
+        packet.arm_delivery_recorder(seen.extend)
+
+        builder = PromptBuilder()
+        builder.conversation_buffer.declined_topics = ["my diet"]
+        section = builder.build_prompt(packet)
+
+        recorded = [i.store_id for i in packet.delivered_items]
+        assert "declined" not in recorded, (
+            "the suppressed record must not be recorded as delivered"
+        )
+        assert "kept" in recorded, (
+            "a record the model saw was accounted as not delivered; the "
+            "declined-topics filter has discarded the delivery record"
+        )
+        assert "r0" in recorded
+
+        assert "diet" not in section, "the declined record was still rendered"
+        assert "coding project" in section
+
+        assert packet.commit_delivery() == len(recorded)
+        assert "kept" in [i.store_id for i in seen]
+
 
 # ---------------------------------------------------------------------------
 # The cascade-trim path, on the real guardrail
@@ -297,12 +352,11 @@ class TestGuardrailClone:
 
         class _Builder:
             def build_prompt(self, working_packet, **kwargs):
+                from src.context.render_window import rendered_memory_window
+
                 working_packet.begin_render()
-                nonprofile = [
-                    i for i in working_packet.memory_items
-                    if i.memory_type != "profile"
-                ][:4]
-                working_packet.record_rendered(nonprofile)
+                profile, other = rendered_memory_window(working_packet.memory_items)
+                working_packet.record_rendered(profile + other)
                 return "PROMPT"
 
         prompt, returned, telemetry = trim_to_fit(

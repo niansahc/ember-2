@@ -242,7 +242,9 @@ def _policy_activation(item, policy, ranker: ContextRanker) -> PolicyActivation:
     )
 
 
-def _authorship_activation(item, query: str, project_id: str | None) -> AuthorshipActivation:
+def _authorship_activation(
+    item, query: str, project_id: str | None, channel: str
+) -> AuthorshipActivation:
     authorship = getattr(item, "authorship", None)
     if not authorship:
         metadata = getattr(item, "metadata", {}) or {}
@@ -255,6 +257,11 @@ def _authorship_activation(item, query: str, project_id: str | None) -> Authorsh
 
     metadata = getattr(item, "metadata", {}) or {}
     return AuthorshipActivation(
+        # The stage runs on the memory channel only. project_match is recorded
+        # regardless, because apply_project_boost DOES run on both
+        # (service.py:272-273) -- which is why this is a per-stage flag and not a
+        # per-record one.
+        applies=channel != CHANNEL_REFLECTION,
         relational_query=_matches_relational_query(query),
         branch=authorship,
         project_match=bool(project_id and metadata.get("project_id") == project_id),
@@ -331,7 +338,7 @@ def _walk_stages(items, channel, policy, query, project_id, ranker, include_cont
             content=content if include_content else None,
             retrieval=_retrieval_activation(item, channel, query),
             policy=_policy_activation(item, policy, ranker),
-            author=_authorship_activation(item, query, project_id),
+            author=_authorship_activation(item, query, project_id, channel),
             rank=_rank_activation(item, channel, ranker._bucket_for_age(age_days)),
         )
 
@@ -377,9 +384,24 @@ def _walk_stages(items, channel, policy, query, project_id, ranker, include_cont
         # between apply_policy and apply_authorship_scoring -- and this walk
         # did not, which meant a replay reproduced every score correctly and
         # still over-delivered assistant turns with nothing to explain why.
-        trace.excluded_by_role = role_predicate.excluded_by_role(item)
-
-        ranker.apply_authorship_scoring([item], query)
+        #
+        # MEMORY CHANNEL ONLY, both of them. service.py:268-269 applies
+        # role_predicate.apply and apply_authorship_scoring to `memory_items`
+        # and not to `reflection_items`; this walk applied both to every
+        # channel. On a relational query a reflection whose authorship column
+        # reads `unknown` therefore took a x0.5 the pipeline never applied --
+        # measured on one query as a walk score of 0.224991 against the
+        # packet's 0.449982, exactly half -- and a reflection could be marked
+        # excluded_by_role, which _content_filtered reads, so replay dropped
+        # reflections the pipeline keeps.
+        #
+        # _validate could not catch it. It compares compose() against THIS
+        # walk's stage_scores, so a stage the walk applies and the pipeline does
+        # not is agreed upon by both sides. Nothing compared the walk to the
+        # packet until the render check did.
+        if channel != CHANNEL_REFLECTION:
+            trace.excluded_by_role = role_predicate.excluded_by_role(item)
+            ranker.apply_authorship_scoring([item], query)
         trace.stage_scores["authorship"] = float(item.score)
 
         ranker.apply_project_boost([item], project_id)
@@ -415,6 +437,70 @@ def _validate(trace: CandidateTrace, policy_name: str, params: ReplayParams) -> 
                 f"(delta {actual - expected:.3e})"
             )
     return problems
+
+
+def _validate_render(trace: QueryTrace, params: ReplayParams) -> list[str]:
+    """Does the model reproduce the render the pipeline performed?
+
+    `_validate` does this per candidate for the stage scores, as a float
+    comparison. This is the same structure one level up and set-valued: capture
+    read the rendered set off the shipped PromptBuilder, replay derives it from
+    src/context/render_window.py, and if those disagree the window function has
+    drifted from the render it is supposed to describe.
+
+    It lives beside STAGES rather than in it. `_validate` is typed
+    dict[str, float] per candidate and tests/test_retrieval_trace.py asserts
+    `set(stage_scores) == set(STAGES)`, so a set-valued stage cannot go in that
+    table without breaking both.
+
+    The comparison itself is replay.render_mismatches, shared with
+    check_fidelity, so the capture-time refusal and the whole-run report cannot
+    disagree about what a mismatch is.
+    """
+    from .replay import render_mismatches, replay_query
+
+    return render_mismatches(trace, replay_query(trace, params))
+
+
+def _rendered_refs(packet, builder) -> tuple[set[str], set[str]]:
+    """The refs the prompt actually renders, per channel.
+
+    Drives the shipped PromptBuilder and reads `packet.delivered_items`, which is
+    where `record_rendered` reports. Both channels are rendered because they have
+    separate early returns -- a packet can render reflections and no memory, or
+    the reverse -- and each is read from a fresh render pass, so attribution needs
+    no index arithmetic and does not depend on which section records first.
+
+    The builder is passed in, not constructed here. PromptBuilder.__init__ reads
+    and YAML-parses four files -- measured at 10.7ms, of which 10.7ms is
+    NatureLoader, IdentityRulesLoader and LodestoneLoader -- so one per query was
+    ~288ms over a 27-query run, about 18% of capture, for an object whose state
+    none of this touches. Reuse is safe and deliberately scoped to the run rather
+    than cached at module level: a long-lived builder owns a mutable
+    ConversationBuffer, and run-scoping is what keeps this function's "writes
+    nothing" guarantee structural.
+
+    No LLM, no embedding, no vault read: tests/test_incident_reproduction.py takes
+    the same route for the same reason, to get the model-visible window from the
+    shipped slice rather than a copy that can drift.
+
+    Writes nothing, structurally rather than by care: build_context was called
+    with read_only=True so no delivery recorder was ever armed, and
+    retrieval_stats_disabled() guards both the service recorder and the store.
+
+    Does NOT model prompt_guardrail.trim_to_fit -- see src/context/render_window.py,
+    which owns that caveat.
+    """
+    def refs(render) -> set[str]:
+        packet.begin_render()
+        render(packet)
+        return {
+            i.metadata["_trace_ref"]
+            for i in packet.delivered_items
+            if (i.metadata or {}).get("_trace_ref")
+        }
+
+    return refs(builder._build_context_section), refs(builder._build_reflection_section)
 
 
 def _mark_dedup(service: ContextService, walked) -> None:
@@ -481,15 +567,38 @@ def capture_query(
     service: ContextService | None = None,
     project_id: str | None = None,
     include_content: bool = False,
+    builder=None,
 ) -> QueryTrace:
     """Trace one query. Read-only; raises TraceValidationError on any drift."""
+    from src.llm.prompt_builder import PromptBuilder
+
     service = service or ContextService()
     ranker = ContextRanker()
+    builder = builder if builder is not None else PromptBuilder()
     policy = classify_query(query)
 
     state_items, task_items, memory_items, reflection_items, _emb = service.retriever.retrieve(
         query
     )
+
+    # Stamp the ref onto each candidate BEFORE the deep copy, so the packet's
+    # copies carry it and what the prompt renders can be read back as refs
+    # directly. The index is the one _walk_stages will assign, because it
+    # enumerates these same lists in this same order.
+    #
+    # This replaces matching the rendered items back by content fingerprint.
+    # Content is the only key two different objects share, so that match had to
+    # be a multiset consumed in some order -- and no order was correct: the walk
+    # runs in retrieval order while replay sorts by score, so two candidates
+    # with the same body resolved to different refs on the two sides. Duplicate
+    # content is exactly the dedup case, so a near-duplicate pair in a corpus
+    # would have aborted the capture with "the model does not reproduce the
+    # render" and named the wrong cause. The mapping was available here all
+    # along and was being thrown away.
+    for index, item in enumerate(memory_items):
+        item.metadata = dict(getattr(item, "metadata", {}) or {}, _trace_ref=f"m{index}")
+    for index, item in enumerate(reflection_items):
+        item.metadata = dict(getattr(item, "metadata", {}) or {}, _trace_ref=f"r{index}")
 
     # One retrieval, two consumers. build_context is handed deep copies of
     # the same candidate objects rather than being allowed to retrieve
@@ -549,25 +658,38 @@ def capture_query(
         )
 
     # Outcome flags. Content-based filters are evaluated with the service's
-    # own predicates; delivery is read off the packet.
+    # own predicates; what was RENDERED comes from the shipped prompt builder.
+    #
+    # This used to read `packet.memory_items` and call it delivery. The packet
+    # is a candidate set of 4 to 6 non-profile records and the prompt renders 4
+    # (src/context/render_window.py), so the delivery endpoint was measuring a
+    # set the model never receives -- and worse, it was BLIND to the one
+    # boundary that decides whether a record is seen at all. A candidate moving
+    # between rank 4 and rank 5 leaves packet membership unchanged, so the
+    # measured distance for the most consequential reordering there is was
+    # zero. #227 fixed the production stats write the same way and the harness
+    # was not touched.
+    #
+    # Driving the real PromptBuilder rather than applying the window here is
+    # the point: it exercises the shipped early returns, so a packet whose
+    # memory_items are empty renders and records nothing, which is the correct
+    # answer and one a restatement would get wrong. The window function exists
+    # for REPLAY, where a full builder is unaffordable -- replay_query runs about
+    # 213,000 times in an N=4096 pass and must stay a pure function of (trace,
+    # params) with no vault files behind it. Capture runs it 27 times and is the
+    # ground truth the model is checked against. Same structure as _validate:
+    # pipeline on one side, model on the other.
     normalized_query = service._normalize_text(query)
-    delivered_fingerprints = {
-        content_fingerprint(i.content) for i in packet.memory_items
-    }
-    delivered_reflection_fingerprints = {
-        content_fingerprint(i.content) for i in packet.reflection_items
-    }
+    rendered_memory, rendered_reflections = _rendered_refs(packet, builder)
 
     for walk in walked_memory:
         walk.trace.filtered_echo_or_meta = bool(
             service._is_echo_or_meta_memory(walk.item, normalized_query)
         )
         walk.trace.filtered_low_value = bool(service._is_low_value_memory(walk.item))
-        walk.trace.delivered = walk.trace.content_sha256 in delivered_fingerprints
+        walk.trace.rendered = walk.trace.ref in rendered_memory
     for walk in walked_reflections:
-        walk.trace.delivered = (
-            walk.trace.content_sha256 in delivered_reflection_fingerprints
-        )
+        walk.trace.rendered = walk.trace.ref in rendered_reflections
 
     # Dedup is applied to the ranked, filtered list, so it has to be walked
     # in that order to mark the right member of a duplicate pair. It rarely
@@ -584,7 +706,7 @@ def capture_query(
         for walk in walked_reflections:
             walk.trace.relevance_gated_out = True
 
-    return QueryTrace(
+    trace = QueryTrace(
         query_id=query_id,
         query=query,
         policy_name=policy.name,
@@ -610,11 +732,20 @@ def capture_query(
         min_score=policy.min_score,
         relevance_gate_fired=relevance_gate_fired,
         candidates=[w.trace for w in all_walked],
-        delivered_refs=[w.trace.ref for w in walked_memory if w.trace.delivered],
-        delivered_reflection_refs=[
-            w.trace.ref for w in walked_reflections if w.trace.delivered
+        rendered_refs=[w.trace.ref for w in walked_memory if w.trace.rendered],
+        rendered_reflection_refs=[
+            w.trace.ref for w in walked_reflections if w.trace.rendered
         ],
     )
+
+    render_problems = _validate_render(trace, validation_params)
+    if render_problems:
+        raise TraceValidationError(
+            f"[{query_id}] the model does not reproduce the render:\n  "
+            + "\n  ".join(render_problems)
+        )
+
+    return trace
 
 
 def discover_project_id(vault: Path) -> str | None:
@@ -688,6 +819,13 @@ def capture_run(
         stack.append(patch.object(ss_module, "semantic_search", _widened))
 
     traces: list[QueryTrace] = []
+    # One builder for the run, hoisted for the same reason `service` is.
+    # PromptBuilder.__init__ reads and YAML-parses four files, ~10.7ms, so one
+    # per query was ~18% of capture for an object whose state the render never
+    # touches. Scoped to the run rather than cached at module level.
+    from src.llm.prompt_builder import PromptBuilder
+
+    builder = PromptBuilder()
     for context in stack:
         context.__enter__()
     try:
@@ -701,6 +839,7 @@ def capture_run(
                     service=service,
                     project_id=project_id,
                     include_content=include_content,
+                    builder=builder,
                 )
             )
     finally:

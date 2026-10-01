@@ -21,6 +21,10 @@ from pathlib import Path
 
 from src.context.models import ContextPacket
 from src.context.conversation_buffer import ConversationBuffer
+from src.context.render_window import (
+    rendered_memory_window,
+    rendered_reflection_window,
+)
 from src.safety.nature_loader import NatureLoader
 from src.safety.identity_rules_loader import IdentityRulesLoader
 from src.safety.lodestone_loader import LodestoneLoader
@@ -916,11 +920,24 @@ class PromptBuilder:
         # significant words (>2 chars, common determiners stripped) and the
         # item is suppressed if ALL significant words appear in its content.
         # This handles pronoun differences ("my diet" vs "their diet").
+        #
+        # Filtered into a LOCAL, not into a replacement packet. This used to
+        # rebind `context_packet` to a new ContextPacket built from seven fields
+        # -- which carried neither delivered_items nor _delivery_recorder, so the
+        # record_rendered call below reported to a throwaway object and the
+        # caller's packet never learned what was rendered. commit_delivery()
+        # then committed the reflections alone, because _build_reflection_section
+        # runs earlier against the original. Measured: with one topic declined,
+        # a packet of two memory records and one reflection committed 1 record,
+        # and the memory record that DID reach the model was recorded as not
+        # delivered. Issue #227's fix was silently defeated for every turn after
+        # any topic decline, since declined_topics is sticky for the session.
         declined = self.conversation_buffer.declined_topics
-        if declined and context_packet.memory_items:
+        memory_items = context_packet.memory_items
+        if declined and memory_items:
             declined_keywords = _extract_decline_keywords(declined)
             filtered = []
-            for item in context_packet.memory_items:
+            for item in memory_items:
                 content_lower = (getattr(item, "content", "") or "").lower()
                 if any(
                     all(kw in content_lower for kw in kw_set)
@@ -929,17 +946,9 @@ class PromptBuilder:
                 ):
                     continue
                 filtered.append(item)
-            context_packet = ContextPacket(
-                user_message=context_packet.user_message,
-                memory_items=filtered,
-                reflection_items=context_packet.reflection_items,
-                state_items=context_packet.state_items,
-                web_items=context_packet.web_items,
-                image_data=context_packet.image_data,
-                task_items=context_packet.task_items,
-            )
+            memory_items = filtered
 
-        if not context_packet.memory_items:
+        if not memory_items:
             if is_conversational:
                 # Conversational/emotional check-ins ("I'm tired",
                 # "How are you?") don't need a knowledge gap directive —
@@ -980,12 +989,13 @@ class PromptBuilder:
                 "</memory>"
             )
 
-        profile_items = [i for i in context_packet.memory_items if i.memory_type == "profile"]
-        other_items = [i for i in context_packet.memory_items if i.memory_type != "profile"][:4]
-
         # Issue #227: this slice, not the packet, is what the model sees on
         # the memory channel. Recorded here rather than recomputed elsewhere
-        # so the record and the render cannot drift apart.
+        # so the record and the render cannot drift apart. The window itself
+        # lives in src/context/render_window.py, because the trace harness has
+        # to measure the same slice and a second copy of it is what let the
+        # delivery endpoint measure the packet instead.
+        profile_items, other_items = rendered_memory_window(memory_items)
         context_packet.record_rendered(profile_items + other_items)
 
         sections: list[str] = []
@@ -1052,12 +1062,13 @@ class PromptBuilder:
         # as Fix 2. Only emits when memory_items has at least one record;
         # the empty-retrieval branches above handle the no-records case
         # with their own absence framing.
-        if context_packet.memory_items and _is_personal_query(
-            intent_class, context_packet.user_message
-        ):
-            inventory_block = self._build_vault_inventory(
-                context_packet.memory_items
-            )
+        # Reads the declined-topics-filtered local, not the packet. Under the
+        # replacement-packet version this saw the filtered list too, because
+        # `context_packet` had been rebound; keeping the local preserves that
+        # and stops the inventory advertising a type the filter just suppressed.
+        # No truthiness test on it: every empty-memory path returned above.
+        if _is_personal_query(intent_class, context_packet.user_message):
+            inventory_block = self._build_vault_inventory(memory_items)
             if inventory_block:
                 sections.append(inventory_block)
 
@@ -1280,7 +1291,7 @@ class PromptBuilder:
             return ""
 
         lines: list[str] = []
-        rendered_reflections = context_packet.reflection_items[:1]
+        rendered_reflections = rendered_reflection_window(context_packet.reflection_items)
         # Issue #227, second channel. reflection_limit is 1 to 3 depending on
         # policy and this renders one, so the difference took a promotion for
         # a delivery that did not happen -- the same defect as the memory

@@ -67,7 +67,7 @@ import numpy as np
 from .endpoints import ENDPOINT_DELIVERY, ENDPOINTS, EndpointEvaluator
 from .params import ReplayParams
 from .ranges import ParameterRange, build_ranges
-from .schema import TraceRun
+from .schema import SCHEMA_VERSION, TraceRun
 
 # Bootstrap resamples for the confidence intervals. 1000 is enough for a
 # 95% percentile interval to be stable to the third decimal, and it costs
@@ -450,9 +450,9 @@ def find_no_delivery_effect(run: TraceRun, names: list[str]) -> list[str]:
     show up as a nonzero ST with a near-zero S1 -- a finding, not something
     to filter out in advance.
     """
-    from .endpoints import delivered_sets
+    from .endpoints import rendered_sets
 
-    baseline = delivered_sets(run, ReplayParams())
+    baseline = rendered_sets(run, ReplayParams())
     ranges = build_ranges(run.param_defaults)
 
     flat: list[str] = []
@@ -462,7 +462,7 @@ def find_no_delivery_effect(run: TraceRun, names: list[str]) -> list[str]:
             params = ReplayParams().with_overrides(
                 **{name: ranges[name].to_value(unit)}
             )
-            if delivered_sets(run, params) != baseline:
+            if rendered_sets(run, params) != baseline:
                 moved = True
                 break
         if not moved:
@@ -791,6 +791,14 @@ def _wrap(text: str, width: int) -> list[str]:
 def to_dict(sobol: SobolRun) -> dict:
     """Serializable results: parameter names and numbers only, no vault data."""
     return {
+        # What the delivery endpoint MEANT when these numbers were taken. Added
+        # for #227: the endpoint used to measure the context packet and now
+        # measures what the prompt renders, which rescales every delivery index
+        # and changes which parameters land in no_solo_delivery_effect. A saved
+        # result carried no way to tell the two apart -- same keys, same shapes,
+        # different quantity -- so a stale artefact was undetectable. Results
+        # whose trace_schema_version differs are not comparable.
+        "trace_schema_version": SCHEMA_VERSION,
         "samples": sobol.samples,
         "evaluations": sobol.evaluations,
         "seed": sobol.seed,
@@ -854,6 +862,19 @@ def load_results(results: dict, st_ci_target: float = 0.0) -> SobolRun:
     question being asked of the numbers, not of the numbers themselves:
     the same run answers "is this resolved to 0.02" and "to 0.05".
     """
+    # Refuse a result taken under a different endpoint definition rather than
+    # re-rendering it as though it were current. A pre-#227 artefact has the same
+    # keys and shapes but its delivery indices describe the context packet, not
+    # what the prompt renders. Absent means pre-stamp, which is also incomparable.
+    stamped = results.get("trace_schema_version")
+    if stamped != SCHEMA_VERSION:
+        raise ValueError(
+            f"saved Sobol result was taken at trace schema {stamped!r} and this "
+            f"code speaks {SCHEMA_VERSION}; its delivery indices measure a "
+            "different quantity (#227: the endpoint measured the context packet "
+            "rather than the rendered set). Re-run rather than re-rendering."
+        )
+
     endpoints: dict[str, EndpointIndices] = {}
     for endpoint, payload in results["endpoints"].items():
         parameters = [

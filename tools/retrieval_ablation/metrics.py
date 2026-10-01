@@ -31,6 +31,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from typing import Mapping, Sequence
+from src.context.render_window import MEMORY_RENDER_SLOTS
 
 # Two items whose final scores differ by less than this are treated as tied.
 # The pipeline's additive constants are quantised to 0.01 (0.10 type boost,
@@ -43,10 +44,18 @@ DEFAULT_TIE_EPSILON = 1e-6
 # _memory_limit_for_policy). k=6 is the widest of those.
 K_SERVICE = 6
 
-# src/llm/prompt_builder.py:979 slices NON-PROFILE memory items to 4 before
-# rendering, so this is what the model actually sees regardless of what the
-# service delivered. Metrics at this k are computed over the non-profile slice.
-K_MODEL_VISIBLE = 4
+# What the model actually sees, regardless of what the service delivered.
+# Imported rather than restated: the number is owned by
+# src/context/render_window.py, which the prompt builder renders with and the
+# trace harness measures against. The comment here used to cite
+# prompt_builder.py:979, a line that no longer holds the slice.
+#
+# Metrics at this k are computed over the non-profile slice.
+#
+# This harness still defines `delivered` over the PACKET (K_SERVICE) and
+# computes its metrics at that k -- see #259, which is where that decision
+# belongs. Only the constant is unified here.
+K_MODEL_VISIBLE = MEMORY_RENDER_SLOTS
 
 
 @dataclass(frozen=True)

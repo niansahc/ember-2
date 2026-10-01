@@ -25,6 +25,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.context.render_window import (
+    rendered_memory_window,
+    rendered_reflection_window,
+)
+
 from .compose import STAGE_FINAL, STAGE_RETRIEVAL, Composition, compose
 from .params import ReplayParams
 from .schema import CHANNEL_REFLECTION, CandidateTrace, QueryTrace, TraceRun
@@ -49,8 +54,8 @@ class QueryReplay:
     query_id: str
     policy_name: str
     scored: list[ScoredCandidate]
-    delivered_refs: list[str]
-    delivered_reflection_refs: list[str]
+    rendered_refs: list[str]
+    rendered_reflection_refs: list[str]
 
     def by_ref(self) -> dict[str, ScoredCandidate]:
         return {s.ref: s for s in self.scored}
@@ -142,14 +147,34 @@ def replay_query(query: QueryTrace, params: ReplayParams | None = None) -> Query
     ]
     surviving_reflections.sort(key=lambda s: s.score, reverse=True)
 
+    # Two truncations, in pipeline order. The service limit first -- 4 to 6
+    # memory records, 1 to 3 reflections, per policy -- and then the window the
+    # PROMPT applies, which is 4 and 1 regardless of policy.
+    #
+    # Only the second one is new here, and it is the whole point of the change.
+    # Stopping at the service limit meant the delivery endpoint measured a
+    # candidate set rather than what the model receives, and was blind to
+    # movement across the 4/5 boundary: both candidates stay in the packet, so
+    # set membership is unchanged and the measured distance is zero for the one
+    # reordering that decides whether a record is seen at all.
+    #
+    # The window comes from src/context/render_window.py, which the prompt
+    # builder renders with and capture checks against. CandidateTrace carries
+    # memory_type and ref, so it is passed straight in -- no shim, and no second
+    # copy of the slice.
+    rendered_profile, rendered_other = rendered_memory_window(
+        [s.candidate for s in profile + selected_other]
+    )
+    rendered_reflections = rendered_reflection_window(
+        [s.candidate for s in surviving_reflections[: query.reflection_limit]]
+    )
+
     return QueryReplay(
         query_id=query.query_id,
         policy_name=query.policy_name,
         scored=scored,
-        delivered_refs=[s.ref for s in profile + selected_other],
-        delivered_reflection_refs=[
-            s.ref for s in surviving_reflections[: query.reflection_limit]
-        ],
+        rendered_refs=[c.ref for c in rendered_profile + rendered_other],
+        rendered_reflection_refs=[c.ref for c in rendered_reflections],
     )
 
 
@@ -183,6 +208,34 @@ def replay_run(run: TraceRun, params: ReplayParams | None = None) -> list[QueryR
 # itself faithful while sitting far enough from the pipeline to reorder two
 # close candidates.
 EXACT_TOLERANCE = 1e-12
+
+
+def render_mismatches(query: QueryTrace, replay: QueryReplay) -> list[str]:
+    """Where the model's rendered set disagrees with the pipeline's, per channel.
+
+    One comparison, two callers. capture._validate_render refuses to write a
+    trace that fails it, and check_fidelity reports it over a whole run. Those
+    are different responses to the same invariant, and when the invariant was
+    written out twice the two sites drifted in what they reported.
+
+    Sets, not sequences: membership is what the delivery endpoint measures, and
+    the prompt renders profile and non-profile in separate sections anyway, so
+    order within the render is not a claim this makes.
+    """
+    mismatches: list[str] = []
+    for channel, modelled_refs, captured_refs in (
+        ("memory", replay.rendered_refs, query.rendered_refs),
+        ("reflection", replay.rendered_reflection_refs, query.rendered_reflection_refs),
+    ):
+        modelled, captured = set(modelled_refs), set(captured_refs)
+        if modelled != captured:
+            mismatches.append(
+                f"{query.query_id} ({channel}): model rendered {sorted(modelled)}, "
+                f"pipeline rendered {sorted(captured)} "
+                f"(only in model: {sorted(modelled - captured)}; "
+                f"only in pipeline: {sorted(captured - modelled)})"
+            )
+    return mismatches
 
 
 @dataclass
@@ -226,17 +279,7 @@ def check_fidelity(run: TraceRun) -> FidelityReport:
                     f"!= replayed {scored.score!r}"
                 )
 
-        if set(replay.delivered_refs) != set(query.delivered_refs):
-            delivery_mismatches.append(
-                f"{query.query_id}: captured {sorted(query.delivered_refs)} "
-                f"!= replayed {sorted(replay.delivered_refs)}"
-            )
-        if set(replay.delivered_reflection_refs) != set(query.delivered_reflection_refs):
-            delivery_mismatches.append(
-                f"{query.query_id} (reflections): "
-                f"captured {sorted(query.delivered_reflection_refs)} "
-                f"!= replayed {sorted(replay.delivered_reflection_refs)}"
-            )
+        delivery_mismatches.extend(render_mismatches(query, replay))
 
     return FidelityReport(
         candidates_checked=checked,
@@ -309,13 +352,13 @@ def sweep(
     exercised end to end without pulling in a sensitivity library. The real
     Sobol pass consumes replay_run() directly.
     """
-    baseline = {q.query_id: set(replay_query(q).delivered_refs) for q in run.queries}
+    baseline = {q.query_id: set(replay_query(q).rendered_refs) for q in run.queries}
     results = []
     for value in values:
         params = ReplayParams().with_overrides(**{param_name: value})
         changed = 0
         for query in run.queries:
-            delivered = set(replay_query(query, params).delivered_refs)
+            delivered = set(replay_query(query, params).rendered_refs)
             changed += len(delivered ^ baseline[query.query_id])
         results.append((value, changed))
     return results

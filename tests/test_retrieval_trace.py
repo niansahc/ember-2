@@ -40,6 +40,10 @@ import pytest
 
 from src.context.models import ContextItem
 from src.context.policies import ContextPolicy
+from src.context.render_window import (
+    MEMORY_RENDER_SLOTS,
+    REFLECTION_RENDER_SLOTS,
+)
 from src.context.ranker import COLD_MULTIPLIER, WARM_MULTIPLIER, ContextRanker
 from src.context.service import ContextService
 from tests.conftest import deliver_packet, stub_both_embed_bindings
@@ -395,19 +399,175 @@ def test_replay_reproduces_every_captured_score_exactly(traced_run):
     assert report.score_mismatches == []
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="#244: the harness models the reflection channel as having no "
-           "retrieval stage -- true under Jaccard scoring, stale since "
-           "#241 routed reflections through semantic_search. Non-strict "
-           "because the outcome is order-dependent, and the passing case "
-           "is the vacuous one: the two models agree whenever the shared "
-           "session vault is large enough that the channel delivers "
-           "nothing in both. Remove with the #244 fix, not before.",
-)
-def test_replay_reproduces_the_delivered_set(traced_run):
+def test_render_mismatches_detects_a_disagreement():
+    """The positive control, and the reason the two tests below need one.
+
+    Both of them assert an EMPTY mismatch list over the `traced_run` fixture --
+    and capture refuses to write a trace that fails the same check, so a real
+    disagreement raises TraceValidationError while the fixture is being built.
+    The assertions error in setup rather than failing, which means they cannot
+    fail for the condition they name. They are worth keeping as end-to-end smoke
+    checks, but the detector itself needs a test that exercises the non-empty
+    path, or the guard is asserted only by its own refusal.
+
+    This is the same vacuity PR #258 found in the clamp's unreachability test:
+    an assertion over a quantity that something upstream has already guaranteed.
+    """
+    from tools.retrieval_trace.replay import QueryReplay, render_mismatches
+    from tools.retrieval_trace.schema import QueryTrace
+
+    def pipeline_rendered(memory, reflections):
+        return QueryTrace(
+            query_id="q", query="", policy_name="default", policy={},
+            relational_query=False, project_id=None, memory_limit=6,
+            reflection_limit=2, diversity=False, min_score=0.25,
+            relevance_gate_fired=False, candidates=[],
+            rendered_refs=memory, rendered_reflection_refs=reflections,
+        )
+
+    def model_rendered(memory, reflections):
+        return QueryReplay(
+            query_id="q", policy_name="default", scored=[],
+            rendered_refs=memory, rendered_reflection_refs=reflections,
+        )
+
+    pipeline = pipeline_rendered(["m0", "m1"], ["r0"])
+
+    assert render_mismatches(pipeline, model_rendered(["m0", "m1"], ["r0"])) == [], (
+        "identical sets must agree"
+    )
+    # Order is deliberately not a claim this makes.
+    assert render_mismatches(pipeline, model_rendered(["m1", "m0"], ["r0"])) == []
+
+    problems = render_mismatches(pipeline, model_rendered(["m0", "m99"], ["r0"]))
+    assert len(problems) == 1, problems
+    assert "memory" in problems[0] and "m99" in problems[0]
+
+    assert len(render_mismatches(pipeline, model_rendered(["m0", "m99"], []))) == 2, (
+        "the reflection channel is compared independently of the memory one"
+    )
+
+
+def test_replay_reproduces_the_rendered_set(traced_run):
+    """Strict again, after being xfail'd for a reason that was never its own.
+
+    Secondary by construction: capture refuses to write a trace that fails this,
+    so a mismatch errors while the fixture is built rather than failing here. The
+    detector's own test is test_render_mismatches_detects_a_disagreement.
+
+    This was xfail(strict=False) under #244 -- the reflection channel's scoring
+    model -- and the non-strict marker meant it reported neither failure nor
+    unexpected pass. It was therefore silent while the memory channel diverged
+    for an entirely different reason: capture recorded the PACKET as delivered
+    (4 to 6 non-profile records) and the prompt renders 4, so the two sides were
+    comparing different quantities on every query. The one test that would have
+    caught #227's harness half was disarmed by a marker about another channel.
+
+    Both sides now speak about the rendered set, so this is an assertion again.
+    The reflection-channel scoring concern #244 names is real and is covered by
+    test_replay_reproduces_every_captured_score_exactly, which is where a
+    scoring defect belongs.
+    """
     report = check_fidelity(traced_run)
     assert report.delivery_mismatches == []
+
+
+# Every policy classify_query can return. Derived from the harness's own
+# registry plus the two it excludes by design, rather than transcribed from
+# policies.py -- which has no name constant to import, so a transcription would
+# let an eleventh policy skip this sweep silently.
+#
+# Ten names over four distinct packet sizes: the limits come from the shipped
+# service methods rather than being restated, so a retune is picked up.
+POLICY_NAMES = tuple(sorted(EXPECTED_POLICIES | {"web_search", "clarification"}))
+PROFILE_COUNT = MEMORY_RENDER_SLOTS + 1  # deliberately over the window
+
+
+@pytest.mark.parametrize("policy_name", POLICY_NAMES)
+def test_the_render_window_matches_the_prompt_builder_on_every_policy(policy_name):
+    """The assertion whose absence let #227's harness half survive.
+
+    The trace harness used to read delivery off `packet.memory_items` while the
+    prompt rendered a slice of it. Nothing compared the two, so the delivery
+    endpoint measured a set the model never receives -- across #232, #256's
+    N=4096 run, and every Morris screening.
+
+    The window itself is policy-INDEPENDENT (4 non-profile memory records and one
+    reflection, whatever the policy), so what this actually sweeps is every packet
+    SIZE the policies produce: memory limits of 4 to 6 and reflection limits of 1
+    to 3. Both come from the shipped service methods rather than being restated,
+    and the packet is filled to the limit so the slice has something to cut.
+
+    Profile items are deliberately included and deliberately over the window: they
+    are uncapped (ADR-046 gives them guaranteed slots not charged against the
+    policy limit), so a window that capped them would be caught here.
+    """
+    from src.context.models import ContextPacket
+    from src.context.render_window import (
+        rendered_memory_window,
+        rendered_reflection_window,
+    )
+    from src.context.service import ContextService
+    from src.llm.prompt_builder import PromptBuilder
+
+    service = ContextService()
+    memory_limit = service._memory_limit_for_policy(policy_name)
+    reflection_limit = service._reflection_limit_for_policy(policy_name)
+
+    packet = ContextPacket(
+        user_message="what have i been reading about my own notes lately",
+        memory_items=(
+            [
+                _item(id=f"p{i}", store_id=f"p{i}", memory_type="profile")
+                for i in range(PROFILE_COUNT)
+            ]
+            + [
+                _item(id=f"m{i}", store_id=f"m{i}", memory_type="conversation",
+                      item_type="conversation")
+                for i in range(memory_limit)
+            ]
+        ),
+        reflection_items=[
+            _item(id=f"r{i}", store_id=f"r{i}", memory_type="reflection",
+                  item_type="reflection")
+            for i in range(reflection_limit)
+        ],
+    )
+
+    builder = PromptBuilder()
+
+    def rendered_by_the_builder(render) -> list[str]:
+        # A fresh render pass per section, so attribution needs no index
+        # arithmetic and does not depend on which section records first.
+        packet.begin_render()
+        render(packet)
+        return [i.store_id for i in packet.delivered_items]
+
+    memory_rendered = rendered_by_the_builder(builder._build_context_section)
+    reflections_rendered = rendered_by_the_builder(builder._build_reflection_section)
+
+    window_profile, window_other = rendered_memory_window(packet.memory_items)
+    assert memory_rendered == [i.store_id for i in window_profile + window_other], (
+        f"{policy_name}: the render window and the prompt builder disagree on the "
+        f"memory channel at a limit of {memory_limit}"
+    )
+    assert reflections_rendered == [
+        i.store_id for i in rendered_reflection_window(packet.reflection_items)
+    ], (
+        f"{policy_name}: the render window and the prompt builder disagree on the "
+        f"reflection channel at a limit of {reflection_limit}"
+    )
+
+    # Non-vacuity: the window has to be CUTTING something, or this test would
+    # pass against no window at all. Stated as the exact expected count rather
+    # than an inequality against len(packet.memory_items), which includes the
+    # uncapped profile items and so compares against the wrong number.
+    assert len(memory_rendered) == PROFILE_COUNT + min(
+        memory_limit, MEMORY_RENDER_SLOTS
+    ), f"{policy_name}: profile is uncapped and non-profile caps at the window"
+    assert len(reflections_rendered) == min(
+        reflection_limit, REFLECTION_RENDER_SLOTS
+    ), f"{policy_name}: the reflection window did not cut to its slot count"
 
 
 def test_capture_leaves_the_database_unchanged(traced_run):
@@ -425,8 +585,25 @@ def test_the_same_pipeline_unguarded_does_write(stub_query_embedding):
 
 
 def test_something_was_actually_delivered(traced_run):
-    delivered = sum(len(q.delivered_refs) for q in traced_run.queries)
+    delivered = sum(len(q.rendered_refs) for q in traced_run.queries)
     assert delivered > 0, "nothing delivered; the delivery replay check is vacuous"
+
+
+def test_a_reflection_was_actually_delivered(traced_run):
+    """The companion the memory-channel guard never had.
+
+    test_something_was_actually_delivered covers the memory channel only, and the
+    reflection channel's vacuity is exactly what hid behind that gap: the xfail
+    on the fidelity check said in its own reason that "the passing case is the
+    vacuous one -- the two models agree whenever the channel delivers nothing in
+    both", and nothing asserted otherwise. A reflection-channel comparison over
+    two empty sets passes while proving nothing.
+    """
+    delivered = sum(len(q.rendered_reflection_refs) for q in traced_run.queries)
+    assert delivered > 0, (
+        "no reflection delivered on any query, so the reflection half of the "
+        "render and fidelity checks is vacuous on this corpus"
+    )
 
 
 def test_terms_are_individually_attributable(traced_run):
@@ -503,17 +680,25 @@ def test_sweep_reports_delivery_changes(traced_run):
 # Serialization and the privacy guard
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="#244: the harness models the reflection channel as having no "
-           "retrieval stage -- true under Jaccard scoring, stale since "
-           "#241 routed reflections through semantic_search. Non-strict "
-           "because the outcome is order-dependent, and the passing case "
-           "is the vacuous one: the two models agree whenever the shared "
-           "session vault is large enough that the channel delivers "
-           "nothing in both. Remove with the #244 fix, not before.",
-)
 def test_round_trip_through_disk(traced_run, tmp_path):
+    """Also xfail'd under #244, and also not failing for that reason.
+
+    With the xfail lifted it fails on this machine because TraceRun.write
+    correctly refuses tmp_path: pytest puts it under the home directory, and on
+    the reference machine the home directory is itself a git work tree. That is
+    the privacy guard doing its job, not a fidelity defect, and it has nothing to
+    do with the reflection channel. A non-strict xfail hid the distinction.
+
+    So the condition is measured rather than assumed, as the guard's own
+    non-vacuity test does, and the round trip runs wherever tmp_path is writable
+    -- which includes CI.
+    """
+    enclosing = _nearest_work_tree(tmp_path)
+    if enclosing is not None:
+        pytest.skip(
+            f"tmp_path is inside the git work tree at {enclosing}, which "
+            "TraceRun.write refuses by design; nothing to round-trip through"
+        )
     path = traced_run.write(tmp_path / "trace.json")
     reloaded = load_run(path)
     assert reloaded.schema_version == SCHEMA_VERSION

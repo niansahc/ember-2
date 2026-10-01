@@ -35,7 +35,18 @@ from pathlib import Path
 # intended behaviour, not a migration to write: a trace captured under the
 # old composition describes a pipeline that no longer exists, and
 # reinterpreting it would produce numbers about nothing.
-SCHEMA_VERSION = 2
+#
+# Bumped to 3 for #227, and this one is a SEMANTIC change with no structural
+# signature, which is the reason the fields were renamed rather than
+# reinterpreted. `delivered_refs` held the context packet -- 4 to 6 non-profile
+# memory records -- while the prompt renders 4. The layout of a v2 trace under
+# the new meaning is byte-identical: same names, same types, same lengths. It
+# would have loaded cleanly and reported numbers about a set the model never
+# receives. `rendered_refs` / `rendered_reflection_refs` / `rendered` make the
+# keyword reconstruction below fail on an old trace instead, which is the only
+# detector available: the one test that compares the two definitions is
+# xfail'd under #244.
+SCHEMA_VERSION = 3
 
 # Channels a candidate can arrive through. They score differently and must
 # not be pooled: the reflection channel never passes through
@@ -92,6 +103,13 @@ class PolicyActivation:
 
 @dataclass
 class AuthorshipActivation:
+    # Whether the authorship stage runs on this candidate's channel at all.
+    # False for reflections: service.py:268-269 applies role_predicate.apply and
+    # apply_authorship_scoring to memory_items only. Same role `applies` plays on
+    # RetrievalActivation, and here for the same reason -- a stage that does not
+    # run on a channel has to be recorded as absent rather than as an identity,
+    # or the model has no way to tell "ran and did nothing" from "never ran".
+    applies: bool = True
     relational_query: bool = False
     branch: str = "first_person"         # first_person|mixed|third_party|unknown
     project_match: bool = False
@@ -155,7 +173,7 @@ class CandidateTrace:
     # see why.
     excluded_by_role: bool = False
     deduped_out: bool = False
-    delivered: bool = False
+    rendered: bool = False
 
 
 @dataclass
@@ -172,8 +190,8 @@ class QueryTrace:
     min_score: float
     relevance_gate_fired: bool
     candidates: list[CandidateTrace] = field(default_factory=list)
-    delivered_refs: list[str] = field(default_factory=list)
-    delivered_reflection_refs: list[str] = field(default_factory=list)
+    rendered_refs: list[str] = field(default_factory=list)
+    rendered_reflection_refs: list[str] = field(default_factory=list)
 
 
 @dataclass

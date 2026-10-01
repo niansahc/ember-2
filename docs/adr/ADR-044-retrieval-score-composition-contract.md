@@ -1064,6 +1064,307 @@ resolved and neither inconsistent, so they are derived like any other term.
 activation. It was not: activation is 3.18% on production too. The synthetic
 figure was wrong for a different reason -- see the three-corpus table.
 
+## Amendment (2026-10-01): the delivery endpoint measured the wrong set
+
+Every magnitude in the amendment above was derived from Sobol ST on a "delivery"
+endpoint that measured the context **packet**. The packet carries 4 to 6
+non-profile memory records and 1 to 3 reflections; the prompt renders 4 and 1
+(`src/context/render_window.py`). So the endpoint described a set the model never
+receives.
+
+The consequence is worse than a scale error. The endpoint was **blind to the 4/5
+boundary** -- the line between a record the model sees and one it does not. A
+candidate moving between rank 4 and rank 5 leaves packet membership unchanged, so
+the measured distance was exactly zero for the most consequential reordering in
+the system.
+
+This affected #232, the 2026-09-30 N=4096 run, and every Morris screening.
+
+### What #227 said, and what was actually done
+
+#227 measured this divergence and quantified it: 13 of 45 records across eight
+policies, 29%. Its closing line before "Related" reads:
+
+> [...] it should land before ADR-044's composition census, which reads
+> delivered-set composition and would otherwise measure a window whose stats
+> writes do not correspond to it.
+
+PR #238 closed it by firing the stats write after the prompt slice, and said why:
+"The timing option changes no delivery at all and needs no number." That was the
+right call for the stats write. It left the packet/slice divergence in place by
+design, and nine files changed with **none** under `tools/retrieval_trace/`.
+
+So the accurate statement is not "production was fixed and the harness was not".
+It is three distinctions that come apart:
+
+- **Definition.** Production records the rendered slice. Correct, and that is what
+  #238 fixed. The harness recorded the packet. Wrong, on every query.
+- **Completeness.** The production side was fixed in definition, and has a
+  separate branch where it records nothing: `prompt_builder`'s BUG-009
+  declined-topics filter rebound `context_packet` to a replacement packet
+  carrying neither `delivered_items` nor the recorder, so the memory half of the
+  record went to a throwaway object. Measured on synthetic fixtures: with one
+  topic declined, a packet of two memory records and one reflection committed 1,
+  and the memory record that *did* reach the model was accounted as not
+  delivered. `declined_topics` is sticky for the session, so one decline silently
+  defeated #227's own fix for every turn that followed.
+- **Direction.** The two sides failed in opposite directions. The harness
+  **over**-counted: 6 recorded, 4 seen. Production **under**-counted: 0 recorded,
+  up to 4 seen.
+
+Both are fixed here. The declined-topics fix is a behaviour change, not a
+cleanup: records that previously never got promoted will start getting promoted.
+
+### Measured: the endpoint definition, with nothing else varying
+
+Same trace, same 37-parameter vector, same seed (20260923), same sampler, same
+code. The render window is the only difference, so every figure below is the
+endpoint definition and nothing else.
+
+| | packet | rendered |
+|---|---|---|
+| N to meet `st_ci_target` 0.020 | 8192 (425,984 evals) | **4096** (212,992) |
+| delivery half-width | 0.0162 | 0.0147 |
+| score half-width | 0.0072 | 0.0104 |
+| delivery output variance | 0.000099 | 0.000434 |
+| extrapolated N | 5164 | **2098** |
+| delivered refs, 27 queries | 223 | 194 |
+
+**29 refs -- 13% -- were counted as delivered and never rendered**, across 17 of
+27 queries. The corrected endpoint converges on **half** the samples, because
+delivery variance is 4.4x higher on the rendered set: the packet definition was
+averaging a quantity that barely moved.
+
+**17 of 25 swept terms moved beyond the larger of their two half-widths on
+delivery. 0 of 25 moved on score**, which is the control -- the score endpoint
+never saw a delivered set.
+
+| term | packet ST | rendered ST | delta |
+|---|---|---|---|
+| `pol.prefer_active_work` | 0.4277 | 0.2453 | **-0.1824** |
+| `reflection` | 0.1482 | 0.0208 | **-0.1274** |
+| `pol.prefer_experience` | 0.1060 | 0.0323 | -0.0738 |
+| `recency.d365` | 0.3020 | 0.2371 | -0.0649 |
+| `recency.older` | 0.2685 | 0.2195 | -0.0490 |
+| `kind.user_content` | 0.1434 | 0.1191 | -0.0243 |
+| `kind.question` | 0.1167 | 0.1687 | +0.0521 |
+| `len.lt50` | 0.0218 | 0.0559 | +0.0340 |
+| `pol.exact_question` | **0.0000** | 0.0525 | +0.0525 |
+| `pol.exact_other` | 0.0177 | 0.0524 | +0.0346 |
+| `proj.match` | **0.0000** | 0.0080 | +0.0080 |
+| `ret.lexical.term_hit` | 0.0733 | 0.1447 | +0.0714 |
+| `kind.experience` | 0.2114 | 0.2216 | +0.0102 (held) |
+
+So the magnitudes are re-derived from the rendered table. Keeping packet-derived
+values would be the #232 error this document already records: continuing to cite
+a measurement the code has disowned.
+
+### Three terms demonstrate the defect in both directions
+
+These are the clearest evidence that the old endpoint measured the wrong thing,
+and they move opposite ways:
+
+- **`pol.exact_question` 0.0000 -> 0.0525** and **`proj.match` 0.0000 -> 0.0080**
+  were *freed*. Both measured exactly zero on the packet because their only
+  effect is at the 4/5 boundary -- they reorder inside the packet without
+  changing its membership. On the rendered set that reordering is a delivery
+  change.
+- **`reflection` 0.1482 -> 0.0208** became *newly solo-flat*. Its effect lived at
+  packet positions 2 and 3 of the reflection channel, which the prompt never
+  renders: `reflection_limit` is 1 to 3 and the render takes one.
+
+An earlier draft of this amendment asserted that reclassification could only go
+one way -- that the rendered set being a subset of the packet meant membership
+changes strictly more often, so `no_solo_delivery_effect` could only shrink and
+nothing could join it. That reasoning is wrong and the measurement refutes it: a
+term acting only at packet positions the prompt discards changes the packet set
+and cannot touch the rendered one. The count went 14 -> 13, with two freed and one
+joining.
+
+### `kind.answer`: the retirement holds
+
+ADR-044 sends `kind.answer` to 1.0 on the strength of ST 0.0000 and membership of
+`no_solo_delivery_effect`. Both came from the packet endpoint, so the
+justification needed repairing rather than inheriting.
+
+It holds, and on three independent grounds:
+
+- ST 0.0000 and S1 0.0000 on the **rendered** endpoint.
+- `no_solo_delivery_effect` under **both** definitions.
+- A direct probe: sweeping `prior.kind.answer` to either end of its range moves
+  **zero** delivered refs, packet and rendered.
+
+The same is true of all three `auth.*` arms and of `recency.unparsed`. Related
+correction: `src/context/prior.py` claimed `RECENCY["unparsed"]` was ST-derived.
+It has no entry in `_ST` and never had one. It is a structural identity -- a named
+branch so the traffic window shows it happening instead of the count vanishing --
+and the docstring now says so.
+
+### What the allocation rests on: ST, not S1
+
+Seven of the fourteen measured terms are interaction-dominated: `ST - S1` exceeds
+`S1`, so most of their total effect appears only in combination.
+
+| term | ST | S1 | ST-S1 |
+|---|---|---|---|
+| `recency.older` | 0.2195 | 0.0535 | +0.1660 |
+| `recency.d365` | 0.2371 | 0.1030 | +0.1341 |
+| `kind.user_content` | 0.1191 | 0.0289 | +0.0902 |
+| `len.lt50` | 0.0559 | 0.0207 | +0.0352 |
+| `pol.exact_other` | 0.0524 | 0.0229 | +0.0295 |
+| `pol.prefer_experience` | 0.0323 | 0.0041 | +0.0282 |
+| `reflection` | 0.0208 | -0.0007 | +0.0216 |
+
+The allocation uses ST, and that is a positive choice rather than a caveat. **The
+quantity this bound constrains is the product of one arm per family firing
+simultaneously** -- that is what the worst case is, and what the clamp's
+unreachability is asserted against. Simultaneous is precisely the regime
+interactions describe, so the total-effect index is the one that matches the
+claim. S1 would be correct if the bound constrained each term acting alone, and it
+does not: allocating on S1 would under-fund exactly the terms that do their work
+in combination, and the worst-case product would land inside the bound, wasting
+budget the contract permits.
+
+This is the opposite case to the recency ladder, where ST is the **wrong**
+statistic, and the distinction is the point. Ordering is a pairwise question about
+which arm ranks higher, and a variance share cannot answer it. Magnitude under
+simultaneous firing is a joint-variance question, and a variance share is exactly
+what answers it.
+
+Two terms sit at the noise floor and are flagged rather than hidden:
+`reflection`'s S1 is **negative** (-0.0007), and `len.gt1200`'s S1 (0.0127)
+exceeds its ST (0.0058), which is impossible in theory. Both are estimator noise
+at small magnitudes. Their derived factors are within 0.3% of 1.0, so nothing
+downstream turns on them, but neither is a measurement to lean on.
+
+### The recency family rests on two arms
+
+Stated plainly, because "mixed derivation" was too generous:
+
+    MEASURED        d365  ST 0.2371      older  ST 0.2195
+    NO SIGNAL       d30   ST 0.0000, under both endpoint definitions
+    CARRIED         d7    d90   unexercised, never measured at any N
+
+**Four of six arms carry no signal on this corpus.** The family's magnitude rests
+on two. This is a carried ladder with two measured anchors, not a measured family,
+and the ordering comes entirely from the additive ladder these multipliers
+replaced.
+
+`d30` reading exactly 0.0000 is new -- it was 0.0111 on the packet endpoint. The
+two kinds of zero are reported separately and mean different things: `d7` and
+`d90` are unexercised, a corpus fact that no sample count fixes; `d30` is
+exercised and measured zero, which is a finding about the term.
+
+The rule for the family's magnitude is unchanged -- its strongest measured arm --
+but the inputs moved, so it is now `d365` where `older` led before. "Strongest of
+two" is a weaker statement than "strongest of five" and the docstring says so.
+
+### The re-derived magnitudes
+
+```
+N=4096, k=37, 212,992 evaluations, rendered endpoint
+scipy.qmc.Sobol(scrambled), seed 20260923, 1000 bootstrap resamples
+st_ci_target 0.020: MET -- delivery 0.0147, score 0.0104
+```
+
+| constant | 2026-09-30 | 2026-10-01 |
+|---|---|---|
+| `KIND_EXPERIENCE` | 1.067846 | 1.038154 |
+| `KIND_USER_CONTENT` | 1.030868 | 1.020328 |
+| `KIND_QUESTION` | 0.967944 | 0.978665 |
+| `KIND_ANSWER` | 1.0 | 1.0 |
+| `LEN_UNDER_50` | 0.987642 | 0.992879 |
+| `LEN_OVER_1200` | 0.999514 | 0.999259 |
+| `POL_PREFER_ACTIVE_WORK` | 1.017858 | 1.042319 |
+| `POL_PREFER_EXPERIENCE` | 1.009838 | 1.005473 |
+| `POL_EXACT_QUESTION` | 0.997294 | 0.993311 |
+| `POL_EXACT_OTHER` | 1.001827 | 1.008893 |
+| `PROJECT_MATCH` | 1.006290 | 1.001353 |
+| `REFLECTION_DISCOUNT` | 0.999479 | 0.997345 |
+| `RECENCY[d7]` | 1.031168 | 1.040876 |
+| `RECENCY[older]` | 0.980055 | 0.970145 |
+
+The worst one-arm-per-family product lands on the bound to 2.2e-16 in both
+directions, the ladder stays monotonic, and the clamp stays unreachable. The bound
+itself is untouched: `[0.8722, 1.1278]` and its derivation from `0.0815 / 0.6375`
+are unchanged.
+
+**#250 stays resolved**, and not by luck: `kind.user_content` outranks `len.lt50`
+under both endpoint definitions (0.1434 vs 0.0218 packet, 0.1191 vs 0.0559
+rendered), so the ordering that decides the sign does not depend on the
+correction. `LEN_UNDER_50 x KIND_USER_CONTENT = 0.9929 x 1.0203 = 1.0131`.
+
+### A harness defect the per-candidate check could not see
+
+The render check found this on its first real run, and it is worth recording
+because of *why* nothing caught it earlier.
+
+`capture._walk_stages` applied `role_predicate` and `apply_authorship_scoring` to
+every channel. `src/context/service.py:268-269` applies both to `memory_items`
+only. So on a relational query a reflection whose authorship column reads
+`unknown` took a x0.5 the pipeline never applies -- measured on one query as a
+walk score of 0.224991 against the packet's 0.449982, exactly half. And a
+reflection could be marked `excluded_by_role`, which replay's `_content_filtered`
+reads, so replay dropped reflections the pipeline keeps.
+
+`capture._validate` compares `compose()` against **the walk's own** stage scores.
+A stage the walk applies and the pipeline does not is agreed upon by both sides of
+that comparison, because the walk *is* the ground truth there. Nothing compared
+the walk to the packet until the render check did. That is the same structural
+hole one level down: a check between two things that share a mistake cannot see
+it.
+
+Fixed with `AuthorshipActivation.applies`, following the `RetrievalActivation.applies`
+pattern already in the schema for the channel that has no retrieval stage.
+
+Consequence for the figures above: the authorship arms read ST 0.0000 on both
+endpoints in the controlled comparison, and a direct probe confirms they move zero
+delivered refs under either definition. The `auth.unknown` ST of 0.1668 recorded
+in the 2026-09-30 run is from a different trace on a differently-named parameter
+vector and is **not** comparable with either column here.
+
+### Also corrected
+
+- `tools/retrieval_trace` fingerprint matching treated a multiset as a set. Walked
+  candidates and the packet are different objects, so content is the only shared
+  key, and `sha in rendered` marked every candidate sharing content. The reflection
+  channel returns three pre-gate candidates for one stored record in the test
+  corpus, so a set test marked three where one was rendered. Invisible under the
+  packet definition, because all three were in the packet anyway.
+- `SCHEMA_VERSION` 2 -> 3, and the trace fields are **renamed** (`rendered_refs`,
+  `rendered_reflection_refs`, `rendered`) rather than reinterpreted. A v2 trace
+  under the new meaning is byte-identical -- same names, same types, same lengths
+  -- so it would have loaded cleanly and reported numbers about the wrong set.
+  Renaming makes `load_run`'s keyword reconstruction fail instead.
+- Saved Sobol results now carry `trace_schema_version`, and `load_results` refuses
+  a result taken under a different endpoint definition. Before this, a stale
+  artefact was undetectable.
+- `tests/test_retrieval_trace.py`'s two delivery xfails were both mislabelled.
+  `test_replay_reproduces_the_rendered_set` was `xfail(strict=False)` under #244, a
+  reflection-SCORING concern, and `strict=False` reports neither failure nor
+  unexpected pass -- so it was silent while the memory channel diverged for an
+  unrelated reason. It is the test that should have caught #227's harness half.
+  `test_round_trip_through_disk` carried the same marker and fails on the
+  reference machine for a third reason: `TraceRun.write` correctly refuses
+  `tmp_path`, because pytest puts it under a home directory that is itself a git
+  work tree.
+- `tests/test_self_echo.py` asserted that the prior provides defence in depth for
+  an assistant answer, citing `KIND_ANSWER` at 0.9752. That constant has been 1.0
+  since the ADR-044 magnitudes were derived, and the assertion passed anyway
+  because the fixture was 46 characters, so `LEN_UNDER_50` was doing the work the
+  docstring credited to the kind term. A test can pass for a reason its own
+  docstring denies.
+
+### Follow-ups
+
+#259 (`tools/retrieval_ablation` keeps a second `delivered` defined over the packet, with
+`K_SERVICE = 6` and `K_MODEL_VISIBLE = 4`), #260 (#227's option 2: the service
+still selects 1 to 2 memory records per query that cannot reach the model), and a
+note on #252 recording the declined-topics rebind as a hypothesis for the tier
+collapse, not a cause.
+
+Not reopened by any of them: `[0.8722, 1.1278]` and `0.0815 / 0.6375`.
+
 ## Consequences
 
 **Positive**

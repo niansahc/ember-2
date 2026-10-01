@@ -306,8 +306,9 @@ class ContextService:
         #
         # memory_limit applies to the non-profile channel only; profile is not
         # charged against it. Profile already has its own prompt section, and
-        # prompt_builder.py:978-979 partitions it out a second time and caps
-        # non-profile at [:4] independently -- so subtracting the profile count
+        # The prompt partitions it out a second time and caps non-profile at
+        # render_window.MEMORY_RENDER_SLOTS independently -- so subtracting the
+        # profile count
         # here reserved no prompt space for profile. It only starved the other
         # channel before it reached a render layer that was going to separate
         # them anyway.

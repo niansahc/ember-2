@@ -450,9 +450,9 @@ def find_no_delivery_effect(run: TraceRun, names: list[str]) -> list[str]:
     show up as a nonzero ST with a near-zero S1 -- a finding, not something
     to filter out in advance.
     """
-    from .endpoints import delivered_sets
+    from .endpoints import rendered_sets
 
-    baseline = delivered_sets(run, ReplayParams())
+    baseline = rendered_sets(run, ReplayParams())
     ranges = build_ranges(run.param_defaults)
 
     flat: list[str] = []
@@ -462,7 +462,7 @@ def find_no_delivery_effect(run: TraceRun, names: list[str]) -> list[str]:
             params = ReplayParams().with_overrides(
                 **{name: ranges[name].to_value(unit)}
             )
-            if delivered_sets(run, params) != baseline:
+            if rendered_sets(run, params) != baseline:
                 moved = True
                 break
         if not moved:

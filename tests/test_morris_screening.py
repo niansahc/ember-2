@@ -129,8 +129,8 @@ def _query(query_id: str, candidates: list[CandidateTrace], **overrides) -> Quer
         min_score=0.0,
         relevance_gate_fired=False,
         candidates=candidates,
-        delivered_refs=[],
-        delivered_reflection_refs=[],
+        rendered_refs=[],
+        rendered_reflection_refs=[],
     )
     fields.update(overrides)
     return QueryTrace(**fields)
@@ -184,8 +184,8 @@ def synthetic_run() -> TraceRun:
 
     for query in run.queries:
         replay = replay_query(query)
-        query.delivered_refs = list(replay.delivered_refs)
-        query.delivered_reflection_refs = list(replay.delivered_reflection_refs)
+        query.rendered_refs = list(replay.rendered_refs)
+        query.rendered_reflection_refs = list(replay.rendered_reflection_refs)
     return run
 
 

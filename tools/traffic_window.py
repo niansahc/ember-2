@@ -469,7 +469,11 @@ def cmd_run_readonly(artefacts: Path, project_id: str | None) -> int:
                     project_id=project_id if entry.get("project") else None,
                     read_only=True,
                 )
-                outcome = f"ok delivered={len(packet.memory_items)}"
+                # "packet", not "delivered". The packet is a candidate set and
+                # the prompt renders a slice of it (src/context/render_window.py);
+                # calling this count delivery is the same conflation #227 fixed
+                # in the stats write and this change fixed in the trace harness.
+                outcome = f"ok packet={len(packet.memory_items)}"
             except Exception as exc:  # noqa: BLE001
                 outcome = f"FAILED {type(exc).__name__}"
                 failures += 1

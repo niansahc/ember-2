@@ -417,6 +417,118 @@ def _validate(trace: CandidateTrace, policy_name: str, params: ReplayParams) -> 
     return problems
 
 
+def _mark_rendered(walked, rendered_prints: list[str]) -> None:
+    """Mark exactly as many candidates rendered as the prompt rendered.
+
+    Fingerprint matching is a MULTISET problem and was being done as a set one.
+    The walked candidates and the packet are different objects -- the packet is
+    built from deep copies, so there is no identity to match on -- and content is
+    the only shared key. When two candidates carry the same content, a
+    `sha in rendered_prints` test marks both, and the trace then claims more
+    records were rendered than the prompt rendered.
+
+    It is not hypothetical and it is not only a fixture artefact: the reflection
+    channel in the test corpus returns three pre-gate candidates for one stored
+    record, so a set test marked three where one was rendered. Under the old
+    packet-based definition this was invisible, because all of them were in the
+    packet anyway.
+
+    So matches are CONSUMED, in walk order. Walk order is score-descending, the
+    same order replay sorts in, so when candidates are interchangeable by content
+    both sides pick the same one and the sets agree.
+    """
+    remaining = list(rendered_prints)
+    for walk in walked:
+        sha = walk.trace.content_sha256
+        if sha in remaining:
+            remaining.remove(sha)
+            walk.trace.rendered = True
+
+
+def _validate_render(trace: QueryTrace, params: ReplayParams) -> list[str]:
+    """Does the model reproduce the render the pipeline performed?
+
+    `_validate` does this per candidate for the stage scores, as a float
+    comparison. This is the same structure one level up and set-valued: capture
+    read the rendered set off the shipped PromptBuilder, replay derives it from
+    src/context/render_window.py, and if those disagree the window function has
+    drifted from the render it is supposed to describe.
+
+    It lives beside STAGES rather than in it. `_validate` is typed
+    dict[str, float] per candidate and tests/test_retrieval_trace.py asserts
+    `set(stage_scores) == set(STAGES)`, so a set-valued stage cannot go in that
+    table without breaking both.
+
+    Compared as sets, because membership is what the endpoint measures. Order
+    within the render is not a claim this makes -- the prompt renders profile and
+    non-profile in separate sections anyway.
+    """
+    from .replay import replay_query
+
+    replay = replay_query(trace, params)
+    problems: list[str] = []
+    for channel, modelled, captured in (
+        ("memory", replay.rendered_refs, trace.rendered_refs),
+        ("reflection", replay.rendered_reflection_refs, trace.rendered_reflection_refs),
+    ):
+        if set(modelled) != set(captured):
+            problems.append(
+                f"{channel}: model rendered {sorted(set(modelled))}, "
+                f"pipeline rendered {sorted(set(captured))} "
+                f"(only in model: {sorted(set(modelled) - set(captured))}; "
+                f"only in pipeline: {sorted(set(captured) - set(modelled))})"
+            )
+    return problems
+
+
+def _render_fingerprints(packet) -> tuple[list[str], list[str]]:
+    """What the prompt actually renders, by content fingerprint.
+
+    Drives the shipped PromptBuilder and reads `packet.delivered_items`, which
+    is where `record_rendered` reports. Both channels are rendered because they
+    have separate early returns -- a packet can render reflections and no
+    memory, or the reverse -- and `begin_render()` comes first so a second call
+    cannot accumulate onto the first.
+
+    Costs one PromptBuilder construction and two private-method calls. No LLM,
+    no embedding, no vault read: tests/test_incident_reproduction.py takes the
+    same route for the same reason, to get the model-visible window from the
+    shipped slice rather than a copy that can drift.
+
+    Writes nothing. Three independent guards make that structural rather than a
+    matter of care: build_context was called with read_only=True so no delivery
+    recorder was ever armed (src/context/models.py:101-108), and
+    retrieval_stats_disabled() guards both the service recorder and the store.
+    capture_run holds the third for the whole run.
+
+    Does NOT model prompt_guardrail.trim_to_fit, which rebuilds up to seven
+    times on the local-Ollama path and can drop every non-profile memory item.
+    Capture never touches an adapter, so no trim happens here -- but a trace is
+    therefore a statement about the untrimmed render.
+    """
+    from src.llm.prompt_builder import PromptBuilder
+
+    builder = PromptBuilder()
+    packet.begin_render()
+
+    # Split by WHICH SECTION recorded it, not by memory_type. `reflection` is in
+    # SQLITE_MEMORY_TYPES, so a reflection record can arrive through the memory
+    # channel and carry memory_type == "reflection" while being a memory
+    # candidate -- that conflation is the defect ADR-044's 2026-09-30 amendment
+    # fixed in the channel weight. The section that rendered it is the channel.
+    builder._build_reflection_section(packet)
+    reflection_rendered = list(packet.delivered_items)
+    builder._build_context_section(packet)
+    memory_rendered = packet.delivered_items[len(reflection_rendered):]
+
+    # Lists, not sets: duplicate content has to stay duplicated so _mark_rendered
+    # can consume one match per rendered record.
+    return (
+        [content_fingerprint(i.content) for i in memory_rendered],
+        [content_fingerprint(i.content) for i in reflection_rendered],
+    )
+
+
 def _mark_dedup(service: ContextService, walked) -> None:
     ordered = sorted(walked, key=lambda w: w.trace.composed_score, reverse=True)
     survivors = [
@@ -549,25 +661,35 @@ def capture_query(
         )
 
     # Outcome flags. Content-based filters are evaluated with the service's
-    # own predicates; delivery is read off the packet.
+    # own predicates; what was RENDERED comes from the shipped prompt builder.
+    #
+    # This used to read `packet.memory_items` and call it delivery. The packet
+    # is a candidate set of 4 to 6 non-profile records and the prompt renders 4
+    # (src/context/render_window.py), so the delivery endpoint was measuring a
+    # set the model never receives -- and worse, it was BLIND to the one
+    # boundary that decides whether a record is seen at all. A candidate moving
+    # between rank 4 and rank 5 leaves packet membership unchanged, so the
+    # measured distance for the most consequential reordering there is was
+    # zero. #227 fixed the production stats write the same way and the harness
+    # was not touched.
+    #
+    # Driving the real PromptBuilder rather than applying the window here is
+    # the point: it exercises the shipped early returns, so a packet whose
+    # memory_items are empty renders and records nothing, which is the correct
+    # answer and one a restatement would get wrong. The window function exists
+    # for REPLAY, which has no builder; capture is the ground truth the model
+    # is checked against. Same structure as _validate: pipeline on one side,
+    # model on the other.
     normalized_query = service._normalize_text(query)
-    delivered_fingerprints = {
-        content_fingerprint(i.content) for i in packet.memory_items
-    }
-    delivered_reflection_fingerprints = {
-        content_fingerprint(i.content) for i in packet.reflection_items
-    }
+    rendered_memory_prints, rendered_reflection_prints = _render_fingerprints(packet)
 
     for walk in walked_memory:
         walk.trace.filtered_echo_or_meta = bool(
             service._is_echo_or_meta_memory(walk.item, normalized_query)
         )
         walk.trace.filtered_low_value = bool(service._is_low_value_memory(walk.item))
-        walk.trace.delivered = walk.trace.content_sha256 in delivered_fingerprints
-    for walk in walked_reflections:
-        walk.trace.delivered = (
-            walk.trace.content_sha256 in delivered_reflection_fingerprints
-        )
+    _mark_rendered(walked_memory, rendered_memory_prints)
+    _mark_rendered(walked_reflections, rendered_reflection_prints)
 
     # Dedup is applied to the ranked, filtered list, so it has to be walked
     # in that order to mark the right member of a duplicate pair. It rarely
@@ -584,7 +706,7 @@ def capture_query(
         for walk in walked_reflections:
             walk.trace.relevance_gated_out = True
 
-    return QueryTrace(
+    trace = QueryTrace(
         query_id=query_id,
         query=query,
         policy_name=policy.name,
@@ -610,11 +732,20 @@ def capture_query(
         min_score=policy.min_score,
         relevance_gate_fired=relevance_gate_fired,
         candidates=[w.trace for w in all_walked],
-        delivered_refs=[w.trace.ref for w in walked_memory if w.trace.delivered],
-        delivered_reflection_refs=[
-            w.trace.ref for w in walked_reflections if w.trace.delivered
+        rendered_refs=[w.trace.ref for w in walked_memory if w.trace.rendered],
+        rendered_reflection_refs=[
+            w.trace.ref for w in walked_reflections if w.trace.rendered
         ],
     )
+
+    render_problems = _validate_render(trace, validation_params)
+    if render_problems:
+        raise TraceValidationError(
+            f"[{query_id}] the model does not reproduce the render:\n  "
+            + "\n  ".join(render_problems)
+        )
+
+    return trace
 
 
 def discover_project_id(vault: Path) -> str | None:

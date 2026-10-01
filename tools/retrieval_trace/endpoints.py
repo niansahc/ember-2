@@ -36,12 +36,12 @@ ENDPOINT_DELIVERY = "delivery"
 ENDPOINTS: tuple[str, ...] = (ENDPOINT_SCORE, ENDPOINT_DELIVERY)
 
 
-def delivered_sets(run: TraceRun, params: ReplayParams) -> dict[str, set[str]]:
+def rendered_sets(run: TraceRun, params: ReplayParams) -> dict[str, set[str]]:
     sets: dict[str, set[str]] = {}
     for query in run.queries:
         replay = replay_query(query, params)
-        sets[query.query_id] = set(replay.delivered_refs) | {
-            f"refl:{ref}" for ref in replay.delivered_reflection_refs
+        sets[query.query_id] = set(replay.rendered_refs) | {
+            f"refl:{ref}" for ref in replay.rendered_reflection_refs
         }
     return sets
 
@@ -60,7 +60,7 @@ class EndpointEvaluator:
 
     def __post_init__(self) -> None:
         if not self.baseline_delivery:
-            self.baseline_delivery = delivered_sets(self.run, ReplayParams())
+            self.baseline_delivery = rendered_sets(self.run, ReplayParams())
 
     def evaluate(self, params: ReplayParams) -> dict[str, float]:
         per_query_score: list[float] = []
@@ -74,8 +74,8 @@ class EndpointEvaluator:
                 # retrieved fewer.
                 per_query_score.append(fmean(s.score for s in replay.scored))
 
-            delivered = set(replay.delivered_refs) | {
-                f"refl:{ref}" for ref in replay.delivered_reflection_refs
+            delivered = set(replay.rendered_refs) | {
+                f"refl:{ref}" for ref in replay.rendered_reflection_refs
             }
             baseline = self.baseline_delivery[query.query_id]
             union = delivered | baseline

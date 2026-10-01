@@ -493,6 +493,14 @@ def unclamped(
     because assemble() clamps. It previously kept its own copy of this product,
     which meant a sixth family added to assemble() and not to the copy would
     leave the central assertion passing while measuring the wrong thing.
+
+    Returns the product UNCLAMPED, which is the whole point and is worth saying
+    because it did not. When this function was split out of assemble() the
+    trailing `return clamp(prior)` came with it, so `unclamped` clamped: the
+    unreachability test then compared a clamped value against the bound it was
+    clamped to and could not fail, and the clamp counters fired twice per
+    assemble(). The product has to be able to leave the bound here, or nothing
+    is watching whether it does.
     """
     prior = 1.0
 
@@ -511,4 +519,4 @@ def unclamped(
     if count("prior.reflection_path", is_reflection):
         prior *= REFLECTION_DISCOUNT
 
-    return clamp(prior)
+    return prior

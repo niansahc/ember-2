@@ -35,6 +35,7 @@ from __future__ import annotations
 import contextlib
 import inspect
 import itertools
+from unittest.mock import patch
 
 import pytest
 
@@ -281,6 +282,67 @@ class TestTheBoundItself:
             f"the clamp is still doing enforcement rather than assertion. First: "
             f"{escaped[0]}"
         )
+
+    def test_the_unreachability_check_can_actually_fail(self):
+        """The control for the test above, and the reason it is needed.
+
+        The unreachability test asserts an ABSENCE -- no combination leaves the
+        bound -- and ADR-044 records the rule for those: an absence needs a
+        positive precondition that the thing could have happened. It did not
+        have one, and it was vacuous for a release. `unclamped` was split out of
+        `assemble` and the trailing `return clamp(prior)` came with it, so the
+        test compared a clamped value against the bound it had just been clamped
+        to. It could not fail for any input.
+
+        So this feeds `unclamped` a magnitude the derivation would never produce
+        and asserts the product DOES leave the bound. If this test ever fails,
+        the unreachability test above has stopped measuring anything.
+        """
+        with _out_of_contract_kind("experience", 5.0):
+            raw = prior.unclamped(
+                content_kind="experience", content_length=600, recency_bucket="d7"
+            )
+        assert raw > prior.PRIOR_MAX, (
+            f"unclamped returned {raw}, inside the bound, for a kind factor of "
+            f"5.0. It is clamping, which makes "
+            f"test_the_clamp_is_unreachable_at_shipped_magnitudes vacuous."
+        )
+
+    def test_the_clamp_is_evaluated_once_per_assemble(self, tmp_path, monkeypatch):
+        """Two clamps in one call double every clamp counter.
+
+        The counters are the only thing that would report a future term breaking
+        the allocation (see test_the_clamp_rate_is_observable), so a rate read
+        off them has to mean what it says. While `unclamped` clamped, every
+        assemble() evaluated the guard twice and any observed rate was 2x.
+
+        Writes to a counter database under tmp_path, and steps around the pytest
+        guard deliberately, following tests/test_guard_counters.py -- the
+        recorder is normally inert under pytest, which is the feature there and
+        an obstacle here.
+        """
+        import src.observability.guard_counters as gc
+
+        db = tmp_path / "counters" / "guard_counters.db"
+        monkeypatch.setenv(gc.ENV_DB_PATH, str(db))
+        gc.close_connections()
+        try:
+            with patch.object(gc, "_under_pytest", return_value=False):
+                with gc.recording():
+                    prior.assemble(
+                        content_kind="experience",
+                        content_length=600,
+                        recency_bucket="d7",
+                    )
+            rows = {row["site"]: row for row in gc.read_all(db)}
+        finally:
+            gc.close_connections()
+
+        for site in ("prior.clamped_low", "prior.clamped_high"):
+            assert rows[site]["evaluations"] == 1, (
+                f"{site} was evaluated {rows[site]['evaluations']} times for one "
+                f"assemble() call; the clamp is being applied more than once"
+            )
 
     def test_the_worst_case_per_family_lands_exactly_on_the_bound(self):
         """Tight, not merely inside -- which is what makes the clamp unreachable.

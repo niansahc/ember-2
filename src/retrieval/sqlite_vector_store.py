@@ -39,12 +39,58 @@ import math
 import re
 import sqlite3
 import struct
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from src.core.timestamps import parse_vault_timestamp
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RetrievalStatsWrite:
+    """What one retrieval-stat write actually did.
+
+    `requested` and `matched` are carried separately because the difference
+    between them is the only thing that distinguishes a KEY MISMATCH from a
+    legitimate no-op, and that distinction has cost this project a
+    measurement twice.
+
+    The first time was the ADR-015 defect: `ContextItem.id` was passed where
+    `vectors.id` was wanted, every SELECT returned None, every record was
+    skipped, and `frequency_score` never moved for anything but reflections.
+    Nothing reported it. The second was the reverse reading -- `#252` named
+    "retrieval stats are not being written" as its leading hypothesis, and
+    the measured zeros were consistent with both a live defect and a
+    deliberate reset of a working mechanism. A matched count tells those
+    apart on the spot instead of by archaeology over database backups.
+
+    `requested == 0` is the no-op: nothing was asked for. `matched == 0` with
+    `requested > 0` is the mismatch signature, because the ids handed to this
+    store come from records retrieval just produced, so every one of them
+    should be in the table it was read from.
+
+    There are THREE outcomes here and not two, which is why `suppressed` is a
+    field rather than being folded into a zero. A read-only replay asks for
+    records and writes none on purpose; that is not a mismatch, and reporting
+    it as one would hand every harness run a false alarm. `suppressed` is the
+    difference between "declined to write" and "tried and hit nothing".
+    """
+
+    requested: int
+    matched: int
+    suppressed: bool = False
+
+    @property
+    def missed(self) -> int:
+        return 0 if self.suppressed else self.requested - self.matched
+
+    @property
+    def all_missed(self) -> bool:
+        """The key-mismatch signature, as opposed to one stale id."""
+        return not self.suppressed and self.requested > 0 and self.matched == 0
+
 
 # Separator between a colliding record's id and its disambiguating counter.
 # See SqliteVectorStore.insert (issue #210).
@@ -453,10 +499,16 @@ class SqliteVectorStore:
             pass  # column already exists
         self._conn.commit()
 
-    def update_retrieval_stats(self, record_ids: list[str]) -> None:
+    def update_retrieval_stats(self, record_ids: list[str]) -> RetrievalStatsWrite:
         """
         Decay-then-increment frequency_score and set last_retrieved_at for
         selected records (ADR-015 amendment, implementation step 4).
+
+        Returns a RetrievalStatsWrite so a caller, a test or an operator can
+        tell a key mismatch from a no-op. See that class for why: an id that
+        misses this table used to `continue` in silence, which is not even a
+        zero-rowcount UPDATE -- the SELECT returns None and the loop moves on,
+        with no log, no exception and no counter.
 
         Called after final context packet assembly — only records that were
         actually selected for the prompt get their stats updated.
@@ -482,7 +534,7 @@ class SqliteVectorStore:
         flooring any record retrieved 4+ times at warm-or-hotter.
         """
         if not record_ids:
-            return
+            return RetrievalStatsWrite(requested=0, matched=0)
 
         # Last line of defense for read-only replay. build_context's
         # read_only flag is a per-call opt-in and the ablation harness did
@@ -496,13 +548,17 @@ class SqliteVectorStore:
                 "read-only mode is active",
                 len(record_ids),
             )
-            return
+            return RetrievalStatsWrite(
+                requested=len(record_ids), matched=0, suppressed=True
+            )
 
         from src.core.config import get_tier_recency_halflife_days
 
         halflife = get_tier_recency_halflife_days()
         now_dt = datetime.now()
         now_str = now_dt.strftime("%Y-%m-%dT%H-%M-%S")
+
+        matched = 0
 
         for record_id in record_ids:
             row = self._conn.execute(
@@ -511,7 +567,12 @@ class SqliteVectorStore:
                 (record_id,),
             ).fetchone()
             if row is None:
+                # Counted, not swallowed. This `continue` is where the
+                # ADR-015 key defect lived for months: a SELECT that returns
+                # None is not a zero-rowcount UPDATE, it is no statement at
+                # all, so there was nothing for anybody to notice.
                 continue
+            matched += 1
 
             old_frequency = row["frequency_score"] or 0.0
             reference = row["last_retrieved_at"] or row["created_at"]
@@ -535,6 +596,34 @@ class SqliteVectorStore:
                 (new_frequency, now_str, record_id),
             )
         self._conn.commit()
+
+        result = RetrievalStatsWrite(requested=len(record_ids), matched=matched)
+
+        # The detector. Counts only, never an id: a record id is vault content
+        # (CLAUDE.md Vault Privacy Rule) and logs/ is inside the repo tree.
+        #
+        # all_missed is reported separately and more loudly because it is a
+        # different diagnosis, not a worse version of the same one. One id
+        # missing is a record deleted or re-indexed between retrieval and
+        # delivery. EVERY id missing means the key is wrong, which cannot be a
+        # property of the corpus: these ids were produced by reading this table.
+        if result.all_missed:
+            logger.warning(
+                "[TIERING] retrieval-stat write matched 0 of %d record id(s). "
+                "Every id missed the vectors table, which is a key mismatch "
+                "rather than stale ids: this store is keyed on vectors.id and "
+                "the caller must supply ContextItem.store_id, not .id "
+                "(ADR-015 amendment, step 4).",
+                result.requested,
+            )
+        elif result.missed:
+            logger.warning(
+                "[TIERING] retrieval-stat write matched %d of %d record id(s); "
+                "%d id(s) are not in the vectors table and were skipped.",
+                result.matched, result.requested, result.missed,
+            )
+
+        return result
 
     def _check_column_exists(self, column_name: str) -> bool:
         """Check if a column exists in the vectors table."""

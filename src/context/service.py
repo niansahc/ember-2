@@ -490,6 +490,21 @@ class ContextService:
 
         Only called on records that made it into the final context packet.
         Runs in a try/except so retrieval stat failures never crash context building.
+
+        The except is LOGGED rather than bare. It was `except Exception: pass`,
+        which is the right behaviour and the wrong report: a store that raised
+        on every turn was indistinguishable from a store that wrote cleanly,
+        and both looked identical to the deliberate reset #252 turned out to be
+        describing. The handler still swallows -- a stats failure must never
+        cost a user their answer -- but it no longer does so in silence.
+
+        A guard counter is deliberately NOT used here, and that is worth
+        stating because it is the obvious instrument and it would be dead.
+        `build_context` opens the counter scope and returns; this method is
+        invoked later by `ContextPacket.commit_delivery` from the adapter, once
+        the prompt is final, so it runs OUTSIDE the scope and `count()` would
+        record nothing -- in production as well as under pytest. The log is the
+        durable channel at this site.
         """
         try:
             from src.retrieval.retrieval_stats import retrieval_stats_disabled_now
@@ -523,6 +538,21 @@ class ContextService:
                 elif mem_type in {"conversation", "profile", "reflection", "journal"}:
                     memory_ids.append(record_id)
 
+            # Armed, fired, and nothing routable. The third silent case, and
+            # one level up from the key mismatch the store now detects: if
+            # every delivered record lost its store_id, both lists are empty,
+            # both stores are skipped, and the write reports success by doing
+            # nothing. That is the ADR-015 defect's exact signature at the
+            # routing step rather than at the SELECT.
+            if items and not memory_ids and not ingested_ids:
+                logger.warning(
+                    "[CONTEXT] retrieval-stat write routed 0 of %d delivered "
+                    "record(s) to a store: no record carried a store_id, or "
+                    "none carried a routable memory_type. Nothing was written.",
+                    len(items),
+                )
+                return
+
             memory_store = _get_memory_store()
             if memory_store and memory_ids:
                 memory_store.update_retrieval_stats(memory_ids)
@@ -531,8 +561,17 @@ class ContextService:
             if sqlite_store and ingested_ids:
                 sqlite_store.update_retrieval_stats(ingested_ids)
 
-        except Exception:
-            pass  # retrieval stats are best-effort, never crash context building
+        except Exception as exc:
+            # Swallowed on purpose, reported on purpose. The exception TYPE and
+            # the count only: an exception message can carry a record id or a
+            # parameter value, and a record id is vault content (CLAUDE.md
+            # Vault Privacy Rule) while logs/ sits inside the repo tree.
+            logger.warning(
+                "[CONTEXT] retrieval-stat write failed for %d delivered "
+                "record(s): %s. Retrieval stats are best-effort and the turn "
+                "is unaffected, but tiering's only upward path did not run.",
+                len(items), type(exc).__name__,
+            )
 
     def _apply_type_gate(self, items: list, policy) -> list:
         """

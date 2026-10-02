@@ -1,8 +1,44 @@
 """
 tests/test_incident_reproduction.py
 
-Permanent regression suite for the three retrieval incidents that have real
-production provenance, plus the arm comparison that ADR-044 deferred.
+Permanent regression suite for the retrieval incidents that have real production
+provenance, plus the arm comparison that ADR-044 deferred.
+
+Three of them are closed defects and are guarded here. The fourth and fifth are
+#207, which is OPEN, and it is different in three ways that are called out where
+they bite rather than hidden behind the shared machinery.
+
+Its provenance is an issue rather than a fix commit, because it had never been
+reproduced. What the reproduction found is that #207's open question -- did the
+successor lose on score or was it never a candidate -- has two answers depending
+on one property of the successor, and neither is "it lost on score":
+
+  user-authored successor:      delivered. Nothing between retrieval and the
+                                render removes it, so it is a plain regression
+                                guard and carries no xfail.
+  assistant-authored successor: removed by the role predicate before selection,
+                                and the freed slot is taken by an unrelated
+                                filler. That one carries a strict xfail naming
+                                the issue that owns it, because the removal is
+                                shipped policy under ADR-044 4a rather than a
+                                defect in this suite -- and strict means an
+                                unexpected pass fails too, so the day that
+                                policy changes this suite says so rather than
+                                going quietly green.
+
+It runs through the REAL `ContextService._build_context` over a stubbed
+retriever, not the hand-assembled stage chain the other three use. #207's open
+question is which stage removes the successor, and the stage chain does not run
+the type gate, the relevance gate, the content filters, dedup, the policy limit
+or diversity selection. The relevance gate cannot be called at all -- it is
+inline in `_build_context` with an undeclared second threshold -- so a ladder
+that reproduced it would be restating shipped logic, which is the mistake
+recorded at the role-predicate call site below.
+
+And it is measured twice, by two instruments that must agree: the shipped trace
+harness `capture_query`, which emits CandidateTrace's per-stage flags and aborts
+if its model of the stages disagrees with the real ones, and the rendered prompt
+itself.
 
 Why this exists
 ---------------
@@ -66,6 +102,8 @@ Rule).
 from __future__ import annotations
 
 import contextlib
+import copy
+import datetime as dt
 from dataclasses import dataclass
 from unittest.mock import patch
 
@@ -74,7 +112,9 @@ import pytest
 import src.context.role_predicate as role_predicate_module
 import src.retrieval.semantic_search as ss
 from src.context.models import ContextItem, ContextPacket
+from src.context.policies import ContextPolicy
 from src.context.ranker import ContextRanker
+from src.context.service import ContextService
 from src.llm.prompt_builder import PromptBuilder
 
 # ---------------------------------------------------------------------------
@@ -117,6 +157,20 @@ def _item(
     )
 
 
+def _days_ago(days: int) -> str:
+    """A vault-format timestamp, relative to now rather than a literal.
+
+    The three original fixtures carry a fixed literal, which is fine for them:
+    nothing they measure depends on an age. #207 is an age incident -- the
+    predecessor's 74 weeks against the successor's few days is the condition --
+    and the recency arm of the prior, the `[recorded ...]` label and the
+    confidence band are all computed from the gap to now. A literal would let
+    the fixture drift into a different recency bucket and a different confidence
+    band as the repo ages, which is a condition-dependent test by construction.
+    """
+    return (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y-%m-%dT%H-%M-%S")
+
+
 @dataclass(frozen=True)
 class Incident:
     key: str
@@ -125,6 +179,20 @@ class Incident:
     items: tuple
     note: str
     endpoint: str  # "presence" or "order" -- see below
+
+    # Set when the shipped arm is NOT expected to pass, naming the issue that
+    # owns the failure. The three original incidents leave it None: they are
+    # closed defects and a failure there is a regression. #207 is open, so a
+    # failure there is the measurement, and `_params` turns this into a strict
+    # xfail so the suite reports it without going red on a known-open issue --
+    # and fails loudly if it ever starts passing silently.
+    open_issue: str | None = None
+
+    # Which runner produces the model-visible text. "stage_chain" is the
+    # original hand-assembled sequence; "pipeline" runs the real
+    # ContextService._build_context over a stubbed retriever. See
+    # `_pipeline_visible_text` for why #207 needs the second one.
+    via: str = "stage_chain"
 
 
 def _self_echo() -> Incident:
@@ -290,8 +358,150 @@ def _entity_confusion() -> Incident:
     )
 
 
-INCIDENTS = (_self_echo(), _relational_contamination(), _entity_confusion())
+def _superseded_fact(successor_role: str) -> Incident:
+    """#207, open. The first fixture here whose provenance is an issue.
+
+    A query about a current biographical fact returned a record roughly 74 weeks
+    old and the response asserted its content in the present tense. A later
+    record in the same vault contradicts that fact and was not delivered. #207
+    is explicit that it does not establish WHY: "Whether the contradicting
+    record lost on score or never entered the candidate set is not established."
+    This fixture is how that gets established.
+
+    The structural condition: predecessor ahead on cosine and old, successor
+    behind on cosine and recent, both in the candidate pool by construction, so
+    whatever happens to the successor downstream is attributable to a stage
+    rather than to retrieval.
+
+    Three construction choices that are deductions rather than preferences.
+
+    The predecessor is NOT a profile record. `_build_retrieval_confidence` is
+    computed over non-profile items only, and a profile-only packet gets no
+    confidence block at all, so #207's Failure 2 -- the low-confidence line
+    firing -- could not have happened if the delivered record were profile.
+
+    One unrelated profile record IS in the fixture. `has_profile` is computed
+    over the whole packet, and ADR-046 measured `reserved_slots.profile_present`
+    at 36 of 36 turns, so the profile authority-rules block was in the prompt on
+    the incident turn. Without a profile record here the arm below measures
+    nothing.
+
+    The successor's authorship is an AXIS, not a stipulation. #266 measured that
+    on the real vault every supersession-candidate pair was assistant-authored
+    and all five removals were `excluded_by_role`. Stipulating that would decide
+    "which stage removes it" by construction and then report the construction as
+    a finding. Both variants run.
+    """
+    assert successor_role in {"user", "assistant"}
+    # Cosines derived from the production measurement rather than invented.
+    # prior.COSINE_MEAN_RANK1 is the measured mean top-1 raw cosine on this
+    # vault and COSINE_SPREAD the measured top-8 spread (#236), so "the
+    # predecessor is a rank-1-strength match and the successor is one spread
+    # behind it" is a statement about the embedder rather than a number chosen
+    # to make the fixture work. Invented cosines above the measured rank-1 mean
+    # would put the whole fixture in territory the corpus does not produce,
+    # which is the error ADR-044 records against the synthetic ablation corpus.
+    from src.context import prior
+
+    lead = prior.COSINE_MEAN_RANK1
+    trail = prior.COSINE_MEAN_RANK1 - prior.COSINE_SPREAD
+    return Incident(
+        key=f"superseded_{successor_role}",
+        provenance=f"#207 / successor_role={successor_role}",
+        query="what is my current job title",
+        items=(
+            # The decoy: the superseded fact, ahead on cosine, 74 weeks old.
+            _item(
+                "sup_predecessor",
+                f"{MARK_WRONG} my job title is systems analyst on the "
+                "integrations team and it has been that for a good while now.",
+                role="user",
+                content_kind="user_content",
+                score=lead,
+                timestamp=_days_ago(518),
+            ),
+            # The answer: the successor, behind on cosine, recent.
+            _item(
+                "sup_successor",
+                f"{MARK_RIGHT} i moved off integrations and my job title is "
+                "platform lead as of the reorganisation last month.",
+                role=successor_role,
+                content_kind="user_content" if successor_role == "user" else "answer",
+                authorship="first_person" if successor_role == "user" else "mixed",
+                score=trail,
+                timestamp=_days_ago(4),
+            ),
+            # Unrelated profile record, present for the reason in the docstring.
+            _item(
+                "sup_profile",
+                "prefers direct answers with no preamble and no closing question",
+                memory_type="profile",
+                score=trail,
+                timestamp=_days_ago(200),
+            ),
+            *[
+                _item(f"sup_filler_{i}",
+                      f"an unrelated record number {i} about something else "
+                      "entirely, with enough length to clear the short-content "
+                      "floor and no job title in it",
+                      role="user", content_kind="user_content",
+                      # Inside the measured spread, below the successor, so the
+                      # fillers crowd the window without displacing it.
+                      score=trail - 0.01 * (i + 1),
+                      timestamp=_days_ago(60 + i * 10))
+                for i in range(5)
+            ],
+        ),
+        note=(
+            "the successor reaches the model alongside the predecessor"
+            if successor_role == "user"
+            else "role exclusion removes the successor before selection"
+        ),
+        # See `_verdict` for why this is not `presence`.
+        endpoint="delivery",
+        # Measured, not predicted. The user variant PASSES on current main: with
+        # the successor in the candidate pool, nothing between retrieval and the
+        # render removes it. So it is a plain regression guard and carries no
+        # xfail -- the day a stage starts eating it, this suite says so.
+        #
+        # The assistant variant fails, and the failure is shipped policy rather
+        # than a defect in this suite: ADR-044 4a's role predicate drops
+        # assistant-authored records on every query, before selection. Whether a
+        # correction the assistant wrote may supersede a user-stated fact is the
+        # question that owns it, and it is not this file's to answer.
+        open_issue=None if successor_role == "user" else "#270",
+        via="pipeline",
+    )
+
+
+INCIDENTS = (
+    _self_echo(),
+    _relational_contamination(),
+    _entity_confusion(),
+    _superseded_fact("user"),
+    _superseded_fact("assistant"),
+)
 INCIDENTS_BY_KEY = {i.key: i for i in INCIDENTS}
+
+
+def _params(keys=None):
+    """Parametrize ids, carrying a strict xfail for any incident still open.
+
+    Only `test_shipped_suppresses_the_decoy` uses this. The construction guards
+    deliberately do not: a fixture that fails to reproduce its own condition is
+    a defect in this file, not a known-open issue, and must fail outright.
+    """
+    incidents = INCIDENTS if keys is None else [INCIDENTS_BY_KEY[k] for k in keys]
+    out = []
+    for incident in incidents:
+        if incident.open_issue is None:
+            out.append(incident.key)
+        else:
+            out.append(pytest.param(incident.key, marks=pytest.mark.xfail(
+                strict=True,
+                reason=f"{incident.open_issue} open: {incident.note}",
+            )))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -361,9 +571,141 @@ def _arm(name: str):
 ARMS = ("shipped", "reduced", "reduced+role_predicate", "reduced+entity_boost")
 
 
+def _arms_for(incident: Incident) -> tuple[str, ...]:
+    """Which arms mean anything for this incident.
+
+    The four arms above all patch functions that live INSIDE semantic_search or
+    the ranker's retrieval-stage pile. A pipeline-run incident stubs
+    `retriever.retrieve`, which is downstream of every one of them, so all four
+    arms would produce byte-identical output and the matrix would show four
+    columns of the same number as though that were a result. The #207 arm that
+    does mean something is the prompt-level one, and it has its own section at
+    the end of this file because it cannot be measured on the presence endpoint.
+    """
+    return ("shipped",) if incident.via == "pipeline" else ARMS
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
+
+PIPELINE_POLICY = ContextPolicy(name="default")
+
+
+def _retrieved_items(incident: Incident) -> list:
+    """What `semantic_search` would have returned for this fixture's candidates.
+
+    The fixture stipulates a cosine. `ContextRetriever.retrieve` hands
+    `_build_context` records whose `score` is that cosine PLUS the two
+    retrieval-stage adjustments, with the cosine itself preserved in
+    `metadata["raw_score"]` -- `semantic_search.py:105-110`, and the two
+    functions in that order.
+
+    Restating those two lines is unavoidable: the fixture exists to replace the
+    embedding call, so something has to play its part, and the suite's docstring
+    gives the reason -- a real search would return a cosine that is a property of
+    the embedder rather than a controlled input.
+
+    What makes it different from the restatement recorded at the role-predicate
+    call site is that it is CHECKED rather than trusted. The trace harness
+    recomputes every stage from its own model of the pipeline and aborts the
+    capture if this sequence is wrong. The first version of this function omitted
+    both adjustments, and `_validate` refused the capture with a 0.06 delta on
+    every record carrying a query term. A restatement with a validator behind it
+    is a different thing from one without.
+
+    Fresh deep copies, because every downstream stage mutates `item.score` in
+    place and a second run over the same objects would score scored items.
+    """
+    normalized_query = ss.normalize_text(incident.query)
+    query_terms = ss.extract_query_terms(normalized_query)
+
+    items = []
+    for item in copy.deepcopy(list(incident.items)):
+        normalized_content = ss.normalize_text(item.content)
+        raw = float((item.metadata or {}).get("raw_score", item.score))
+        score = raw
+        score += ss.lexical_relevance_bonus(
+            normalized_query, query_terms, normalized_content,
+            raw_query=incident.query,
+        )
+        score += ss.query_intent_adjustment(
+            normalized_query, item.memory_type, normalized_content,
+        )
+        item.score = score
+        item.metadata = dict(item.metadata or {}, raw_score=raw)
+        items.append(item)
+    return items
+
+
+def _run_pipeline(incident: Incident, *, suppress_profile_authority: bool = False):
+    """One run of the fixture through the real ContextService._build_context.
+
+    Returns (packet, prompt_text).
+
+    Why this and not the stage chain below. The stage chain reproduces four
+    retrieval-stage functions and then calls the ranker and the prompt builder;
+    it does NOT run the ADR-018 type gate, the relevance gate, the content
+    filters, dedup, the policy limit or diversity selection. For #207 the
+    question IS which of those removes the successor, so a runner that skips
+    most of them cannot answer it.
+
+    The relevance gate in particular cannot be called at all: it is inline in
+    `_build_context` with an undeclared second threshold for ingested records,
+    so any ladder that reproduced it would be restating shipped logic -- which
+    is precisely what the comment at the role-predicate call site above records
+    as having cost this suite a real defect.
+
+    Stubbing `retriever.retrieve` is the established seam for this
+    (tests/test_profile_slot_budget.py does the same), and it is the same seam
+    the shipped trace harness uses. `classify_query` is pinned because it calls
+    the ADR-034 intent classifier, which reaches Ollama; the policy is `default`
+    because that is the only policy whose relevance gate opens, and its memory
+    limit of 6 against a render of 4 is the boundary #264 showed decides
+    membership. A different policy changes the limit and the diversity flag, so
+    the ladder prints the policy it ran under.
+
+    Fresh deep copies per run, because every stage mutates `item.score` in
+    place: a second run over the same objects would score already-scored items.
+    """
+    items = _retrieved_items(incident)
+    service = ContextService()
+    builder = PromptBuilder()
+
+    with patch("src.context.service.classify_query", return_value=PIPELINE_POLICY), \
+         patch.object(service.retriever, "retrieve",
+                      return_value=([], [], items, [], None)):
+        packet = service.build_context(
+            incident.query, read_only=True, skip_web_search=True
+        )
+
+    # build_prompt calls begin_render itself (prompt_builder.py:371) and the
+    # shipped renderer records what it rendered, so delivered_items after this
+    # is the model-visible set rather than a restatement of the window.
+    if suppress_profile_authority:
+        with patch(
+            "src.llm.prompt_builder._AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION", ""
+        ):
+            prompt = builder.build_prompt(packet)
+    else:
+        prompt = builder.build_prompt(packet)
+
+    return packet, prompt
+
+
+def _pipeline_visible_text(incident: Incident, arm: str) -> str:
+    """The pipeline runner's answer to the same question `_model_visible_text` asks.
+
+    The markers only ever occur in record content, so searching the whole prompt
+    is equivalent to searching the memory section for a presence endpoint, and
+    it is the prompt that carries the authority rules the arm at the end of this
+    file varies.
+    """
+    if arm != "shipped":  # pragma: no cover
+        raise ValueError(f"{incident.key} runs only the shipped arm; see _arms_for")
+    _packet, prompt = _run_pipeline(incident)
+    return prompt
+
 
 def _model_visible_text(incident: Incident, arm: str) -> str:
     """Render what the model would actually see, for one incident under one arm.
@@ -372,6 +714,9 @@ def _model_visible_text(incident: Incident, arm: str) -> str:
     the real prompt builder, so the [:4] slice and the label rendering are the
     shipped ones rather than a copy that can drift.
     """
+    if incident.via == "pipeline":
+        return _pipeline_visible_text(incident, arm)
+
     with _arm(arm) as role_predicate:
         normalized_query = ss.normalize_text(incident.query)
         query_terms = ss.extract_query_terms(normalized_query)
@@ -462,6 +807,23 @@ def _verdict(incident: Incident, arm: str) -> tuple[bool, bool, bool]:
     if incident.endpoint == "order":
         ordered = right and (not wrong or right_at < wrong_at)
         return right, wrong, ordered
+    if incident.endpoint == "delivery":
+        # #207. The answer must reach the model; the decoy's presence is not the
+        # harm and is reported without being judged.
+        #
+        # Presence would be the wrong endpoint here, for the same reason it is
+        # wrong for the entity incident and in the same words: it would mark the
+        # arm FAIL and measure the window size rather than the mechanism. A
+        # superseded fact delivered ALONGSIDE its successor, both honestly dated
+        # with an age label, is the configuration the Memory Trust Gap paper
+        # measures 8B stale-value following at 0.00 in -- so "both present" is
+        # not the incident, it is the condition under which the model gets it
+        # right. Suppressing the predecessor is what ADR-045 proposes; it is not
+        # a property this pipeline has or a failure for lacking.
+        #
+        # What #207 is about is the successor's ABSENCE. That is what this
+        # endpoint tests and nothing else.
+        return right, wrong, right
     raise ValueError(incident.endpoint)  # pragma: no cover
 
 
@@ -469,12 +831,18 @@ def _verdict(incident: Incident, arm: str) -> tuple[bool, bool, bool]:
 # The shipped arm must pass all three. These are the regression guards.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("key", [i.key for i in INCIDENTS])
+@pytest.mark.parametrize("key", _params())
 def test_shipped_suppresses_the_decoy(key: str) -> None:
     """The incident does not recur on the shipped pipeline.
 
     If one of these starts failing, the corresponding production incident has
     regressed. Each names its own commit so the failure is traceable.
+
+    The two #207 cases carry a strict xfail from `_params` because the issue is
+    open: there, a failure is the measurement rather than a regression, and
+    `strict=True` makes an unexpected PASS fail too, so the day the pipeline
+    starts delivering the successor this test says so instead of going quietly
+    green.
     """
     incident = INCIDENTS_BY_KEY[key]
     right, _wrong, passed = _verdict(incident, "shipped")
@@ -668,7 +1036,7 @@ def test_emit_arm_matrix(capsys) -> None:
     """
     rows = []
     for incident in INCIDENTS:
-        for arm in ARMS:
+        for arm in _arms_for(incident):
             right, wrong, passed = _verdict(incident, arm)
             rows.append((incident.key, arm, right, wrong,
                          "PASS" if passed else "FAIL"))
@@ -692,3 +1060,284 @@ def test_emit_arm_matrix(capsys) -> None:
                   f"{str(right):>7} {str(wrong):>7}  {verdict}")
 
     assert rows
+
+
+# ---------------------------------------------------------------------------
+# #207: the stage ladder. Which stage removes the successor, or does it survive.
+# ---------------------------------------------------------------------------
+
+# The flags below are CandidateTrace's, named exactly as the schema names them.
+# There is no `score_gated_out`: the min_score half of the ADR-018 gate is folded
+# into `type_gated_out`, so `type_eligible=True` with `type_gated_out=True` reads
+# as "the right type, dropped on score" (capture.py:371-374). The raw-cosine
+# relevance gate is the separate `relevance_gated_out`.
+#
+# `in_packet` is DERIVED, not a trace flag, and it is here because capture has no
+# flag for the two stages between the packet and the render: the policy limit and
+# diversity selection. Both are visible only as `rendered=False`, so without this
+# column "dropped by a gate" and "ranked out of the window" are indistinguishable.
+LADDER_COLUMNS = (
+    "store_id", "authorship", "age_days", "raw_cosine", "composed_score",
+    "type_eligible", "type_gated_out", "relevance_gated_out",
+    "filtered_echo_or_meta", "filtered_low_value", "excluded_by_role",
+    "deduped_out", "in_packet", "rendered",
+)
+
+
+def _stage_ladder(incident: Incident) -> tuple[list[dict], list[str]]:
+    """Per-candidate stage attribution, plus the delivered set in render order.
+
+    Instrument: the shipped trace harness, `capture_query`, over the same stubbed
+    retriever `_run_pipeline` uses. It is the right instrument for three reasons
+    and one of them is the point of this file.
+
+    First, it emits the flags above per candidate rather than requiring a
+    restatement of each stage's predicate.
+
+    Second, it self-validates. `_validate` recomputes every stage score from the
+    recorded activations and raises `TraceValidationError` if the model and the
+    pipeline disagree by more than 1e-12, and `_validate_render` raises if
+    `render_window` disagrees with what `PromptBuilder` actually rendered. So a
+    ladder that reported a stage attribution the pipeline does not produce would
+    abort rather than print.
+
+    Third, `rendered` comes from driving the real prompt builder, not from
+    applying the window here.
+
+    The successor's `rendered` flag is then cross-checked against the marker in
+    the prompt from `_run_pipeline`, which is a second instrument reaching the
+    same conclusion by a different route. Two instruments agreeing is the only
+    reason to believe either.
+    """
+    from tools.retrieval_trace.capture import capture_query
+
+    items = _retrieved_items(incident)
+    service = ContextService()
+
+    # Both bindings. capture_query calls classify_query itself, and that call
+    # reaches the ADR-034 intent classifier, which reaches Ollama.
+    with patch("tools.retrieval_trace.capture.classify_query",
+               return_value=PIPELINE_POLICY), \
+         patch("src.context.service.classify_query", return_value=PIPELINE_POLICY), \
+         patch.object(service.retriever, "retrieve",
+                      return_value=([], [], items, [], None)):
+        trace = capture_query(
+            incident.query, incident.key, service=service, include_content=True
+        )
+
+    packet, _prompt = _run_pipeline(incident)
+    in_packet = {getattr(i, "store_id", None) for i in packet.memory_items}
+
+    rows = []
+    for candidate in trace.candidates:
+        rows.append({
+            "store_id": candidate.store_id,
+            "authorship": candidate.authorship,
+            "age_days": candidate.age_days,
+            "raw_cosine": round(candidate.retrieval.raw_cosine, 4),
+            "composed_score": round(candidate.composed_score, 4),
+            "type_eligible": candidate.type_eligible,
+            "type_gated_out": candidate.type_gated_out,
+            "relevance_gated_out": candidate.relevance_gated_out,
+            "filtered_echo_or_meta": candidate.filtered_echo_or_meta,
+            "filtered_low_value": candidate.filtered_low_value,
+            "excluded_by_role": candidate.excluded_by_role,
+            "deduped_out": candidate.deduped_out,
+            "in_packet": candidate.store_id in in_packet,
+            "rendered": candidate.rendered,
+        })
+    return rows, list(trace.rendered_refs)
+
+
+def _ladder_row(incident: Incident, store_id: str) -> dict:
+    rows, _refs = _stage_ladder(incident)
+    return next(r for r in rows if r["store_id"] == store_id)
+
+
+@pytest.mark.parametrize("key", ["superseded_user", "superseded_assistant"])
+def test_both_records_are_candidates_by_construction(key: str) -> None:
+    """The construction guard that makes the ladder attributable.
+
+    If either record were absent from the candidate pool, "which stage removed
+    the successor" would have no answer and the fixture would be measuring
+    retrieval, which it stubs. #207 declines to say whether the real successor
+    was ever a candidate; this fixture stipulates that it was, so that whatever
+    happens downstream is attributable to a stage.
+    """
+    rows, _refs = _stage_ladder(INCIDENTS_BY_KEY[key])
+    ids = {r["store_id"] for r in rows}
+    assert {"sup_predecessor", "sup_successor"} <= ids
+
+
+@pytest.mark.parametrize("key", ["superseded_user", "superseded_assistant"])
+def test_the_ladder_and_the_prompt_agree_on_the_successor(key: str) -> None:
+    """Two instruments, one conclusion. Neither is trusted alone.
+
+    `capture_query` reports `rendered` from the shipped prompt builder; the
+    pipeline runner independently searches the prompt for the marker. If these
+    ever disagree, the ladder is reporting something the model never saw and
+    every number in it is suspect.
+    """
+    incident = INCIDENTS_BY_KEY[key]
+    successor = _ladder_row(incident, "sup_successor")
+    _packet, prompt = _run_pipeline(incident)
+    assert successor["rendered"] == (MARK_RIGHT in prompt), (
+        "the trace harness and the rendered prompt disagree about whether the "
+        "successor reached the model"
+    )
+
+
+def test_emit_supersession_ladder(capsys) -> None:
+    """Print the stage ladder for both variants. Asserts nothing on its own.
+
+    This is the deliverable: #207 has never been reproduced against the
+    corrected index, and the question it leaves open -- did the successor lose
+    on score or was it never a candidate -- is answered per stage here.
+    """
+    with capsys.disabled():
+        print("\n\n#207 SUPERSESSION -- stage ladder")
+        print(f"policy={PIPELINE_POLICY.name}  "
+              f"min_score={PIPELINE_POLICY.min_score}  "
+              f"diversity={PIPELINE_POLICY.diversity}")
+        print("predecessor = the superseded fact (74 weeks old, ahead on cosine)")
+        print("successor   = the record that corrects it (recent, behind on cosine)")
+        print("in_packet is DERIVED: in the packet but not rendered means the")
+        print("policy limit or diversity selection dropped it, not a gate.")
+
+        for incident in (INCIDENTS_BY_KEY["superseded_user"],
+                         INCIDENTS_BY_KEY["superseded_assistant"]):
+            rows, refs = _stage_ladder(incident)
+            print(f"\n--- {incident.key} ({incident.provenance}) ---")
+            widths = [max(len(c), 10) for c in LADDER_COLUMNS]
+            print("  ".join(c[:w].ljust(w) for c, w in zip(LADDER_COLUMNS, widths)))
+            for row in rows:
+                print("  ".join(
+                    str(row[c])[:w].ljust(w)
+                    for c, w in zip(LADDER_COLUMNS, widths)
+                ))
+            print(f"rendered refs, in render order: {refs}")
+            _packet, prompt = _run_pipeline(incident)
+            print(f"confidence band: {_hedge_band(prompt) or 'high, or no block'}")
+            print(f"answer reached: {MARK_RIGHT in prompt}   "
+                  f"decoy reached: {MARK_WRONG in prompt}")
+
+    assert True
+
+
+# ---------------------------------------------------------------------------
+# #207 Failure 2: the profile authority-rules arm.
+#
+# WHAT THIS ARM CAN AND CANNOT CLAIM, stated here because overclaiming it would
+# repeat this suite's own recorded failure mode.
+#
+# Suppressing `_AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION` cannot change retrieval,
+# the packet, or the rendered set. It is prompt text. What the model does with it
+# is unmeasurable without calling the model, which this suite never does.
+#
+# What it CAN establish as a construction fact is whether the prompt handed to
+# the model contains, at the same time, the low-confidence hedge line and an
+# instruction never to hedge profile facts on that block. That co-occurrence is
+# the contradiction #207's Failure 2 describes -- the hedge fired and the model
+# asserted the stale fact in the present tense anyway -- and whether it is
+# present, and disappears when the constant is suppressed, needs no model.
+#
+# The constant is NOT deleted. It is patched inside a `with` block for the
+# duration of one arm.
+# ---------------------------------------------------------------------------
+
+# The confidence block's three bands, verbatim fragments.
+#
+# The band is NOT pinned to "low", and that is a finding rather than a
+# convenience. #207 reports the low band firing on the incident turn, and
+# ADR-044:95-99 says why: "Aged records finalize at 0.03-0.15x raw cosine, so
+# the confidence block reads 'low -- records are old or weakly matched' on
+# essentially every vault-grounded turn... Neither is reporting match quality;
+# both are reporting the decay multipliers." Those multipliers are gone. The
+# composed score is now cosine x [0.8722, 1.1278], so a fixture at the measured
+# production cosines cannot reach the low band, and pinning it would mean
+# inventing cosines the corpus does not produce to force a band the contract
+# retired. What the contradiction needs is a band that instructs hedging at all,
+# which both "low" and "moderate" do.
+_HEDGE_BANDS = ("records are old or weakly matched", "hedge claims with temporal context")
+_CONFIDENCE_HEADER = "[Retrieval confidence:]"
+
+
+def _hedge_band(prompt: str) -> str | None:
+    return next((band for band in _HEDGE_BANDS if band in prompt), None)
+
+
+def test_the_prompt_carries_the_hedge_and_the_never_hedge_instruction() -> None:
+    """The contradiction, as a construction fact on the shipped arm.
+
+    #207's Failure 2 is that the confidence block instructed hedging and the
+    model asserted the stale fact in the present tense anyway. The prompt it was
+    given also told it never to hedge profile facts on that block. Whether both
+    instructions are in the same prompt is checkable; what the model did with
+    them is not, without a model.
+
+    This is also the positive control for the absence assertion in the arm
+    below, per CLAUDE.md: an assertion that the instruction is gone is satisfied
+    by a fixture where it could never have been there.
+    """
+    from src.llm.prompt_builder import _AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION
+
+    _packet, prompt = _run_pipeline(INCIDENTS_BY_KEY["superseded_user"])
+    assert _AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION in prompt, (
+        "the profile authority-rules block did not render, so this fixture "
+        "cannot speak to #207 Failure 2 -- ADR-046 measures it present on 36 "
+        "of 36 turns, so a fixture where it is absent is the wrong fixture"
+    )
+    assert _CONFIDENCE_HEADER in prompt, (
+        "no confidence block rendered, so there is no hedge instruction for the "
+        "authority rules to contradict"
+    )
+    assert _hedge_band(prompt) is not None, (
+        "the confidence block fired on the high band, so it is not instructing "
+        "the model to hedge and the contradiction is not reproduced"
+    )
+
+
+def test_suppressing_the_profile_authority_block_changes_only_the_prompt() -> None:
+    """The arm, and the limit of what it measures.
+
+    Three claims, in order of what they are worth.
+
+    The instruction is gone from the prompt (the absence, controlled above).
+
+    The two prompts differ by EXACTLY that constant and nothing else, which is
+    the arm-liveness guard `tests/test_retrieval_ablation_arms.py` puts on every
+    ablation arm: a patch that reached nothing would otherwise give a clean
+    two-arm comparison measuring nothing.
+
+    And the delivered set is byte-identical across the two arms. That is the
+    honest answer to "does removing it change the answer": it cannot change
+    which records the model receives, because it is an instruction about them.
+    Anything further needs a model in the loop and is not measurable here.
+    """
+    from src.llm.prompt_builder import _AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION
+
+    incident = INCIDENTS_BY_KEY["superseded_user"]
+    shipped_packet, shipped_prompt = _run_pipeline(incident)
+    armed_packet, armed_prompt = _run_pipeline(
+        incident, suppress_profile_authority=True
+    )
+
+    assert _AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION not in armed_prompt
+    assert shipped_prompt.replace(
+        _AUTHORITY_RULES_PROFILE_HEDGE_EXCLUSION, ""
+    ) == armed_prompt, (
+        "the two arms differ by something other than the suppressed constant, "
+        "so this arm is not measuring what it claims to"
+    )
+
+    assert [i.store_id for i in shipped_packet.delivered_items] == [
+        i.store_id for i in armed_packet.delivered_items
+    ], (
+        "suppressing prompt text changed the delivered set, which would mean "
+        "the arm is reaching retrieval and the measurement is confounded"
+    )
+    assert _hedge_band(armed_prompt) == _hedge_band(shipped_prompt), (
+        "the hedge band moved with the exclusion block; the arm is supposed to "
+        "leave the confidence block alone and remove only the instruction "
+        "telling the model to ignore it"
+    )

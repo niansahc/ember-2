@@ -90,6 +90,29 @@ _BOUNDED_PREFIXES = ("prior.", "tier.")
 # an empty frozenset: an unused hook reads as a supported extension point.
 _MULTIPLIER_PREFIXES = ("auth.",)
 
+# The selection-stage terms (#255) take FAMILY_ADDITIVE, and the choice is
+# recorded rather than inherited, because this file's own rule is that choosing
+# the ranges chooses the ranking.
+#
+# Which parameters those are is declared in params.SELECTION_ONLY_PARAMS, not
+# inferred from the prefix here; this block records why the interval is right.
+#
+# `div.same_type`, `div.same_doc` and `div.same_title` are score-unit penalties
+# SUMMED per already-selected neighbour, so `default +/- default` is the right
+# interval for the same reason it is right for every other additive term: it
+# sweeps the magnitude against itself.
+#
+# `div.similarity_share` is NOT a score-unit penalty -- it is the similarity
+# term's share of the selection band, so it is dimensionally a multiplier. The
+# additive rule gives it `1.0 +/- 1.0` = `[0, 2.0]`, which is the right interval
+# for a share whose effect at 0 is "ignore similarity entirely", at 1.0 is "a
+# pair of identical records costs exactly one band", and above 1.0 is "claim more
+# of the band than the band holds" -- where _diversity_score's cap clips it, so
+# the upper half of the interval is where the sweep measures the cap rather than
+# the term. So it lands in the right place by a different argument than the one
+# the family name implies, and it is left here rather than given a fourth family
+# that would exist for one parameter.
+
 
 @dataclass(frozen=True)
 class ParameterRange:

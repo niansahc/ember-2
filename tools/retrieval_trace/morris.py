@@ -53,8 +53,13 @@ from .endpoints import (
     EndpointEvaluator,
 )
 from .params import ReplayParams
-from .ranges import ParameterRange, build_ranges
-from .replay import EXACT_TOLERANCE, replay_query
+from .ranges import ParameterRange, build_ranges, range_for
+from .replay import (
+    EXACT_TOLERANCE,
+    delivery_baseline,
+    delivery_moved,
+    score_query,
+)
 from .schema import TraceRun
 
 # ---------------------------------------------------------------------------
@@ -185,28 +190,86 @@ class ScreeningRun:
 def find_unexercised(run: TraceRun) -> list[str]:
     """Parameters no candidate in the trace activates.
 
-    Measured, not assumed: each parameter is moved on its own and the
-    composed scores are compared. A parameter that cannot move any score
-    cannot move a delivered set either, since delivery is downstream of
-    score, so one probe settles both endpoints.
+    Measured, not assumed: each parameter is moved on its own and the composed
+    scores are compared.
+
+    A score probe used to be the whole of this, on the stated ground that "a
+    parameter that cannot move any score cannot move a delivered set either,
+    since delivery is downstream of score". That held for every parameter in the
+    vector until #255 added the selection family. `div.*` moves which candidates
+    are SELECTED and leaves every composed score untouched, so the score probe
+    reports all four inert -- and because __main__ drops whatever this function
+    returns from the sweep, a Sobol run would have silently declined to measure
+    the terms it was commissioned to measure.
+
+    So a parameter that fails the score probe gets a DELIVERY probe before being
+    declared unexercised. The order matters for cost, not correctness: the score
+    probe is cheap and settles most of the vector, and only what it rejects pays
+    for a selection pass. The premise is now "a parameter that can move neither a
+    score nor a delivered set is unexercised", which is what the word meant all
+    along.
     """
     defaults = run.param_defaults
+    # score_query, not replay_query: this probe compares composed scores and
+    # nothing else, so the survivor gates, the content filters, two sorts, the
+    # profile partition, the render window and -- on a diversity policy -- a
+    # whole selection pass were all computed and discarded. parameter_coverage
+    # already made this switch for the same reason.
     baseline = {
-        query.query_id: {s.ref: s.score for s in replay_query(query).scored}
+        query.query_id: {s.ref: s.score for s in score_query(query)}
         for query in run.queries
     }
+    # The delivery probe's own baseline, one pass, hoisted for the same reason.
+    # Computed lazily: most vectors never reach the second chance.
+    rendered_baseline: dict[str, set[str]] | None = None
 
     unexercised: list[str] = []
     for name in sorted(defaults):
-        params = ReplayParams().with_overrides(**{name: defaults[name] + 1.0})
+        spread = range_for(name, defaults[name])
         moved = False
-        for query in run.queries:
-            for scored in replay_query(query, params).scored:
-                if abs(scored.score - baseline[query.query_id][scored.ref]) > EXACT_TOLERANCE:
-                    moved = True
+
+        # BOTH ends of the declared range, not `default + 1.0`.
+        #
+        # The old one-directional nudge missed any parameter whose effect is
+        # only reachable downward, and `ret.lexical.term_cap` is one: raising a
+        # cap that nothing reaches is a no-op, lowering it to zero clamps every
+        # lexical bonus. It was classified unexercised and dropped from the
+        # sweep for a reason belonging to the probe. parameter_coverage was
+        # migrated to range-aware probing for the same reason and this function
+        # was not.
+        for end in (spread.low, spread.high):
+            params = ReplayParams().with_overrides(**{name: end})
+            for query in run.queries:
+                for scored in score_query(query, params):
+                    if abs(scored.score - baseline[query.query_id][scored.ref]) > EXACT_TOLERANCE:
+                        moved = True
+                        break
+                if moved:
                     break
             if moved:
                 break
+
+        if not moved:
+            # Second chance on delivery, for the terms that act on selection
+            # rather than on score. Deliberately NOT gated to the declared
+            # selection family: that declaration is what parameter_coverage uses
+            # to pick a probe, but here the delivery pass is the net that catches
+            # a parameter nobody declared, which is the case #255 ran into. The
+            # probe itself lives in replay.delivery_moved, one definition shared
+            # with parameter_coverage -- these two probes drifting apart is what
+            # left the range-aware nudge in one and the `+1.0` nudge in the other.
+            if rendered_baseline is None:
+                rendered_baseline = delivery_baseline(run)
+            moved = bool(
+                delivery_moved(
+                    run,
+                    name,
+                    (spread.low, spread.high),
+                    baseline=rendered_baseline,
+                    stop_early=True,
+                )
+            )
+
         if not moved:
             unexercised.append(name)
     return unexercised

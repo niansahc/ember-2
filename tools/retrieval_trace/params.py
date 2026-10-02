@@ -40,6 +40,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from src.context import prior as _prior
+from src.context import service as _service
 from src.context.ranker import COLD_MULTIPLIER, WARM_MULTIPLIER
 
 # ---------------------------------------------------------------------------
@@ -149,6 +150,50 @@ PRIOR_DEFAULTS: dict[str, float] = {
 }
 
 # ---------------------------------------------------------------------------
+# Selection stage -- ContextService._diversity_score, #255
+#
+# The greedy round-robin that picks the delivered memory set on four of ten
+# policies. It had no parameters at all: compose.py has no diversity stage, so a
+# converged Sobol run measured a delivery endpoint whose selection function was a
+# constant.
+#
+# IMPORTED, not copied, like PRIOR_DEFAULTS -- src/context/service.py owns the
+# magnitudes. See the module docstring on why a copy of a derived value is worse
+# than no copy.
+#
+# `div.short_penalty` is absent on purpose: the len<80 term was retired rather
+# than parameterised, because git history shows it was a 10%-of-a-constant
+# discount re-denominated into an absolute penalty in the same hunk that changed
+# the baseline. See _diversity_score's docstring.
+#
+# What these can and cannot establish on the current corpus is in ADR-044's
+# amendment: `div.same_doc` and `div.same_title` have zero shareable pairs across
+# 17 diversity-policy queries, so they will measure exactly 0.0000 at any N. They
+# are in the vector so the zero is a MEASURED zero with a stated cause, rather
+# than an absence nobody looked at.
+# ---------------------------------------------------------------------------
+
+DIVERSITY_DEFAULTS: dict[str, float] = {
+    "div.similarity_share": _service.DIVERSITY_WEIGHTS.similarity_share,
+    "div.same_type": _service.DIVERSITY_WEIGHTS.same_type,
+    "div.same_doc": _service.DIVERSITY_WEIGHTS.same_doc,
+    "div.same_title": _service.DIVERSITY_WEIGHTS.same_title,
+}
+
+# Which parameters move the DELIVERED SET without moving any composed score.
+#
+# Declared here, beside the table that defines them, rather than re-derived from
+# the "div." name prefix by each probe that needs to know. Both probes in the
+# harness -- morris.find_unexercised and replay.parameter_coverage -- have to
+# treat these differently from the rest of the vector, because a score probe
+# reports every one of them inert and that zero belongs to the probe. A prefix
+# test in each probe would be the same fact written three times, and a fifth
+# selection-stage parameter named something else would silently revert to the
+# score probe. Adding a name to DIVERSITY_DEFAULTS declares it here too.
+SELECTION_ONLY_PARAMS: frozenset[str] = frozenset(DIVERSITY_DEFAULTS)
+
+
+# ---------------------------------------------------------------------------
 # Recency -- one table, now exactly one consumer.
 #
 # It had two: apply_policy scaled it by policy.recency_bias and
@@ -170,6 +215,7 @@ def default_params() -> dict[str, float]:
         AUTHORSHIP_DEFAULTS,
         PRIOR_DEFAULTS,
         RECENCY_DEFAULTS,
+        DIVERSITY_DEFAULTS,
     ):
         overlap = merged.keys() & table.keys()
         if overlap:

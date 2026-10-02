@@ -793,7 +793,7 @@ found three places the blanket version was covering. None is retuned here.
 | `lexical_relevance_bonus` | `semantic_search.py:309` | ceiling 0.68 (0.10 + 0.18 + 0.40 entity cap) | 8.3x | **yes** -- genuinely exempt, but unbounded |
 | `query_intent_adjustment` mem_type arms | `semantic_search.py:421` | +0.10 / +0.08 / -0.03 | 1.6x swing | **no** -- a type ladder, query-conditional |
 | `query_intent_adjustment` role prefix | `semantic_search.py:436` | +0.10 / -0.10 | 2.5x swing | **no** -- a role term |
-| `_diversity_score` | `service.py:655` | -0.08 length, 0.05/item type, 0.22/item doc, 0.08/item title, 0.70 x Jaccard | up to 8x, **uncapped** | partly |
+| `_diversity_score` | `service.py` | -0.08 length, 0.05/item type, 0.22/item doc, 0.08/item title, 0.70 x Jaccard | up to 8x, **uncapped** | partly -- RESOLVED by the 2026-10-02 amendment: bounded to SELECTION_BAND of the record's own score |
 
 What each one means, stated plainly rather than left for the next reader:
 
@@ -1364,6 +1364,275 @@ note on #252 recording the declined-topics rebind as a hypothesis for the tier
 collapse, not a cause.
 
 Not reopened by any of them: `[0.8722, 1.1278]` and `0.0815 / 0.6375`.
+
+## Amendment (2026-10-02): the selection objective, bounded
+
+`ContextService._diversity_score` picks the delivered memory set on four of ten
+policies. The 2026-09-30 amendment listed it as the fourth term the per-stage
+exemption had been hiding and deferred it to #255. This resolves it.
+
+What it was:
+
+```
+candidate.score
+  - 0.08 if len(content) < 80
+  - 0.70 * max_jaccard          a MAX, so bounded by its own coefficient
+  - 0.05 per same item_type     a SUM, unbounded in len(selected)
+  - 0.22 per same doc_id        a SUM, unbounded
+  - 0.08 per same title         a SUM, unbounded
+```
+
+At a limit of 6 the three sums reach 1.75 and the similarity term 0.70, against a
+composed score of roughly 0.4 to 0.8 -- **up to six times the whole record**. The
+asymmetry is the point: one term was capped by construction and three accumulated.
+
+### The bound
+
+> The selection objective may move a record by at most SELECTION_BAND of that
+> record's own composed score, where SELECTION_BAND is the relative cosine spread
+> `0.0815 / 0.6375`.
+
+Derived, not chosen, and by the same argument the prior's bound uses. **A
+tie-breaker's legitimate authority is tie-breaking among records of COMPARABLE
+relevance**, and the measured width of "comparable" is the embedder's own top-k
+spread (#236). Two records inside that band are comparable and diversity may
+reorder them; two further apart are not, and diversity may not overturn the
+similarity signal it exists to tie-break. Expressed as a fraction of the record's
+own score rather than an absolute, because the penalty applies to a composed score
+whose scale is not fixed.
+
+| record score | objective could take | band allows |
+|---|---|---|
+| 0.4 | 2.45 (**6.1x the record**) | 0.051 |
+| 0.6375 | 2.45 (3.8x) | 0.082 |
+| 0.8 | 2.45 (3.1x) | 0.102 |
+
+### One derived magnitude and one cap, not four magnitudes
+
+This supersedes the plan's Step 4, which was to derive a magnitude per term. Only
+one of the four is measurable on the production corpus:
+
+| term | delivery ST | verdict |
+|---|---|---|
+| `div.similarity_share` | **0.1180 +/- 0.0078** (S1 0.0796) | resolved, 8th of 27 swept |
+| `div.same_type` | solo-flat | not measurable here |
+| `div.same_doc` | solo-flat | not measurable here |
+| `div.same_title` | solo-flat | not measurable here |
+
+Sweeping each of the three to both ends of its declared range moves **zero**
+rendered refs. Deriving magnitudes for them would be inventing numbers for terms
+this corpus cannot exercise -- the #232 error pointed the other way, and the same
+mistake this document already records against a synthetic `len.lt50` of 0.0006.
+
+So: `similarity_share` is derived, and the TOTAL is capped. Capping the total
+rather than each term is deliberate -- what the contract must constrain is the
+objective's authority over relevance, not how that authority divides between its
+terms. **The cap makes the three unmeasurable sizes moot rather than guessed.**
+
+What the cap does to those three terms, stated rather than left to be discovered:
+past saturation they are not merely unmeasured, they are **inoperative**. The
+similarity term is now relative (a share of the band) while the other three remain
+absolute score units summed per neighbour, and the ceiling at the measured mean
+rank-1 cosine is `0.6375 x 0.1278 = 0.0815`. One shared `doc_id` contributes 0.22
+and two same-type neighbours contribute 0.10, so either reaches the ceiling on its
+own. Wherever those terms fire at more than a marginal size the total clips, the
+penalty becomes a constant fraction of each candidate's own score, and ordering
+reverts to raw score -- so `diversity.penalty_capped` firing is the expected case
+and not an exception, which is worth knowing before anybody reads a nonzero count
+there as a defect. That is a consequence of bounding a composite whose terms are
+not commensurate; the alternative is to re-denominate all four as shares of the
+band, which needs no measurement (`similarity_share` was re-denominated from an
+absolute 0.70 without one) and would make the bound hold by construction with the
+relative ordering among terms surviving. Not done here: the decision taken was one
+derived magnitude plus a structural cap, and re-expressing the other three changes
+selection behaviour on a corpus that cannot measure the change.
+
+`similarity_share` becomes 1.0 of the band at full overlap, replacing an absolute
+0.70. Two identical records now cost each other exactly one band and partial
+overlap costs proportionally less; before, at `max_jaccard = 1`, the term took up
+to 175% of a record. Its resolved ST is why the term is kept at all: it is the only
+selection term this corpus shows moving the delivered set.
+
+The `len < 80` term is **retired**, not parameterised. `8d28336` introduced
+`_diversity_score` with `relevance = 1.0`, a constant; `8cb0f6c` added
+`len < 80 -> -0.1` against that constant, a self-contained 10% discount; and
+`db02670` changed the baseline to `float(candidate.score)` **in the same hunk**
+that retuned it to -0.08, silently re-denominating a fraction-of-a-constant into an
+absolute penalty on a composed cosine score. The prior already carries a measured,
+bounded length family on STRIPPED characters at threshold 50; this was RAW
+characters at 80, so trailing whitespace alone moved a record across it, and a
+record under both thresholds paid twice.
+
+### `div.same_type` measuring flat was not expected
+
+The plan assumed `same_type` would resolve and only `same_doc` / `same_title`
+would not. It did not, and that is recorded rather than smoothed over: three of
+four terms are unmeasurable here, not two.
+
+It changes nothing about the treatment -- the cap covers a flat term exactly as it
+covers a measurable one, and `same_type` is inside the capped total regardless. But
+it does mean the selection family's only measured magnitude is a single term, and a
+later reader should not infer from "the objective is bounded" that four magnitudes
+were checked. One was.
+
+Plausible cause, not established: `_select_diverse_memory` already round-robins
+across three `item_type` groups, so within a round the control flow guarantees type
+alternation and `same_type` re-prices a decision the loop has already made. The
+2026-09-28 amendment records the same observation from the performance audit. That
+would make the term redundant with its own caller rather than with the corpus, but
+nothing here measures that.
+
+### Correcting my own probe: two populations, two right answers
+
+An earlier probe in this work reported **0 shareable doc pairs** across the
+diversity-policy queries. The trace reports **4**. Both are correct, and the
+difference is which population each counts:
+
+- **0** counts candidates **reaching `_select_diverse_memory`** -- post-gate,
+  post-filter, post-dedup. This is the population the penalty can actually fire
+  on, so it is the right answer to "can the term fire".
+- **4** counts **all retrieved candidates** in the trace. This is the population
+  before the gates, so it is the right answer to "does the corpus contain the
+  configuration the term is for".
+
+The trace's number is the more informative one here, because it separates two
+diagnoses that the selector-input number conflates. A 0 at the selector could mean
+the corpus has no multi-chunk documents, or that it has them and something removes
+one member before selection. The 4 settles it: the configuration is retrieved, and
+something between retrieval and selection removes it.
+
+That distinction is what led to the finding below, which the 0 alone would have
+hidden.
+
+### Why `same_doc` never fires: role exclusion got there first
+
+Across the diversity-policy queries, 4 doc groups have two or more retrieved
+candidates. One loses every member before selection; three are reduced to a single
+survivor. **All 5 removals are `excluded_by_role`** -- zero by dedup, zero by
+either score gate, zero by the content filters.
+
+The pairs are assistant-authored chunks of one conversation, and amendment 4a's
+role predicate drops them between `apply_policy` and the authorship multiplier,
+before `_select_diverse_memory` sees them. So `same_doc_penalty` is not failing for
+want of multi-chunk documents -- the corpus is 89% multi-chunk, 1,244 documents with
+more than one chunk, largest 301 -- it is failing because the records that would
+trigger it are the ones role exclusion already removed.
+
+Filed as **#266** rather than acted on. One corpus showing redundancy is not the
+predicate subsuming the term in general: ADR-044's bar for retirement is a
+STRUCTURAL argument, and this vault's `ingested.db` holds **0 records**, so the case
+where the term would fire -- multiple user-authored or unattributed chunks of one
+document -- is untested here rather than absent. The issue states what would settle
+it.
+
+### A caveat on #256's and #264's measurements, and its size
+
+Until this change, `_DiversityShim` had no `metadata` attribute and `CandidateTrace`
+carried no `doc_id` or `title`, so in replay `same_doc_penalty` and
+`same_title_penalty` were pinned to zero -- structurally, for any trace.
+`EndpointEvaluator` computes the baseline and every perturbed sample through the
+same `replay_query`, so on the diversity policies both sides of every delivery
+Jaccard distance ran a selector missing two of five terms.
+
+**Measured magnitude of the error: none.** On the corpus those runs used -- vault
+fingerprint `08b864f806af2565`, confirmed identical -- no two candidates reaching
+the selector on any diversity query share a `doc_id` or a `title`, so neither
+penalty could have fired even with a faithful shim. 47 of 51 candidates carry both
+fields; `maxdoc` and `maxttl` are 1 on every query.
+
+So #256's and #264's delivery numbers stand as measured. The correction is that the
+harness **could not express** two of five terms, not that it got them wrong, and on
+this corpus it did not need to. That is a corpus fact and not a property of the
+formula: a vault with non-conversational ingest would break it.
+
+### Two harness defects found on the way, both of which would have corrupted this
+
+**`find_unexercised` would have dropped the entire selection family from the
+sweep.** Its premise was "a parameter that cannot move any score cannot move a
+delivered set either, since delivery is downstream of score, so one probe settles
+both endpoints". True for every parameter in the vector until `div.*`, which moves
+the delivered SET without touching any score. `__main__` drops whatever the function
+returns, so a Sobol run would have declined to measure the four terms it was
+commissioned to measure and reported nothing amiss. A score-probe failure now gets a
+DELIVERY second chance.
+
+**And its score probe was one-directional.** `ret.lexical.term_cap` moves no score
+under `default + 1.0` -- raising a cap nothing reaches is a no-op -- but sweeping it
+to zero clamps every lexical bonus. It had been classified unexercised and excluded
+from sweeps for a reason belonging to the probe. `parameter_coverage` was migrated to
+range-aware probing and this function was not; the 2026-09-30 cleanup pass flagged
+the un-migrated nudge, and this is what it cost. Now both ends of the declared
+range.
+
+`parameter_coverage` has the mirror-image problem and is fixed the same way: it uses
+`score_query` to skip the selection pass, which is right for the other 37 parameters
+and reports all four `div.*` inert. It now probes that family on delivery.
+
+### Recency-arm activation is wall-clock dependent
+
+Incidental, and it sharpens an existing caveat. `prior.recency.d30` is unexercised
+on this trace where it was ranked at ST 0.0000 in #264's; `d90` moved the other way.
+Same vault fingerprint, capture one day later -- records aged out of one bucket into
+the next.
+
+The recency family already rested on two measured arms of six. **Which** two is
+partly a function of when the capture runs. A re-derivation that lands on a
+different pair is not a finding about recency.
+
+### Measurement
+
+Two captures of the same vault, both read-only under `retrieval_stats_disabled()`
+with the store digest identical either side, both self-checking at 0 score and 0
+delivery mismatches over 370 candidates. Before at `main` in a worktree, after on
+the branch. Joined on `content_sha256`, because the two traces are different schema
+versions and refs are positional.
+
+| | |
+|---|---|
+| queries compared | 27 |
+| on a diversity policy | 10 |
+| **diversity queries whose rendered set changed** | **2** |
+| rendered-set Jaccard, mean | **0.9743** |
+| queries with an identical set | 25 of 27 |
+| refs gained / lost | 3 / 3 |
+| composed scores changed | **0 of 370** |
+| per-query mean score change | **+0.000000** |
+
+The composed score cannot move and did not: `_diversity_score` runs after the rank
+stage and its output never reaches `composed_score`. The retired `len < 80` term was
+subtracted inside the selector too, so it never touched a composed score either. A
+nonzero in that column would have meant something other than this change.
+
+So bounding an objective that could subtract six times a record's score moves the
+delivered set on **2 of 10** eligible queries, three records swapped. Small, and the
+reason is the one the reachability probes already gave: the pool is thin, three of
+the four terms never fire, and the cap binds mostly where the similarity term was
+already doing the work.
+
+The Sobol run the magnitude comes from:
+
+```
+N=4096, k=41 (27 swept, 14 unexercised), 229,376 evaluations
+scipy.qmc.Sobol(scrambled), seed 20260923, 1000 bootstrap resamples
+st_ci_target 0.020: MET -- delivery 0.0150, score 0.0109
+the extrapolation independently demanded N=2597
+```
+
+### What the bound covers, and what it does not
+
+Covered: the whole selection objective, as one capped total, on every policy where
+`policy.diversity` is set.
+
+Not covered, and stated rather than implied: the individual magnitudes of
+`same_type`, `same_doc` and `same_title`. They are carried at their shipped values
+because this corpus cannot measure them, and the cap is what makes that safe. If a
+later corpus exercises them, their sizes become derivable and the cap stays
+correct either way -- which is the property that made capping preferable to
+guessing.
+
+Follow-ups: **#266** (whether role exclusion subsumes `same_doc` structurally or
+only on this vault). Unchanged by this amendment: `[0.8722, 1.1278]` and its
+derivation from `0.0815 / 0.6375`.
 
 ## Consequences
 

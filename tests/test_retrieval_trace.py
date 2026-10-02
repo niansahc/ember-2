@@ -811,6 +811,147 @@ def test_content_is_omitted_when_not_requested(stub_query_embedding):
             assert candidate.content_length > 0
 
 
+def test_a_content_free_trace_is_refused_for_diversity_replay():
+    """The positive control for the refusal, not just its absence elsewhere.
+
+    `_diversity_score` reads content for the Jaccard term, so a content-free
+    trace replays selection as round-robin-on-score. The shim's
+    `content or ""` turned "cannot replay this" into "replayed it wrongly and said
+    nothing" -- the degradation was silent and the numbers still looked like
+    numbers. Now it raises.
+
+    Paired with test_content_is_omitted_when_not_requested, which captures a
+    NON-diversity policy without content and must still succeed: the refusal is
+    scoped to the policies that actually need content, not to --no-content itself.
+    """
+    from tools.retrieval_trace.compose import STAGES
+    from tools.retrieval_trace.schema import CandidateTrace, QueryTrace
+
+    def query_trace(*, diversity: bool, content: str | None) -> QueryTrace:
+        candidate = CandidateTrace(
+            ref="m0", store_id="m0", channel="memory", memory_type="conversation",
+            item_type="conversation", tier="hot", authorship="first_person",
+            timestamp=None, age_days=None, content_sha256="x", content_length=99,
+            content=content,
+        )
+        candidate.stage_scores = {stage: 0.5 for stage in STAGES}
+        return QueryTrace(
+            query_id="q1", query="", policy_name="reflective", policy={},
+            relational_query=False, project_id=None, memory_limit=4,
+            reflection_limit=2, diversity=diversity, min_score=0.0,
+            relevance_gate_fired=False, candidates=[candidate],
+        )
+
+    with pytest.raises(ValueError, match="diversity replay needs candidate content"):
+        replay_query(query_trace(diversity=True, content=None))
+
+    # Both controls: content present on a diversity policy is fine, and content
+    # absent on a NON-diversity policy is fine -- the refusal is scoped to the
+    # policies that actually read content, not to --no-content itself.
+    replay_query(query_trace(diversity=True, content="a body with some words in it"))
+    replay_query(query_trace(diversity=False, content=None))
+
+
+def test_the_group_fingerprints_carry_equality_and_not_the_value():
+    """What the selector tests is equality, so that is all the trace carries.
+
+    Two chunks of one document must land in the same group, two different
+    documents must not, and absent must stay absent -- `_diversity_score`'s guard
+    is `if candidate_doc_id and ...`, so collapsing None to a hash of the empty
+    string would put every doc-less candidate in one group and fire the 0.22
+    between unrelated records.
+    """
+    from tools.retrieval_trace.schema import group_fingerprint
+
+    a = group_fingerprint("documents/the-same-one.md")
+    b = group_fingerprint("documents/the-same-one.md")
+    c = group_fingerprint("documents/a-different-one.md")
+
+    assert a == b, "chunks of one document must share a group"
+    assert a != c
+    assert group_fingerprint(None) is None
+    assert group_fingerprint("") is None
+    assert "the-same-one" not in a, "the value must not survive into the trace"
+    assert len(a) == 16
+
+
+def test_the_shim_lets_the_document_penalty_fire():
+    """The control for the gap, which the fingerprint test above does not cover.
+
+    `_DiversityShim` had no `metadata` slot, so `_diversity_score`'s
+    `getattr(candidate, "metadata", {}) or {}` returned {} and both
+    `same_doc_penalty` (0.22/item, uncapped) and `same_title_penalty` were pinned
+    to zero for every trace -- structurally, not just on this corpus. Testing
+    `group_fingerprint` alone would not catch that: the hash can be perfect while
+    nothing hands it to the selector.
+
+    So this drives the SHIPPED `_diversity_score` through the shim and asserts the
+    penalty appears, by differencing two candidates that are identical except for
+    whether they share a group.
+    """
+    from src.context.service import DIVERSITY_WEIGHTS
+    from tools.retrieval_trace.compose import STAGE_FINAL, Composition
+    from tools.retrieval_trace.replay import ScoredCandidate, _DiversityShim
+    from tools.retrieval_trace.schema import CandidateTrace
+
+    def scored(ref: str, content: str, doc: str | None, title: str | None):
+        candidate = CandidateTrace(
+            ref=ref, store_id=ref, channel="memory", memory_type="ingested",
+            item_type="ingested", tier="hot", authorship="unknown",
+            timestamp=None, age_days=None, content_sha256=ref,
+            content_length=len(content), content=content,
+            doc_group=doc, title_group=title,
+        )
+        # The real Composition, not a stand-in: `.final` reads
+        # stage_scores[STAGE_FINAL], so pinning that one stage is all this needs,
+        # and a stand-in would keep passing if ScoredCandidate.score ever read a
+        # second field.
+        return ScoredCandidate(
+            candidate=candidate,
+            composition=Composition(stage_scores={STAGE_FINAL: 0.5}, terms={}),
+        )
+
+    service = ContextService.__new__(ContextService)
+    body_a = "one body of text that shares no vocabulary with the other"
+    body_b = "a completely different sentence using separate words entirely"
+
+    shared = [
+        _DiversityShim(scored("m0", body_a, "doc-one", "title-one")),
+        _DiversityShim(scored("m1", body_b, "doc-one", "title-one")),
+    ]
+    distinct = [
+        _DiversityShim(scored("m0", body_a, "doc-one", "title-one")),
+        _DiversityShim(scored("m1", body_b, "doc-two", "title-two")),
+    ]
+
+    shared_score = service._diversity_score(shared[1], [shared[0]])
+    distinct_score = service._diversity_score(distinct[1], [distinct[0]])
+
+    assert shared_score < distinct_score, (
+        "sharing a document and a title cost nothing; the shim is not handing "
+        "the group ids to _diversity_score"
+    )
+
+    # The magnitudes are no longer readable off the difference, because
+    # SELECTION_BAND caps the three sums in total. Both facts are asserted:
+    #
+    #   shared   : same_doc 0.22 + same_title 0.08 + same_type 0.05 = 0.35,
+    #              capped to 0.5 * SELECTION_BAND
+    #   distinct : same_type 0.05 alone, under the ceiling, so uncapped
+    #
+    # This test asserted `distinct - shared == 0.30` before the cap existed, which
+    # is exactly the authority the cap removes -- 0.30 against a score of 0.5 is
+    # 60% of the record, for two neighbours.
+    from src.context.service import SELECTION_BAND
+
+    ceiling = 0.5 * SELECTION_BAND
+    assert distinct_score == pytest.approx(0.5 - DIVERSITY_WEIGHTS.same_type)
+    assert shared_score == pytest.approx(0.5 - ceiling)
+    assert distinct_score - shared_score == pytest.approx(
+        ceiling - DIVERSITY_WEIGHTS.same_type
+    )
+
+
 def test_an_older_schema_is_refused_rather_than_guessed(tmp_path):
     path = tmp_path / "old.json"
     path.write_text('{"schema_version": 0, "queries": []}', encoding="utf-8")

@@ -46,7 +46,13 @@ from pathlib import Path
 # keyword reconstruction below fail on an old trace instead, which is the only
 # detector available: the one test that compares the two definitions is
 # xfail'd under #244.
-SCHEMA_VERSION = 3
+#
+# Bumped to 4 for #255, and this is the EASY kind of bump, in deliberate contrast
+# to the one above: `doc_group` and `title_group` are additive optional fields, so
+# the change has a structural signature. A version-3 trace lacks the keys and
+# `load_run`'s keyword reconstruction fails on it, which is the detector working
+# rather than a reinterpretation to guard against.
+SCHEMA_VERSION = 4
 
 # Channels a candidate can arrive through. They score differently and must
 # not be pooled: the reflection channel never passes through
@@ -59,6 +65,24 @@ CHANNEL_REFLECTION = "reflection"
 
 def content_fingerprint(content: str) -> str:
     return hashlib.sha256(" ".join((content or "").split()).lower().encode()).hexdigest()
+
+
+def group_fingerprint(value: str | None) -> str | None:
+    """A document or title identity, as a hash rather than the value.
+
+    `_diversity_score` only ever tests these for EQUALITY between two candidates
+    (service.py's `existing_metadata.get("doc_id") == candidate_doc_id`), so a
+    hash carries everything the selector needs and nothing it does not. The
+    values themselves are vault content -- a title is free text and a doc_id can
+    be a path -- and a trace is a file on disk.
+
+    None in, None out: absent is a different fact from present-and-unmatched, and
+    the penalty's guard is `if candidate_doc_id and ...`, so collapsing absence to
+    a hash of the empty string would make every doc-less candidate share a group.
+    """
+    if not value:
+        return None
+    return hashlib.sha256(f"group:{value}".encode()).hexdigest()[:16]
 
 
 @dataclass
@@ -148,6 +172,15 @@ class CandidateTrace:
     content_sha256: str
     content_length: int
     content: str | None = None
+
+    # The two identities `_diversity_score` compares between candidates, hashed.
+    # #255: without these the selector ran in replay with `same_doc_penalty` and
+    # `same_title_penalty` pinned to zero, because _DiversityShim had no metadata
+    # to read and the trace had nothing to give it. content_sha256 cannot stand in
+    # -- two chunks of one document have different bodies, so different
+    # fingerprints, which is precisely the case the 0.22/chunk term exists for.
+    doc_group: str | None = None
+    title_group: str | None = None
 
     retrieval: RetrievalActivation = field(default_factory=RetrievalActivation)
     policy: PolicyActivation = field(default_factory=PolicyActivation)

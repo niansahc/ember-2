@@ -69,6 +69,7 @@ from .schema import (
     RetrievalActivation,
     TraceRun,
     content_fingerprint,
+    group_fingerprint,
 )
 
 # How close a recomputation has to be to the real pipeline before the trace
@@ -322,6 +323,12 @@ def _walk_stages(items, channel, policy, query, project_id, ranker, include_cont
         item = copy.deepcopy(source)
         content = getattr(item, "content", "") or ""
         age_days = ranker._parse_age_days(getattr(item, "timestamp", None))
+        # The OUTER metadata, deliberately -- not _retrieval_metadata's
+        # profile-aware unwrapping. _diversity_score reads
+        # `getattr(candidate, "metadata", {})` directly, and profile items are
+        # partitioned out before selection, so the outer dict is what the
+        # selector sees for every candidate that can reach it.
+        selection_metadata = getattr(item, "metadata", {}) or {}
 
         trace = CandidateTrace(
             ref="",  # assigned by the caller, which knows the channel offsets
@@ -336,6 +343,8 @@ def _walk_stages(items, channel, policy, query, project_id, ranker, include_cont
             content_sha256=content_fingerprint(content),
             content_length=len(content),
             content=content if include_content else None,
+            doc_group=group_fingerprint(selection_metadata.get("doc_id")),
+            title_group=group_fingerprint(selection_metadata.get("title")),
             retrieval=_retrieval_activation(item, channel, query),
             policy=_policy_activation(item, policy, ranker),
             author=_authorship_activation(item, query, project_id, channel),

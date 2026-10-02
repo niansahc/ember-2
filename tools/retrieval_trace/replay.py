@@ -31,7 +31,7 @@ from src.context.render_window import (
 )
 
 from .compose import STAGE_FINAL, STAGE_RETRIEVAL, Composition, compose
-from .params import ReplayParams
+from .params import SELECTION_ONLY_PARAMS, ReplayParams
 from .schema import CHANNEL_REFLECTION, CandidateTrace, QueryTrace, TraceRun
 
 
@@ -126,11 +126,35 @@ def replay_query(query: QueryTrace, params: ReplayParams | None = None) -> Query
         # The real round-robin, not an approximation of it. It reads
         # item.memory_type and item.score off objects, so a light shim is
         # enough to hand it scored candidates.
-        from src.context.service import ContextService
+        from src.context.service import ContextService, DiversityWeights
+
+        # Refuse rather than degrade. `_diversity_score` reads content for the
+        # Jaccard term, so a content-free trace replays selection as
+        # round-robin-on-score and says nothing about it -- the shim's
+        # `content or ""` turns "cannot replay this" into "replayed it wrongly".
+        # The CLI carries content by default precisely because of this; the
+        # library default does not, so the check is worth having.
+        if any(s.candidate.content is None for s in other):
+            raise ValueError(
+                f"{query.query_id}: diversity replay needs candidate content, and "
+                "this trace was captured without it. Recapture without "
+                "--no-content; a content-free trace can replay scores exactly but "
+                "not selection."
+            )
 
         shims = [_DiversityShim(s) for s in other]
+        # The sampled weights, or the parameters move nothing and their ST is a
+        # measurement of the harness rather than of the pipeline.
         chosen = ContextService._select_diverse_memory(
-            ContextService.__new__(ContextService), shims, query.memory_limit
+            ContextService.__new__(ContextService),
+            shims,
+            query.memory_limit,
+            DiversityWeights(
+                similarity_share=params["div.similarity_share"],
+                same_type=params["div.same_type"],
+                same_doc=params["div.same_doc"],
+                same_title=params["div.same_title"],
+            ),
         )
         selected_other = [shim.scored for shim in chosen]
     else:
@@ -181,7 +205,9 @@ def replay_query(query: QueryTrace, params: ReplayParams | None = None) -> Query
 class _DiversityShim:
     """Just enough of a ContextItem for _select_diverse_memory to read."""
 
-    __slots__ = ("scored", "memory_type", "item_type", "score", "content", "id")
+    __slots__ = (
+        "scored", "memory_type", "item_type", "score", "content", "id", "metadata",
+    )
 
     def __init__(self, scored: ScoredCandidate) -> None:
         self.scored = scored
@@ -194,10 +220,68 @@ class _DiversityShim:
         self.score = scored.score
         self.content = scored.candidate.content or ""
         self.id = scored.candidate.ref
+        # #255. Without this slot `_diversity_score`'s
+        # `getattr(candidate, "metadata", {}) or {}` returned {} for every
+        # candidate, so `same_doc_penalty` (0.22/item, the uncapped one) and
+        # `same_title_penalty` were pinned to zero in replay -- not for this
+        # corpus, but structurally, for any trace. The hashed group ids carry
+        # exactly what the selector tests, which is equality.
+        self.metadata = {
+            "doc_id": scored.candidate.doc_group,
+            "title": scored.candidate.title_group,
+        }
 
 
 def replay_run(run: TraceRun, params: ReplayParams | None = None) -> list[QueryReplay]:
     return [replay_query(q, params) for q in run.queries]
+
+
+def delivery_baseline(run: TraceRun) -> dict[str, set[str]]:
+    """The unperturbed rendered memory set per query, computed once.
+
+    A probe that recomputes this inside its own parameter loop pays a full
+    selection pass per (parameter x range end x query) to rediscover a value
+    that does not depend on the parameter. `sweep` already hoists it; the two
+    one-at-a-time probes did not.
+    """
+    return {q.query_id: set(replay_query(q).rendered_refs) for q in run.queries}
+
+
+def delivery_moved(
+    run: TraceRun,
+    name: str,
+    ends: tuple[float, ...],
+    *,
+    baseline: dict[str, set[str]],
+    stop_early: bool = False,
+) -> int:
+    """How many rendered refs a parameter moves, perturbed alone to each `end`.
+
+    ONE definition of the delivery probe. morris.find_unexercised and
+    parameter_coverage both need it -- the first to give a score-flat parameter a
+    second chance, the second to report the selection family's coverage -- and
+    writing it twice is how the two probes drifted apart before: the range-aware
+    nudge was migrated into one and not the other, and #255 found the cost.
+    `stop_early` is the only difference between the callers that is real, since
+    find_unexercised needs a boolean and can quit on the first movement while
+    parameter_coverage needs the count.
+
+    Non-diversity queries are skipped. Their rendered set is a pure function of
+    the composed scores, so a parameter that moves no score cannot move their
+    delivery, and a parameter that does move a score has no business in this
+    probe.
+    """
+    moved = 0
+    for end in ends:
+        params = ReplayParams().with_overrides(**{name: end})
+        for query in run.queries:
+            if not query.diversity:
+                continue
+            after = set(replay_query(query, params).rendered_refs)
+            moved += len(baseline[query.query_id] ^ after)
+            if moved and stop_early:
+                return moved
+    return moved
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +397,12 @@ def parameter_coverage(run: TraceRun) -> list[tuple[str, int]]:
     from .ranges import range_for
 
     defaults = run.param_defaults
+    # One pass, reused by every selection-stage parameter below.
+    rendered_baseline = (
+        delivery_baseline(run)
+        if SELECTION_ONLY_PARAMS & set(defaults)
+        else {}
+    )
     results: list[tuple[str, int]] = []
     for name in sorted(defaults):
         # Range-aware, not a flat +1.0.
@@ -331,6 +421,29 @@ def parameter_coverage(run: TraceRun) -> list[tuple[str, int]]:
         # therefore the right question to ask of it.
         spread = range_for(name, defaults[name])
         nudged = spread.high if defaults[name] < spread.high else spread.low
+
+        if name in SELECTION_ONLY_PARAMS:
+            # The selection-stage family cannot be probed on scores. #255's
+            # parameters change which candidates are SELECTED and leave every
+            # composed score untouched, so the score probe below would report
+            # all four inert -- a zero belonging to the probe, which is exactly
+            # the confusion this function exists to prevent.
+            #
+            # So they are probed on the rendered set, which costs the selection
+            # pass the comment above avoids. Only this family pays it: four
+            # parameters rather than forty. Which parameters those are is read
+            # off params.SELECTION_ONLY_PARAMS rather than off their name
+            # prefix, so the fact lives where the parameters are declared.
+            results.append(
+                (
+                    name,
+                    delivery_moved(
+                        run, name, (nudged,), baseline=rendered_baseline
+                    ),
+                )
+            )
+            continue
+
         params = ReplayParams().with_overrides(**{name: nudged})
         moved = 0
         for query in run.queries:

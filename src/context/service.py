@@ -12,6 +12,7 @@ filter → dedup → diversity selection → format into ContextPacket.
 
 import logging
 import re
+from dataclasses import dataclass
 
 from src.context.formatter import ContextFormatter
 from src.core.config import get_ember_debug
@@ -105,7 +106,78 @@ from src.context.policies import classify_query
 from src.context import role_predicate
 from src.context.ranker import ContextRanker
 from src.context.retriever import ContextRetriever
+from src.context import prior as _prior
 from src.tools.web_search import web_search
+
+
+@dataclass(frozen=True)
+class DiversityWeights:
+    """The magnitudes `_diversity_score` penalises with.
+
+    Declared as an object so the trace harness can perturb them. They were
+    inline literals, which meant the sensitivity vector could not reach them:
+    `tools/retrieval_trace/compose.py` had no diversity stage, so a converged
+    Sobol run measured a delivery endpoint whose selection function was a
+    constant. Copying the numbers into params.py instead would have made a
+    second definition of a magnitude that is supposed to have one derivation.
+
+    One of the four is derived and three are the shipped values carried forward
+    unchanged, because three of the four cannot be measured on the current corpus
+    at all -- see ADR-044's amendment and its reachability section.
+
+    `similarity_share` multiplies a MAX over the selected set and is therefore
+    capped at its own value. The other three are SUMMED per already-selected
+    neighbour and grow without limit in len(selected). That asymmetry is what
+    SELECTION_BAND has to resolve, not the individual sizes.
+    """
+
+    # The similarity term's share of the band, at max_jaccard = 1. Derived: it
+    # is the one selection term with a resolved ST (0.1180 +/- 0.0078 on the
+    # delivery endpoint, 8th of 27 swept parameters), so it is entitled to the
+    # whole band at full overlap -- two identical records cost each other exactly
+    # the authority a tie-breaker may have, and partial overlap costs
+    # proportionally less. Replaces an absolute 0.70, which on a composed score
+    # of 0.4 to 0.8 reached 175% of the record.
+    similarity_share: float = 1.0
+
+    # The three per-neighbour sums, carried at their shipped values. NOT derived:
+    # all three are solo-flat on the delivery endpoint and cannot be measured on
+    # this corpus, so these numbers are the ones that were already here rather
+    # than numbers anybody computed. The total cap in _diversity_score is what
+    # bounds them; see ADR-044's amendment on why capping beats guessing.
+    same_type: float = 0.05
+    same_doc: float = 0.22
+    same_title: float = 0.08
+
+
+DIVERSITY_WEIGHTS = DiversityWeights()
+
+# How far the selection objective may move a record, as a fraction of that
+# record's own composed score.
+#
+# ADR-044 / #255. The three per-neighbour terms are SUMMED, so they grew without
+# limit in len(selected): at a limit of 6 they reached 0.25, 1.10 and 0.40, a
+# total of 1.75 against a composed score of roughly 0.4 to 0.8. A selection
+# objective able to subtract more than twice a record's whole score is not
+# ordering records, it is overriding relevance.
+#
+# The cap is derived, not chosen. A tie-breaker's legitimate authority is
+# tie-breaking AMONG RECORDS OF COMPARABLE RELEVANCE, and the measured width of
+# "comparable" is the embedder's own top-k spread: RELATIVE_SPREAD, the same
+# 0.0815 / 0.6375 the prior's bound comes from (#236). Two records within that
+# band are comparable and diversity may reorder them; two records further apart
+# are not, and diversity may not overturn the similarity signal. Expressed as a
+# fraction of the record's own score rather than an absolute, because the penalty
+# applies to a composed score whose scale is not fixed.
+#
+# This is a STRUCTURAL bound, and deliberately so. The individual magnitudes of
+# the three sums are not measurable on this corpus -- all three are solo-flat on
+# the delivery endpoint, and same_doc's triggering records turn out to be the ones
+# role exclusion already removes -- so a derived magnitude for any of them would be
+# a number invented for a term the corpus cannot exercise. Capping the total makes
+# the individual sizes moot rather than guessed: whatever they are, together they
+# cannot exceed the band.
+SELECTION_BAND = _prior.RELATIVE_SPREAD
 
 
 class ContextService:
@@ -589,7 +661,9 @@ class ContextService:
 
         return deduped
 
-    def _select_diverse_memory(self, items: list, limit: int) -> list:
+    def _select_diverse_memory(
+        self, items: list, limit: int, weights: DiversityWeights = DIVERSITY_WEIGHTS
+    ) -> list:
         if not items:
             return []
 
@@ -606,7 +680,7 @@ class ContextService:
 
             for group_name in ("conversation", "ingested", "other"):
                 candidate = self._best_diverse_candidate(
-                    grouped_items[group_name], selected
+                    grouped_items[group_name], selected, weights
                 )
 
                 if count(f"diversity.group_yielded.{group_name}", bool(candidate)):
@@ -627,7 +701,7 @@ class ContextService:
                 remaining.extend(group_items)
 
             while len(selected) < limit and remaining:
-                candidate = self._best_diverse_candidate(remaining, selected)
+                candidate = self._best_diverse_candidate(remaining, selected, weights)
                 if count("diversity.backfill_exhausted", not candidate):
                     break
                 selected.append(candidate)
@@ -635,7 +709,9 @@ class ContextService:
 
         return selected
 
-    def _best_diverse_candidate(self, candidates: list, selected: list):
+    def _best_diverse_candidate(
+        self, candidates: list, selected: list, weights: DiversityWeights = DIVERSITY_WEIGHTS
+    ):
         if not candidates:
             return None
 
@@ -646,18 +722,44 @@ class ContextService:
         best_score = float("-inf")
 
         for candidate in candidates:
-            score = self._diversity_score(candidate, selected)
+            score = self._diversity_score(candidate, selected, weights)
             if score > best_score:
                 best_score = score
                 best_item = candidate
 
         return best_item
 
-    def _diversity_score(self, candidate, selected: list) -> float:
-        relevance = float(getattr(candidate, "score", 0.0))
+    def _diversity_score(
+        self, candidate, selected: list, weights: DiversityWeights = DIVERSITY_WEIGHTS
+    ) -> float:
+        """How much this candidate is penalised for what is already selected.
 
-        if len(candidate.content) < 80:
-            relevance -= 0.08
+        ADR-044 / #255. Three things to know about the magnitudes.
+
+        They are no longer literals here. `weights` defaults to
+        DIVERSITY_WEIGHTS, declared above, because the trace harness has to be
+        able to perturb them and a copy in params.py would be a second
+        definition of a number with a derivation.
+
+        The `len(content) < 80 -> -0.08` term that stood at the top is GONE. It
+        was not a distinct signal. `8d28336` introduced this function with
+        `relevance = 1.0`, a constant; `8cb0f6c` added `len < 80 -> -0.1`
+        against that constant, a self-contained 10% discount; and `db02670`
+        then changed the baseline to `float(candidate.score)` IN THE SAME HUNK
+        that retuned it to -0.08, silently re-denominating a
+        fraction-of-a-constant into an absolute penalty on a composed cosine
+        score. The prior already carries a measured, bounded length family
+        (LEN_UNDER_50, on STRIPPED characters at threshold 50); this one was on
+        RAW characters at 80, so trailing whitespace alone moved a record across
+        it, and a record under both thresholds paid twice.
+
+        The asymmetry that remains is the subject of the bound: `max_similarity`
+        is a MAX and so is capped by construction, while the three
+        per-neighbour terms are SUMS and grow with len(selected). At limit=6 the
+        type term reaches 0.25 and the document term 1.10, against a composed
+        score of roughly 0.4 to 0.8.
+        """
+        relevance = float(getattr(candidate, "score", 0.0))
 
         candidate_tokens = self._tokenize(candidate.content)
         candidate_type = getattr(candidate, "item_type", "unknown")
@@ -670,6 +772,13 @@ class ContextService:
         same_doc_penalty = 0.0
         same_title_penalty = 0.0
 
+        # Bound once. This loop runs O(candidates x selected) times per pick, and
+        # with div.* in the swept vector it also runs inside the trace harness's
+        # sampling loop, where it was formerly a constant.
+        w_type = weights.same_type
+        w_doc = weights.same_doc
+        w_title = weights.same_title
+
         for existing in selected:
             existing_tokens = self._tokenize(existing.content)
             similarity = self._jaccard_similarity(candidate_tokens, existing_tokens)
@@ -679,21 +788,56 @@ class ContextService:
             existing_metadata = getattr(existing, "metadata", {}) or {}
 
             if existing_type == candidate_type:
-                same_type_penalty += 0.05
+                same_type_penalty += w_type
 
             if candidate_doc_id and existing_metadata.get("doc_id") == candidate_doc_id:
-                same_doc_penalty += 0.22
+                same_doc_penalty += w_doc
 
             if candidate_title and existing_metadata.get("title") == candidate_title:
-                same_title_penalty += 0.08
+                same_title_penalty += w_title
 
-        return (
-            relevance
-            - (max_similarity * 0.70)
-            - same_type_penalty
-            - same_doc_penalty
-            - same_title_penalty
+        # One count per candidate evaluation, not per inner-loop comparison:
+        # the loop runs O(candidates x selected) times per pick and the
+        # per-term question is "did this fire at all for this candidate".
+        #
+        # These exist because the absence of them cost a measurement. #255 had
+        # to discover by ad-hoc probe that no two candidates on any
+        # diversity-policy query share a doc_id or a title -- so same_doc and
+        # same_title have never fired on this corpus, and nothing in the
+        # traffic window said so. A term that cannot fire and a term that fires
+        # and does nothing are different findings, and the counters are what
+        # tell them apart.
+        count("diversity.penalty.same_type", same_type_penalty > 0.0)
+        count("diversity.penalty.same_doc", same_doc_penalty > 0.0)
+        count("diversity.penalty.same_title", same_title_penalty > 0.0)
+        count("diversity.penalty.similarity", max_similarity > 0.0)
+
+        # THE BOUND. The selection objective may move a record by at most
+        # SELECTION_BAND of that record's own score, and the cap is on the TOTAL
+        # rather than on each term. SELECTION_BAND above carries the derivation
+        # and why the total is capped rather than the terms; ADR-044's 2026-10-02
+        # amendment carries the measurement it rests on.
+        #
+        # The similarity coefficient is derived rather than carried. It was 0.70
+        # ABSOLUTE against a composed score of roughly 0.4 to 0.8 -- at
+        # max_jaccard = 1 that is up to 175% of the record, for a term whose job
+        # is to separate near-duplicates. It is now SELECTION_BAND applied
+        # relatively, so two identical records cost each other exactly one band
+        # and partial overlap costs proportionally less.
+        #
+        # abs() on relevance: a composed score is non-negative in practice, but a
+        # negative baseline would otherwise invert the cap into a licence.
+        ceiling = abs(relevance) * SELECTION_BAND
+        penalty = (
+            max_similarity * ceiling * weights.similarity_share
+            + same_doc_penalty
+            + same_title_penalty
+            + same_type_penalty
         )
+        if count("diversity.penalty_capped", penalty > ceiling):
+            penalty = ceiling
+
+        return relevance - penalty
 
     def _tokenize(self, text: str) -> set[str]:
         return set(re.findall(r"\b[a-z0-9]{3,}\b", text.lower()))

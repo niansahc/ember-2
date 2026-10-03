@@ -43,7 +43,7 @@ def run_monthly_reflection():
         if proposed is not None:
             reflection["proposed_lodestone_id"] = proposed["id"]
     except Exception as exc:
-        logger.warning("[LODESTONE_SYNTHESIS] post-reflection pass failed (non-fatal): %s", exc)
+        logger.warning("[LODESTONE_SYNTHESIS] post-reflection pass failed (non-fatal): %s", type(exc).__name__)
 
     return reflection
 

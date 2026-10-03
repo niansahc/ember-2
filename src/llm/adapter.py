@@ -72,7 +72,7 @@ def list_generation_models() -> list[str]:
     try:
         return [m["model"] for m in _generation_client().list()["models"]]
     except Exception as exc:
-        logger.warning("[GENERATION_HOST] Could not list models: %s", exc)
+        logger.warning("[GENERATION_HOST] Could not list models: %s", type(exc).__name__)
         return []
 
 # Ceiling on the *computed* num_ctx default (the 80%-of-declared path in
@@ -1103,7 +1103,7 @@ class LLMAdapter:
             buf.buffer = oldest_turns + buf.buffer
             logger.warning(
                 "[BUFFER] Compression failed; restored %d turns. error=%s",
-                len(oldest_turns), exc,
+                len(oldest_turns), type(exc).__name__,
             )
             return
 

@@ -60,7 +60,7 @@ def _read_all_project_records() -> list[dict]:
         try:
             records.append(storage.read_json(f))
         except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Skipping corrupt project file %s: %s", f, e)
+            logger.warning("Skipping corrupt project file %s: %s", f, type(e).__name__)
     return records
 
 

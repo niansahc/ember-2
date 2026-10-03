@@ -114,7 +114,7 @@ def read(vault_path: Path | None = None) -> dict:
                 _migration_write_failed_paths.discard(path)
             except JsonIoError as exc:
                 logger.warning(
-                    "[PREFERENCES] Migration write failed for %s: %s", path.name, exc
+                    "[PREFERENCES] Migration write failed for %s: %s", path.name, type(exc).__name__
                 )
                 _migration_write_failed_paths.add(path)
 

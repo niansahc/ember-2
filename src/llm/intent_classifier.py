@@ -195,7 +195,7 @@ def _get_example_embeddings() -> tuple[list[str], np.ndarray] | None:
             # behind EMBER_DEBUG so it does not enter stdout by default.
             logger.warning(
                 "[INTENT_CLASSIFY] Stage 2 example embedding load failed (non-fatal): %s",
-                exc,
+                type(exc).__name__,
             )
         return None
 
@@ -222,7 +222,7 @@ def _stage2_classify(query: str) -> tuple[str | None, float | None]:
             # Exception payload may echo the query; gate behind EMBER_DEBUG.
             logger.warning(
                 "[INTENT_CLASSIFY] Stage 2 query embed failed (non-fatal): %s",
-                exc,
+                type(exc).__name__,
             )
         return None, None
 
@@ -295,11 +295,11 @@ def _stage3_llm_call(query: str) -> str:
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         if get_ember_debug():
             # Exception may include raw LLM output that echoes the query.
-            logger.warning("[INTENT_CLASSIFY] Stage 3 JSON parse failed: %s", exc)
+            logger.warning("[INTENT_CLASSIFY] Stage 3 JSON parse failed: %s", type(exc).__name__)
     except Exception as exc:
         if get_ember_debug():
             # Exception may include the request payload sent to Ollama.
-            logger.warning("[INTENT_CLASSIFY] Stage 3 LLM call failed: %s", exc)
+            logger.warning("[INTENT_CLASSIFY] Stage 3 LLM call failed: %s", type(exc).__name__)
     return _SAFE_DEFAULT
 
 

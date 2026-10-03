@@ -110,7 +110,7 @@ async def run_grounding_check(
         return True, None
 
     except Exception as exc:
-        logger.warning("[GROUNDING] Check failed (passing through): %s", exc)
+        logger.warning("[GROUNDING] Check failed (passing through): %s", type(exc).__name__)
         return True, None  # fail open -- don't block on grounding check errors
 
 
@@ -141,7 +141,7 @@ async def run_revision_pass(
         logger.warning("[GROUNDING] Revision pass completed")
         return revised
     except Exception as exc:
-        logger.warning("[GROUNDING] Revision failed (returning original): %s", exc)
+        logger.warning("[GROUNDING] Revision failed (returning original): %s", type(exc).__name__)
         return response  # fail open
 
 
@@ -168,4 +168,4 @@ def log_grounding_outcome(
         log_file = log_dir / f"{datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}Z-grounding.json"
         log_file.write_text(json.dumps(entry, indent=2), encoding="utf-8")
     except Exception as exc:
-        logger.warning("[GROUNDING] Failed to log outcome: %s", exc)
+        logger.warning("[GROUNDING] Failed to log outcome: %s", type(exc).__name__)

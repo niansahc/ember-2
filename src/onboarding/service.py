@@ -169,5 +169,5 @@ class OnboardingService:
             formatted = resp["message"]["content"].strip()
             return formatted if len(formatted) >= 10 else answer
         except Exception as exc:
-            logger.warning("[ONBOARDING] LLM format call failed: %s - storing raw answer", exc)
+            logger.warning("[ONBOARDING] LLM format call failed: %s - storing raw answer", type(exc).__name__)
             return answer

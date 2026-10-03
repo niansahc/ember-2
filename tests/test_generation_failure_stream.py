@@ -9,9 +9,9 @@ Every absence assertion here ("no vault_sources frame", "no vault header")
 has a positive control in the same file: the identical request with a
 successful generation, where the thing does occur.
 
-Only the buffer-then-stream path is covered. `_needs_grounding` is the
-constant True in openai_adapter, so the raw fast-streaming branch is not
-reachable and is not wrapped.
+Both streaming branches are covered. Production routes every turn through the
+buffer-then-stream path (`_STREAM_ALWAYS_GROUNDED` is True); the fast-streaming
+tests flip that module constant so the raw branch runs.
 """
 
 import json
@@ -234,3 +234,96 @@ def test_reachable_generation_control_delivers_and_commits(client, monkeypatch):
     assert "error" not in types
     assert "vault_sources" in types
     assert len(committed) == 1
+
+
+# ---------------------------------------------------------------------------
+# Fast streaming branch. Production keeps _STREAM_ALWAYS_GROUNDED True, which
+# makes this branch unreachable; the tests flip the module constant so the
+# branch runs.
+# ---------------------------------------------------------------------------
+
+def _post_fast(client, stream_fn):
+    from src.api import openai_adapter as oa
+
+    with patch.object(oa, "_STREAM_ALWAYS_GROUNDED", False), \
+         patch.object(oa.context_service, "build_context", return_value=_packet()), \
+         patch.object(oa.llm_adapter, "generate_response_stream", side_effect=stream_fn), \
+         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter._background_state_extraction"), \
+         patch("src.api.openai_adapter._detect_and_write_commitment"), \
+         patch("src.api.openai_adapter._detect_task_in_response"), \
+         patch("src.api.openai_adapter.onboarding_service") as onb, \
+         patch("src.api.openai_adapter._ensure_session"):
+        onb.is_active.return_value = False
+        return client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "ember-2",
+                "messages": [{"role": "user", "content": "hello there"}],
+                "stream": True,
+            },
+            headers={"X-Test-Session": "true"},
+        )
+
+
+def _content_frames(events: list) -> list:
+    return [
+        e["choices"][0]["delta"]["content"]
+        for e in events
+        if isinstance(e, dict) and e.get("choices") and "content" in e["choices"][0]["delta"]
+    ]
+
+
+def test_fast_path_failure_before_tokens_emits_error(client):
+    def _boom(*_a, **_k):
+        raise RuntimeError(MARKER)
+        yield  # pragma: no cover - makes this a generator
+
+    resp = _post_fast(client, _boom)
+    events = _events(resp.text)
+    types = _types(events)
+
+    assert resp.status_code == 200
+    assert types.count("error") == 1
+    assert "vault_sources" not in types
+    assert [c for c in _content_frames(events) if c] == []
+    assert events[-2]["choices"][0]["finish_reason"] == "stop"
+    assert events[-1] == "[DONE]"
+    assert MARKER not in resp.text
+
+
+def test_fast_path_failure_after_two_tokens_keeps_tokens_before_error(client):
+    def _two_then_boom(*_a, **_k):
+        yield "first "
+        yield "second "
+        raise RuntimeError(MARKER)
+
+    resp = _post_fast(client, _two_then_boom)
+    events = _events(resp.text)
+    types = _types(events)
+
+    assert [c for c in _content_frames(events) if c] == ["first ", "second "]
+    error_pos = next(i for i, e in enumerate(events) if isinstance(e, dict) and e.get("type") == "error")
+    last_token_pos = max(
+        i for i, e in enumerate(events)
+        if isinstance(e, dict) and e.get("choices") and e["choices"][0]["delta"].get("content")
+    )
+    assert last_token_pos < error_pos
+    assert "vault_sources" not in types
+    assert events[-1] == "[DONE]"
+    assert MARKER not in resp.text
+
+
+def test_fast_path_success_control_has_no_error_and_sends_vault_sources(client):
+    def _ok(*_a, **_k):
+        yield "first "
+        yield "second"
+
+    resp = _post_fast(client, _ok)
+    events = _events(resp.text)
+    types = _types(events)
+
+    assert [c for c in _content_frames(events) if c] == ["first ", "second"]
+    assert "error" not in types
+    assert "vault_sources" in types
+    assert events[-1] == "[DONE]"

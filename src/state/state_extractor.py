@@ -125,7 +125,7 @@ class StateExtractor:
         try:
             return self._do_extract(user_message, assistant_reply)
         except Exception as exc:
-            logger.warning("[STATE_EXTRACT] Extraction failed (non-fatal): %s", exc)
+            logger.warning("[STATE_EXTRACT] Extraction failed (non-fatal): %s", type(exc).__name__)
             return []
 
     def _do_extract(self, user_message: str, assistant_reply: str) -> list[StateRecord]:

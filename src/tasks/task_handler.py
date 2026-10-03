@@ -224,7 +224,7 @@ def create_task(
         logger.info("[TASK_HANDLER] Wrote task: %d chars", len(title))
         return TaskCreationResult(created=True, task_title=title)
     except Exception as exc:
-        logger.warning("[TASK_HANDLER] Failed to write task: %s", exc)
+        logger.warning("[TASK_HANDLER] Failed to write task: %s", type(exc).__name__)
         return TaskCreationResult(created=False, task_title=title, error=str(exc))
 
 

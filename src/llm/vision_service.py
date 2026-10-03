@@ -83,7 +83,7 @@ def _log_vision(event: str, **fields: Any) -> None:
         with log_file.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception as exc:
-        logger.warning("[VISION_LOG] Write failed (non-fatal): %s", exc)
+        logger.warning("[VISION_LOG] Write failed (non-fatal): %s", type(exc).__name__)
 
 
 class VisionService:
@@ -160,7 +160,7 @@ class VisionService:
                 )
             return description.strip()
         except Exception as exc:
-            logger.warning("[VISION] Preprocessor failed (non-fatal): %s", exc)
+            logger.warning("[VISION] Preprocessor failed (non-fatal): %s", type(exc).__name__)
             _log_vision(
                 "vision_failure",
                 exception_type=type(exc).__name__,

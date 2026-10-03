@@ -168,7 +168,7 @@ def _ollama_text(prompt: str, num_predict: int) -> str | None:
         )
         return (result.get("message") or {}).get("content", "").strip()
     except Exception as exc:
-        logger.warning("[LODESTONE_SYNTHESIS] LLM call failed: %s", exc)
+        logger.warning("[LODESTONE_SYNTHESIS] LLM call failed: %s", type(exc).__name__)
         return None
 
 

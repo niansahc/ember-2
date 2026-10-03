@@ -471,7 +471,7 @@ def delete_conversation_endpoint(session_id: str):
                 vault=_request_vault,
             )
     except Exception as exc:
-        logger.warning("[SESSION_REFLECT] Auto-trigger on delete failed (non-fatal): %s", exc)
+        logger.warning("[SESSION_REFLECT] Auto-trigger on delete failed (non-fatal): %s", type(exc).__name__)
 
     result = delete_session(session_id)
     if result is None:
@@ -490,7 +490,7 @@ def delete_conversation_endpoint(session_id: str):
             vault=_request_vault,
         )
     except Exception as exc:
-        logger.warning("[CASCADE_DELETE] Failed to start cascade (non-fatal): %s", exc)
+        logger.warning("[CASCADE_DELETE] Failed to start cascade (non-fatal): %s", type(exc).__name__)
 
     return {"status": "deleted", "session_id": session_id}
 
@@ -925,7 +925,7 @@ def _extract_lodestone_value(raw_answer: str, question_context: str | None = Non
         logger.warning("[LODESTONE] Inference returned empty")
         return None
     except Exception as exc:
-        logger.warning("[LODESTONE] Value inference failed: %s", exc)
+        logger.warning("[LODESTONE] Value inference failed: %s", type(exc).__name__)
         return None
 
 
@@ -1875,7 +1875,7 @@ def _nightly_tiering_loop():
             TieringService().run()
         except Exception as exc:
             logging.getLogger("ember.tiering").warning(
-                "[TIERING] Nightly run failed: %s", exc
+                "[TIERING] Nightly run failed: %s", type(exc).__name__
             )
 
         # Monthly reflection fires on the 1st of each month
@@ -1888,7 +1888,7 @@ def _nightly_tiering_loop():
                 )
             except Exception as exc:
                 logging.getLogger("ember.reflection").warning(
-                    "[REFLECTION] Monthly reflection failed: %s", exc
+                    "[REFLECTION] Monthly reflection failed: %s", type(exc).__name__
                 )
 
 

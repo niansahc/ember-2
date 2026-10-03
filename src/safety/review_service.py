@@ -157,7 +157,7 @@ class ResponseReviewService:
                 "[REVIEW_SERVICE] heuristic_fallback reason=llm_parse_error "
                 "active_principle_ids=%s err=%s",
                 context.active_principle_ids,
-                exc,
+                type(exc).__name__,
             )
             return self._heuristic_critique(context)
 

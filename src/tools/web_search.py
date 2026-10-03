@@ -120,5 +120,5 @@ def web_search(query):
         return results
 
     except Exception as exc:
-        logger.warning("[WEB_SEARCH] Failed: %s", exc)
+        logger.warning("[WEB_SEARCH] Failed: %s", type(exc).__name__)
         return []

@@ -373,7 +373,7 @@ def _rewrite(text: str, matches: list[dict]) -> str:
         return rewritten
 
     except Exception as exc:
-        logger.warning("[COACHING_FILTER] Stage 2 rewrite failed (non-fatal): %s", exc)
+        logger.warning("[COACHING_FILTER] Stage 2 rewrite failed (non-fatal): %s", type(exc).__name__)
         return text
 
 
@@ -412,7 +412,7 @@ def _log_intervention(
         logger.info("[COACHING_FILTER] Logged intervention: %s patterns, stage %d", len(matches), stage)
 
     except Exception as exc:
-        logger.warning("[COACHING_FILTER] Logging failed (non-fatal): %s", exc)
+        logger.warning("[COACHING_FILTER] Logging failed (non-fatal): %s", type(exc).__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -543,7 +543,7 @@ def _check_semantic_identity_collapse(text: str) -> bool:
         return "YES" in answer
 
     except Exception as exc:
-        logger.warning("[COACHING_FILTER] Semantic identity check failed (non-fatal): %s", exc)
+        logger.warning("[COACHING_FILTER] Semantic identity check failed (non-fatal): %s", type(exc).__name__)
         return False
 
 
@@ -581,7 +581,7 @@ def _rewrite_identity_collapse(text: str) -> str:
         return rewritten
 
     except Exception as exc:
-        logger.warning("[COACHING_FILTER] Identity rewrite failed (non-fatal): %s", exc)
+        logger.warning("[COACHING_FILTER] Identity rewrite failed (non-fatal): %s", type(exc).__name__)
         return text
 
 

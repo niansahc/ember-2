@@ -87,7 +87,7 @@ class VectorIndex:
 
         except OSError as exc:
             # stat() on the index can still fail before the read is attempted.
-            logger.warning("[VECTOR_INDEX] Failed to load index %s: %s", index_path, exc)
+            logger.warning("[VECTOR_INDEX] Failed to load index %s: %s", index_path, type(exc).__name__)
             return []
 
     def save_index(self, index_path: Path, index_data: list) -> None:

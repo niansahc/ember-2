@@ -135,7 +135,7 @@ class NatureLoader:
 
             version_file.write_text(current_version, encoding="utf-8")
         except Exception as exc:
-            logger.warning("[NATURE] Could not check/write version file: %s", exc)
+            logger.warning("[NATURE] Could not check/write version file: %s", type(exc).__name__)
 
     @staticmethod
     def _version_file_path() -> Path | None:

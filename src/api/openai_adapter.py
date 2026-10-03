@@ -46,6 +46,12 @@ from src.state.state_service import StateService
 
 EMBER_MODEL_ID = "ember-2"
 
+# True routes every streaming turn through the buffer-then-stream path so
+# post-gen validators run before the first token reaches the client. False
+# selects the raw fast-streaming branch. Module-level so tests can exercise
+# the fast branch; production leaves it True.
+_STREAM_ALWAYS_GROUNDED = True
+
 SUPPORTED_MODELS = [EMBER_MODEL_ID]
 
 
@@ -201,7 +207,7 @@ def _detect_and_write_commitment(reply: str, session_id: str) -> None:
             state_service.write(record)
             logger.info("[COMMITMENT] Wrote open_loop (%d chars)", len(result.commitment_text))
     except Exception as exc:
-        logger.warning("[COMMITMENT] Detection failed (non-fatal): %s", exc)
+        logger.warning("[COMMITMENT] Detection failed (non-fatal): %s", type(exc).__name__)
 
 
 def _detect_task_in_response(reply: str, session_id: str) -> None:
@@ -214,7 +220,7 @@ def _detect_task_in_response(reply: str, session_id: str) -> None:
             store_pending_offer(session_id, result.task_title)
             logger.info("[TASK_DETECT] Stored pending offer (%d chars)", len(result.task_title))
     except Exception as exc:
-        logger.warning("[TASK_DETECT] Detection failed (non-fatal): %s", exc)
+        logger.warning("[TASK_DETECT] Detection failed (non-fatal): %s", type(exc).__name__)
 
 
 def _background_state_extraction(user_message: str, reply: str) -> None:
@@ -232,7 +238,7 @@ def _background_state_extraction(user_message: str, reply: str) -> None:
         if records:
             logger.info("[STATE_EXTRACT] Wrote %d state record(s) to vault", len(records))
     except Exception as exc:
-        logger.warning("[STATE_EXTRACT] Background extraction failed (non-fatal): %s", exc)
+        logger.warning("[STATE_EXTRACT] Background extraction failed (non-fatal): %s", type(exc).__name__)
 
 
 def _background_topic_decline_resolution(user_message: str) -> None:
@@ -257,7 +263,7 @@ def _background_topic_decline_resolution(user_message: str) -> None:
                         )
                 break
     except Exception as exc:
-        logger.warning("[TOPIC_DECLINE] Resolution failed (non-fatal): %s", exc)
+        logger.warning("[TOPIC_DECLINE] Resolution failed (non-fatal): %s", type(exc).__name__)
 
 
 def _background_deviation_detection(
@@ -277,7 +283,7 @@ def _background_deviation_detection(
         if result and result.second_pass_result == "YES":
             write_deviation_record(result, user_message, response_text)
     except Exception as exc:
-        logger.warning("[DEVIATION] Background detection failed (non-fatal): %s", exc)
+        logger.warning("[DEVIATION] Background detection failed (non-fatal): %s", type(exc).__name__)
 
 
 def _resolve_original_pending(pending, reason: str = "user_response") -> None:
@@ -386,7 +392,7 @@ def _check_pending_confirmation(
             return {"confirmed": False, "action": action, "query": action_query}, filtered
 
     except Exception as exc:
-        logger.warning("[CONFIRM] Pending confirmation check failed (non-fatal): %s", exc)
+        logger.warning("[CONFIRM] Pending confirmation check failed (non-fatal): %s", type(exc).__name__)
         return None, []
 
 
@@ -465,7 +471,7 @@ def _write_pending_confirmation(
         state_service.write(record)
         logger.info("[ASK_FIRST] Wrote pending_confirmation (%d chars)", len(offer_sentence))
     except Exception as exc:
-        logger.warning("[ASK_FIRST] Detection failed (non-fatal): %s", exc)
+        logger.warning("[ASK_FIRST] Detection failed (non-fatal): %s", type(exc).__name__)
 
 
 import re
@@ -1169,7 +1175,7 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
                 logger.info("[CONFIRM] Executing deferred web search (%d chars)",
                             len(_original_query))
             except Exception as exc:
-                logger.warning("[CONFIRM] Deferred web search failed: %s", exc)
+                logger.warning("[CONFIRM] Deferred web search failed: %s", type(exc).__name__)
                 work.confirmation_search_failed = True
         elif not _confirmation_result["confirmed"]:
             pass
@@ -1255,7 +1261,7 @@ def _apply_timers(gen_ctx: GenerationContext, work: GenerationWork) -> None:
                         f'[System: timer started for "{timer_label}"] {work.message}'
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("[TIMER] Failed to start timer: %s", exc)
+                    logger.warning("[TIMER] Failed to start timer: %s", type(exc).__name__)
             elif detect_stop_timer(work.message) or detect_check_timer(work.message):
                 try:
                     active = get_active_timers()
@@ -1280,10 +1286,10 @@ def _apply_timers(gen_ctx: GenerationContext, work: GenerationWork) -> None:
                         note = "no active timer to stop" if wants_stop else "no active timers"
                         work.message = f"[System: {note}] {work.message}"
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("[TIMER] Failed to query/stop timers: %s", exc)
+                    logger.warning("[TIMER] Failed to query/stop timers: %s", type(exc).__name__)
         except Exception as exc:  # noqa: BLE001
             # Defensive: timer module load failures should never break a chat request.
-            logger.warning("[TIMER] Detection block failed: %s", exc)
+            logger.warning("[TIMER] Detection block failed: %s", type(exc).__name__)
 
 
 @router.post("/v1/chat/completions", response_model=ChatCompletionsResponse)
@@ -1298,7 +1304,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             raw_json = json.loads(raw_body)
             _log_payload_diagnostics(raw_json)
         except Exception as exc:
-            logger.warning("[PAYLOAD] failed to log raw request: %s", exc)
+            logger.warning("[PAYLOAD] failed to log raw request: %s", type(exc).__name__)
     # --- END DIAGNOSTIC LOGGING ---
 
     # --- SESSION ID ---
@@ -1547,7 +1553,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 break
         except Exception as exc:
             logger.warning(
-                "[CLARIFY] Next-turn check failed (non-fatal): %s", exc,
+                "[CLARIFY] Next-turn check failed (non-fatal): %s", type(exc).__name__,
             )
 
         _explicit_search = getattr(_early_policy, "explicit_search_request", False)
@@ -1585,7 +1591,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             context_packet.query_embedding,
         )
     except Exception as exc:
-        logger.warning("[T2_DETECTOR] detection failed (non-fatal): %s", exc)
+        logger.warning("[T2_DETECTOR] detection failed (non-fatal): %s", type(exc).__name__)
 
     # Reuse early classification when available; only call again for stateless mode
     from src.context.policies import classify_query
@@ -1676,7 +1682,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             if _vision_description:
                 logger.info("[VISION] Preprocessor returned %d chars", len(_vision_description))
         except Exception as exc:
-            logger.warning("[VISION] Preprocessing failed (non-fatal): %s", exc)
+            logger.warning("[VISION] Preprocessing failed (non-fatal): %s", type(exc).__name__)
     elif image_data:
         from src.llm.vision_service import _log_vision
         _log_vision(
@@ -1803,7 +1809,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     context_packet.web_items = _auto_results
                     logger.info("[WEB_SEARCH] Autonomous execution: %d results", len(_auto_results))
             except Exception as exc:
-                logger.warning("[WEB_SEARCH] Autonomous execution failed: %s", exc)
+                logger.warning("[WEB_SEARCH] Autonomous execution failed: %s", type(exc).__name__)
 
     # Web search transparency: track whether web search results were used
     # in context assembly. Communicated to the UI via X-Ember-Web-Search response
@@ -1887,7 +1893,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         # substitutions, and social_engineering compliance responses must
         # reach the user as the validated version, not the raw model output.
         # ADR-036 documents the social_engineering policy.
-        _needs_grounding = True
+        _needs_grounding = _STREAM_ALWAYS_GROUNDED
 
         def _post_stream_cleanup(full_reply: str) -> None:
             """Shared post-stream cleanup: write memories, extract state, detect tasks.
@@ -1913,7 +1919,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 )
             except Exception as exc:
                 logger.warning(
-                    "[SELF_NARRATIVE] Audit pass failed (non-fatal): %s", exc,
+                    "[SELF_NARRATIVE] Audit pass failed (non-fatal): %s", type(exc).__name__,
                 )
 
             with vault_binding(_turn_vault):
@@ -2219,25 +2225,31 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 accumulated = []
                 think_filter = ThinkBlockFilter()
 
-                for chunk in llm_adapter.generate_response_stream(
-                    context_packet,
-                    style=conversational_style,
-                    project_name=project_name,
-                    last_session_label=last_session_label,
-                    suppress_relational_lodestone=suppress_relational_lodestone,
-                    temperature=_inference_temperature,
-                    bare_mode=_bare_mode,
-                    vision_description=_vision_description,
-                    ask_first_active=_ask_first_active,
-                    intent_class=_intent_class,
-                    session_id=session_id,
-                    vault_path=_turn_vault,
-                    skip_vault_write=_skip_vault_write,
-                ):
-                    filtered = think_filter.filter(chunk)
-                    if filtered:
-                        accumulated.append(filtered)
-                        yield _emit_chunk(content=filtered)
+                try:
+                    for chunk in llm_adapter.generate_response_stream(
+                        context_packet,
+                        style=conversational_style,
+                        project_name=project_name,
+                        last_session_label=last_session_label,
+                        suppress_relational_lodestone=suppress_relational_lodestone,
+                        temperature=_inference_temperature,
+                        bare_mode=_bare_mode,
+                        vision_description=_vision_description,
+                        ask_first_active=_ask_first_active,
+                        intent_class=_intent_class,
+                        session_id=session_id,
+                        vault_path=_turn_vault,
+                        skip_vault_write=_skip_vault_write,
+                    ):
+                        filtered = think_filter.filter(chunk)
+                        if filtered:
+                            accumulated.append(filtered)
+                            yield _emit_chunk(content=filtered)
+                except Exception as exc:
+                    # Tokens already sent stay on screen; the error frame
+                    # follows them. No sources frame, no memory write.
+                    yield _generation_failed_frames(exc)
+                    return
 
                 # Vault sources event (if applicable)
                 if vault_sources:
@@ -2368,7 +2380,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         )
     except Exception as exc:
         logger.warning(
-            "[SELF_NARRATIVE] Audit pass failed (non-fatal): %s", exc,
+            "[SELF_NARRATIVE] Audit pass failed (non-fatal): %s", type(exc).__name__,
         )
 
     # Every write below belongs to the vault this turn started in, whether it

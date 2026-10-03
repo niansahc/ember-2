@@ -13,6 +13,7 @@ Frame families (see ADR-040 for the full schema):
       {type, content}  status signal      via sse_status()
       {type, sources}  web citations       via sse_sources()
       {type, sources}  vault citations     via sse_vault_sources()
+      {type, code, message}  generation failure via sse_error() (v3)
   - the [DONE] terminator via sse_done()
 
 B-SSE-001 (ADR-040 contract v2): status is a top-level typed frame,
@@ -92,6 +93,24 @@ def sse_sources(sources: list[Any]) -> str:
 def sse_vault_sources(sources: list[Any]) -> str:
     """Vault citation frame: {"type": "vault_sources", "sources": [...]}."""
     return "data: " + json.dumps({"type": "vault_sources", "sources": sources}) + "\n\n"
+
+
+GENERATION_FAILED_CODE = "generation_failed"
+GENERATION_FAILED_MESSAGE = (
+    "Ember couldn't generate a reply. Check that the model server is reachable."
+)
+
+
+def sse_error(
+    code: str = GENERATION_FAILED_CODE,
+    message: str = GENERATION_FAILED_MESSAGE,
+) -> str:
+    """Error frame: {"type": "error", "code": "<str>", "message": "<str>"}.
+
+    ADR-040 contract v3. Fixed text only: exception detail goes to the
+    application log, never onto the wire.
+    """
+    return "data: " + json.dumps({"type": "error", "code": code, "message": message}) + "\n\n"
 
 
 def sse_done() -> str:

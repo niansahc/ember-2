@@ -19,7 +19,14 @@ from src.api.pregeneration import (
     TerminalReply,
     PreGenerationRouter,
 )
-from src.api.sse import sse_chunk, sse_done, sse_sources, sse_status, sse_vault_sources
+from src.api.sse import (
+    sse_chunk,
+    sse_done,
+    sse_error,
+    sse_sources,
+    sse_status,
+    sse_vault_sources,
+)
 from src.core.config import (
     get_ember_debug,
     get_private_vault_path,
@@ -192,7 +199,7 @@ def _detect_and_write_commitment(reply: str, session_id: str) -> None:
                 metadata={"session_id": session_id, "resolved": False},
             )
             state_service.write(record)
-            logger.info("[COMMITMENT] Wrote open_loop: %s", result.commitment_text[:60])
+            logger.info("[COMMITMENT] Wrote open_loop (%d chars)", len(result.commitment_text))
     except Exception as exc:
         logger.warning("[COMMITMENT] Detection failed (non-fatal): %s", exc)
 
@@ -205,7 +212,7 @@ def _detect_task_in_response(reply: str, session_id: str) -> None:
         result = detect_task(reply)
         if result.detected and result.task_title:
             store_pending_offer(session_id, result.task_title)
-            logger.info("[TASK_DETECT] Stored pending offer: %s", result.task_title[:60])
+            logger.info("[TASK_DETECT] Stored pending offer (%d chars)", len(result.task_title))
     except Exception as exc:
         logger.warning("[TASK_DETECT] Detection failed (non-fatal): %s", exc)
 
@@ -246,8 +253,7 @@ def _background_topic_decline_resolution(user_message: str) -> None:
                     count = state_service.resolve_open_loops_by_topic(topic)
                     if count:
                         logger.info(
-                            "[TOPIC_DECLINE] Resolved %d open_loop(s) matching '%s'",
-                            count, topic[:40],
+                            "[TOPIC_DECLINE] Resolved %d open_loop(s)", count,
                         )
                 break
     except Exception as exc:
@@ -369,8 +375,8 @@ def _check_pending_confirmation(
             or any(p in _cleaned for p in _phrase_affirm)
         )
         if not _confirmed:
-            logger.info("[CONFIRM] Unmatched response (treating as decline): %s",
-                        user_message[:80])
+            logger.info("[CONFIRM] Unmatched response (treating as decline), %d chars",
+                        len(user_message))
 
         if _confirmed:
             logger.info("[CONFIRM] User confirmed pending %s action", action)
@@ -457,7 +463,7 @@ def _write_pending_confirmation(
             },
         )
         state_service.write(record)
-        logger.info("[ASK_FIRST] Wrote pending_confirmation: %s", offer_sentence[:80])
+        logger.info("[ASK_FIRST] Wrote pending_confirmation (%d chars)", len(offer_sentence))
     except Exception as exc:
         logger.warning("[ASK_FIRST] Detection failed (non-fatal): %s", exc)
 
@@ -553,8 +559,8 @@ def _intercept_override(ctx: RouterContext) -> Optional[TerminalReply]:
     """Claim instruction-override jailbreak attempts before any pipeline work."""
     if _is_override_attempt(ctx.latest_user_message):
         logger.warning(
-            "[OVERRIDE] Blocked override attempt: %s",
-            ctx.latest_user_message[:80],
+            "[OVERRIDE] Blocked override attempt (%d chars)",
+            len(ctx.latest_user_message),
         )
         return TerminalReply(_OVERRIDE_REPLY, label="override")
     return None
@@ -1010,7 +1016,7 @@ def _ensure_session(session_id: str, first_user_message: str, *, test: bool = Fa
     if len(first_user_message) > 50 and " " in title:
         title = title.rsplit(" ", 1)[0] + "..."
     create_session(session_id, title)
-    logger.info("[SESSION] Created session %s: %s", session_id, title)
+    logger.info("[SESSION] Created session %s", session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1160,8 +1166,8 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
             try:
                 from src.tools.web_search import web_search
                 work.confirmation_web_items = web_search(_original_query)
-                logger.info("[CONFIRM] Executing deferred web search for: %s",
-                            _original_query[:80])
+                logger.info("[CONFIRM] Executing deferred web search (%d chars)",
+                            len(_original_query))
             except Exception as exc:
                 logger.warning("[CONFIRM] Deferred web search failed: %s", exc)
                 work.confirmation_search_failed = True
@@ -1197,7 +1203,7 @@ def _apply_tasks(gen_ctx: GenerationContext, work: GenerationWork) -> None:
             if result.created:
                 created_titles.append(task_title)
             else:
-                logger.warning("[TASK] Write failed for '%s': %s", task_title, result.error)
+                logger.warning("[TASK] Write failed (%d chars)", len(task_title))
                 failed_titles.append(task_title)
 
         # Inject system context so Ember confirms naturally
@@ -2013,6 +2019,19 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             """Final chunk (finish_reason='stop') concatenated with [DONE]."""
             return _emit_chunk(content=None, finish_reason="stop") + sse_done()
 
+        def _generation_failed_frames(exc: BaseException) -> str:
+            """Error frame + terminal stop + [DONE] for a failed generation.
+
+            Headers are already flushed when the generator runs, so the client
+            has HTTP 200; the typed error frame (ADR-040 v3) is the only way to
+            tell it the turn failed. Only the exception type is logged beyond
+            the traceback; nothing from the exception reaches the wire.
+            """
+            logger.error(
+                "[GENERATION] failed: %s", type(exc).__name__, exc_info=exc,
+            )
+            return sse_error() + _emit_final_chunk_and_done()
+
         if _needs_grounding:
             # --- BUFFER-THEN-STREAM PATH (ADR-019) ---
             async def _stream_sse():
@@ -2030,25 +2049,29 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 # the trigger doesn't fire, no StatusSignals are yielded
                 # and only the final string arrives.
                 full_reply = ""
-                for _item in llm_adapter.generate_response_iter(
-                    context_packet,
-                    style=conversational_style,
-                    project_name=project_name,
-                    last_session_label=last_session_label,
-                    suppress_relational_lodestone=suppress_relational_lodestone,
-                    temperature=_inference_temperature,
-                    bare_mode=_bare_mode,
-                    vision_description=_vision_description,
-                    ask_first_active=_ask_first_active,
-                    intent_class=_intent_class,
-                    session_id=session_id,
-                    vault_path=_turn_vault,
-                    skip_vault_write=_skip_vault_write,
-                ):
-                    if isinstance(_item, StatusSignal):
-                        yield _status_event(_item.name)
-                    else:
-                        full_reply = _item
+                try:
+                    for _item in llm_adapter.generate_response_iter(
+                        context_packet,
+                        style=conversational_style,
+                        project_name=project_name,
+                        last_session_label=last_session_label,
+                        suppress_relational_lodestone=suppress_relational_lodestone,
+                        temperature=_inference_temperature,
+                        bare_mode=_bare_mode,
+                        vision_description=_vision_description,
+                        ask_first_active=_ask_first_active,
+                        intent_class=_intent_class,
+                        session_id=session_id,
+                        vault_path=_turn_vault,
+                        skip_vault_write=_skip_vault_write,
+                    ):
+                        if isinstance(_item, StatusSignal):
+                            yield _status_event(_item.name)
+                        else:
+                            full_reply = _item
+                except Exception as exc:
+                    yield _generation_failed_frames(exc)
+                    return
 
                 # 3. Grounding check
                 yield _status_event("verifying")
@@ -2267,8 +2290,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         }
         if used_web_search and not _suppress_source_badges:
             response_headers["X-Ember-Web-Search"] = "true"
-        if used_vault and not _suppress_source_badges:
-            response_headers["X-Ember-Vault-Used"] = "true"
+        # No X-Ember-Vault-Used here (ADR-040 v3): headers flush before the
+        # body runs, so the value cannot reflect a failed or substituted
+        # turn. The vault badge derives from the vault_sources frame, which
+        # is emitted only after generation succeeds.
         if used_vision:
             response_headers["X-Ember-Vision-Used"] = "true"
 

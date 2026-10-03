@@ -105,7 +105,7 @@ async def run_grounding_check(
         upper = answer.upper()
 
         if upper.startswith("YES"):
-            logger.warning("[GROUNDING] Unsupported claims detected: %s", answer[:200])
+            logger.warning("[GROUNDING] Unsupported claims detected (%d chars)", len(answer))
             return False, answer
         return True, None
 

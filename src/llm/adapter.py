@@ -356,17 +356,6 @@ class LLMAdapter:
             if _trim_log["overflow"]:
                 logger.warning("[PROMPT_GUARD] OVERFLOW %s", _trim_log)
 
-        # ADR-015 retrieval stats, issue #227. The prompt is final here --
-        # trimmed if it was going to be trimmed -- so this is the first point
-        # at which "what the model sees" is a settled question. Committing
-        # earlier would credit records that a later trim pass dropped.
-        # No-op when build_context armed nothing (read_only) or when no
-        # memory section rendered.
-        _delivered = context_packet.commit_delivery()
-        if _delivered:
-            logger.debug("[CONTEXT] retrieval stats recorded for %d rendered "
-                         "record(s)", _delivered)
-
         # Vision pipeline: the VisionService preprocessor (called upstream
         # in openai_adapter.py) extracts a text description that's already
         # injected into system_prompt via vision_description. The main
@@ -391,6 +380,16 @@ class LLMAdapter:
             assistant_prefix=_prefix,
         )
         draft_response = strip_think_blocks(draft_response)
+
+        # ADR-015 retrieval stats, issue #227. Committed only after generation
+        # returned: the prompt is final (trimmed if it was going to be) and
+        # the model actually received it. A failed turn delivered nothing,
+        # so it must not credit records. No-op when build_context armed
+        # nothing (read_only) or when no memory section rendered.
+        _delivered = context_packet.commit_delivery()
+        if _delivered:
+            logger.debug("[CONTEXT] retrieval stats recorded for %d rendered "
+                         "record(s)", _delivered)
 
         # Mark review context when any third-party
         # content was injected this turn (image description from vision
@@ -578,17 +577,6 @@ class LLMAdapter:
             if _trim_log["overflow"]:
                 logger.warning("[PROMPT_GUARD] OVERFLOW %s", _trim_log)
 
-        # ADR-015 retrieval stats, issue #227. The prompt is final here --
-        # trimmed if it was going to be trimmed -- so this is the first point
-        # at which "what the model sees" is a settled question. Committing
-        # earlier would credit records that a later trim pass dropped.
-        # No-op when build_context armed nothing (read_only) or when no
-        # memory section rendered.
-        _delivered = context_packet.commit_delivery()
-        if _delivered:
-            logger.debug("[CONTEXT] retrieval stats recorded for %d rendered "
-                         "record(s)", _delivered)
-
         # Assistant prefill for web-search-grounded turns (streaming path).
         _prefix = None
         if context_packet.web_items:
@@ -608,6 +596,15 @@ class LLMAdapter:
             yield chunk
 
         full_response = "".join(accumulated)
+
+        # ADR-015 retrieval stats, issue #227. Committed only after the stream
+        # completed without raising (see the sync path). A stream that fails
+        # partway through does not commit, even though some tokens were
+        # delivered: the rule is "only after generation succeeds".
+        _delivered = context_packet.commit_delivery()
+        if _delivered:
+            logger.debug("[CONTEXT] retrieval stats recorded for %d rendered "
+                         "record(s)", _delivered)
 
         # Third-party content flag for streaming path.
         _has_third_party_stream = bool(

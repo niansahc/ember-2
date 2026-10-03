@@ -116,7 +116,7 @@ def web_search(query):
             for c in candidates[:MAX_RESULTS]
         ]
 
-        logger.info("[WEB_SEARCH] %d results for: %s", len(results), query[:80])
+        logger.info("[WEB_SEARCH] %d results", len(results))
         return results
 
     except Exception as exc:

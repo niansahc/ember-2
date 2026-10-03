@@ -206,7 +206,7 @@ def create_session(session_id: str, title: str, *, test: bool = False) -> Path:
     }
     file_path = _session_dir() / f"{record['id']}.json"
     storage.write_json(file_path, record)
-    logger.info("Created session %s: %s", session_id, title)
+    logger.info("Created session %s", session_id)
     return file_path
 
 
@@ -256,7 +256,10 @@ def update_session(
     }
     file_path = _session_dir() / f"{record['id']}.json"
     storage.write_json(file_path, record)
-    logger.info("Updated session %s: title=%s project_id=%s", session_id, new_title, new_project_id)
+    logger.info(
+        "Updated session %s: title_changed=%s project_id=%s",
+        session_id, new_title is not None, new_project_id,
+    )
     return file_path
 
 

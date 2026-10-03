@@ -115,7 +115,7 @@ def detect_commitment(response_text: str) -> CommitmentDetectionResult:
 
             # Extract the sentence containing the commitment
             commitment_text = _extract_sentence(response_text, pattern)
-            logger.info("[COMMITMENT] Detected: %s", commitment_text[:80])
+            logger.info("[COMMITMENT] Detected: %d chars", len(commitment_text))
 
             return CommitmentDetectionResult(
                 detected=True,

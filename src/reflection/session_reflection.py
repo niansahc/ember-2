@@ -137,5 +137,5 @@ def generate_session_reflection(
         metadata=metadata,
     )
 
-    logger.info("[SESSION_REFLECT] Written: %s", reflection_text[:80])
+    logger.info("[SESSION_REFLECT] Written: %d chars", len(reflection_text))
     return reflection_text

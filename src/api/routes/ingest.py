@@ -102,7 +102,7 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
         content = await file.read()
         b64 = base64.b64encode(content).decode("ascii")
         media_type = MIME_MAP.get(ext, "application/octet-stream")
-        logger.info("[UPLOAD] Image passthrough: %s (%s, %d bytes)", filename, media_type, len(content))
+        logger.info("[UPLOAD] Image passthrough: %s (%s, %d bytes)", ext, media_type, len(content))
         return {
             "status": "image",
             "filename": filename,
@@ -126,7 +126,7 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
     # Write to vault/imports/uploads/ so it persists as a source file
     saved_path = uploads_dir / filename
     saved_path.write_bytes(content)
-    logger.info("[UPLOAD] Saved %s (%d bytes) to %s", filename, len(content), saved_path)
+    logger.info("[UPLOAD] Saved %s upload (%d bytes)", ext, len(content))
 
     try:
         doc_type = DOCUMENT_EXTENSIONS[ext]
@@ -155,7 +155,7 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
         chunks = run_ingestion_pipeline(docs)
         write_chunks_to_vault(chunks, vault_path)
 
-        logger.info("[UPLOAD] Ingested %s: %d docs, %d chunks", filename, len(docs), len(chunks))
+        logger.info("[UPLOAD] Ingested %s upload: %d docs, %d chunks", ext, len(docs), len(chunks))
         return {
             "status": "ingested",
             "filename": filename,
@@ -164,7 +164,7 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
         }
 
     except Exception as e:
-        logger.error("[UPLOAD] Failed to ingest %s: %s", filename, e)
+        logger.error("[UPLOAD] Failed to ingest %s upload: %s", ext, type(e).__name__)
         raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(e)}")
 
 

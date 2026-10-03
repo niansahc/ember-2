@@ -67,6 +67,43 @@ from src.tasks.task_service import TaskService
 
 logger = logging.getLogger("ember.auth")
 
+_APP_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
+def _default_app_log_path() -> Path:
+    return Path.home() / ".ember" / "logs" / "ember-api.log"
+
+
+def configure_app_logging() -> Path | None:
+    """Send application logs (INFO and above) to a rotating file.
+
+    Path comes from EMBER_LOG_PATH; the default is outside the repo tree. The
+    single basicConfig call is a no-op when the root logger already has
+    handlers, so re-running this does not stack duplicate handlers. httpx and
+    httpcore log full request URLs at INFO (web search queries ride in the
+    URL), so they are held at WARNING. Returns the log path, or None when the
+    file cannot be opened (the API must still start).
+    """
+    from logging.handlers import RotatingFileHandler
+
+    raw = os.getenv("EMBER_LOG_PATH")
+    path = Path(raw) if raw else _default_app_log_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.warning("[LOGGING] File log disabled: %s", type(exc).__name__)
+        return None
+    logging.basicConfig(level=logging.INFO, format=_APP_LOG_FORMAT, handlers=[handler])
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    return path
+
+
+configure_app_logging()
+
 _AUDIT_LOG_DIR = Path(__file__).resolve().parents[2] / "logs" / "audit"
 _AUDIT_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -883,7 +920,7 @@ def _extract_lodestone_value(raw_answer: str, question_context: str | None = Non
         )
         inferred = result["message"]["content"].strip()
         if inferred:
-            logger.info("[LODESTONE] Inferred value: %s", inferred[:80])
+            logger.info("[LODESTONE] Inferred value (%d chars)", len(inferred))
             return inferred
         logger.warning("[LODESTONE] Inference returned empty")
         return None

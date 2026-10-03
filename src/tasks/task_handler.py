@@ -207,7 +207,7 @@ def create_task(
         normalized_title = title.strip().lower()
         for existing_task in existing:
             if existing_task.title.strip().lower() == normalized_title:
-                logger.info("[TASK_HANDLER] Dedup: '%s' already exists, skipping", title[:60])
+                logger.info("[TASK_HANDLER] Dedup: task already exists, skipping")
                 return TaskCreationResult(created=True, task_title=title)
 
         metadata = {}
@@ -221,7 +221,7 @@ def create_task(
             metadata=metadata,
         )
         path = service.write(record)
-        logger.info("[TASK_HANDLER] Wrote task: %s -> %s", title[:60], path)
+        logger.info("[TASK_HANDLER] Wrote task: %d chars", len(title))
         return TaskCreationResult(created=True, task_title=title)
     except Exception as exc:
         logger.warning("[TASK_HANDLER] Failed to write task: %s", exc)
@@ -233,8 +233,8 @@ def store_pending_offer(session_id: str, task_title: str) -> None:
     if session_id not in _pending_offers:
         _pending_offers[session_id] = []
     _pending_offers[session_id].append(task_title)
-    logger.info("[TASK_HANDLER] Stored pending offer for session %s: %s (total: %d)",
-                session_id, task_title[:60], len(_pending_offers[session_id]))
+    logger.info("[TASK_HANDLER] Stored pending offer for session %s: %d chars (total: %d)",
+                session_id, len(task_title), len(_pending_offers[session_id]))
 
 
 def check_pending_confirmation(

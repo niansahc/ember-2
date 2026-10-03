@@ -15,7 +15,15 @@ reverts to the .env vault path.
 
 import contextlib
 import os
+import tempfile
 from unittest.mock import patch
+
+# src/api/main.py attaches a rotating file handler at import. Point it at a
+# throwaway directory before any test module imports the app, so test runs
+# never write to the user's real application log.
+os.environ["EMBER_LOG_PATH"] = os.path.join(
+    tempfile.mkdtemp(prefix="ember-test-logs-"), "ember-api.log"
+)
 
 import pytest
 from pathlib import Path

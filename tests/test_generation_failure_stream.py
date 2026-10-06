@@ -16,29 +16,17 @@ tests flip that module constant so the raw branch runs.
 
 import json
 import logging
+from contextlib import ExitStack
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from src.context.models import ContextItem, ContextPacket
+from src.api.sse import GENERATION_FAILED_CODE, GENERATION_FAILED_MESSAGE
 from src.llm.adapter import StatusSignal
+from tests.conftest import synthetic_packet
 
-ERROR_MESSAGE = "Ember couldn't generate a reply. Check that the model server is reachable."
 MARKER = "EXC-MARKER-7f3a"
-
-
-def _packet() -> ContextPacket:
-    item = ContextItem(
-        id="fixture-1",
-        content="A synthetic fixture record with enough content to pass filters.",
-        source="conversation",
-        item_type="conversation",
-        memory_type="conversation",
-        score=0.6,
-        timestamp="2026-03-15T10-00-00",
-    )
-    return ContextPacket(user_message="hello there", memory_items=[item])
 
 
 def _events(text: str) -> list:
@@ -63,26 +51,26 @@ def client():
         yield TestClient(app)
 
 
-def _post(client, *, stream: bool, iter_side_effect=None, iter_items=None):
-    """POST a chat turn with generation stubbed; returns the response."""
+def _post_chat(client, *, stream: bool = True, packet=None, extra_patches=()):
+    """POST one chat turn with side-effect writers stubbed.
+
+    Each caller passes only the patches that differ: the generation stubs,
+    the ollama stubs, or the branch flag.
+    """
     from src.api import openai_adapter as oa
 
-    gen_patch = patch.object(
-        oa.llm_adapter,
-        "generate_response_iter",
-        side_effect=iter_side_effect,
-        return_value=iter(iter_items or []),
-    )
-    with patch.object(oa.context_service, "build_context", return_value=_packet()), \
-         gen_patch, \
-         patch.object(oa.llm_adapter, "generate_response", return_value="A grounded reply."), \
-         patch("src.safety.grounding_check.run_grounding_check", return_value=(True, None)), \
-         patch("src.api.openai_adapter.write_memory"), \
-         patch("src.api.openai_adapter._background_state_extraction"), \
-         patch("src.api.openai_adapter._detect_and_write_commitment"), \
-         patch("src.api.openai_adapter._detect_task_in_response"), \
-         patch("src.api.openai_adapter.onboarding_service") as onb, \
-         patch("src.api.openai_adapter._ensure_session"):
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(
+            oa.context_service, "build_context",
+            return_value=packet if packet is not None else synthetic_packet(),
+        ))
+        for p in extra_patches:
+            stack.enter_context(p)
+        for name in ("write_memory", "_background_state_extraction",
+                     "_detect_and_write_commitment", "_detect_task_in_response",
+                     "_ensure_session"):
+            stack.enter_context(patch(f"src.api.openai_adapter.{name}"))
+        onb = stack.enter_context(patch("src.api.openai_adapter.onboarding_service"))
         onb.is_active.return_value = False
         return client.post(
             "/v1/chat/completions",
@@ -93,6 +81,20 @@ def _post(client, *, stream: bool, iter_side_effect=None, iter_items=None):
             },
             headers={"X-Test-Session": "true"},
         )
+
+
+def _post(client, *, stream: bool, iter_side_effect=None, iter_items=None):
+    """POST a chat turn with generation stubbed; returns the response."""
+    from src.api import openai_adapter as oa
+
+    return _post_chat(client, stream=stream, extra_patches=(
+        patch.object(
+            oa.llm_adapter, "generate_response_iter",
+            side_effect=iter_side_effect, return_value=iter(iter_items or []),
+        ),
+        patch.object(oa.llm_adapter, "generate_response", return_value="A grounded reply."),
+        patch("src.safety.grounding_check.run_grounding_check", return_value=(True, None)),
+    ))
 
 
 def _raise(*_a, **_k):
@@ -106,7 +108,7 @@ def test_failure_emits_error_frame_then_stop_and_done(client):
     assert resp.status_code == 200  # headers flushed before the body ran
     errors = [e for e in events if isinstance(e, dict) and e.get("type") == "error"]
     assert errors == [
-        {"type": "error", "code": "generation_failed", "message": ERROR_MESSAGE}
+        {"type": "error", "code": GENERATION_FAILED_CODE, "message": GENERATION_FAILED_MESSAGE}
     ]
     stop = events[-2]
     assert stop["choices"][0]["finish_reason"] == "stop"
@@ -182,30 +184,13 @@ def _local_chat(**kwargs):
 
 
 def _post_real_adapter(client, committed: list):
-    from src.api import openai_adapter as oa
-
-    packet = _packet()
+    packet = synthetic_packet()
     packet.arm_delivery_recorder(lambda items: committed.append(list(items)))
-    with patch.object(oa.context_service, "build_context", return_value=packet), \
-         patch("ollama.chat", side_effect=_local_chat), \
-         patch("ollama.embed", return_value={"embeddings": [[0.0] * 768]}), \
-         patch("src.safety.grounding_check.run_grounding_check", return_value=(True, None)), \
-         patch("src.api.openai_adapter.write_memory"), \
-         patch("src.api.openai_adapter._background_state_extraction"), \
-         patch("src.api.openai_adapter._detect_and_write_commitment"), \
-         patch("src.api.openai_adapter._detect_task_in_response"), \
-         patch("src.api.openai_adapter.onboarding_service") as onb, \
-         patch("src.api.openai_adapter._ensure_session"):
-        onb.is_active.return_value = False
-        return client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "ember-2",
-                "messages": [{"role": "user", "content": "hello there"}],
-                "stream": True,
-            },
-            headers={"X-Test-Session": "true"},
-        )
+    return _post_chat(client, packet=packet, extra_patches=(
+        patch("ollama.chat", side_effect=_local_chat),
+        patch("ollama.embed", return_value={"embeddings": [[0.0] * 768]}),
+        patch("src.safety.grounding_check.run_grounding_check", return_value=(True, None)),
+    ))
 
 
 def test_unreachable_generation_host_surfaces_error_and_skips_commit(client, monkeypatch, caplog):
@@ -245,25 +230,10 @@ def test_reachable_generation_control_delivers_and_commits(client, monkeypatch):
 def _post_fast(client, stream_fn):
     from src.api import openai_adapter as oa
 
-    with patch.object(oa, "_STREAM_ALWAYS_GROUNDED", False), \
-         patch.object(oa.context_service, "build_context", return_value=_packet()), \
-         patch.object(oa.llm_adapter, "generate_response_stream", side_effect=stream_fn), \
-         patch("src.api.openai_adapter.write_memory"), \
-         patch("src.api.openai_adapter._background_state_extraction"), \
-         patch("src.api.openai_adapter._detect_and_write_commitment"), \
-         patch("src.api.openai_adapter._detect_task_in_response"), \
-         patch("src.api.openai_adapter.onboarding_service") as onb, \
-         patch("src.api.openai_adapter._ensure_session"):
-        onb.is_active.return_value = False
-        return client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "ember-2",
-                "messages": [{"role": "user", "content": "hello there"}],
-                "stream": True,
-            },
-            headers={"X-Test-Session": "true"},
-        )
+    return _post_chat(client, extra_patches=(
+        patch.object(oa, "_STREAM_ALWAYS_GROUNDED", False),
+        patch.object(oa.llm_adapter, "generate_response_stream", side_effect=stream_fn),
+    ))
 
 
 def _content_frames(events: list) -> list:

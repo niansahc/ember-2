@@ -243,6 +243,22 @@ class StatusSignal:
     name: str  # "review_pending" or "review_complete"
 
 
+def _commit_delivery(context_packet) -> None:
+    """Commit ADR-015 retrieval stats for the records the model received.
+
+    Issue #227. Called only after generation succeeded: the prompt is final
+    (trimmed if it was going to be) and the model actually received it. A
+    failed turn delivered nothing, so it must not credit records. A stream
+    that fails partway does not commit either, even though some tokens were
+    delivered. No-op when build_context armed nothing (read_only) or when no
+    memory section rendered.
+    """
+    delivered = context_packet.commit_delivery()
+    if delivered:
+        logger.debug("[CONTEXT] retrieval stats recorded for %d rendered "
+                     "record(s)", delivered)
+
+
 class LLMAdapter:
     def __init__(
         self,
@@ -381,15 +397,7 @@ class LLMAdapter:
         )
         draft_response = strip_think_blocks(draft_response)
 
-        # ADR-015 retrieval stats, issue #227. Committed only after generation
-        # returned: the prompt is final (trimmed if it was going to be) and
-        # the model actually received it. A failed turn delivered nothing,
-        # so it must not credit records. No-op when build_context armed
-        # nothing (read_only) or when no memory section rendered.
-        _delivered = context_packet.commit_delivery()
-        if _delivered:
-            logger.debug("[CONTEXT] retrieval stats recorded for %d rendered "
-                         "record(s)", _delivered)
+        _commit_delivery(context_packet)
 
         # Mark review context when any third-party
         # content was injected this turn (image description from vision
@@ -597,14 +605,7 @@ class LLMAdapter:
 
         full_response = "".join(accumulated)
 
-        # ADR-015 retrieval stats, issue #227. Committed only after the stream
-        # completed without raising (see the sync path). A stream that fails
-        # partway through does not commit, even though some tokens were
-        # delivered: the rule is "only after generation succeeds".
-        _delivered = context_packet.commit_delivery()
-        if _delivered:
-            logger.debug("[CONTEXT] retrieval stats recorded for %d rendered "
-                         "record(s)", _delivered)
+        _commit_delivery(context_packet)
 
         # Third-party content flag for streaming path.
         _has_third_party_stream = bool(

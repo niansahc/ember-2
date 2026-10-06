@@ -2,7 +2,7 @@
 tests/test_app_logging.py
 
 configure_app_logging() in src/api/main.py: one basicConfig plus a
-RotatingFileHandler, path from EMBER_LOG_PATH, default outside the repo tree.
+RotatingFileHandler, path from get_ember_log_path() (EMBER_LOG_PATH), default outside the repo tree.
 
 Behavior at import time is checked in a fresh interpreter: under pytest the
 root logger already carries capture handlers, which makes basicConfig a
@@ -13,6 +13,8 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -54,24 +56,30 @@ def _run_probe(tmp_path, log_path):
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
-def test_import_attaches_one_rotating_handler_at_env_path(tmp_path):
+@pytest.fixture(scope="module")
+def probe(tmp_path_factory):
+    """One fresh-interpreter import shared by the writable-path tests."""
+    tmp_path = tmp_path_factory.mktemp("app_logging")
     log_path = tmp_path / "logs" / "ember-api.log"
-    result = _run_probe(tmp_path, log_path)
+    return log_path, _run_probe(tmp_path, log_path)
+
+
+def test_import_attaches_one_rotating_handler_at_env_path(probe):
+    log_path, result = probe
     assert result["first"] == 1
     assert [Path(p) for p in result["paths"]] == [log_path]
     assert log_path.exists()
     assert "probe-line-info" in log_path.read_text(encoding="utf-8")
 
 
-def test_reconfigure_does_not_stack_handlers(tmp_path):
-    result = _run_probe(tmp_path, tmp_path / "logs" / "ember-api.log")
+def test_reconfigure_does_not_stack_handlers(probe):
+    _, result = probe
     assert result["first"] == 1       # control: a handler was attached
     assert result["second"] == 1      # still one after a second call
 
 
-def test_httpx_is_held_at_warning(tmp_path):
-    log_path = tmp_path / "logs" / "ember-api.log"
-    result = _run_probe(tmp_path, log_path)
+def test_httpx_is_held_at_warning(probe):
+    log_path, result = probe
     assert result["before_httpx"] == 0   # control: NOTSET without the config
     assert result["after_httpx"] == 30   # logging.WARNING
     assert "httpx-probe-line" not in log_path.read_text(encoding="utf-8")
@@ -94,9 +102,9 @@ def _inside_repo(path: Path) -> bool:
 
 
 def test_default_path_is_outside_the_repo_tree():
-    from src.api.main import _default_app_log_path
+    from src.core.config import default_app_log_path
 
-    default = _default_app_log_path()
+    default = default_app_log_path()
     assert not _inside_repo(default)
     assert default.name == "ember-api.log"
     # Control: the predicate does flag a path under the repo.

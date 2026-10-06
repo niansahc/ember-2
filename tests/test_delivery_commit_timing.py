@@ -14,26 +14,16 @@ from unittest.mock import patch
 
 import pytest
 
-from src.context.models import ContextItem, ContextPacket
 from src.llm.adapter import LLMAdapter
+from tests.conftest import render_packet, synthetic_packet
 
 
 def _armed_packet():
     """A packet whose render is recorded and whose recorder is armed."""
-    item = ContextItem(
-        id="fixture-1",
-        content="A synthetic fixture record with enough content to pass filters.",
-        source="conversation",
-        item_type="conversation",
-        memory_type="conversation",
-        score=0.6,
-        timestamp="2026-03-15T10-00-00",
-    )
-    packet = ContextPacket(user_message="hello there", memory_items=[item])
+    packet = synthetic_packet()
     committed: list = []
     packet.arm_delivery_recorder(lambda items: committed.append(list(items)))
-    packet.begin_render()
-    packet.record_rendered([item])
+    render_packet(packet)
     return packet, committed
 
 

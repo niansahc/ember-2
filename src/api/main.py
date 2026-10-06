@@ -70,10 +70,6 @@ logger = logging.getLogger("ember.auth")
 _APP_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 
 
-def _default_app_log_path() -> Path:
-    return Path.home() / ".ember" / "logs" / "ember-api.log"
-
-
 def configure_app_logging() -> Path | None:
     """Send application logs (INFO and above) to a rotating file.
 
@@ -86,8 +82,9 @@ def configure_app_logging() -> Path | None:
     """
     from logging.handlers import RotatingFileHandler
 
-    raw = os.getenv("EMBER_LOG_PATH")
-    path = Path(raw) if raw else _default_app_log_path()
+    from src.core.config import get_ember_log_path
+
+    path = get_ember_log_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         handler = RotatingFileHandler(

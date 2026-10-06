@@ -101,16 +101,18 @@ GENERATION_FAILED_MESSAGE = (
 )
 
 
-def sse_error(
-    code: str = GENERATION_FAILED_CODE,
-    message: str = GENERATION_FAILED_MESSAGE,
-) -> str:
+def sse_error() -> str:
     """Error frame: {"type": "error", "code": "<str>", "message": "<str>"}.
 
     ADR-040 contract v3. Fixed text only: exception detail goes to the
-    application log, never onto the wire.
+    application log, never onto the wire. v3 defines one code; add a
+    parameter when a second one exists.
     """
-    return "data: " + json.dumps({"type": "error", "code": code, "message": message}) + "\n\n"
+    return "data: " + json.dumps({
+        "type": "error",
+        "code": GENERATION_FAILED_CODE,
+        "message": GENERATION_FAILED_MESSAGE,
+    }) + "\n\n"
 
 
 def sse_done() -> str:

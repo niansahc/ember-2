@@ -1892,8 +1892,8 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         # memory copy -- but fabricated sources, vision refusals, ask-first
         # substitutions, and social_engineering compliance responses must
         # reach the user as the validated version, not the raw model output.
-        # ADR-036 documents the social_engineering policy.
-        _needs_grounding = _STREAM_ALWAYS_GROUNDED
+        # ADR-036 documents the social_engineering policy. The branch is
+        # selected by _STREAM_ALWAYS_GROUNDED below.
 
         def _post_stream_cleanup(full_reply: str) -> None:
             """Shared post-stream cleanup: write memories, extract state, detect tasks.
@@ -2038,7 +2038,24 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             )
             return sse_error() + _emit_final_chunk_and_done()
 
-        if _needs_grounding:
+        # Keyword arguments shared by both generation calls below, so a new
+        # generation parameter is added in one place.
+        _gen_kwargs = dict(
+            style=conversational_style,
+            project_name=project_name,
+            last_session_label=last_session_label,
+            suppress_relational_lodestone=suppress_relational_lodestone,
+            temperature=_inference_temperature,
+            bare_mode=_bare_mode,
+            vision_description=_vision_description,
+            ask_first_active=_ask_first_active,
+            intent_class=_intent_class,
+            session_id=session_id,
+            vault_path=_turn_vault,
+            skip_vault_write=_skip_vault_write,
+        )
+
+        if _STREAM_ALWAYS_GROUNDED:
             # --- BUFFER-THEN-STREAM PATH (ADR-019) ---
             async def _stream_sse():
                 # Searching indicator for web search intent
@@ -2057,19 +2074,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 full_reply = ""
                 try:
                     for _item in llm_adapter.generate_response_iter(
-                        context_packet,
-                        style=conversational_style,
-                        project_name=project_name,
-                        last_session_label=last_session_label,
-                        suppress_relational_lodestone=suppress_relational_lodestone,
-                        temperature=_inference_temperature,
-                        bare_mode=_bare_mode,
-                        vision_description=_vision_description,
-                        ask_first_active=_ask_first_active,
-                        intent_class=_intent_class,
-                        session_id=session_id,
-                        vault_path=_turn_vault,
-                        skip_vault_write=_skip_vault_write,
+                        context_packet, **_gen_kwargs,
                     ):
                         if isinstance(_item, StatusSignal):
                             yield _status_event(_item.name)
@@ -2227,19 +2232,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
 
                 try:
                     for chunk in llm_adapter.generate_response_stream(
-                        context_packet,
-                        style=conversational_style,
-                        project_name=project_name,
-                        last_session_label=last_session_label,
-                        suppress_relational_lodestone=suppress_relational_lodestone,
-                        temperature=_inference_temperature,
-                        bare_mode=_bare_mode,
-                        vision_description=_vision_description,
-                        ask_first_active=_ask_first_active,
-                        intent_class=_intent_class,
-                        session_id=session_id,
-                        vault_path=_turn_vault,
-                        skip_vault_write=_skip_vault_write,
+                        context_packet, **_gen_kwargs,
                     ):
                         filtered = think_filter.filter(chunk)
                         if filtered:

@@ -399,11 +399,36 @@ def deliver_packet(packet) -> int:
     src/context/render_window.py, which the prompt builder and the trace harness
     also use.
     """
+    render_packet(packet)
+    return packet.commit_delivery()
+
+
+def render_packet(packet) -> None:
+    """The render half of deliver_packet, without the commit.
+
+    For tests that let the adapter fire the commit (or withhold it) and need
+    the render to have happened exactly as the prompt does it.
+    """
     packet.begin_render()
     profile, other = rendered_memory_window(packet.memory_items)
     packet.record_rendered(profile + other)
     packet.record_rendered(rendered_reflection_window(packet.reflection_items))
-    return packet.commit_delivery()
+
+
+def synthetic_packet():
+    """A one-record synthetic ContextPacket. No vault content."""
+    from src.context.models import ContextItem, ContextPacket
+
+    item = ContextItem(
+        id="fixture-1",
+        content="A synthetic fixture record with enough content to pass filters.",
+        source="conversation",
+        item_type="conversation",
+        memory_type="conversation",
+        score=0.6,
+        timestamp="2026-03-15T10-00-00",
+    )
+    return ContextPacket(user_message="hello there", memory_items=[item])
 
 
 # ---------------------------------------------------------------------------

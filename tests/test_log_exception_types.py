@@ -105,7 +105,9 @@ def test_web_search_failure_logs_type_only(caplog):
 
 
 def test_generation_failure_line_is_the_one_that_keeps_its_traceback():
-    # The only intended exception: [GENERATION] failed keeps exc_info. This
+    # The only intended exceptions: guard_sse in sse.py keeps exc_info on its
+    # [GENERATION] failed and post-terminal lines (the file log redacts the
+    # text, src/core/log_redaction.py). This
     # pins that it is still the only call in the sweep that does.
     import pathlib
     import re
@@ -116,7 +118,7 @@ def test_generation_failure_line_is_the_one_that_keeps_its_traceback():
         text = path.read_text(encoding="utf-8")
         if re.search(r"exc_info\s*=\s*(exc|e)\b", text):
             carrying.append(path.name)
-    assert carrying == ["openai_adapter.py"]   # control: the intended one is found
+    assert carrying == ["sse.py"]   # control: the intended one is found
 
 
 def test_openai_adapter_commitment_failure_logs_type_only(caplog):

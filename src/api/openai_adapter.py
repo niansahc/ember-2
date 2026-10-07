@@ -20,9 +20,9 @@ from src.api.pregeneration import (
     PreGenerationRouter,
 )
 from src.api.sse import (
+    guard_sse,
     sse_chunk,
     sse_done,
-    sse_error,
     sse_sources,
     sse_status,
     sse_vault_sources,
@@ -100,7 +100,9 @@ def early_return_response(
             yield sse_chunk(completion_id, finish_reason="stop")
             yield sse_done()
 
-        return StreamingResponse(_sse(), media_type="text/event-stream")
+        return StreamingResponse(
+            guard_sse(_sse(), completion_id), media_type="text/event-stream",
+        )
 
     return ChatCompletionsResponse(
         id=completion_id,
@@ -2025,19 +2027,6 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             """Final chunk (finish_reason='stop') concatenated with [DONE]."""
             return _emit_chunk(content=None, finish_reason="stop") + sse_done()
 
-        def _generation_failed_frames(exc: BaseException) -> str:
-            """Error frame + terminal stop + [DONE] for a failed generation.
-
-            Headers are already flushed when the generator runs, so the client
-            has HTTP 200; the typed error frame (ADR-040 v3) is the only way to
-            tell it the turn failed. Only the exception type is logged beyond
-            the traceback; nothing from the exception reaches the wire.
-            """
-            logger.error(
-                "[GENERATION] failed: %s", type(exc).__name__, exc_info=exc,
-            )
-            return sse_error() + _emit_final_chunk_and_done()
-
         # Keyword arguments shared by both generation calls below, so a new
         # generation parameter is added in one place.
         _gen_kwargs = dict(
@@ -2071,18 +2060,16 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 # review call (ADR-036 Option A; UI commit ed858c9). When
                 # the trigger doesn't fire, no StatusSignals are yielded
                 # and only the final string arrives.
+                # A raise here (or anywhere below) reaches guard_sse, which
+                # emits the error frame + stop + [DONE].
                 full_reply = ""
-                try:
-                    for _item in llm_adapter.generate_response_iter(
-                        context_packet, **_gen_kwargs,
-                    ):
-                        if isinstance(_item, StatusSignal):
-                            yield _status_event(_item.name)
-                        else:
-                            full_reply = _item
-                except Exception as exc:
-                    yield _generation_failed_frames(exc)
-                    return
+                for _item in llm_adapter.generate_response_iter(
+                    context_packet, **_gen_kwargs,
+                ):
+                    if isinstance(_item, StatusSignal):
+                        yield _status_event(_item.name)
+                    else:
+                        full_reply = _item
 
                 # 3. Grounding check
                 yield _status_event("verifying")
@@ -2230,19 +2217,16 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                 accumulated = []
                 think_filter = ThinkBlockFilter()
 
-                try:
-                    for chunk in llm_adapter.generate_response_stream(
-                        context_packet, **_gen_kwargs,
-                    ):
-                        filtered = think_filter.filter(chunk)
-                        if filtered:
-                            accumulated.append(filtered)
-                            yield _emit_chunk(content=filtered)
-                except Exception as exc:
-                    # Tokens already sent stay on screen; the error frame
-                    # follows them. No sources frame, no memory write.
-                    yield _generation_failed_frames(exc)
-                    return
+                # A raise mid-stream reaches guard_sse: tokens already sent
+                # stay on screen and the error frame follows them. No sources
+                # frame, no memory write.
+                for chunk in llm_adapter.generate_response_stream(
+                    context_packet, **_gen_kwargs,
+                ):
+                    filtered = think_filter.filter(chunk)
+                    if filtered:
+                        accumulated.append(filtered)
+                        yield _emit_chunk(content=filtered)
 
                 # Vault sources event (if applicable)
                 if vault_sources:
@@ -2303,7 +2287,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             response_headers["X-Ember-Vision-Used"] = "true"
 
         return StreamingResponse(
-            _stream_sse(),
+            guard_sse(_stream_sse(), completion_id),
             media_type="text/event-stream",
             headers=response_headers,
         )

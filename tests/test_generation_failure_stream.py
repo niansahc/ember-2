@@ -83,17 +83,22 @@ def _post_chat(client, *, stream: bool = True, packet=None, extra_patches=()):
         )
 
 
-def _post(client, *, stream: bool, iter_side_effect=None, iter_items=None):
-    """POST a chat turn with generation stubbed; returns the response."""
+def _post(client, *, stream: bool, iter_side_effect=None, iter_items=None,
+          packet=None, extra=()):
+    """POST a chat turn with generation stubbed; returns the response.
+
+    `extra` patches are entered after the defaults, so they override them.
+    """
     from src.api import openai_adapter as oa
 
-    return _post_chat(client, stream=stream, extra_patches=(
+    return _post_chat(client, stream=stream, packet=packet, extra_patches=(
         patch.object(
             oa.llm_adapter, "generate_response_iter",
             side_effect=iter_side_effect, return_value=iter(iter_items or []),
         ),
         patch.object(oa.llm_adapter, "generate_response", return_value="A grounded reply."),
         patch("src.safety.grounding_check.run_grounding_check", return_value=(True, None)),
+        *extra,
     ))
 
 
@@ -227,12 +232,13 @@ def test_reachable_generation_control_delivers_and_commits(client, monkeypatch):
 # branch runs.
 # ---------------------------------------------------------------------------
 
-def _post_fast(client, stream_fn):
+def _post_fast(client, stream_fn, extra=()):
     from src.api import openai_adapter as oa
 
     return _post_chat(client, extra_patches=(
         patch.object(oa, "_STREAM_ALWAYS_GROUNDED", False),
         patch.object(oa.llm_adapter, "generate_response_stream", side_effect=stream_fn),
+        *extra,
     ))
 
 
@@ -297,3 +303,170 @@ def test_fast_path_success_control_has_no_error_and_sends_vault_sources(client):
     assert "error" not in types
     assert "vault_sources" in types
     assert events[-1] == "[DONE]"
+
+
+# ---------------------------------------------------------------------------
+# guard_sse: a raise in any stage of the body, not only generation, ends the
+# stream with the error frame, one stop chunk and one [DONE]. Each stage test
+# patches the stage to raise; the no-exception controls run the same request
+# with nothing raising.
+# ---------------------------------------------------------------------------
+
+def _boom_exc():
+    return RuntimeError(MARKER)
+
+
+def _assert_failed_once(resp):
+    events = _events(resp.text)
+    errors = [e for e in events if isinstance(e, dict) and e.get("type") == "error"]
+    stops = [
+        e for e in events
+        if isinstance(e, dict) and e.get("choices")
+        and e["choices"][0].get("finish_reason") == "stop"
+    ]
+    assert resp.status_code == 200
+    assert errors == [
+        {"type": "error", "code": GENERATION_FAILED_CODE, "message": GENERATION_FAILED_MESSAGE}
+    ]
+    assert len(stops) == 1
+    assert events.count("[DONE]") == 1
+    assert events[-3:] == [errors[0], stops[0], "[DONE]"]
+    assert MARKER not in resp.text
+    return events
+
+
+def _assert_completed_once(resp):
+    events = _events(resp.text)
+    assert resp.status_code == 200
+    assert "error" not in _types(events)
+    assert events.count("[DONE]") == 1
+    assert events[-1] == "[DONE]"
+    return events
+
+
+def _web_packet():
+    packet = synthetic_packet()
+    packet.web_items = [{"title": "A synthetic page", "url": "https://example.com/a"}]
+    return packet
+
+
+OK = ["A grounded reply."]
+
+# Stage name -> (packet factory or None, patches that make the stage raise).
+# Built lazily per test: a patch object cannot be entered twice.
+GROUNDED_STAGES = {
+    "grounding": (None, lambda: (
+        patch("src.safety.grounding_check.run_grounding_check", side_effect=_boom_exc()),
+    )),
+    "revision": (None, lambda: (
+        patch("src.safety.grounding_check.run_grounding_check", return_value=(False, "claim")),
+        patch("src.safety.grounding_check.run_revision_pass", side_effect=_boom_exc()),
+    )),
+    "coaching": (None, lambda: (
+        patch("src.llm.coaching_filter.filter_coaching_frame", side_effect=_boom_exc()),
+    )),
+    "post_gen": (None, lambda: (
+        patch("src.llm.post_gen_pipeline.run_post_gen_pipeline", side_effect=_boom_exc()),
+    )),
+    "web_sources_emission": (_web_packet, lambda: (
+        patch("src.api.openai_adapter.sse_sources", side_effect=_boom_exc()),
+    )),
+    "vault_sources_emission": (None, lambda: (
+        patch("src.api.openai_adapter.sse_vault_sources", side_effect=_boom_exc()),
+    )),
+}
+
+
+@pytest.mark.parametrize("stage", sorted(GROUNDED_STAGES))
+def test_grounded_stage_raise_emits_terminal_frames_once(client, caplog, stage):
+    packet_fn, patches = GROUNDED_STAGES[stage]
+    packet = packet_fn() if packet_fn else None
+    with caplog.at_level(logging.ERROR):
+        resp = _post(client, stream=True, iter_items=OK, packet=packet, extra=patches())
+    _assert_failed_once(resp)
+    failed = [r.getMessage() for r in caplog.records
+              if r.getMessage().startswith("[GENERATION] failed")]
+    assert failed == ["[GENERATION] failed: RuntimeError"]
+
+
+def test_grounded_generation_raise_emits_terminal_frames_once(client):
+    _assert_failed_once(_post(client, stream=True, iter_side_effect=_raise))
+
+
+def test_grounded_no_exception_control(client):
+    events = _assert_completed_once(_post(client, stream=True, iter_items=OK))
+    assert "vault_sources" in _types(events)
+
+
+def test_grounded_web_sources_control_emits_sources(client):
+    # Control for the web_sources_emission stage: the frame is reached.
+    events = _assert_completed_once(
+        _post(client, stream=True, iter_items=OK, packet=_web_packet())
+    )
+    assert "sources" in _types(events)
+
+
+def test_review_stage_raise_emits_terminal_frames_once(client, monkeypatch):
+    """Real adapter generate_response_iter; trigger forced; review raises."""
+    from unittest.mock import MagicMock
+
+    from src.api import openai_adapter as oa
+
+    monkeypatch.delenv("EMBER_GENERATION_OLLAMA_HOST", raising=False)
+    trigger = MagicMock(triggered=True, triggered_by=["test_signal"])
+    review = MagicMock(side_effect=_boom_exc())
+    resp = _post_chat(client, extra_patches=(
+        patch("ollama.chat", side_effect=_local_chat),
+        patch("ollama.embed", return_value={"embeddings": [[0.0] * 768]}),
+        patch("src.safety.grounding_check.run_grounding_check", return_value=(True, None)),
+        patch.object(oa.llm_adapter.policy_service, "evaluate_trigger", return_value=trigger),
+        patch.object(oa.llm_adapter.policy_service, "get_active_principles", return_value=[]),
+        patch.object(oa.llm_adapter.review_service, "review", review),
+    ))
+    events = _assert_failed_once(resp)
+    assert review.called  # control: the review stage was reached
+    assert "status" in _types(events)  # review_pending went out before the raise
+
+
+def test_post_terminal_raise_adds_no_frames(client, caplog):
+    """_post_stream_cleanup runs after [DONE]; a raise there is log-only."""
+    with caplog.at_level(logging.ERROR):
+        resp = _post(client, stream=True, iter_items=OK, extra=(
+            patch("src.api.openai_adapter.vault_binding", side_effect=_boom_exc()),
+        ))
+    _assert_completed_once(resp)
+    messages = [r.getMessage() for r in caplog.records]
+    assert "[SSE] post-terminal failure: RuntimeError" in messages  # control: it raised
+    assert not any(m.startswith("[GENERATION] failed") for m in messages)
+
+
+def test_fast_path_vault_sources_raise_emits_terminal_frames_once(client):
+    def _ok(*_a, **_k):
+        yield "first "
+
+    resp = _post_fast(client, _ok, extra=(
+        patch("src.api.openai_adapter.sse_vault_sources", side_effect=_boom_exc()),
+    ))
+    events = _assert_failed_once(resp)
+    assert [c for c in _content_frames(events) if c] == ["first "]
+
+
+def test_fast_path_post_terminal_raise_adds_no_frames(client, caplog):
+    def _ok(*_a, **_k):
+        yield "first "
+
+    with caplog.at_level(logging.ERROR):
+        resp = _post_fast(client, _ok, extra=(
+            patch("src.llm.coaching_filter.filter_coaching_frame", side_effect=_boom_exc()),
+        ))
+    _assert_completed_once(resp)
+    messages = [r.getMessage() for r in caplog.records]
+    assert "[SSE] post-terminal failure: RuntimeError" in messages
+
+
+def test_fast_path_no_exception_control(client):
+    def _ok(*_a, **_k):
+        yield "first "
+
+    events = _assert_completed_once(_post_fast(client, _ok))
+    assert "vault_sources" in _types(events)

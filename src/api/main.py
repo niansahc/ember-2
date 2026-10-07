@@ -77,12 +77,14 @@ def configure_app_logging() -> Path | None:
     single basicConfig call is a no-op when the root logger already has
     handlers, so re-running this does not stack duplicate handlers. httpx and
     httpcore log full request URLs at INFO (web search queries ride in the
-    URL), so they are held at WARNING. Returns the log path, or None when the
+    URL), so they are held at WARNING. The file handler carries
+    ExceptionTextRedactor. Returns the log path, or None when the
     file cannot be opened (the API must still start).
     """
     from logging.handlers import RotatingFileHandler
 
     from src.core.config import get_ember_log_path
+    from src.core.log_redaction import ExceptionTextRedactor
 
     path = get_ember_log_path()
     try:
@@ -93,6 +95,9 @@ def configure_app_logging() -> Path | None:
     except OSError as exc:
         logger.warning("[LOGGING] File log disabled: %s", type(exc).__name__)
         return None
+    # Exception text can carry vault content; the file log keeps type names
+    # and traceback frames only (src/core/log_redaction.py).
+    handler.addFilter(ExceptionTextRedactor())
     logging.basicConfig(level=logging.INFO, format=_APP_LOG_FORMAT, handlers=[handler])
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)

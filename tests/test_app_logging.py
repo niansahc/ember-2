@@ -29,6 +29,11 @@ returned_again = m.configure_app_logging()
 handlers2 = [h for h in root.handlers if h.__class__.__name__ == "RotatingFileHandler"]
 logging.getLogger("ember.probe").info("probe-line-info")
 logging.getLogger("httpx").info("httpx-probe-line")
+try:
+    raise RuntimeError("PROBE-EXC-MARKER")
+except RuntimeError as exc:
+    logging.getLogger("ember.probe").error("probe-exc-args: %s", exc)
+    logging.getLogger("ember.probe").error("probe-exc-info", exc_info=exc)
 for h in root.handlers:
     h.flush()
 print(json.dumps({
@@ -38,6 +43,7 @@ print(json.dumps({
     "returned_again": str(returned_again) if returned_again else None,
     "before_httpx": before_httpx,
     "after_httpx": logging.getLogger("httpx").level,
+    "filters": [[f.__class__.__name__ for f in h.filters] for h in handlers2],
 }))
 """
 
@@ -83,6 +89,17 @@ def test_httpx_is_held_at_warning(probe):
     assert result["before_httpx"] == 0   # control: NOTSET without the config
     assert result["after_httpx"] == 30   # logging.WARNING
     assert "httpx-probe-line" not in log_path.read_text(encoding="utf-8")
+
+
+def test_file_handler_redacts_exception_text(probe):
+    log_path, result = probe
+    assert result["filters"] == [["ExceptionTextRedactor"]]
+    text = log_path.read_text(encoding="utf-8")
+    assert "PROBE-EXC-MARKER" not in text
+    # Control: both lines did reach the file, with the type name.
+    assert "probe-exc-args: RuntimeError" in text
+    assert "probe-exc-info" in text and "Traceback (most recent call last):" in text
+    # Marker-present control without the filter: tests/test_log_redaction.py.
 
 
 def test_unwritable_path_does_not_stop_import(tmp_path):

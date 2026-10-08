@@ -115,7 +115,7 @@ def start_timer(
         },
     )
     svc.write(record)
-    logger.info("[TIMER] Started '%s' (id=%s)", label, record.metadata["timer_id"])
+    logger.info("[TIMER] Started (id=%s)", record.metadata["timer_id"])
     return record
 
 
@@ -188,7 +188,7 @@ def stop_timer(
         },
     )
     svc.write(record)
-    logger.info("[TIMER] Stopped '%s' (id=%s)", target.text, timer_id)
+    logger.info("[TIMER] Stopped (id=%s)", timer_id)
     return record
 
 

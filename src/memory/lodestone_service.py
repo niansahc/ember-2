@@ -148,9 +148,9 @@ def write(
     storage.write_json(file_path, record)
 
     logger.info(
-        "[LODESTONE] Wrote %s record: %s (%s)",
+        "[LODESTONE] Wrote %s record: %d chars (%s)",
         "confirmed" if confirmed else "proposed",
-        value[:60],
+        len(value),
         taxonomy_category,
     )
     return record

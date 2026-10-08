@@ -116,9 +116,9 @@ def web_search(query):
             for c in candidates[:MAX_RESULTS]
         ]
 
-        logger.info("[WEB_SEARCH] %d results for: %s", len(results), query[:80])
+        logger.info("[WEB_SEARCH] %d results", len(results))
         return results
 
     except Exception as exc:
-        logger.warning("[WEB_SEARCH] Failed: %s", exc)
+        logger.warning("[WEB_SEARCH] Failed: %s", type(exc).__name__)
         return []

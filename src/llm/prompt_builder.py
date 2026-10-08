@@ -325,7 +325,7 @@ class PromptBuilder:
             self._nature_loader = NatureLoader()
             self._nature_loader.load()
         except Exception as exc:
-            logger.warning("[PROMPT] Could not load nature document: %s", exc)
+            logger.warning("[PROMPT] Could not load nature document: %s", type(exc).__name__)
             self._nature_loader = None
 
         # Identity rules loader — singleton, loaded once at startup.
@@ -333,7 +333,7 @@ class PromptBuilder:
             self._identity_rules_loader = IdentityRulesLoader()
             self._identity_rules_loader.load()
         except Exception as exc:
-            logger.warning("[PROMPT] Could not load identity rules: %s", exc)
+            logger.warning("[PROMPT] Could not load identity rules: %s", type(exc).__name__)
             self._identity_rules_loader = None
 
         # Lodestone seed loader — singleton, loaded once at startup.
@@ -341,7 +341,7 @@ class PromptBuilder:
             self._lodestone_loader = LodestoneLoader()
             self._lodestone_loader.load()
         except Exception as exc:
-            logger.warning("[PROMPT] Could not load lodestone seed: %s", exc)
+            logger.warning("[PROMPT] Could not load lodestone seed: %s", type(exc).__name__)
             self._lodestone_loader = None
 
     def build_prompt(
@@ -592,7 +592,7 @@ class PromptBuilder:
                 ]
             return to_prompt_text(records)
         except Exception as exc:
-            logger.warning("[PROMPT] Lodestone living layer failed: %s", exc)
+            logger.warning("[PROMPT] Lodestone living layer failed: %s", type(exc).__name__)
             return ""
 
     def _build_state_section(self, context_packet: ContextPacket) -> str:

@@ -67,6 +67,45 @@ from src.tasks.task_service import TaskService
 
 logger = logging.getLogger("ember.auth")
 
+_APP_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
+def configure_app_logging() -> Path | None:
+    """Send application logs (INFO and above) to a rotating file.
+
+    Path comes from EMBER_LOG_PATH; the default is outside the repo tree. The
+    single basicConfig call is a no-op when the root logger already has
+    handlers, so re-running this does not stack duplicate handlers. httpx and
+    httpcore log full request URLs at INFO (web search queries ride in the
+    URL), so they are held at WARNING. The file handler carries
+    ExceptionTextRedactor. Returns the log path, or None when the
+    file cannot be opened (the API must still start).
+    """
+    from logging.handlers import RotatingFileHandler
+
+    from src.core.config import get_ember_log_path
+    from src.core.log_redaction import ExceptionTextRedactor
+
+    path = get_ember_log_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.warning("[LOGGING] File log disabled: %s", type(exc).__name__)
+        return None
+    # Exception text can carry vault content; the file log keeps type names
+    # and traceback frames only (src/core/log_redaction.py).
+    handler.addFilter(ExceptionTextRedactor())
+    logging.basicConfig(level=logging.INFO, format=_APP_LOG_FORMAT, handlers=[handler])
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    return path
+
+
+configure_app_logging()
+
 _AUDIT_LOG_DIR = Path(__file__).resolve().parents[2] / "logs" / "audit"
 _AUDIT_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -434,7 +473,7 @@ def delete_conversation_endpoint(session_id: str):
                 vault=_request_vault,
             )
     except Exception as exc:
-        logger.warning("[SESSION_REFLECT] Auto-trigger on delete failed (non-fatal): %s", exc)
+        logger.warning("[SESSION_REFLECT] Auto-trigger on delete failed (non-fatal): %s", type(exc).__name__)
 
     result = delete_session(session_id)
     if result is None:
@@ -453,7 +492,7 @@ def delete_conversation_endpoint(session_id: str):
             vault=_request_vault,
         )
     except Exception as exc:
-        logger.warning("[CASCADE_DELETE] Failed to start cascade (non-fatal): %s", exc)
+        logger.warning("[CASCADE_DELETE] Failed to start cascade (non-fatal): %s", type(exc).__name__)
 
     return {"status": "deleted", "session_id": session_id}
 
@@ -883,12 +922,12 @@ def _extract_lodestone_value(raw_answer: str, question_context: str | None = Non
         )
         inferred = result["message"]["content"].strip()
         if inferred:
-            logger.info("[LODESTONE] Inferred value: %s", inferred[:80])
+            logger.info("[LODESTONE] Inferred value (%d chars)", len(inferred))
             return inferred
         logger.warning("[LODESTONE] Inference returned empty")
         return None
     except Exception as exc:
-        logger.warning("[LODESTONE] Value inference failed: %s", exc)
+        logger.warning("[LODESTONE] Value inference failed: %s", type(exc).__name__)
         return None
 
 
@@ -1838,7 +1877,7 @@ def _nightly_tiering_loop():
             TieringService().run()
         except Exception as exc:
             logging.getLogger("ember.tiering").warning(
-                "[TIERING] Nightly run failed: %s", exc
+                "[TIERING] Nightly run failed: %s", type(exc).__name__
             )
 
         # Monthly reflection fires on the 1st of each month
@@ -1851,7 +1890,7 @@ def _nightly_tiering_loop():
                 )
             except Exception as exc:
                 logging.getLogger("ember.reflection").warning(
-                    "[REFLECTION] Monthly reflection failed: %s", exc
+                    "[REFLECTION] Monthly reflection failed: %s", type(exc).__name__
                 )
 
 

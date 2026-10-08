@@ -52,7 +52,7 @@ def _get_keyring(service: str) -> str | None:
         import keyring
         return keyring.get_password(service, _KEYRING_USERNAME)
     except Exception as exc:
-        logger.warning("[PIN_SERVICE] Failed to read from keyring: %s", exc)
+        logger.warning("[PIN_SERVICE] Failed to read from keyring: %s", type(exc).__name__)
         return None
 
 
@@ -62,7 +62,7 @@ def _set_keyring(service: str, value: str) -> None:
         import keyring
         keyring.set_password(service, _KEYRING_USERNAME, value)
     except Exception as exc:
-        logger.warning("[PIN_SERVICE] Failed to write to keyring: %s", exc)
+        logger.warning("[PIN_SERVICE] Failed to write to keyring: %s", type(exc).__name__)
         raise
 
 

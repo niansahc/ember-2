@@ -254,7 +254,7 @@ def _run_second_pass(
             return "YES", answer
         return "NO", answer
     except Exception as exc:
-        logger.warning("[DEVIATION] Second pass failed: %s", exc)
+        logger.warning("[DEVIATION] Second pass failed: %s", type(exc).__name__)
         return "NO", f"second pass error: {exc}"
 
 
@@ -335,7 +335,7 @@ def write_deviation_record(
         )
         return record_data
     except Exception as exc:
-        logger.warning("[DEVIATION] Failed to write record: %s", exc)
+        logger.warning("[DEVIATION] Failed to write record: %s", type(exc).__name__)
         return None
 
 

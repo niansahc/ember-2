@@ -125,7 +125,7 @@ class StateExtractor:
         try:
             return self._do_extract(user_message, assistant_reply)
         except Exception as exc:
-            logger.warning("[STATE_EXTRACT] Extraction failed (non-fatal): %s", exc)
+            logger.warning("[STATE_EXTRACT] Extraction failed (non-fatal): %s", type(exc).__name__)
             return []
 
     def _do_extract(self, user_message: str, assistant_reply: str) -> list[StateRecord]:
@@ -212,8 +212,8 @@ class StateExtractor:
             # Skip low confidence
             if confidence == "low":
                 logger.info(
-                    "[STATE_EXTRACT] Skipping low-confidence: %s — %s",
-                    state_type, text[:60],
+                    "[STATE_EXTRACT] Skipping low-confidence: %s",
+                    state_type,
                 )
                 continue
 
@@ -226,8 +226,8 @@ class StateExtractor:
             # but at 8B scale it may still do so. Belt-and-suspenders.
             if _is_conversational_meta(text):
                 logger.info(
-                    "[STATE_EXTRACT] Filtered conversational meta: %s",
-                    text[:60],
+                    "[STATE_EXTRACT] Filtered conversational meta: %d chars",
+                    len(text),
                 )
                 continue
 
@@ -245,8 +245,8 @@ class StateExtractor:
             )
             records.append(record)
             logger.info(
-                "[STATE_EXTRACT] Found: %s — %s (confidence: %s)",
-                state_type, text[:60], confidence,
+                "[STATE_EXTRACT] Found: %s (confidence: %s)",
+                state_type, confidence,
             )
 
         if records:

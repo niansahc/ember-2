@@ -112,7 +112,7 @@ def detect_task(response_text: str) -> TaskDetectionResult:
 
             task_title = _extract_task_title(response_text, pattern)
             suggested = f"Want me to add \"{task_title}\" as a task?"
-            logger.info("[TASK_DETECT] Detected: %s", task_title[:60])
+            logger.info("[TASK_DETECT] Detected: %d chars", len(task_title))
 
             return TaskDetectionResult(
                 detected=True,

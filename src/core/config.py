@@ -354,6 +354,20 @@ def get_ember_classifier_telemetry() -> bool:
     return os.getenv("EMBER_CLASSIFIER_TELEMETRY", "").lower() in ("1", "true", "yes")
 
 
+def default_app_log_path() -> Path:
+    """Default application log path. Outside the repo tree by design."""
+    return Path.home() / ".ember" / "logs" / "ember-api.log"
+
+
+def get_ember_log_path() -> Path:
+    """
+    Returns the application log file path.
+    Set EMBER_LOG_PATH in .env to override; defaults to default_app_log_path().
+    """
+    raw = os.getenv("EMBER_LOG_PATH")
+    return Path(raw) if raw else default_app_log_path()
+
+
 def get_ember_vision_model() -> str | None:
     """
     Returns the Ollama vision model for image analysis, or None if not configured.

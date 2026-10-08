@@ -72,7 +72,7 @@ def list_generation_models() -> list[str]:
     try:
         return [m["model"] for m in _generation_client().list()["models"]]
     except Exception as exc:
-        logger.warning("[GENERATION_HOST] Could not list models: %s", exc)
+        logger.warning("[GENERATION_HOST] Could not list models: %s", type(exc).__name__)
         return []
 
 # Ceiling on the *computed* num_ctx default (the 80%-of-declared path in
@@ -243,6 +243,22 @@ class StatusSignal:
     name: str  # "review_pending" or "review_complete"
 
 
+def _commit_delivery(context_packet) -> None:
+    """Commit ADR-015 retrieval stats for the records the model received.
+
+    Issue #227. Called only after generation succeeded: the prompt is final
+    (trimmed if it was going to be) and the model actually received it. A
+    failed turn delivered nothing, so it must not credit records. A stream
+    that fails partway does not commit either, even though some tokens were
+    delivered. No-op when build_context armed nothing (read_only) or when no
+    memory section rendered.
+    """
+    delivered = context_packet.commit_delivery()
+    if delivered:
+        logger.debug("[CONTEXT] retrieval stats recorded for %d rendered "
+                     "record(s)", delivered)
+
+
 class LLMAdapter:
     def __init__(
         self,
@@ -356,17 +372,6 @@ class LLMAdapter:
             if _trim_log["overflow"]:
                 logger.warning("[PROMPT_GUARD] OVERFLOW %s", _trim_log)
 
-        # ADR-015 retrieval stats, issue #227. The prompt is final here --
-        # trimmed if it was going to be trimmed -- so this is the first point
-        # at which "what the model sees" is a settled question. Committing
-        # earlier would credit records that a later trim pass dropped.
-        # No-op when build_context armed nothing (read_only) or when no
-        # memory section rendered.
-        _delivered = context_packet.commit_delivery()
-        if _delivered:
-            logger.debug("[CONTEXT] retrieval stats recorded for %d rendered "
-                         "record(s)", _delivered)
-
         # Vision pipeline: the VisionService preprocessor (called upstream
         # in openai_adapter.py) extracts a text description that's already
         # injected into system_prompt via vision_description. The main
@@ -391,6 +396,8 @@ class LLMAdapter:
             assistant_prefix=_prefix,
         )
         draft_response = strip_think_blocks(draft_response)
+
+        _commit_delivery(context_packet)
 
         # Mark review context when any third-party
         # content was injected this turn (image description from vision
@@ -578,17 +585,6 @@ class LLMAdapter:
             if _trim_log["overflow"]:
                 logger.warning("[PROMPT_GUARD] OVERFLOW %s", _trim_log)
 
-        # ADR-015 retrieval stats, issue #227. The prompt is final here --
-        # trimmed if it was going to be trimmed -- so this is the first point
-        # at which "what the model sees" is a settled question. Committing
-        # earlier would credit records that a later trim pass dropped.
-        # No-op when build_context armed nothing (read_only) or when no
-        # memory section rendered.
-        _delivered = context_packet.commit_delivery()
-        if _delivered:
-            logger.debug("[CONTEXT] retrieval stats recorded for %d rendered "
-                         "record(s)", _delivered)
-
         # Assistant prefill for web-search-grounded turns (streaming path).
         _prefix = None
         if context_packet.web_items:
@@ -608,6 +604,8 @@ class LLMAdapter:
             yield chunk
 
         full_response = "".join(accumulated)
+
+        _commit_delivery(context_packet)
 
         # Third-party content flag for streaming path.
         _has_third_party_stream = bool(
@@ -1106,7 +1104,7 @@ class LLMAdapter:
             buf.buffer = oldest_turns + buf.buffer
             logger.warning(
                 "[BUFFER] Compression failed; restored %d turns. error=%s",
-                len(oldest_turns), exc,
+                len(oldest_turns), type(exc).__name__,
             )
             return
 

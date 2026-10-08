@@ -128,3 +128,19 @@ def test_empty_message_stream_matches_serializer(monkeypatch):
     stop = json.loads(lines[1][len("data: "):])
     assert stop["choices"][0]["finish_reason"] == "stop"
     assert lines[2] == "data: [DONE]"
+
+
+def test_error_frame_exact_bytes():
+    # ADR-040 v3: generation failure is a top-level typed frame with fixed text.
+    from src.api.sse import sse_error
+
+    frame = sse_error()
+    assert frame == (
+        'data: {"type": "error", "code": "generation_failed", "message": '
+        '"Ember couldn\'t generate a reply. Check that the model server is reachable."}\n\n'
+    )
+    p = _payload(frame)
+    assert set(p) == {"type", "code", "message"}
+    # Not an OpenAI chunk envelope.
+    assert "choices" not in p
+    assert "object" not in p

@@ -183,4 +183,4 @@ def log_self_narrative_outcome(
         )
         log_file.write_text(json.dumps(entry, indent=2), encoding="utf-8")
     except Exception as exc:
-        logger.warning("[SELF_NARRATIVE] Failed to log outcome: %s", exc)
+        logger.warning("[SELF_NARRATIVE] Failed to log outcome: %s", type(exc).__name__)

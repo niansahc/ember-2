@@ -105,7 +105,7 @@ def generate_session_reflection(
             )
             reflection_text = response["message"]["content"]
     except Exception as exc:
-        logger.warning("[SESSION_REFLECT] LLM call failed: %s", exc)
+        logger.warning("[SESSION_REFLECT] LLM call failed: %s", type(exc).__name__)
         return None
 
     if not reflection_text or not reflection_text.strip():
@@ -137,5 +137,5 @@ def generate_session_reflection(
         metadata=metadata,
     )
 
-    logger.info("[SESSION_REFLECT] Written: %s", reflection_text[:80])
+    logger.info("[SESSION_REFLECT] Written: %d chars", len(reflection_text))
     return reflection_text

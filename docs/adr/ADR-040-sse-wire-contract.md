@@ -3,9 +3,14 @@
 **Status:** Accepted
 **Date:** 2026-06-13
 **Target:** v0.18.1
-**Contract version:** 2
+**Contract version:** 3
 
 **Version history:**
+- v3 (2026-10-03) -- generation failures surface on the wire. New Family-2
+  `error` frame; the streaming response no longer sets `X-Ember-Vault-Used`
+  (the vault badge derives from the `vault_sources` frame). See "Family 2" and
+  "Resolved (generation failure)" below. Lockstep UI change: `ember-2-ui`
+  parser and badge source.
 - v1 (2026-06-13) -- initial freeze of the current wire format (issue #93 PR (a)).
 - v2 (2026-07-18) -- B-SSE-001 resolution: status moved from a Family-1
   `choices[0].delta.status` chunk to a top-level typed frame
@@ -59,6 +64,11 @@ below.)
   in `content` -- the field the UI parser reads. Emitted by `sse_status()`.
 - **web sources** -- `{"type": "sources", "sources": [{"title": "<str>", "url": "<str>"}, ...]}`
 - **vault sources** -- `{"type": "vault_sources", "sources": [{"type": "<state|conversation|...>", "timestamp": "<iso>", "summary": "<str>"}, ...]}`
+- **error** (v3) -- `{"type": "error", "code": "generation_failed", "message": "Ember couldn't generate a reply. Check that the model server is reachable."}`.
+  Emitted by `sse_error()` when generation raises inside the SSE generator.
+  `code` is a stable machine value (`generation_failed` is the only one
+  defined); `message` is fixed user-facing text. Exception detail is logged
+  server-side and never placed on the wire.
 
 ### Terminator
 
@@ -70,6 +80,32 @@ Optional status frames -> initial `content: ""` -> content tokens ->
 [optional web `sources`] -> [optional `vault_sources`] -> terminal `stop` ->
 `[DONE]`. Canned early-return paths emit a single content frame -> `stop` ->
 `[DONE]` (no status or sources).
+
+Failed generation (v3): optional status frames -> initial `content: ""` ->
+`error` -> terminal `stop` -> `[DONE]`. No `sources` or `vault_sources` frame
+follows an `error`, and no content tokens are emitted by the grounded
+(buffer-then-stream) path before it.
+
+## Resolved (generation failure)
+
+Response headers flush before the SSE generator runs. An exception inside the
+generator therefore reached the client as HTTP 200 with whatever headers were
+computed up front (including `X-Ember-Vault-Used: true`) and an empty body, which
+the UI rendered as an empty reply. v3 adds the `error` frame as the in-band
+failure signal.
+
+`X-Ember-Vault-Used` is removed from the streaming response for the same
+reason: it is computed before generation, so it cannot reflect a failed turn
+or a post-generation substitution that clears the sources. The vault badge
+derives from the `vault_sources` frame, which is emitted only after generation
+succeeds and is suppressed when the response is substituted. The header is
+unchanged on the non-streaming path, where the response is only sent after
+generation completes. `X-Ember-Web-Search` and `X-Ember-Vision-Used` are
+unchanged.
+
+Because retrieval stats are credited only for records the model received, the
+delivery commit now runs after generation succeeds (ADR-015); a failed or
+partially streamed turn does not commit.
 
 ## Resolved (B-SSE-001)
 

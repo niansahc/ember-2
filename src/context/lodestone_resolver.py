@@ -58,7 +58,7 @@ def resolve(
         try:
             query_embedding = embed_text(user_message)
         except Exception as exc:
-            logger.warning("[LODESTONE_RESOLVER] Embedding failed: %s", exc)
+            logger.warning("[LODESTONE_RESOLVER] Embedding failed: %s", type(exc).__name__)
             return []
 
     scored = []

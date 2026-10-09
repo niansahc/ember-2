@@ -75,6 +75,7 @@ if str(REPO_ROOT) not in sys.path:
 from src.core.config import get_private_vault_path
 from src.memory.authorship import classify_authorship
 from src.memory.eval_fixtures import is_eval_fixture, should_index_record
+from src.memory.write_memory import should_index
 from src.retrieval.embedding_model import embed_texts
 from src.retrieval.sqlite_vector_store import SqliteVectorStore
 
@@ -367,6 +368,7 @@ def collect_source_records(vault: Path) -> list[SourceRecord]:
     """
     records: list[SourceRecord] = []
     skipped_fixtures: list[str] = []
+    skipped_filtered: list[str] = []
 
     for memory_type in MEMORY_DB_TYPES:
         directory = vault / "memory" / memory_type
@@ -386,6 +388,16 @@ def collect_source_records(vault: Path) -> list[SourceRecord]:
             # (issue #211). Same helper, same fail-closed direction.
             if not should_index_record(vault, data.get("source"), data.get("metadata")):
                 skipped_fixtures.append(path.stem)
+                continue
+            # The live write path's index filter, for conversation turns
+            # (ADR-047). Every turn is stored now, including ones the write
+            # path leaves out of the index (code fences, pasted JSON), and a
+            # rebuild must not index them. Other types, and the
+            # prior-substrate chunks below, keep their existing rules.
+            if memory_type == "conversation" and not should_index(
+                {**data, "type": memory_type}, vault,
+            ):
+                skipped_filtered.append(path.stem)
                 continue
             records.append(
                 SourceRecord(
@@ -428,6 +440,11 @@ def collect_source_records(vault: Path) -> list[SourceRecord]:
         print(
             f"  [memory.db] skipped {len(skipped_fixtures)} eval fixture(s): "
             "not indexing test corpus into a non-test vault"
+        )
+    if skipped_filtered:
+        print(
+            f"  [memory.db] skipped {len(skipped_filtered)} record(s) the index "
+            "filter rejects (should_index)"
         )
 
     return records

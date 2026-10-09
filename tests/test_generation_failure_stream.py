@@ -51,11 +51,14 @@ def client():
         yield TestClient(app)
 
 
-def _post_chat(client, *, stream: bool = True, packet=None, extra_patches=()):
+def _post_chat(client, *, stream: bool = True, packet=None, extra_patches=(),
+               test_session: bool = True):
     """POST one chat turn with side-effect writers stubbed.
 
     Each caller passes only the patches that differ: the generation stubs,
-    the ollama stubs, or the branch flag.
+    the ollama stubs, or the branch flag. test_session=False drops the
+    X-Test-Session header so the post-[DONE] extractor step runs; the exchange
+    recorder stays stubbed either way, so nothing reaches the vault.
     """
     from src.api import openai_adapter as oa
 
@@ -66,9 +69,9 @@ def _post_chat(client, *, stream: bool = True, packet=None, extra_patches=()):
         ))
         for p in extra_patches:
             stack.enter_context(p)
-        for name in ("write_memory", "_background_state_extraction",
+        for name in ("ExchangeRecorder", "_background_state_extraction",
                      "_detect_and_write_commitment", "_detect_task_in_response",
-                     "_ensure_session"):
+                     "_background_topic_decline_resolution"):
             stack.enter_context(patch(f"src.api.openai_adapter.{name}"))
         onb = stack.enter_context(patch("src.api.openai_adapter.onboarding_service"))
         onb.is_active.return_value = False
@@ -79,7 +82,7 @@ def _post_chat(client, *, stream: bool = True, packet=None, extra_patches=()):
                 "messages": [{"role": "user", "content": "hello there"}],
                 "stream": stream,
             },
-            headers={"X-Test-Session": "true"},
+            headers={"X-Test-Session": "true"} if test_session else {},
         )
 
 
@@ -232,10 +235,10 @@ def test_reachable_generation_control_delivers_and_commits(client, monkeypatch):
 # branch runs.
 # ---------------------------------------------------------------------------
 
-def _post_fast(client, stream_fn, extra=()):
+def _post_fast(client, stream_fn, extra=(), test_session: bool = True):
     from src.api import openai_adapter as oa
 
-    return _post_chat(client, extra_patches=(
+    return _post_chat(client, test_session=test_session, extra_patches=(
         patch.object(oa, "_STREAM_ALWAYS_GROUNDED", False),
         patch.object(oa.llm_adapter, "generate_response_stream", side_effect=stream_fn),
         *extra,
@@ -428,11 +431,34 @@ def test_review_stage_raise_emits_terminal_frames_once(client, monkeypatch):
     assert "status" in _types(events)  # review_pending went out before the raise
 
 
+# Post-[DONE] work is only the extractor step now: the turns and the pending
+# confirmation are stored before [DONE] (ADR-047). A raise in that step must
+# stay log-only. The Phase B builders are stubbed because these two requests
+# drop X-Test-Session so the extractor step runs.
+_NON_TEST_STUBS = (
+    "_apply_confirmation", "_apply_tasks", "_apply_timers",
+)
+
+
+def _post_terminal_raise():
+    return (
+        patch(
+            "src.api.openai_adapter._spawn_post_exchange_extractors",
+            side_effect=_boom_exc(),
+        ),
+        *(patch(f"src.api.openai_adapter.{name}") for name in _NON_TEST_STUBS),
+    )
+
+
 def test_post_terminal_raise_adds_no_frames(client, caplog):
     """_post_stream_cleanup runs after [DONE]; a raise there is log-only."""
+    from src.api import openai_adapter as oa
+
     with caplog.at_level(logging.ERROR):
-        resp = _post(client, stream=True, iter_items=OK, extra=(
-            patch("src.api.openai_adapter.vault_binding", side_effect=_boom_exc()),
+        resp = _post_chat(client, test_session=False, extra_patches=(
+            patch.object(oa.llm_adapter, "generate_response_iter", return_value=iter(OK)),
+            patch("src.safety.grounding_check.run_grounding_check", return_value=(True, None)),
+            *_post_terminal_raise(),
         ))
     _assert_completed_once(resp)
     messages = [r.getMessage() for r in caplog.records]
@@ -456,12 +482,24 @@ def test_fast_path_post_terminal_raise_adds_no_frames(client, caplog):
         yield "first "
 
     with caplog.at_level(logging.ERROR):
-        resp = _post_fast(client, _ok, extra=(
-            patch("src.llm.coaching_filter.filter_coaching_frame", side_effect=_boom_exc()),
-        ))
+        resp = _post_fast(client, _ok, test_session=False, extra=_post_terminal_raise())
     _assert_completed_once(resp)
     messages = [r.getMessage() for r in caplog.records]
     assert "[SSE] post-terminal failure: RuntimeError" in messages
+
+
+def test_fast_path_coaching_raise_now_fails_before_done(client):
+    """The fast path finishes the stored copy (coaching, post-gen, the reply
+    write) before [DONE] now (ADR-047), so a raise there is a failed exchange:
+    the streamed tokens stay and the error frame follows them."""
+    def _ok(*_a, **_k):
+        yield "first "
+
+    resp = _post_fast(client, _ok, extra=(
+        patch("src.llm.coaching_filter.filter_coaching_frame", side_effect=_boom_exc()),
+    ))
+    events = _assert_failed_once(resp)
+    assert [c for c in _content_frames(events) if c] == ["first "]
 
 
 def test_fast_path_no_exception_control(client):

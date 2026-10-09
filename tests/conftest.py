@@ -415,6 +415,52 @@ def render_packet(packet) -> None:
     packet.record_rendered(rendered_reflection_window(packet.reflection_items))
 
 
+def sse_events(text: str) -> list:
+    """Parse an SSE body into its `data:` payloads: JSON objects and "[DONE]"."""
+    import json
+
+    out: list = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("data:"):
+            payload = line[len("data:"):].strip()
+            out.append("[DONE]" if payload == "[DONE]" else json.loads(payload))
+    return out
+
+
+def vault_records(vault, memory_type: str) -> list[dict]:
+    """Every canonical record of one type in a test vault, oldest first."""
+    import json
+
+    folder = Path(vault) / "memory" / memory_type
+    if not folder.exists():
+        return []
+    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(folder.glob("*.json"))]
+
+
+def memory_db_ids(vault) -> set[str]:
+    """Ids of the rows in a test vault's memory.db (empty when there is none)."""
+    import sqlite3
+
+    db = Path(vault) / "embeddings" / "memory.db"
+    if not db.exists():
+        return set()
+    conn = sqlite3.connect(str(db))
+    try:
+        return {row[0] for row in conn.execute("SELECT id FROM vectors")}
+    finally:
+        conn.close()
+
+
+def run_bound_inline(target, args=(), vault=None, name=None):
+    """Drop-in for spawn_vault_bound_thread that runs the target inline,
+    bound to the same vault, so index jobs finish before assertions run."""
+    from src.core.config import vault_binding
+
+    with vault_binding(vault):
+        target(*args)
+
+
 def synthetic_packet():
     """A one-record synthetic ContextPacket. No vault content."""
     from src.context.models import ContextItem, ContextPacket

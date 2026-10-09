@@ -17,6 +17,7 @@ import re
 
 from src.context.low_value import is_style_feedback
 from src.memory.service import MemoryService
+from src.memory.write_memory import should_index
 
 
 memory_service = MemoryService()
@@ -42,6 +43,13 @@ def generate_reflection(
     seen = set()
 
     for memory in all_memories:
+        # Every conversation turn is stored, including pasted code, JSON and
+        # bracket-prefixed text (ADR-047). Reflection, like the index, sees
+        # only the turns that pass should_index: one filter for every derived
+        # artifact. Other record types keep their existing filters below.
+        if memory.get("type") == "conversation" and not should_index(memory):
+            continue
+
         text = _extract_memory_text(memory).strip()
         if not text:
             continue

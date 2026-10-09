@@ -144,3 +144,36 @@ def test_error_frame_exact_bytes():
     # Not an OpenAI chunk envelope.
     assert "choices" not in p
     assert "object" not in p
+
+
+def test_storage_failed_error_frame_exact_bytes():
+    # ADR-040 v3 amendment (ADR-047): a second code value on the same frame,
+    # with its own fixed text. No new field, so the contract stays v3.
+    from src.api.sse import STORAGE_FAILED_CODE, sse_error
+
+    frame = sse_error(STORAGE_FAILED_CODE)
+    assert frame == (
+        'data: {"type": "error", "code": "storage_failed", "message": '
+        '"Ember couldn\'t save this conversation, so the reply wasn\'t sent. '
+        'Check that the vault is reachable."}\n\n'
+    )
+    assert set(_payload(frame)) == {"type", "code", "message"}
+
+
+def test_default_error_frame_is_still_generation_failed():
+    """Control: the one-argument-free call keeps the v3 bytes."""
+    from src.api.sse import GENERATION_FAILED_CODE, sse_error
+
+    assert sse_error() == sse_error(GENERATION_FAILED_CODE)
+    assert _payload(sse_error())["code"] == "generation_failed"
+
+
+def test_exchange_storage_error_declares_the_storage_failed_code():
+    """src/memory/exchange.py repeats the code to avoid importing the API
+    layer; this keeps the two copies equal."""
+    from src.api.sse import STORAGE_FAILED_CODE, error_code_for
+    from src.memory.exchange import ExchangeStorageError
+
+    exc = ExchangeStorageError("reply", OSError("disk full"))
+    assert ExchangeStorageError.sse_error_code == STORAGE_FAILED_CODE
+    assert error_code_for(exc) == STORAGE_FAILED_CODE

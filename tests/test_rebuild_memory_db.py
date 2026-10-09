@@ -463,3 +463,36 @@ def test_unreadable_record_does_not_abort_the_rebuild(tmp_path):
 
     out = tmp_path / "embeddings" / "rebuilt.db"
     assert rebuild_memory_db(tmp_path, out_path=out) == 1
+
+
+# --- the rebuild applies should_index, the write path's filter (ADR-047) ----
+
+def test_rebuild_skips_a_conversation_turn_the_index_filter_rejects(tmp_path):
+    """Every turn is stored now, code fences included; the rebuild must not
+    index what the live write path leaves out of the index."""
+    _write_native(
+        tmp_path, "conversation", "2024-01-01T00-00-01",
+        "Run this:\n```python\nprint('hi')\n```",
+        metadata={"role": "assistant"},
+    )
+    assert collect_source_records(tmp_path) == []
+
+
+def test_rebuild_keeps_a_plain_conversation_turn(tmp_path):
+    """Positive control for the code-fence absence above."""
+    _write_native(
+        tmp_path, "conversation", "2024-01-01T00-00-01",
+        "A plain conversation turn with nothing unusual in it.",
+        metadata={"role": "assistant"},
+    )
+    assert [r.canonical_id for r in collect_source_records(tmp_path)] == ["2024-01-01T00-00-01"]
+
+
+def test_rebuild_never_indexes_an_exchange_outcome(tmp_path):
+    path = _write_native(
+        tmp_path, "system_event", "2024-01-01T00-00-02", "Exchange failed",
+        source="exchange_recorder",
+        metadata={"kind": "exchange_outcome", "outcome": "failed"},
+    )
+    assert path.exists()  # control: the outcome record is on disk
+    assert collect_source_records(tmp_path) == []

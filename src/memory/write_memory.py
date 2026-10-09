@@ -10,7 +10,7 @@ from src.core.config import (
     vault_writes_blocked,
 )
 from src.memory.authorship import classify_authorship
-from src.memory.eval_fixtures import should_index_record
+from src.memory.eval_fixtures import is_eval_fixture, should_index_record
 from src.memory.storage import MemoryStorage
 from src.retrieval.embed_memory import embed_text
 from src.retrieval.sqlite_vector_store import SqliteVectorStore
@@ -147,39 +147,38 @@ def flatten_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     return flattened
 
 
-def write_memory(
+# Metadata kind of the system_event record that ends an exchange with no reply
+# (ADR-047). Such records are never indexed and never returned in history.
+EXCHANGE_OUTCOME_KIND = "exchange_outcome"
+
+
+def write_canonical_record(
     text: str,
     memory_type: str = "journal",
     source: str = "api",
     tags: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
-):
+) -> tuple[dict, Path]:
     """
-    Write a memory record to the vault.
+    Write one canonical record to the vault, without indexing it.
 
-    memory_type must be a valid type from VALID_MEMORY_TYPES in
-    src/memory/storage.py. Invalid types will raise ValueError
-    at the storage layer (get_memory_dir validation).
+    No content filter runs here: whether the text is worth indexing is
+    should_index()'s question, asked separately (ADR-047). Returns the
+    record and the path of the file written.
 
-    Raises VaultWriteBlocked when a vault swap could not be verified.
-    Refusing loudly is deliberate: a silent return would be
-    indistinguishable from a skipped write, and the record would be lost
-    without anyone noticing.
+    Raises VaultWriteBlocked when a vault swap could not be verified, and
+    lets storage errors propagate, so a caller can never mistake a failed
+    write for a skipped one.
     """
     reason = vault_writes_blocked()
     if reason:
         logger.error("[VAULT_BLOCK] refused memory write: %s", reason)
         raise VaultWriteBlocked(reason)
 
-    if should_skip_memory(text, memory_type=memory_type):
-        return None
-
     vault = get_private_vault_path()
     memory_dir = storage.get_memory_dir(vault, memory_type)
 
     timestamp = _next_timestamp()
-    memory_id = timestamp
-    normalized = normalize_text(text)
     clean_metadata = flatten_metadata(metadata)
 
     # ADR-021 prerequisite: tag conversation records with whether they
@@ -194,11 +193,11 @@ def write_memory(
         )
 
     memory = {
-        "id": memory_id,
+        "id": timestamp,
         "timestamp": timestamp,
         "type": memory_type,
         "text": text,
-        "normalized_text": normalized,
+        "normalized_text": normalize_text(text),
         "source": source,
         "tags": tags or [],
         "metadata": clean_metadata,
@@ -206,21 +205,48 @@ def write_memory(
 
     file_path = memory_dir / f"{timestamp}.json"
     storage.write_json(file_path, memory)
+    return memory, file_path
 
-    # Eval fixtures are written to disk like any other record but are only
-    # indexed into the configured test vault. Indexing them elsewhere puts
-    # synthetic records into someone's personal memory where retrieval cannot
-    # tell them from real recollection -- see src/memory/eval_fixtures.py and
-    # issue #211. Fails closed: an unidentifiable vault does not get them.
-    # Checked before embedding, so a skipped fixture costs no model call.
-    if not should_index_record(vault, source, clean_metadata):
-        logger.warning(
-            "[VAULT] eval fixture written to disk but not indexed: vault is not "
-            "the configured test vault (memory_type=%s source=%s)",
-            memory_type,
-            source,
-        )
-        return memory
+
+def should_index(record: dict, vault: Path | None = None) -> bool:
+    """
+    Decide whether a canonical record belongs in the index.
+
+    The one filter shared by the live write path, the exchange recorder,
+    index rebuilds and monthly reflection (ADR-047): exchange outcome records
+    never index, should_skip_memory() rejects low-value text, and eval
+    fixtures index only into the configured test vault (issue #211).
+    """
+    metadata = record.get("metadata") or {}
+    if metadata.get("kind") == EXCHANGE_OUTCOME_KIND:
+        return False
+    if should_skip_memory(
+        record.get("text") or "", memory_type=record.get("type") or "journal",
+    ):
+        return False
+    if not is_eval_fixture(record.get("source"), metadata):
+        return True
+    # Only an eval fixture needs to know which vault it is in.
+    if vault is None:
+        vault = get_private_vault_path()
+    return should_index_record(vault, record.get("source"), metadata)
+
+
+def index_record(record: dict, file_path: Path) -> None:
+    """
+    Embed a canonical record and add it to the active vault's index.
+
+    SQLite types go to memory.db; any other type goes to its JSON index.
+    Callers decide whether to index (should_index); this only does it.
+    """
+    vault = get_private_vault_path()
+    memory_type = record["type"]
+    memory_id = record["id"]
+    text = record["text"]
+    tags = record.get("tags") or []
+    clean_metadata = record.get("metadata") or {}
+    source = record.get("source", "api")
+    normalized = record.get("normalized_text") or normalize_text(text)
 
     embedding = embed_text(text)
 
@@ -233,13 +259,13 @@ def write_memory(
             "embedding": embedding,
             "source": source,
             "memory_type": memory_type,
-            "created_at": timestamp,
+            "created_at": record.get("timestamp", memory_id),
             "authorship": classify_authorship(memory_type, source, clean_metadata),
             "metadata": {
                 **clean_metadata,
                 "file_path": str(file_path),
                 "normalized_text": normalized,
-                "tags": tags or [],
+                "tags": tags,
                 "source_field": source,
             },
         })
@@ -262,12 +288,12 @@ def write_memory(
         index_data.append(
             {
                 "id": memory_id,
-                "timestamp": timestamp,
+                "timestamp": record.get("timestamp", memory_id),
                 "type": memory_type,
                 "text": text,
                 "normalized_text": normalized,
                 "source": source,
-                "tags": tags or [],
+                "tags": tags,
                 "file_path": str(file_path),
                 "embedding": embedding,
                 "metadata": clean_metadata,
@@ -276,4 +302,60 @@ def write_memory(
 
         vector_index.save_index(index_path, index_data)
 
+
+def write_memory(
+    text: str,
+    memory_type: str = "journal",
+    source: str = "api",
+    tags: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+):
+    """
+    Write a memory record to the vault and index it inline.
+
+    memory_type must be a valid type from VALID_MEMORY_TYPES in
+    src/memory/storage.py. Invalid types will raise ValueError
+    at the storage layer (get_memory_dir validation).
+
+    Unlike write_canonical_record(), text that should_skip_memory() rejects
+    is not written at all. Every caller except the exchange recorder keeps
+    that behavior (ADR-047).
+
+    Raises VaultWriteBlocked when a vault swap could not be verified.
+    Refusing loudly is deliberate: a silent return would be
+    indistinguishable from a skipped write, and the record would be lost
+    without anyone noticing.
+    """
+    reason = vault_writes_blocked()
+    if reason:
+        logger.error("[VAULT_BLOCK] refused memory write: %s", reason)
+        raise VaultWriteBlocked(reason)
+
+    if should_skip_memory(text, memory_type=memory_type):
+        return None
+
+    memory, file_path = write_canonical_record(
+        text=text,
+        memory_type=memory_type,
+        source=source,
+        tags=tags,
+        metadata=metadata,
+    )
+
+    # should_index is the shared filter. The text already passed
+    # should_skip_memory above, so the one case left is an eval fixture: written
+    # to disk like any other record but indexed only into the configured test
+    # vault, because elsewhere retrieval cannot tell it from real recollection
+    # (src/memory/eval_fixtures.py, issue #211). Fails closed. Checked before
+    # embedding, so a skipped fixture costs no model call.
+    if not should_index(memory):
+        logger.warning(
+            "[VAULT] eval fixture written to disk but not indexed: vault is not "
+            "the configured test vault (memory_type=%s source=%s)",
+            memory_type,
+            source,
+        )
+        return memory
+
+    index_record(memory, file_path)
     return file_path

@@ -31,12 +31,12 @@ class TestWebSearchHeader:
 
         with patch("src.api.openai_adapter.context_service") as mock_ctx, \
              patch("src.api.openai_adapter.llm_adapter") as mock_llm, \
-             patch("src.api.openai_adapter.write_memory"), \
+             patch("src.api.openai_adapter.ExchangeRecorder"), \
              patch("src.api.openai_adapter._background_state_extraction"), \
              patch("src.api.openai_adapter._detect_and_write_commitment"), \
              patch("src.api.openai_adapter._detect_task_in_response"), \
              patch("src.api.openai_adapter.onboarding_service") as mock_onb, \
-             patch("src.api.openai_adapter._ensure_session"), \
+             patch("src.api.openai_adapter._background_topic_decline_resolution"), \
              patch("src.core.preferences.get", return_value=True):
             mock_onb.is_active.return_value = False
             mock_ctx.build_context.return_value = mock_packet
@@ -62,12 +62,12 @@ class TestWebSearchHeader:
 
         with patch("src.api.openai_adapter.context_service") as mock_ctx, \
              patch("src.api.openai_adapter.llm_adapter") as mock_llm, \
-             patch("src.api.openai_adapter.write_memory"), \
+             patch("src.api.openai_adapter.ExchangeRecorder"), \
              patch("src.api.openai_adapter._background_state_extraction"), \
              patch("src.api.openai_adapter._detect_and_write_commitment"), \
              patch("src.api.openai_adapter._detect_task_in_response"), \
              patch("src.api.openai_adapter.onboarding_service") as mock_onb, \
-             patch("src.api.openai_adapter._ensure_session"):
+             patch("src.api.openai_adapter._background_topic_decline_resolution"):
             mock_onb.is_active.return_value = False
             mock_ctx.build_context.return_value = mock_packet
             mock_llm.generate_response.return_value = "You're Chas."

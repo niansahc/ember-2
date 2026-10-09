@@ -225,3 +225,117 @@ def test_early_return_stream_no_exception_control():
     assert _error_count(events) == 0
     assert _stop_count(events) == 1
     assert events.count("[DONE]") == 1
+
+
+# --- on_abort: the exchange learns how the stream ended (ADR-047) -----------
+
+def _recorder():
+    calls: list[tuple] = []
+
+    def on_abort(outcome, reason):
+        calls.append((outcome, reason))
+
+    return calls, on_abort
+
+
+def test_raise_before_done_calls_on_abort_failed_with_the_type_only():
+    calls, on_abort = _recorder()
+
+    async def body():
+        yield sse_chunk(CID, content="")
+        raise RuntimeError(MARKER)
+
+    _assert_failed_once(_events(_collect(guard_sse(body(), CID, on_abort=on_abort))))
+    assert calls == [("failed", "RuntimeError")]
+
+
+def test_no_exception_control_never_calls_on_abort():
+    calls, on_abort = _recorder()
+
+    async def body():
+        yield sse_chunk(CID, content="hi")
+        yield sse_done()
+
+    _collect(guard_sse(body(), CID, on_abort=on_abort))
+    assert calls == []
+
+
+def test_close_before_done_calls_on_abort_interrupted():
+    calls, on_abort = _recorder()
+
+    async def body():
+        yield sse_chunk(CID, content="one")
+        yield sse_chunk(CID, content="two")  # pragma: no cover
+
+    async def _run():
+        agen = guard_sse(body(), CID, on_abort=on_abort)
+        await agen.__anext__()
+        await agen.aclose()
+
+    asyncio.run(_run())
+    assert calls == [("interrupted", None)]
+
+
+def test_cancel_before_done_calls_on_abort_interrupted():
+    calls, on_abort = _recorder()
+
+    async def body():
+        yield sse_chunk(CID, content="one")
+        await asyncio.sleep(10)
+        yield sse_chunk(CID, content="two")  # pragma: no cover
+
+    async def _run():
+        agen = guard_sse(body(), CID, on_abort=on_abort)
+        await agen.__anext__()
+        task = asyncio.ensure_future(agen.__anext__())
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_run())
+    assert calls == [("interrupted", None)]
+
+
+def test_close_after_done_does_not_call_on_abort():
+    """Positive control is test_close_before_done_calls_on_abort_interrupted."""
+    calls, on_abort = _recorder()
+
+    async def body():
+        yield sse_done()
+        yield sse_chunk(CID, content="after")  # pragma: no cover
+
+    async def _run():
+        agen = guard_sse(body(), CID, on_abort=on_abort)
+        await agen.__anext__()
+        await agen.aclose()
+
+    asyncio.run(_run())
+    assert calls == []
+
+
+def test_raise_after_done_does_not_call_on_abort(caplog):
+    calls, on_abort = _recorder()
+
+    async def body():
+        yield sse_done()
+        raise RuntimeError(MARKER)
+
+    with caplog.at_level(logging.ERROR):
+        _collect(guard_sse(body(), CID, on_abort=on_abort))
+    assert calls == []
+    assert "[SSE] post-terminal failure: RuntimeError" in caplog.text  # control
+
+
+def test_on_abort_failure_does_not_replace_the_error_frames(caplog):
+    def on_abort(outcome, reason):
+        raise OSError("disk full")
+
+    async def body():
+        yield sse_chunk(CID, content="")
+        raise RuntimeError(MARKER)
+
+    with caplog.at_level(logging.ERROR):
+        events = _events(_collect(guard_sse(body(), CID, on_abort=on_abort)))
+    _assert_failed_once(events)
+    assert "[SSE] on_abort failed: OSError" in caplog.text

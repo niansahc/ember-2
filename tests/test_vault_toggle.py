@@ -79,8 +79,7 @@ def client(tmp_path):
     mock_context = MagicMock()
     mock_context.build_context.return_value = _dummy_context_packet()
 
-    mock_write = MagicMock()
-    mock_ensure = MagicMock()
+    mock_recorder = MagicMock()
     mock_onboarding = MagicMock()
     mock_onboarding.is_active.return_value = False
 
@@ -103,8 +102,8 @@ def client(tmp_path):
          patch("src.api.main.get_ember_api_key", return_value=None), \
          patch("src.api.openai_adapter.context_service", mock_context), \
          patch("src.api.openai_adapter.llm_adapter", mock_llm), \
-         patch("src.api.openai_adapter.write_memory", mock_write), \
-         patch("src.api.openai_adapter._ensure_session", mock_ensure), \
+         patch("src.api.openai_adapter.ExchangeRecorder", mock_recorder), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution", return_value=None), \
          patch("src.api.openai_adapter.onboarding_service", mock_onboarding), \
          patch("src.api.openai_adapter.get_session", return_value=None), \
          patch("src.api.openai_adapter._is_override_attempt", return_value=False), \
@@ -118,8 +117,7 @@ def client(tmp_path):
 
         # Expose mocks for assertions
         _client._mock_context = mock_context
-        _client._mock_write = mock_write
-        _client._mock_ensure = mock_ensure
+        _client._mock_recorder = mock_recorder
         _client._mock_llm = mock_llm
         _client._prefs_store = prefs_store
 
@@ -180,8 +178,18 @@ class TestVaultDisabledNoReads:
 # ---------------------------------------------------------------------------
 
 
+def _recorder_enabled(client) -> bool:
+    """The `enabled` flag the handler gave this exchange's recorder.
+
+    A disabled ExchangeRecorder writes nothing at all: no user turn, no
+    conversation record, no reply, no outcome (tests/test_exchange_recorder.py
+    covers that half).
+    """
+    return client._mock_recorder.call_args.kwargs["enabled"]
+
+
 class TestVaultDisabledNoWrites:
-    """When vault_enabled=False, write_memory is never called."""
+    """When vault_enabled=False, the exchange recorder is disabled."""
 
     def test_no_write_memory(self, client):
         resp = client.post(
@@ -190,17 +198,28 @@ class TestVaultDisabledNoWrites:
             headers={"X-Test-Session": "false"},
         )
         assert resp.status_code == 200
-        client._mock_write.assert_not_called()
+        assert _recorder_enabled(client) is False
+
+    def test_vault_on_records_the_exchange(self, client):
+        """Positive control: the same request with the vault on records."""
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_chat_body(vault_enabled=True),
+            headers={"X-Test-Session": "false"},
+        )
+        assert resp.status_code == 200
+        assert _recorder_enabled(client) is True
+        client._mock_recorder.return_value.record_reply.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
-# 4. vault_enabled=False — _ensure_session called with test=True
+# 4. vault_enabled=False - no conversation record
 # ---------------------------------------------------------------------------
 
 
 class TestVaultDisabledNoSession:
-    """When vault_enabled=False, _ensure_session is called with test=True,
-    which causes it to skip vault writes internally."""
+    """When vault_enabled=False, the user turn goes to a disabled recorder,
+    so neither it nor the conversation record is written."""
 
     def test_ensure_session_skipped(self, client):
         resp = client.post(
@@ -209,11 +228,8 @@ class TestVaultDisabledNoSession:
             headers={"X-Test-Session": "false"},
         )
         assert resp.status_code == 200
-        # _ensure_session is called but with test=True, so no session record
-        # is written to the vault.
-        client._mock_ensure.assert_called_once()
-        _, kwargs = client._mock_ensure.call_args
-        assert kwargs.get("test") is True
+        client._mock_recorder.return_value.record_user_turn.assert_called_once()
+        assert _recorder_enabled(client) is False
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +402,7 @@ class TestTestSessionReadsButDoesNotWrite:
             headers={"X-Test-Session": "true"},
         )
         assert resp.status_code == 200
-        client._mock_write.assert_not_called()
+        assert _recorder_enabled(client) is False
 
     def test_vault_off_still_beats_test_session_for_reads(self, client):
         """ADR-031 is unchanged: vault_enabled=False suppresses reads too,
@@ -398,4 +414,4 @@ class TestTestSessionReadsButDoesNotWrite:
         )
         assert resp.status_code == 200
         client._mock_context.build_context.assert_not_called()
-        client._mock_write.assert_not_called()
+        assert _recorder_enabled(client) is False

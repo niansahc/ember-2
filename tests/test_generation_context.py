@@ -6,9 +6,8 @@ GenerationContext (ADR-042, issue #93 PR c).
 
 These exercise _build_generation_context directly: given a request/body and the
 normalization outputs (session_id, latest_user_message, completion_id), it must
-resolve is_test / vault_enabled / the two skip_vault flags / project, ensure the
-session, and
-memoize the query policy - the enrichment-resolved values the clarification
+resolve is_test / vault_enabled / the two skip_vault flags / project, carry the
+user turn exactly as sent, and memoize the query policy - the enrichment-resolved values the clarification
 interceptor and the generation handler consume.
 """
 
@@ -44,8 +43,7 @@ def test_build_generation_context_test_session_suppresses_writes_not_reads():
     """
     req = _FakeReq({"X-Test-Session": "true"})
     body = _FakeBody(vault_enabled=True, stream=True)
-    with patch("src.api.openai_adapter._ensure_session") as ens, \
-         patch("src.api.openai_adapter.get_session", return_value=None):
+    with patch("src.api.openai_adapter.get_session", return_value=None):
         ctx = _build_generation_context(
             req, body,
             session_id="sess_test_001",
@@ -60,8 +58,30 @@ def test_build_generation_context_test_session_suppresses_writes_not_reads():
     assert ctx.stream is True
     assert ctx.raw_user_message == "hello world"
     assert ctx.policy is not None          # memoized classify_query result
-    # Session ensure ran once, gated on the write flag (session creation is a write).
-    ens.assert_called_once_with("sess_test_001", "hello world", test=True)
+    # The builder no longer writes: the handler's ExchangeRecorder stores the
+    # user turn and the conversation record (ADR-047). Without a placeholder
+    # the user turn is the message itself.
+    assert ctx.user_turn_text == "hello world"
+    assert ctx.image_count == 0
+
+
+def test_build_generation_context_carries_the_sent_text_not_the_placeholder():
+    """An image-only message: the model gets the placeholder, the user turn
+    gets the empty text the client sent plus the image count (ADR-047)."""
+    req = _FakeReq({})
+    body = _FakeBody()
+    with patch("src.api.openai_adapter.get_session", return_value=None):
+        ctx = _build_generation_context(
+            req, body,
+            session_id="sess_test_004",
+            latest_user_message="Please describe what you see in this image.",
+            completion_id="chatcmpl-img",
+            user_turn_text="",
+            image_count=1,
+        )
+    assert ctx.raw_user_message == "Please describe what you see in this image."
+    assert ctx.user_turn_text == ""
+    assert ctx.image_count == 1
 
 
 def test_build_generation_context_resolves_project():
@@ -69,8 +89,7 @@ def test_build_generation_context_resolves_project():
     body = _FakeBody()
     sess_rec = {"metadata": {"project_id": "proj_1"}}
     proj_rec = {"text": "Quarterly Planning"}
-    with patch("src.api.openai_adapter._ensure_session"), \
-         patch("src.api.openai_adapter.get_session", return_value=sess_rec), \
+    with patch("src.api.openai_adapter.get_session", return_value=sess_rec), \
          patch("src.memory.project.get_project", return_value=proj_rec):
         ctx = _build_generation_context(
             req, body,
@@ -85,8 +104,7 @@ def test_build_generation_context_resolves_project():
 def test_build_generation_context_vault_disabled_suppresses_both():
     req = _FakeReq({})
     body = _FakeBody(vault_enabled=False, stream=False)
-    with patch("src.api.openai_adapter._ensure_session"), \
-         patch("src.api.openai_adapter.get_session", return_value=None), \
+    with patch("src.api.openai_adapter.get_session", return_value=None), \
          patch("src.core.preferences.read", return_value={"vault_toggle_enabled": True}):
         ctx = _build_generation_context(
             req, body,

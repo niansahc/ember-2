@@ -159,8 +159,40 @@ def get_session(session_id: str) -> Optional[dict]:
     return rec
 
 
+def _is_retry_original(turn: dict, following: dict) -> bool:
+    """True when `following` retries `turn` (CONTEXT.md: Retry).
+
+    Two user turns in a row only happen when the first exchange stored no
+    assistant turn, so a repeat with the same text and image count is the
+    user sending that message again, by the Try again button or by hand.
+    """
+    meta, next_meta = turn.get("metadata", {}), following.get("metadata", {})
+    return (
+        meta.get("role") == "user"
+        and next_meta.get("role") == "user"
+        and turn.get("text", "") == following.get("text", "")
+        and meta.get("image_count", 0) == next_meta.get("image_count", 0)
+    )
+
+
+def _collapse_retries(turns: list[dict]) -> list[dict]:
+    """Show a user turn and its retries once: keep only the last of a run.
+
+    Read-time only (ADR-047). The vault keeps every exchange.
+    """
+    return [
+        turn for i, turn in enumerate(turns)
+        if i + 1 >= len(turns) or not _is_retry_original(turn, turns[i + 1])
+    ]
+
+
 def get_turns(session_id: str, limit: int = 200) -> list[dict]:
-    """Get all conversation turns for a session, oldest first."""
+    """Get a conversation's history: its newest `limit` turns, oldest first.
+
+    Retries are collapsed before the limit applies, so `limit` counts the
+    turns the user sees. Exchange outcomes are system_event records and never
+    appear here (ADR-047).
+    """
     turns = []
     for f in storage.list_memory_files(_conversation_dir()):
         try:
@@ -170,7 +202,8 @@ def get_turns(session_id: str, limit: int = 200) -> list[dict]:
         if rec.get("metadata", {}).get("session_id") == session_id:
             turns.append(rec)
     turns.sort(key=lambda r: r.get("timestamp", ""))
-    return turns[:limit]
+    turns = _collapse_retries(turns)
+    return turns[-limit:] if limit > 0 else []
 
 
 def session_exists(session_id: str) -> bool:

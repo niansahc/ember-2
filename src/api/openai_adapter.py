@@ -20,9 +20,11 @@ from src.api.pregeneration import (
     PreGenerationRouter,
 )
 from src.api.sse import (
+    STORAGE_FAILED_CODE,
     guard_sse,
     sse_chunk,
     sse_done,
+    sse_failure_frames,
     sse_sources,
     sse_status,
     sse_vault_sources,
@@ -35,8 +37,8 @@ from src.core.config import (
 )
 from src.memory.service import MemoryService
 from src.memory.read_memory import read_memories
-from src.memory.write_memory import write_memory
-from src.memory.session import create_session, session_exists, get_session, list_sessions
+from src.memory.exchange import ExchangeRecorder, ExchangeStorageError, OUTCOME_FAILED
+from src.memory.session import get_session, list_sessions
 from src.context.service import ContextService
 from src.llm.adapter import LLMAdapter, StatusSignal
 from src.onboarding.service import OnboardingService
@@ -118,6 +120,23 @@ def early_return_response(
                 finish_reason="stop",
             )
         ],
+    )
+
+
+def storage_failed_response(completion_id: str) -> StreamingResponse:
+    """The SSE response for an exchange Ember could not save (ADR-047).
+
+    The storage_failed error frame, a stop chunk and [DONE]; no content frame,
+    because nothing was generated (ADR-040 v3 amendment). Streaming requests
+    only: a non-streaming request keeps its HTTP 500.
+    """
+    logger.info("[EARLY-RETURN] label=storage_failed stream=True id=%s", completion_id)
+
+    async def _sse():
+        yield sse_failure_frames(STORAGE_FAILED_CODE, completion_id)
+
+    return StreamingResponse(
+        guard_sse(_sse(), completion_id), media_type="text/event-stream",
     )
 
 
@@ -286,6 +305,103 @@ def _background_deviation_detection(
             write_deviation_record(result, user_message, response_text)
     except Exception as exc:
         logger.warning("[DEVIATION] Background detection failed (non-fatal): %s", type(exc).__name__)
+
+
+def _spawn_post_exchange_extractors(
+    *,
+    user_message: str,
+    reply: str,
+    session_id: str,
+    vault,
+) -> None:
+    """Start the derived-work threads that follow a stored reply.
+
+    State extraction, topic-decline resolution, and commitment and task-offer
+    detection. Each start is in its own try block so one failure cannot skip
+    the rest, and each logs the exception type only. Every thread is bound to
+    the exchange's vault (issue #144). Deviation detection is not here: it
+    starts when the reply is stored (_spawn_deviation_detection).
+    """
+    for target, args in (
+        (_background_state_extraction, (user_message, reply)),
+        # BUG-009: resolve open_loops for declined topics
+        (_background_topic_decline_resolution, (user_message,)),
+        # ADR-014 commitments, then task offers
+        (_detect_and_write_commitment, (reply, session_id)),
+        (_detect_task_in_response, (reply, session_id)),
+    ):
+        try:
+            spawn_vault_bound_thread(target, args=args, vault=vault)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[EXTRACT] %s did not start: %s",
+                getattr(target, "__name__", "extractor"), type(exc).__name__,
+            )
+
+
+def _spawn_deviation_detection(
+    *,
+    reply: str,
+    intent_class: str,
+    user_message: str,
+    vault,
+) -> None:
+    """Start the one deviation-detection run for an exchange (ADR-026, #164).
+
+    Called right after the reply is stored, on every path, with the stored
+    text. On the grounded path that is after grounding and before streaming,
+    where ADR-026 places it, and the text scored is exactly the assistant turn
+    in the vault. Async, no latency impact.
+    """
+    prior = None
+    try:
+        buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
+        if buffer_turns and len(buffer_turns) >= 2:
+            prior = buffer_turns[-2].get("assistant")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[DEVIATION] prior reply lookup failed: %s", type(exc).__name__)
+    try:
+        spawn_vault_bound_thread(
+            _background_deviation_detection,
+            args=(reply, intent_class, user_message, prior),
+            vault=vault,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[DEVIATION] detection did not start: %s", type(exc).__name__)
+
+
+def _store_reply(
+    exchange: ExchangeRecorder,
+    reply: str,
+    *,
+    skip_vault_write: bool,
+    intent_class: str,
+    user_turn_text: str,
+    pending_query: str,
+    pending_records: list,
+) -> None:
+    """Store the reply, then the work that must exist before [DONE].
+
+    ADR-047 and decision D: the reply, its one deviation-detection run
+    (ADR-026, issue #164, on the stored text) and the pending confirmation.
+    A reply write failure raises ExchangeStorageError; the stream guard or the
+    handler turns it into storage_failed. _write_pending_confirmation catches
+    its own errors. Used by the streaming paths and the non-stream path alike.
+    """
+    exchange.record_reply(reply)
+    if skip_vault_write:
+        return
+    _spawn_deviation_detection(
+        reply=reply,
+        intent_class=intent_class,
+        user_message=user_turn_text,
+        vault=exchange.vault,
+    )
+    with vault_binding(exchange.vault):
+        _write_pending_confirmation(
+            reply, pending_query, exchange.session_id,
+            existing_pending=pending_records,
+        )
 
 
 def _resolve_original_pending(pending, reason: str = "user_response") -> None:
@@ -596,13 +712,13 @@ def _intercept_clarification(ctx: GenerationContext) -> Optional[TerminalReply]:
 
     Enrichment-DEPENDENT terminal (ADR-042): unlike empty/override/onboarding it
     reads enrichment-resolved values off the frozen GenerationContext. It uses
-    the memoized policy (no re-classification) and, unless the vault is skipped,
-    writes both conversation turns keyed by the resolved session/project so the
-    NEXT turn's dispatch can detect awaiting_search_content on the assistant
-    record. Terminal, so nothing downstream consumes those writes this turn. It
-    reads only the frozen context and never mutates it. The scripted reply shares
-    the request's unified completion_id via the single early_return_response
-    funnel at the call site.
+    the memoized policy (no re-classification). It writes nothing (ADR-047): the
+    user turn was stored in Phase A, and its reply carries
+    CLARIFICATION_REPLY_METADATA, so the handler stores it as this exchange's
+    assistant turn and the NEXT turn's dispatch can detect
+    awaiting_search_content on it. It reads only the frozen context and never
+    mutates it. The scripted reply shares the request's unified completion_id via
+    the single early_return_response funnel at the call site.
     """
     if not ctx.policy.emit_clarification:
         return None
@@ -610,41 +726,18 @@ def _intercept_clarification(ctx: GenerationContext) -> Optional[TerminalReply]:
     from src.context.policies import SCRIPTED_CLARIFICATION_RESPONSE
 
     logger.warning("[CLARIFY] emit clarification, bypass classifier+search")
+    return TerminalReply(
+        SCRIPTED_CLARIFICATION_RESPONSE,
+        label="clarification",
+        reply_metadata=CLARIFICATION_REPLY_METADATA,
+        reply_tags=CLARIFICATION_REPLY_TAGS,
+    )
 
-    # Write both turns so the next-turn handler can detect awaiting_search_content
-    # on the assistant record. Skipped when vault writes are suppressed.
-    if not ctx.skip_vault_write:
-        _user_clar_meta = {
-            "role": "user",
-            "content_kind": "user_content",
-            "session_id": ctx.session_id,
-        }
-        _assistant_clar_meta = {
-            "role": "assistant",
-            "content_kind": "answer",
-            "session_id": ctx.session_id,
-            "source": "clarification",
-            "awaiting_search_content": True,
-        }
-        if ctx.project_id:
-            _user_clar_meta["project_id"] = ctx.project_id
-            _assistant_clar_meta["project_id"] = ctx.project_id
-        write_memory(
-            text=ctx.raw_user_message,
-            memory_type="conversation",
-            source="chat",
-            tags=["conversation"],
-            metadata=_user_clar_meta,
-        )
-        write_memory(
-            text=SCRIPTED_CLARIFICATION_RESPONSE,
-            memory_type="conversation",
-            source="chat",
-            tags=["conversation", "clarification"],
-            metadata=_assistant_clar_meta,
-        )
 
-    return TerminalReply(SCRIPTED_CLARIFICATION_RESPONSE, label="clarification")
+# Metadata and tags on the stored clarification reply. B2 next-turn dispatch
+# reads awaiting_search_content off the most recent assistant turn.
+CLARIFICATION_REPLY_METADATA = {"source": "clarification", "awaiting_search_content": True}
+CLARIFICATION_REPLY_TAGS = ("conversation", "clarification")
 
 
 # Pre-enrichment terminal chain. Declared order IS precedence and mirrors the
@@ -1003,39 +1096,16 @@ class ThinkBlockFilter:
         return False
 
 
-def _ensure_session(session_id: str, first_user_message: str, *, test: bool = False) -> None:
-    """
-    Create a session record if one doesn't exist for this session_id.
-    Title is auto-generated from the first 50 chars of the first user message.
-
-    When test=True (X-Test-Session header), skip vault writes entirely.
-    Test sessions don't need persistence - the conftest vault override
-    handles isolation during pytest, but eval tools hitting the live API
-    would otherwise accumulate sessions in the user's vault.
-    """
-    if test:
-        return
-    if session_exists(session_id):
-        return
-    title = first_user_message[:50].strip()
-    if not title:
-        title = "New conversation"
-    # Remove trailing partial words if we truncated
-    if len(first_user_message) > 50 and " " in title:
-        title = title.rsplit(" ", 1)[0] + "..."
-    create_session(session_id, title)
-    logger.info("[SESSION] Created session %s", session_id)
-
-
 # ---------------------------------------------------------------------------
 # Phase A enrichment value builders (ADR-042, issue #93 PR c).
 #
 # These resolve the per-request identity/routing values into the frozen
 # GenerationContext, AFTER the RouterContext-stage terminals (empty / override /
 # onboarding) have passed and BEFORE the enrichment-dependent clarification
-# terminal and the Phase B message-mutating prep builders run. Order within the
-# assembler mirrors the historical inline order exactly: is_test, then vault
-# toggle, then session ensure, then project resolution.
+# terminal and the Phase B message-mutating prep builders run. Order: is_test,
+# then vault toggle, then project resolution. The handler stores the user turn
+# right after this assembler returns (ADR-047), so the user record can carry
+# project_id; the conversation record is written with that first user turn.
 # ---------------------------------------------------------------------------
 
 def _resolve_is_test(request) -> bool:
@@ -1097,15 +1167,19 @@ def _build_generation_context(
     session_id: str,
     latest_user_message: str,
     completion_id: str,
+    user_turn_text: Optional[str] = None,
+    image_count: int = 0,
 ) -> GenerationContext:
     """Run the Phase A builders and assemble the frozen GenerationContext.
 
     completion_id is carried in from the request's RouterContext so one id spans
     the pre-router terminals, the clarification terminal, and the final
-    generation response. raw_user_message snapshots the normalized message at the
-    Phase A->B boundary (before any prep prefix injection). policy memoizes the
-    single classify_query call the clarification terminal and the downstream
-    routing all consume.
+    generation response; it is also the exchange id (ADR-047). raw_user_message
+    snapshots the normalized message at the Phase A->B boundary (before any prep
+    prefix injection). user_turn_text is the message exactly as the client sent
+    it, before the image placeholder; it defaults to latest_user_message for
+    callers that have no placeholder. policy memoizes the single classify_query
+    call the clarification terminal and the downstream routing all consume.
     """
     is_test = _resolve_is_test(request)
     vault_enabled = _resolve_vault_enabled(body)
@@ -1116,8 +1190,9 @@ def _build_generation_context(
     skip_vault_write = is_test or not vault_enabled
     skip_vault_read = not vault_enabled
 
-    _ensure_session(session_id, latest_user_message, test=skip_vault_write)
-
+    # Before the user turn is stored, so the user record can carry project_id.
+    # A new conversation has no conversation record yet, so this is None for it
+    # either way.
     project_id, project_name = _resolve_project(session_id)
 
     from src.context.policies import classify_query
@@ -1135,6 +1210,10 @@ def _build_generation_context(
         stream=bool(body.stream),
         policy=policy,
         raw_user_message=latest_user_message,
+        user_turn_text=(
+            latest_user_message if user_turn_text is None else user_turn_text
+        ),
+        image_count=image_count,
     )
 
 
@@ -1357,6 +1436,13 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         else:
             latest_user_message = ""
 
+    # The user turn stores what the client sent, unchanged (ADR-047, CONTEXT.md).
+    # Snapshot it here, before the placeholder below, which exists only so the
+    # model has something to answer. An image-only message stores empty text
+    # plus its image count; the images themselves are never kept.
+    _user_turn_text = latest_user_message
+    _image_count = len(image_parts)
+
     # If image present but no text, use a placeholder so the pipeline runs.
     # This runs BEFORE the terminal router so the onboarding interceptor sees
     # the same (placeholdered) message it always has. The empty interceptor is
@@ -1397,8 +1483,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             image_data.append(url_val.split(";base64,", 1)[1])
 
     # --- PHASE A: build the enrichment-resolved GenerationContext (ADR-042) ---
-    # Resolve is_test / vault toggle / the two skip_vault flags / project,
-    # ensure the session,
+    # Resolve is_test / vault toggle / the two skip_vault flags / project
     # and memoize the query policy into one frozen context. completion_id is
     # carried forward from the router so a single id spans every early-return and
     # the final response. The downstream generation handler still reads the
@@ -1410,9 +1495,64 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         session_id=session_id,
         latest_user_message=latest_user_message,
         completion_id=_router_completion_id,
+        user_turn_text=_user_turn_text,
+        image_count=_image_count,
     )
-    is_test = gen_ctx.is_test
-    vault_enabled = gen_ctx.vault_enabled
+
+    # --- PHASE A: store the user turn (ADR-047) ---
+    # The user turn is stored as soon as the message arrives, before any
+    # generation work, so a failed or interrupted exchange still keeps it. The
+    # recorder then finishes the exchange exactly once: with the stored reply or
+    # with an exchange outcome. Nothing is written when vault writes are off.
+    _exchange = ExchangeRecorder(
+        gen_ctx.completion_id,
+        session_id,
+        project_id=gen_ctx.project_id,
+        vault=_turn_vault,
+        enabled=not gen_ctx.skip_vault_write,
+    )
+    # Every stored user turn ends in exactly one assistant turn or one exchange
+    # outcome (CONTEXT.md). A raise before the stream starts, or anywhere on the
+    # non-stream path, lands here: it is recorded as `failed`, the user turn is
+    # indexed if retrieval had not got that far, and the error propagates as
+    # before. Failures inside the SSE body are recorded by guard_sse's on_abort.
+    try:
+        _exchange.record_user_turn(gen_ctx.user_turn_text, gen_ctx.image_count)
+        return await _complete_exchange(
+            request, body, image_data=image_data, gen_ctx=gen_ctx, exchange=_exchange,
+        )
+    except Exception as exc:
+        _exchange.record_failure(exc)
+        if isinstance(exc, ExchangeStorageError):
+            # The message is the step and the exception type only.
+            logger.error("[EXCHANGE] %s", exc)
+            # Ember cannot save this exchange, so it sends no reply. A
+            # streaming client gets the storage_failed frame, not an HTTP 500
+            # its parser would report as a model-server problem (ADR-040).
+            if gen_ctx.stream:
+                return storage_failed_response(gen_ctx.completion_id)
+        raise
+
+
+async def _complete_exchange(
+    request,
+    body,
+    *,
+    image_data: list[str],
+    gen_ctx: GenerationContext,
+    exchange: ExchangeRecorder,
+):
+    """Run one exchange after its user turn is stored, and return the response.
+
+    Split out of chat_completions so the whole exchange runs under the
+    handler's single failure guard. Everything comes from the frozen context
+    and the recorder: the recorder holds the vault captured when the exchange
+    started (issue #144), and records the reply or the outcome.
+    """
+    _exchange = exchange
+    _turn_vault = exchange.vault
+    session_id = gen_ctx.session_id
+    latest_user_message = gen_ctx.raw_user_message
     _skip_vault_read = gen_ctx.skip_vault_read
     _skip_vault_write = gen_ctx.skip_vault_write
     project_id = gen_ctx.project_id
@@ -1428,6 +1568,12 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # unified completion_id, so the A1 stream-vs-JSON invariant holds.
     _enriched_reply = _enriched_generation_router.run(gen_ctx)
     if _enriched_reply is not None:
+        if _enriched_reply.reply_metadata is not None:
+            _exchange.record_reply(
+                _enriched_reply.text,
+                metadata=dict(_enriched_reply.reply_metadata),
+                tags=list(_enriched_reply.reply_tags or ("conversation",)),
+            )
         return early_return_response(
             _enriched_reply.text,
             gen_ctx.completion_id,
@@ -1580,6 +1726,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             skip_web_search=_skip_search,
         )
 
+    # Retrieval for this exchange is done, so its own user turn can be indexed
+    # now without this exchange retrieving it (ADR-047).
+    _exchange.ensure_user_indexed()
+
     # Inject deferred web search results from confirmed ask-first flow
     if _confirmation_web_items:
         context_packet.web_items = _confirmation_web_items
@@ -1731,9 +1881,12 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             "[VISION] Preprocess unavailable - short-circuiting turn (images=%d)",
             len(image_data),
         )
+        # The canned text is not Ember's reply, so it is not stored; the
+        # exchange ends with a `failed` outcome instead (ADR-047).
+        _exchange.record_outcome(OUTCOME_FAILED, "vision_unavailable")
         return early_return_response(
             VISION_UNAVAILABLE_RESPONSE,
-            _router_completion_id,
+            gen_ctx.completion_id,
             stream=bool(body.stream),
             label="vision_unavailable",
         )
@@ -1866,19 +2019,20 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     else:
         _bare_mode = bool(get_pref("bare_mode", False))
 
-    # Build metadata for memory writes
-    user_meta = {"role": "user", "content_kind": "user_content", "session_id": session_id}
-    assistant_meta = {"role": "assistant", "content_kind": "answer", "session_id": session_id}
-    if project_id:
-        user_meta["project_id"] = project_id
-        assistant_meta["project_id"] = project_id
-    if _skip_vault_write:
-        user_meta["test"] = True
-        assistant_meta["test"] = True
+    # What every path passes to _store_reply.
+    _store_kwargs = dict(
+        skip_vault_write=_skip_vault_write,
+        intent_class=_intent_class,
+        user_turn_text=gen_ctx.user_turn_text,
+        pending_query=_raw_user_message,
+        pending_records=_pending_records,
+    )
 
     # --- STREAMING PATH ---
     if body.stream:
-        completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+        # One id for the whole exchange (ADR-042, ADR-047): the response id
+        # the client receives is the exchange id its records carry.
+        completion_id = gen_ctx.completion_id
 
         from src.safety.grounding_check import (
             should_check_grounding,
@@ -1898,12 +2052,16 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         # selected by _STREAM_ALWAYS_GROUNDED below.
 
         def _post_stream_cleanup(full_reply: str) -> None:
-            """Shared post-stream cleanup: write memories, extract state, detect tasks.
+            """Post-[DONE] derived work: the self-narrative audit and extractors.
 
-            Runs from inside the SSE generator, so it executes after the
-            handler has returned and a vault swap may already have landed.
-            Everything it writes -- inline and deferred -- is bound to the
-            turn's vault (issue #144).
+            The extractors read the stored user turn (gen_ctx.user_turn_text),
+            never the prompt with Ember's task, timer and search notes, so
+            those notes cannot turn into state about the user (ADR-047, the
+            ADR-033 root cause). The turns and the pending confirmation were
+            stored before [DONE].
+            Runs from inside the SSE generator, after the handler has returned,
+            so every deferred write is bound to the exchange's vault (issue
+            #144).
             """
             # B3 self-narrative class-based audit. Pure regex pass, no
             # vault read, no LLM call. Runs synchronously - no user
@@ -1924,78 +2082,17 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     "[SELF_NARRATIVE] Audit pass failed (non-fatal): %s", type(exc).__name__,
                 )
 
-            with vault_binding(_turn_vault):
-                # Skip vault writes for test sessions - prevents eval artifacts
-                # from accumulating in the user's personal vault.
-                if not _skip_vault_write:
-                    write_memory(
-                        text=latest_user_message,
-                        memory_type="conversation",
-                        source="chat",
-                        tags=["conversation"],
-                        metadata=user_meta,
-                    )
-                    write_memory(
-                        text=full_reply,
-                        memory_type="conversation",
-                        source="chat",
-                        tags=["conversation"],
-                        metadata=assistant_meta,
-                    )
-
-                # State extraction - skip for test sessions to prevent eval leakage
-                if not _skip_vault_write:
-                    spawn_vault_bound_thread(
-                        _background_state_extraction,
-                        args=(latest_user_message, full_reply),
-                        vault=_turn_vault,
-                    )
-                    # BUG-009: resolve open_loops for declined topics
-                    spawn_vault_bound_thread(
-                        _background_topic_decline_resolution,
-                        args=(latest_user_message,),
-                        vault=_turn_vault,
-                    )
-
-                if not _skip_vault_write:
-                    spawn_vault_bound_thread(
-                        _detect_and_write_commitment,
-                        args=(full_reply, session_id),
-                        vault=_turn_vault,
-                    )
-
-                if not _skip_vault_write:
-                    spawn_vault_bound_thread(
-                        _detect_task_in_response,
-                        args=(full_reply, session_id),
-                        vault=_turn_vault,
-                    )
-
-                # Ask-first confirmation detection - write pending_confirmation
-                # state when Ember offers to search for the user. SYNCHRONOUS
-                # - the background thread was causing a race condition where the
-                # user's "Yes" on the next turn arrived before the pending record
-                # was written, so the confirmation path never fired.
-                if not _skip_vault_write:
-                    _write_pending_confirmation(
-                        full_reply, _raw_user_message, session_id,
-                        existing_pending=_pending_records,
-                    )
-
-                # Deviation detection - async, no latency impact (ADR-026)
-                if not _skip_vault_write:
-                    _prior = None
-                    _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
-                    if _buffer_turns and len(_buffer_turns) >= 2:
-                        _prior = _buffer_turns[-2].get("assistant")
-                    spawn_vault_bound_thread(
-                        _background_deviation_detection,
-                        args=(full_reply, _intent_class, latest_user_message, _prior),
-                        vault=_turn_vault,
-                    )
-
+            # Skip derived writes for test sessions - prevents eval artifacts
+            # from accumulating in the user's personal vault.
             if _skip_vault_write:
                 logger.warning("[TASK] Skipped task/state/commitment detection (test session)")
+                return
+            _spawn_post_exchange_extractors(
+                user_message=gen_ctx.user_turn_text,
+                reply=full_reply,
+                session_id=session_id,
+                vault=_turn_vault,
+            )
 
         # Suppress source badges on ask-first PROMPT turns (Ember asking
         # permission) but NOT on confirm turns (user said Yes, search ran).
@@ -2101,18 +2198,6 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                         full_reply, unsupported or "",
                     )
 
-                # 3.5. Deviation detection (ADR-026) - after grounding, before stream
-                if not _skip_vault_write:
-                    _prior = None
-                    _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
-                    if _buffer_turns and len(_buffer_turns) >= 2:
-                        _prior = _buffer_turns[-2].get("assistant")
-                    spawn_vault_bound_thread(
-                        _background_deviation_detection,
-                        args=(full_reply, _intent_class, latest_user_message, _prior),
-                        vault=_turn_vault,
-                    )
-
                 # 3.6. Coaching-frame filter - post-generation, pre-stream.
                 # Skip when the response is a constitutional refusal - refusal
                 # text must not be rewritten or stripped by the filter. Short
@@ -2181,6 +2266,10 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     )
                     logger.warning("[EMPTY_GUARD] Final guard fired before re-stream")
 
+                # 3.8. Store the reply and the pending confirmation before any
+                # of the reply's text is sent (ADR-047, decision D).
+                _store_reply(_exchange, full_reply, **_store_kwargs)
+
                 # 4. Re-stream verified response word by word
                 tokens = full_reply.split(" ")
                 for i, token in enumerate(tokens):
@@ -2228,13 +2317,6 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                         accumulated.append(filtered)
                         yield _emit_chunk(content=filtered)
 
-                # Vault sources event (if applicable)
-                if vault_sources:
-                    yield sse_vault_sources(vault_sources)
-
-                # Final chunk
-                yield _emit_final_chunk_and_done()
-
                 full_reply = "".join(accumulated)
                 # Coaching-frame filter - applied to accumulated text.
                 # In the fast streaming path, the user has already seen
@@ -2270,6 +2352,18 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
                     state_items=getattr(context_packet, "state_items", None),
                 )
                 full_reply = _postgen.reply
+
+                # Store before [DONE] (ADR-047). Partial tokens are never
+                # stored: a raise or disconnect mid-stream skips this line.
+                _store_reply(_exchange, full_reply, **_store_kwargs)
+
+                # Vault sources event (if applicable)
+                if vault_sources:
+                    yield sse_vault_sources(vault_sources)
+
+                # Final chunk
+                yield _emit_final_chunk_and_done()
+
                 _post_stream_cleanup(full_reply)
 
         response_headers = {
@@ -2287,12 +2381,14 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             response_headers["X-Ember-Vision-Used"] = "true"
 
         return StreamingResponse(
-            guard_sse(_stream_sse(), completion_id),
+            # on_abort ends the exchange with a `failed` or `interrupted`
+            # outcome when the body stops before [DONE] without a stored reply.
+            guard_sse(_stream_sse(), completion_id, on_abort=_exchange.record_outcome),
             media_type="text/event-stream",
             headers=response_headers,
         )
 
-    # --- NON-STREAMING PATH (unchanged) ---
+    # --- NON-STREAMING PATH ---
     reply = llm_adapter.generate_response(
         context_packet,
         style=conversational_style,
@@ -2360,81 +2456,23 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             "[SELF_NARRATIVE] Audit pass failed (non-fatal): %s", type(exc).__name__,
         )
 
-    # Every write below belongs to the vault this turn started in, whether it
-    # runs inline or in a spawned thread (issue #144).
-    with vault_binding(_turn_vault):
-        # Skip vault writes for test sessions
-        if not _skip_vault_write:
-            write_memory(
-                text=latest_user_message,
-                memory_type="conversation",
-                source="chat",
-                tags=["conversation"],
-                metadata=user_meta,
-            )
-
-            write_memory(
-                text=reply,
-                memory_type="conversation",
-                source="chat",
-                tags=["conversation"],
-                metadata=assistant_meta,
-            )
-
-        # Background state extraction - skip for test sessions to prevent eval leakage
-        if not _skip_vault_write:
-            spawn_vault_bound_thread(
-                _background_state_extraction,
-                args=(latest_user_message, reply),
-                vault=_turn_vault,
-            )
-            # BUG-009: resolve open_loops for declined topics
-            spawn_vault_bound_thread(
-                _background_topic_decline_resolution,
-                args=(latest_user_message,),
-                vault=_turn_vault,
-            )
-
-        # Commitment detection (ADR-014) - skip for test sessions
-        if not _skip_vault_write:
-            spawn_vault_bound_thread(
-                _detect_and_write_commitment,
-                args=(reply, session_id),
-                vault=_turn_vault,
-            )
-
-        # Task detection - skip for test sessions
-        if not _skip_vault_write:
-            spawn_vault_bound_thread(
-                _detect_task_in_response,
-                args=(reply, session_id),
-                vault=_turn_vault,
-            )
-
-        # Ask-first confirmation detection - write pending_confirmation
-        if not _skip_vault_write:
-            _write_pending_confirmation(
-                reply, _raw_user_message, session_id,
-                existing_pending=_pending_records,
-            )
-
-        # Deviation detection - async, no latency impact (ADR-026)
-        if not _skip_vault_write:
-            _prior = None
-            _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
-            if _buffer_turns and len(_buffer_turns) >= 2:
-                _prior = _buffer_turns[-2].get("assistant")
-            spawn_vault_bound_thread(
-                _background_deviation_detection,
-                args=(reply, _intent_class, latest_user_message, _prior),
-                vault=_turn_vault,
-            )
-
+    # Store the reply, then the pending confirmation, before the response
+    # (ADR-047). Every write belongs to the vault this exchange started in,
+    # whether it runs inline or in a spawned thread (issue #144).
+    _store_reply(_exchange, reply, **_store_kwargs)
     if _skip_vault_write:
         logger.warning("[TASK] Skipped task detection (test session)")
+    else:
+        _spawn_post_exchange_extractors(
+            user_message=gen_ctx.user_turn_text,
+            reply=reply,
+            session_id=session_id,
+            vault=_turn_vault,
+        )
 
     response_body = ChatCompletionsResponse(
-        id=f"chatcmpl-{uuid.uuid4().hex}",
+        # The exchange id (ADR-042, ADR-047), not a fresh one.
+        id=gen_ctx.completion_id,
         object="chat.completion",
         created=int(time.time()),
         model="ember-2",

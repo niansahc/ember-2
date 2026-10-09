@@ -70,11 +70,17 @@ def test_override_message_not_logged(caplog):
     assert SENTINEL not in text
 
 
-def test_ensure_session_title_not_logged(caplog):
-    from src.api.openai_adapter import _ensure_session
+def test_conversation_title_not_logged(caplog, tmp_path):
+    """The new conversation's title comes from the user turn; it must not
+    reach the log when the recorder creates the conversation record."""
+    from src.core.config import vault_binding
+    from src.memory.exchange import ExchangeRecorder
 
-    with caplog.at_level(logging.INFO):
-        _ensure_session("sess_test_log_003", f"{SENTINEL} first message")
+    (tmp_path / "memory").mkdir()
+    with vault_binding(tmp_path), caplog.at_level(logging.INFO):
+        ExchangeRecorder(
+            "chatcmpl-test-log", "sess_test_log_003", vault=tmp_path,
+        ).record_user_turn(f"{SENTINEL} first message")
     text = _text(caplog)
-    assert "sess_test_log_003" in text   # control: the call logged
+    assert "created conversation record" in text   # control: the call logged
     assert SENTINEL not in text

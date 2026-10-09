@@ -74,3 +74,70 @@ def test_no_candidates_selected_yields_no_write(temp_vault, monkeypatch):
 
     reflection_dir = temp_vault / "memory" / "reflection"
     assert not reflection_dir.exists() or not list(reflection_dir.glob("*.json"))
+
+
+
+# ---------------------------------------------------------------------------
+# Conversation records pass the index filter before they can be candidates
+# (ADR-047, plan v3 Q6): one filter for every derived artifact.
+# ---------------------------------------------------------------------------
+
+CODE_FENCE_TURN = (
+    "Here is my config:\n```yaml\nkey: value\n```\n"
+    "Why does this fail at startup every single time I try it?"
+)
+PLAIN_TURN = (
+    "I keep postponing the garden plans because the weekends fill up with errands."
+)
+# Passes reflection's own skip markers; only the index filter rejects it
+# (text starting with "{").
+JSON_TURN = (
+    '{"plan": "water the garden on weekends", "status": "postponed again this month"}'
+)
+
+
+@pytest.fixture
+def bound_vault(tmp_path):
+    from src.core.config import vault_binding
+
+    (tmp_path / "memory").mkdir()
+    with vault_binding(tmp_path):
+        yield tmp_path
+
+
+def _conversation_turn(text: str) -> None:
+    from src.memory.write_memory import write_canonical_record
+
+    write_canonical_record(
+        text=text, memory_type="conversation", source="chat",
+        metadata={"role": "user", "content_kind": "user_content",
+                  "session_id": "sess_test_reflect_001"},
+    )
+
+
+def test_pasted_json_conversation_record_is_not_a_reflection_candidate(bound_vault):
+    from src.reflection.generate_reflection import generate_reflection
+
+    _conversation_turn(JSON_TURN)
+    result = generate_reflection(memory_types=["conversation"], store=False, prompt_template=None)
+    assert result["memory_count"] == 0
+
+
+def test_code_fence_conversation_record_is_not_a_reflection_candidate(bound_vault):
+    """Reflection's own skip markers already drop code fences; the shared
+    filter must keep it that way."""
+    from src.reflection.generate_reflection import generate_reflection
+
+    _conversation_turn(CODE_FENCE_TURN)
+    result = generate_reflection(memory_types=["conversation"], store=False, prompt_template=None)
+    assert result["memory_count"] == 0
+
+
+def test_plain_conversation_record_is_a_reflection_candidate(bound_vault):
+    """Positive control for the two absences above."""
+    from src.reflection.generate_reflection import generate_reflection
+
+    _conversation_turn(PLAIN_TURN)
+    result = generate_reflection(memory_types=["conversation"], store=False, prompt_template=None)
+    assert result["memory_count"] == 1
+    assert "garden plans" in result["summary"]

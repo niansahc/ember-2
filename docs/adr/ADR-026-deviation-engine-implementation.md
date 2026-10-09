@@ -30,6 +30,8 @@ For non-grounding intents (casual, activity, default):
 2. Deviation detection runs async after streaming completes
 3. No latency impact on user turn
 
+Amended 2026-10-09 (ADR-047, issue #164): detection runs once per exchange, started right after the reply is stored, and scores the stored reply (after coaching and post-gen validation) on every path.
+
 Deviation detection is opt-in. Controlled by EMBER_DEVIATION_DETECTION=true in .env. Default: false.
 
 ### 3. Intent Class Gating
@@ -191,6 +193,7 @@ When true: full pipeline active for gated intent classes only.
 - **ADR-018:** intent classification gates which turns trigger detection — reuses existing classify_query() output
 - **MemoryService:** deviation records written via existing write path, new memory_type only
 - **ConversationBuffer:** position_collapse reads prior response from existing buffer
+- **ADR-047:** exchange persistence. Detection starts right after the reply is stored, once per exchange, and scores the stored reply; the user message it receives is the stored user turn, without Ember's task, timer and search notes
 
 ## Consequences
 

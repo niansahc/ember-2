@@ -696,3 +696,110 @@ def test_clarification_reply_write_failure_sends_storage_failed_once(client, vau
     ))
     _assert_storage_failed_once(resp)
     assert [o["metadata"]["reason"] for o in _outcomes(vault)] == ["OSError"]
+
+
+# ---------------------------------------------------------------------------
+# History: newest turns, retries once, image_count (v3 "Newest turns", Q4, Q5)
+# ---------------------------------------------------------------------------
+
+def _write_turns(count: int) -> list[str]:
+    """Write `count` alternating user/assistant turns; return their texts."""
+    from src.memory.write_memory import write_canonical_record
+
+    texts = []
+    for i in range(count):
+        role = "user" if i % 2 == 0 else "assistant"
+        text = f"turn number {i:03d}"
+        write_canonical_record(
+            text=text, memory_type="conversation", source="chat",
+            metadata={"role": role, "session_id": SESSION_ID},
+        )
+        texts.append(text)
+    return texts
+
+
+def test_history_returns_the_newest_turns_in_order(vault):
+    from src.memory.session import get_turns
+
+    texts = _write_turns(205)
+    turns = get_turns(SESSION_ID, limit=200)
+    assert [t["text"] for t in turns] == texts[-200:]
+    assert turns[-1]["text"] == "turn number 204"
+
+
+def test_history_limit_at_or_above_the_count_returns_every_turn(vault):
+    """Positive control: nothing is dropped when everything fits."""
+    from src.memory.session import get_turns
+
+    texts = _write_turns(6)
+    assert [t["text"] for t in get_turns(SESSION_ID, limit=6)] == texts
+    assert [t["text"] for t in get_turns(SESSION_ID, limit=200)] == texts
+
+
+def test_failure_then_retry_shows_the_message_once(client, vault, casual_policy):
+    _chat(client, policy=casual_policy, gen_error=RuntimeError("model server down"))
+    _chat(client, policy=casual_policy)
+    history = _history(client)
+    assert [(t["role"], t["content"]) for t in history] == [
+        ("user", USER_TEXT), ("assistant", PLAIN_REPLY),
+    ]
+    # The vault keeps both exchanges.
+    assert len(_turns(vault, "user")) == 2
+    assert len(_outcomes(vault)) == 1
+
+
+def test_failure_then_a_different_message_shows_both(client, vault, casual_policy):
+    """Positive control: only an identical repeat is a retry."""
+    _chat(client, policy=casual_policy, gen_error=RuntimeError("model server down"))
+    _chat(client, "something else entirely", policy=casual_policy)
+    assert [(t["role"], t["content"]) for t in _history(client)] == [
+        ("user", USER_TEXT),
+        ("user", "something else entirely"),
+        ("assistant", PLAIN_REPLY),
+    ]
+
+
+def test_retry_collapse_runs_before_the_limit(vault):
+    """`limit` counts the turns the user sees, not the stored records."""
+    from src.memory.session import get_turns
+    from src.memory.write_memory import write_canonical_record
+
+    for role, text in [("user", "first question"), ("assistant", "first answer"),
+                       ("user", "retried question"), ("user", "retried question"),
+                       ("assistant", "second answer")]:
+        write_canonical_record(
+            text=text, memory_type="conversation", source="chat",
+            metadata={"role": role, "session_id": SESSION_ID},
+        )
+    assert [t["text"] for t in get_turns(SESSION_ID, limit=3)] == [
+        "first answer", "retried question", "second answer",
+    ]
+
+
+def test_history_returns_the_image_count(client, vault, casual_policy):
+    from src.api import openai_adapter as oa
+
+    _chat(client, _image_content(""), policy=casual_policy, extra=(
+        patch.object(oa.vision_service, "analyze", return_value="A red square on white."),
+    ))
+    user, reply = _history(client)
+    assert user["image_count"] == 1
+    assert user["content"] == ""
+    # Control: a turn without images reports 0, not a missing field.
+    assert reply["image_count"] == 0
+
+
+def test_repeats_with_different_image_counts_are_not_retries(vault):
+    """Same (empty) text, different attachments: two different messages."""
+    from src.memory.session import get_turns
+    from src.memory.write_memory import write_canonical_record
+
+    for role, count in [("user", 1), ("user", 2), ("assistant", 0)]:
+        meta = {"role": role, "session_id": SESSION_ID}
+        if count:
+            meta["image_count"] = count
+        write_canonical_record(
+            text="" if role == "user" else "Two photos of the same plant.",
+            memory_type="conversation", source="chat", metadata=meta,
+        )
+    assert [t["metadata"].get("image_count") for t in get_turns(SESSION_ID)] == [1, 2, None]

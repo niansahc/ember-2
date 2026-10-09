@@ -373,7 +373,8 @@ def list_conversations_endpoint(limit: int = 50):
 
 @app.get("/v1/conversations/{session_id}")
 def get_conversation_endpoint(session_id: str, limit: int = 200):
-    """Get all turns for a conversation session."""
+    """Get a conversation's history: its newest `limit` turns, oldest first,
+    with retries shown once (ADR-047)."""
     session = get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
@@ -390,6 +391,8 @@ def get_conversation_endpoint(session_id: str, limit: int = 200):
                 "role": t.get("metadata", {}).get("role", "unknown"),
                 "content": t.get("text", ""),
                 "timestamp": t.get("timestamp", ""),
+                # Images are counted, never kept (ADR-047). 0 when none.
+                "image_count": int(t.get("metadata", {}).get("image_count", 0) or 0),
             }
             for t in turns
         ],

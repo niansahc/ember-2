@@ -835,3 +835,30 @@ def test_one_deviation_run_per_exchange_on_the_stored_reply(
     assert reply["text"].endswith("(filtered)")
     assert len(runs) == 1
     assert runs[0][0] == reply["text"]
+
+
+# ---------------------------------------------------------------------------
+# Q9: what Ember works out about the user reads the user turn, not the prompt
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("stream", [True, False], ids=["stream", "non_stream"])
+def test_extractors_get_the_user_turn_without_embers_notes(client, vault, casual_policy, stream):
+    from src.api import openai_adapter as oa
+
+    message = "create a task to water the plants"
+    started: dict[str, tuple] = {}
+
+    def _spawn(target, args=(), vault=None, name=None):
+        started[target.__name__] = args
+
+    with patch.object(oa.context_service, "build_context", return_value=synthetic_packet()) as bc:
+        _chat(client, message, policy=casual_policy, stream=stream, stub_extractors=False, extra=(
+            patch("src.api.openai_adapter._apply_tasks", side_effect=_prefix_task_note),
+            patch.object(oa.context_service, "build_context", bc),
+            patch("src.api.openai_adapter.spawn_vault_bound_thread", side_effect=_spawn),
+        ))
+    assert started["_background_state_extraction"][0] == message
+    assert started["_background_topic_decline_resolution"][0] == message
+    assert started["_background_deviation_detection"][2] == message
+    # Positive control: generation still receives Ember's note.
+    assert bc.call_args.args[0].startswith("[System: tasks created")

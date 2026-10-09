@@ -2037,7 +2037,7 @@ async def _complete_exchange(
                 _spawn_deviation_detection(
                     reply=full_reply,
                     intent_class=_intent_class,
-                    user_message=latest_user_message,
+                    user_message=gen_ctx.user_turn_text,
                     vault=_turn_vault,
                 )
                 with vault_binding(_turn_vault):
@@ -2049,7 +2049,11 @@ async def _complete_exchange(
         def _post_stream_cleanup(full_reply: str) -> None:
             """Post-[DONE] derived work: the self-narrative audit and extractors.
 
-            The turns and the pending confirmation were stored before [DONE].
+            The extractors read the stored user turn (gen_ctx.user_turn_text),
+            never the prompt with Ember's task, timer and search notes, so
+            those notes cannot turn into state about the user (ADR-047, the
+            ADR-033 root cause). The turns and the pending confirmation were
+            stored before [DONE].
             Runs from inside the SSE generator, after the handler has returned,
             so every deferred write is bound to the exchange's vault (issue
             #144).
@@ -2079,7 +2083,7 @@ async def _complete_exchange(
                 logger.warning("[TASK] Skipped task/state/commitment detection (test session)")
                 return
             _spawn_post_exchange_extractors(
-                user_message=latest_user_message,
+                user_message=gen_ctx.user_turn_text,
                 reply=full_reply,
                 session_id=session_id,
                 intent_class=_intent_class,
@@ -2458,7 +2462,7 @@ async def _complete_exchange(
         _spawn_deviation_detection(
             reply=reply,
             intent_class=_intent_class,
-            user_message=latest_user_message,
+            user_message=gen_ctx.user_turn_text,
             vault=_turn_vault,
         )
         with vault_binding(_turn_vault):
@@ -2467,7 +2471,7 @@ async def _complete_exchange(
                 existing_pending=_pending_records,
             )
         _spawn_post_exchange_extractors(
-            user_message=latest_user_message,
+            user_message=gen_ctx.user_turn_text,
             reply=reply,
             session_id=session_id,
             intent_class=_intent_class,

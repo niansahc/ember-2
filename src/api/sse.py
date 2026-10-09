@@ -126,7 +126,21 @@ def sse_done() -> str:
     return "data: [DONE]\n\n"
 
 
-async def guard_sse(body, completion_id: str):
+def _notify_abort(on_abort, outcome: str, reason: str | None) -> None:
+    """Call on_abort without letting its failure replace the stream's own.
+
+    on_abort is synchronous by contract: it can run inside a cancelled scope,
+    where any await would raise CancelledError again.
+    """
+    if on_abort is None:
+        return
+    try:
+        on_abort(outcome, reason)
+    except Exception as exc:  # noqa: BLE001
+        _logger.error("[SSE] on_abort failed: %s", type(exc).__name__)
+
+
+async def guard_sse(body, completion_id: str, on_abort=None):
     """Wrap a StreamingResponse body so no exception ends the stream silently.
 
     Headers (HTTP 200) are flushed before the body runs, so an exception that
@@ -134,17 +148,25 @@ async def guard_sse(body, completion_id: str):
     StreamingResponse in src/api wraps its body in this guard.
 
     - Exception before the terminal frames: log "[GENERATION] failed: <Type>"
-      with the traceback, then yield the error frame (ADR-040 v3), a stop
-      chunk and [DONE], once. Exception text never reaches the wire.
-    - Exception after the body already yielded [DONE] (post-stream cleanup):
+      with the traceback, call on_abort("failed", "<Type>"), then yield the
+      error frame (ADR-040 v3), a stop chunk and [DONE], once. Exception text
+      never reaches the wire.
+    - CancelledError / GeneratorExit before the terminal frames (the client
+      disconnected): call on_abort("interrupted", None), then re-raise.
+    - Anything after the body already yielded [DONE] (post-stream cleanup):
       log "[SSE] post-terminal failure: <Type>" and yield nothing; the client
-      has its complete stream.
-    - Only Exception is caught. CancelledError / GeneratorExit from a client
-      disconnect propagate, and an async inner body is closed on the way out.
+      has its complete stream, and on_abort is not called.
+    - Only Exception is caught; cancellation always propagates, and an async
+      inner body is closed on the way out.
+
+    on_abort(outcome, reason) lets the caller end its exchange with an
+    exchange outcome (ADR-047). It must be synchronous; see _notify_abort.
 
     Sync bodies are iterated in the threadpool, as Starlette does for them,
     so blocking generation never runs on the event loop.
     """
+    import asyncio
+
     from starlette.concurrency import iterate_in_threadpool
 
     iterator = body if hasattr(body, "__aiter__") else iterate_in_threadpool(body)
@@ -164,7 +186,13 @@ async def guard_sse(body, completion_id: str):
         _logger.error(
             "[GENERATION] failed: %s", type(exc).__name__, exc_info=exc,
         )
+        _notify_abort(on_abort, "failed", type(exc).__name__)
         yield sse_error() + sse_chunk(completion_id, finish_reason="stop") + done_frame
+    except (asyncio.CancelledError, GeneratorExit):
+        if not terminated:
+            _logger.warning("[SSE] client disconnected before [DONE]")
+            _notify_abort(on_abort, "interrupted", None)
+        raise
     finally:
         # Async bodies only: a sync body may still be mid-next() in a worker
         # thread on cancellation, and closing it from here would raise.

@@ -156,7 +156,7 @@ class TestSelfNarrativeIntegration:
             ) as _ctx, patch(
                 "src.api.openai_adapter.llm_adapter",
             ) as _llm, patch(
-                "src.api.openai_adapter.write_memory",
+                "src.api.openai_adapter.ExchangeRecorder",
             ), patch(
                 "src.api.openai_adapter._background_state_extraction",
             ), patch(
@@ -166,7 +166,7 @@ class TestSelfNarrativeIntegration:
             ), patch(
                 "src.api.openai_adapter.onboarding_service",
             ) as _onb, patch(
-                "src.api.openai_adapter._ensure_session",
+                "src.api.openai_adapter._background_topic_decline_resolution",
             ):
                 _onb.is_active.return_value = False
                 from src.context.models import ContextPacket
@@ -212,7 +212,7 @@ class TestSelfNarrativeIntegration:
             ) as _ctx, patch(
                 "src.api.openai_adapter.llm_adapter",
             ) as _llm, patch(
-                "src.api.openai_adapter.write_memory",
+                "src.api.openai_adapter.ExchangeRecorder",
             ), patch(
                 "src.api.openai_adapter._background_state_extraction",
             ), patch(
@@ -222,7 +222,7 @@ class TestSelfNarrativeIntegration:
             ), patch(
                 "src.api.openai_adapter.onboarding_service",
             ) as _onb, patch(
-                "src.api.openai_adapter._ensure_session",
+                "src.api.openai_adapter._background_topic_decline_resolution",
             ):
                 _onb.is_active.return_value = False
                 from src.context.models import ContextPacket
@@ -277,7 +277,7 @@ class TestSelfNarrativeIntegration:
             ) as _ctx, patch(
                 "src.api.openai_adapter.llm_adapter",
             ) as _llm, patch(
-                "src.api.openai_adapter.write_memory",
+                "src.api.openai_adapter.ExchangeRecorder",
             ), patch(
                 "src.api.openai_adapter._background_state_extraction",
             ), patch(
@@ -287,7 +287,7 @@ class TestSelfNarrativeIntegration:
             ), patch(
                 "src.api.openai_adapter.onboarding_service",
             ) as _onb, patch(
-                "src.api.openai_adapter._ensure_session",
+                "src.api.openai_adapter._background_topic_decline_resolution",
             ):
                 _onb.is_active.return_value = False
                 from src.context.models import ContextPacket

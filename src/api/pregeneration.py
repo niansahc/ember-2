@@ -107,6 +107,12 @@ class GenerationContext:
     stream: bool
     policy: "ContextPolicy"
     raw_user_message: str
+    # The user turn exactly as the client sent it (ADR-047, CONTEXT.md):
+    # captured before the image placeholder and before any Phase B note. This,
+    # not raw_user_message, is what the exchange recorder stores.
+    user_turn_text: str = ""
+    # Images attached to the message. They are counted, never kept.
+    image_count: int = 0
 
 
 @dataclass

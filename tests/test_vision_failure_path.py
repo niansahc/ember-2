@@ -90,12 +90,12 @@ def test_vision_failure_does_not_forward_images_to_text_model(client):
     with patch("src.api.openai_adapter.context_service") as _ctx, \
          patch("src.api.openai_adapter.llm_adapter") as _llm, \
          patch("src.api.openai_adapter.vision_service") as _vision, \
-         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter.ExchangeRecorder"), \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.core.preferences.get", side_effect=_prefs_get(vision_enabled=True)):
         _onb.is_active.return_value = False
         _ctx.build_context.return_value = empty_packet
@@ -130,12 +130,12 @@ def test_vision_failure_returns_sse_when_streaming(client):
     with patch("src.api.openai_adapter.context_service") as _ctx, \
          patch("src.api.openai_adapter.llm_adapter") as _llm, \
          patch("src.api.openai_adapter.vision_service") as _vision, \
-         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter.ExchangeRecorder"), \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.core.preferences.get", side_effect=_prefs_get(vision_enabled=True)):
         _onb.is_active.return_value = False
         _ctx.build_context.return_value = empty_packet
@@ -170,12 +170,12 @@ def test_vision_success_path_still_generates(client):
     with patch("src.api.openai_adapter.context_service") as _ctx, \
          patch("src.api.openai_adapter.llm_adapter") as _llm, \
          patch("src.api.openai_adapter.vision_service") as _vision, \
-         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter.ExchangeRecorder"), \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.core.preferences.get", side_effect=_prefs_get(vision_enabled=True)):
         _onb.is_active.return_value = False
         _ctx.build_context.return_value = packet
@@ -205,12 +205,12 @@ def test_vision_disabled_skips_preprocessor_and_still_generates(client):
     with patch("src.api.openai_adapter.context_service") as _ctx, \
          patch("src.api.openai_adapter.llm_adapter") as _llm, \
          patch("src.api.openai_adapter.vision_service") as _vision, \
-         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter.ExchangeRecorder"), \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.core.preferences.get", side_effect=_prefs_get(vision_enabled=False)):
         _onb.is_active.return_value = False
         _ctx.build_context.return_value = packet
@@ -240,12 +240,12 @@ def test_vision_disabled_returns_sse_when_streaming(client):
     with patch("src.api.openai_adapter.context_service") as _ctx, \
          patch("src.api.openai_adapter.llm_adapter") as _llm, \
          patch("src.api.openai_adapter.vision_service") as _vision, \
-         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter.ExchangeRecorder"), \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.core.preferences.get", side_effect=_prefs_get(vision_enabled=False)):
         _onb.is_active.return_value = False
         _ctx.build_context.return_value = packet
@@ -278,12 +278,12 @@ def test_vision_default_unset_still_triggers_vision(client):
     with patch("src.api.openai_adapter.context_service") as _ctx, \
          patch("src.api.openai_adapter.llm_adapter") as _llm, \
          patch("src.api.openai_adapter.vision_service") as _vision, \
-         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter.ExchangeRecorder"), \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"):
+         patch("src.api.openai_adapter._background_topic_decline_resolution"):
         # No patch on src.core.preferences.get - exercises the real
         # PREFERENCE_DEFAULTS lookup (empty/no vault preferences file).
         _onb.is_active.return_value = False
@@ -311,12 +311,12 @@ def test_vision_enabled_stored_as_none_defaults_to_enabled(client):
     with patch("src.api.openai_adapter.context_service") as _ctx, \
          patch("src.api.openai_adapter.llm_adapter") as _llm, \
          patch("src.api.openai_adapter.vision_service") as _vision, \
-         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter.ExchangeRecorder"), \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.core.preferences.get", side_effect=_prefs_get(vision_enabled=None)):
         _onb.is_active.return_value = False
         _ctx.build_context.return_value = packet

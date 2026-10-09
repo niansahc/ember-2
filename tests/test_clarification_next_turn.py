@@ -82,12 +82,12 @@ def test_next_turn_after_clarification_dispatches_user_message_to_web_search(cli
     with patch("src.api.openai_adapter.read_memories") as _read_conv, \
          patch("src.api.openai_adapter.context_service") as _ctx, \
          patch("src.api.openai_adapter.llm_adapter") as _llm, \
-         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter.ExchangeRecorder"), \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.api.openai_adapter.get_session") as _get_session:
         _onb.is_active.return_value = False
         _read_conv.return_value = _fake_recent_conversations(session_id)
@@ -154,12 +154,12 @@ def test_no_clarification_in_history_does_not_force_web_search(client):
     with patch("src.api.openai_adapter.read_memories") as _read_conv, \
          patch("src.api.openai_adapter.context_service") as _ctx, \
          patch("src.api.openai_adapter.llm_adapter") as _llm, \
-         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter.ExchangeRecorder"), \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.api.openai_adapter.get_session") as _get_session, \
          patch("src.core.preferences.get", return_value=False):
         _onb.is_active.return_value = False

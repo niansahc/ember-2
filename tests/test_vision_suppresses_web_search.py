@@ -84,12 +84,12 @@ def test_vision_turn_skips_primary_web_search(client):
     with patch("src.api.openai_adapter.context_service") as _ctx, \
          patch("src.api.openai_adapter.llm_adapter") as _llm, \
          patch("src.api.openai_adapter.vision_service") as _vision, \
-         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter.ExchangeRecorder"), \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.core.preferences.get", side_effect=_prefs_get(web_search_autonomous=True)), \
          patch("src.tools.web_search.web_search") as _web:
         _onb.is_active.return_value = False
@@ -125,12 +125,12 @@ def test_vision_turn_skips_autonomous_backstop(client, caplog):
     with patch("src.api.openai_adapter.context_service") as _ctx, \
          patch("src.api.openai_adapter.llm_adapter") as _llm, \
          patch("src.api.openai_adapter.vision_service") as _vision, \
-         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter.ExchangeRecorder"), \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.core.preferences.get", side_effect=_prefs_get(web_search_autonomous=True)), \
          patch("src.tools.web_search.web_search") as _web:
         _onb.is_active.return_value = False
@@ -168,12 +168,12 @@ def test_vision_turn_disables_ask_first(client):
     with patch("src.api.openai_adapter.context_service") as _ctx, \
          patch("src.api.openai_adapter.llm_adapter") as _llm, \
          patch("src.api.openai_adapter.vision_service") as _vision, \
-         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter.ExchangeRecorder"), \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.core.preferences.get", side_effect=_prefs_get(web_search_autonomous=False)), \
          patch("src.tools.web_search.web_search") as _web:
         _onb.is_active.return_value = False

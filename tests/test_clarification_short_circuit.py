@@ -41,12 +41,12 @@ def test_bare_marker_returns_scripted_clarification(client):
     response content."""
     with patch("src.api.openai_adapter.context_service") as _ctx, \
          patch("src.api.openai_adapter.llm_adapter") as _llm, \
-         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter.ExchangeRecorder"), \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.tools.web_search.web_search") as _web:
         _onb.is_active.return_value = False
 
@@ -64,39 +64,35 @@ def test_bare_marker_returns_scripted_clarification(client):
 
 
 def test_bare_marker_writes_both_conversation_records_with_metadata(client):
-    """User turn and assistant turn must both be written. The assistant
-    record carries metadata.source='clarification' and
-    metadata.awaiting_search_content=True so the next-turn handler can
-    detect the followup."""
+    """User turn and assistant turn must both be written. The user turn is
+    stored in Phase A (ADR-047); the assistant record carries
+    metadata.source='clarification' and metadata.awaiting_search_content=True
+    so the next-turn handler can detect the followup."""
     with patch("src.api.openai_adapter.context_service"), \
          patch("src.api.openai_adapter.llm_adapter"), \
-         patch("src.api.openai_adapter.write_memory") as _write, \
+         patch("src.api.openai_adapter.ExchangeRecorder") as _recorder_cls, \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.tools.web_search.web_search"):
         _onb.is_active.return_value = False
 
         resp = client.post("/v1/chat/completions", json=_bare_marker_payload())
 
         assert resp.status_code == 200
-        assert _write.call_count == 2
-
-        user_call, assistant_call = _write.call_args_list
-        # User turn: raw user message in text, role=user metadata.
-        assert user_call.kwargs["text"] == "google please"
-        assert user_call.kwargs["memory_type"] == "conversation"
-        assert user_call.kwargs["metadata"]["role"] == "user"
+        recorder = _recorder_cls.return_value
+        # User turn: the text exactly as sent, written once, in Phase A.
+        recorder.record_user_turn.assert_called_once_with("google please", 0)
 
         # Assistant turn: clarification text + clarification-source flags.
-        assert assistant_call.kwargs["text"] == SCRIPTED_CLARIFICATION_RESPONSE
-        assert assistant_call.kwargs["memory_type"] == "conversation"
-        meta = assistant_call.kwargs["metadata"]
-        assert meta["role"] == "assistant"
-        assert meta["source"] == "clarification"
-        assert meta["awaiting_search_content"] is True
+        recorder.record_reply.assert_called_once()
+        args, kwargs = recorder.record_reply.call_args
+        assert args == (SCRIPTED_CLARIFICATION_RESPONSE,)
+        assert kwargs["metadata"]["source"] == "clarification"
+        assert kwargs["metadata"]["awaiting_search_content"] is True
+        assert "clarification" in kwargs["tags"]
 
 
 def test_bare_marker_streaming_emits_clarification_sse(client):
@@ -106,12 +102,12 @@ def test_bare_marker_streaming_emits_clarification_sse(client):
     payload["stream"] = True
     with patch("src.api.openai_adapter.context_service") as _ctx, \
          patch("src.api.openai_adapter.llm_adapter") as _llm, \
-         patch("src.api.openai_adapter.write_memory"), \
+         patch("src.api.openai_adapter.ExchangeRecorder"), \
          patch("src.api.openai_adapter._background_state_extraction"), \
          patch("src.api.openai_adapter._detect_and_write_commitment"), \
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
-         patch("src.api.openai_adapter._ensure_session"), \
+         patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.tools.web_search.web_search"):
         _onb.is_active.return_value = False
 

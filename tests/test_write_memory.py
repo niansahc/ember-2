@@ -16,6 +16,11 @@ Includes regression tests for the openai_adapter conversation format history:
 - current format — two separate writes, each passes on its own
 """
 
+import sqlite3
+
+import pytest
+
+from src.core.config import vault_binding
 from src.memory.write_memory import should_skip_memory
 
 
@@ -149,3 +154,129 @@ def test_assistant_turn_passes():
     """
     text = "You have been working on the Ember-2 project, specifically the retrieval pipeline and conversation memory write path."
     assert should_skip_memory(text, memory_type="conversation") is False
+
+
+# ---------------------------------------------------------------------------
+# Record write and index are separate (plan v3 section 1, ADR-047).
+#
+# write_canonical_record() writes the canonical record with no content filter;
+# should_index() is the only place the filter applies, and index_record() does
+# the embedding and memory.db insert. write_memory() composes the three and
+# keeps its old behavior for every other caller.
+# ---------------------------------------------------------------------------
+
+CODE_FENCE_REPLY = "Here is the snippet:\n```python\nprint('hi')\n```"
+PLAIN_REPLY = "A plain reply with no code in it, long enough to be ordinary."
+
+
+@pytest.fixture
+def bound_vault(tmp_path, monkeypatch):
+    """A fresh vault bound for this test only, with embedding stubbed."""
+    for sub in ("memory", "embeddings"):
+        (tmp_path / sub).mkdir()
+    monkeypatch.setattr(
+        "src.memory.write_memory.embed_text", lambda _t: [0.0] * 768,
+    )
+    with vault_binding(tmp_path):
+        yield tmp_path
+
+
+def _conversation_record(text: str, **metadata) -> dict:
+    return {
+        "id": "2026-01-01T00-00-00-000001",
+        "timestamp": "2026-01-01T00-00-00-000001",
+        "type": "conversation",
+        "text": text,
+        "source": "chat",
+        "tags": ["conversation"],
+        "metadata": {"role": "assistant", **metadata},
+    }
+
+
+def _row_ids(vault) -> set[str]:
+    db = vault / "embeddings" / "memory.db"
+    if not db.exists():
+        return set()
+    conn = sqlite3.connect(str(db))
+    try:
+        return {r[0] for r in conn.execute("SELECT id FROM vectors")}
+    finally:
+        conn.close()
+
+
+def test_should_index_rejects_code_fence_conversation(bound_vault):
+    from src.memory.write_memory import should_index
+
+    assert should_index(_conversation_record(CODE_FENCE_REPLY)) is False
+
+
+def test_should_index_accepts_plain_conversation(bound_vault):
+    """Positive control for the code-fence rejection above."""
+    from src.memory.write_memory import should_index
+
+    assert should_index(_conversation_record(PLAIN_REPLY)) is True
+
+
+def test_should_index_rejects_exchange_outcome(bound_vault):
+    from src.memory.write_memory import should_index
+
+    record = _conversation_record(PLAIN_REPLY, kind="exchange_outcome")
+    record["type"] = "system_event"
+    assert should_index(record) is False
+
+
+def test_should_index_accepts_system_event_without_outcome_kind(bound_vault):
+    """Positive control: only the exchange_outcome kind is excluded."""
+    from src.memory.write_memory import should_index
+
+    record = _conversation_record(PLAIN_REPLY, kind="audit")
+    record["type"] = "system_event"
+    assert should_index(record) is True
+
+
+def test_write_canonical_record_writes_text_the_filter_skips(bound_vault):
+    from src.memory.write_memory import write_canonical_record
+
+    record, path = write_canonical_record(
+        text=CODE_FENCE_REPLY, memory_type="conversation", source="chat",
+        metadata={"role": "assistant"},
+    )
+    assert path.exists()
+    assert record["text"] == CODE_FENCE_REPLY
+    assert record["metadata"]["contains_named_third_party"] is False
+    # The canonical write never indexes.
+    assert _row_ids(bound_vault) == set()
+
+
+def test_write_memory_still_refuses_text_the_filter_skips(bound_vault):
+    """Control: write_memory keeps today's filter on the write (R10)."""
+    from src.memory.write_memory import write_memory
+
+    assert write_memory(
+        text=CODE_FENCE_REPLY, memory_type="conversation", source="chat",
+    ) is None
+    assert not list((bound_vault / "memory" / "conversation").glob("*.json"))
+
+
+def test_index_record_inserts_a_memory_db_row(bound_vault):
+    from src.memory.write_memory import index_record, write_canonical_record
+
+    record, path = write_canonical_record(
+        text=PLAIN_REPLY, memory_type="conversation", source="chat",
+        metadata={"role": "assistant"},
+    )
+    assert _row_ids(bound_vault) == set()
+    index_record(record, path)
+    assert _row_ids(bound_vault) == {record["id"]}
+
+
+def test_write_memory_still_indexes_inline(bound_vault):
+    """write_memory keeps its write-then-index behavior and return value."""
+    from src.memory.write_memory import write_memory
+
+    path = write_memory(
+        text=PLAIN_REPLY, memory_type="conversation", source="chat",
+        metadata={"role": "assistant"},
+    )
+    assert path is not None and path.exists()
+    assert _row_ids(bound_vault) == {path.stem}

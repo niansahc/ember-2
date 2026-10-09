@@ -30,6 +30,8 @@ For non-grounding intents (casual, activity, default):
 2. Deviation detection runs async after streaming completes
 3. No latency impact on user turn
 
+Amended 2026-10-09 (ADR-047, issue #164): detection runs once per exchange, started right after the reply is stored, and scores the stored reply (after coaching and post-gen validation) on every path.
+
 Deviation detection is opt-in. Controlled by EMBER_DEVIATION_DETECTION=true in .env. Default: false.
 
 ### 3. Intent Class Gating

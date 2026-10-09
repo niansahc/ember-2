@@ -319,19 +319,12 @@ def _spawn_post_exchange_extractors(
 ) -> None:
     """Start the derived-work threads that follow a stored reply.
 
-    State extraction, topic-decline resolution, commitment and task-offer
-    detection, and deviation detection. Each start is in its own try block so
-    one failure cannot skip the rest, and each logs the exception type only.
-    Every thread is bound to the exchange's vault (issue #144).
+    State extraction, topic-decline resolution, and commitment and task-offer
+    detection. Each start is in its own try block so one failure cannot skip
+    the rest, and each logs the exception type only. Every thread is bound to
+    the exchange's vault (issue #144). Deviation detection is not here: it
+    starts when the reply is stored (_spawn_deviation_detection).
     """
-    prior = None
-    try:
-        buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
-        if buffer_turns and len(buffer_turns) >= 2:
-            prior = buffer_turns[-2].get("assistant")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[EXTRACT] prior reply lookup failed: %s", type(exc).__name__)
-
     for target, args in (
         (_background_state_extraction, (user_message, reply)),
         # BUG-009: resolve open_loops for declined topics
@@ -339,8 +332,6 @@ def _spawn_post_exchange_extractors(
         # ADR-014 commitments, then task offers
         (_detect_and_write_commitment, (reply, session_id)),
         (_detect_task_in_response, (reply, session_id)),
-        # ADR-026, async, no latency impact
-        (_background_deviation_detection, (reply, intent_class, user_message, prior)),
     ):
         try:
             spawn_vault_bound_thread(target, args=args, vault=vault)
@@ -349,6 +340,37 @@ def _spawn_post_exchange_extractors(
                 "[EXTRACT] %s did not start: %s",
                 getattr(target, "__name__", "extractor"), type(exc).__name__,
             )
+
+
+def _spawn_deviation_detection(
+    *,
+    reply: str,
+    intent_class: str,
+    user_message: str,
+    vault,
+) -> None:
+    """Start the one deviation-detection run for an exchange (ADR-026, #164).
+
+    Called right after the reply is stored, on every path, with the stored
+    text. On the grounded path that is after grounding and before streaming,
+    where ADR-026 places it, and the text scored is exactly the assistant turn
+    in the vault. Async, no latency impact.
+    """
+    prior = None
+    try:
+        buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
+        if buffer_turns and len(buffer_turns) >= 2:
+            prior = buffer_turns[-2].get("assistant")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[DEVIATION] prior reply lookup failed: %s", type(exc).__name__)
+    try:
+        spawn_vault_bound_thread(
+            _background_deviation_detection,
+            args=(reply, intent_class, user_message, prior),
+            vault=vault,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[DEVIATION] detection did not start: %s", type(exc).__name__)
 
 
 def _resolve_original_pending(pending, reason: str = "user_response") -> None:
@@ -2006,10 +2028,18 @@ async def _complete_exchange(
 
             ADR-047 and decision D: the client's [DONE] means both are already
             in the vault. A reply write failure raises ExchangeStorageError into
-            guard_sse. _write_pending_confirmation catches its own errors.
+            guard_sse. _write_pending_confirmation catches its own errors. The
+            exchange's one deviation-detection run starts here, on the stored
+            text (ADR-026, issue #164).
             """
             _exchange.record_reply(full_reply)
             if not _skip_vault_write:
+                _spawn_deviation_detection(
+                    reply=full_reply,
+                    intent_class=_intent_class,
+                    user_message=latest_user_message,
+                    vault=_turn_vault,
+                )
                 with vault_binding(_turn_vault):
                     _write_pending_confirmation(
                         full_reply, _raw_user_message, session_id,
@@ -2158,18 +2188,6 @@ async def _complete_exchange(
                     yield _status_event("refining")
                     full_reply = await run_revision_pass(
                         full_reply, unsupported or "",
-                    )
-
-                # 3.5. Deviation detection (ADR-026) - after grounding, before stream
-                if not _skip_vault_write:
-                    _prior = None
-                    _buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
-                    if _buffer_turns and len(_buffer_turns) >= 2:
-                        _prior = _buffer_turns[-2].get("assistant")
-                    spawn_vault_bound_thread(
-                        _background_deviation_detection,
-                        args=(full_reply, _intent_class, latest_user_message, _prior),
-                        vault=_turn_vault,
                     )
 
                 # 3.6. Coaching-frame filter - post-generation, pre-stream.
@@ -2437,6 +2455,12 @@ async def _complete_exchange(
     if _skip_vault_write:
         logger.warning("[TASK] Skipped task detection (test session)")
     else:
+        _spawn_deviation_detection(
+            reply=reply,
+            intent_class=_intent_class,
+            user_message=latest_user_message,
+            vault=_turn_vault,
+        )
         with vault_binding(_turn_vault):
             _write_pending_confirmation(
                 reply, _raw_user_message, session_id,

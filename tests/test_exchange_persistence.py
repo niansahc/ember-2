@@ -803,3 +803,35 @@ def test_repeats_with_different_image_counts_are_not_retries(vault):
             memory_type="conversation", source="chat", metadata=meta,
         )
     assert [t["metadata"].get("image_count") for t in get_turns(SESSION_ID)] == [1, 2, None]
+
+
+# ---------------------------------------------------------------------------
+# Q8, issue #164: one deviation run per exchange, on the stored reply
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("path", ["grounded", "fast", "non_stream"])
+def test_one_deviation_run_per_exchange_on_the_stored_reply(
+    client, vault, casual_policy, monkeypatch, path,
+):
+    monkeypatch.setenv("EMBER_DEVIATION_DETECTION", "true")
+    started: list[tuple[str, tuple]] = []
+
+    def _spawn(target, args=(), vault=None, name=None):
+        started.append((target.__name__, args))
+
+    # The coaching filter changes the text, so the stored reply differs from
+    # the raw generation the old pre-coaching run scored.
+    _chat(
+        client, policy=casual_policy, stream=path != "non_stream", fast=path == "fast",
+        stub_extractors=False,
+        extra=(
+            patch("src.api.openai_adapter.spawn_vault_bound_thread", side_effect=_spawn),
+            patch("src.llm.coaching_filter.filter_coaching_frame",
+                  side_effect=lambda text, *_a, **_k: text + " (filtered)"),
+        ),
+    )
+    runs = [args for name, args in started if name == "_background_deviation_detection"]
+    [reply] = _turns(vault, "assistant")
+    assert reply["text"].endswith("(filtered)")
+    assert len(runs) == 1
+    assert runs[0][0] == reply["text"]

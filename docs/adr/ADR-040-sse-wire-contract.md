@@ -11,6 +11,11 @@
   (the vault badge derives from the `vault_sources` frame). See "Family 2" and
   "Resolved (generation failure)" below. Lockstep UI change: `ember-2-ui`
   parser and badge source.
+- v3 amendment (2026-10-09, ADR-047) -- a second `error` code,
+  `storage_failed`, and the exchange's records are stored before `[DONE]`. No
+  new event type and no new field, so the contract version stays 3 and the UI
+  parser is unchanged: it renders `message` and never reads `code`
+  (`ember-2-ui/src/api/ember.js`, error-frame branch).
 - v1 (2026-06-13) -- initial freeze of the current wire format (issue #93 PR (a)).
 - v2 (2026-07-18) -- B-SSE-001 resolution: status moved from a Family-1
   `choices[0].delta.status` chunk to a top-level typed frame
@@ -66,9 +71,15 @@ below.)
 - **vault sources** -- `{"type": "vault_sources", "sources": [{"type": "<state|conversation|...>", "timestamp": "<iso>", "summary": "<str>"}, ...]}`
 - **error** (v3) -- `{"type": "error", "code": "generation_failed", "message": "Ember couldn't generate a reply. Check that the model server is reachable."}`.
   Emitted by `sse_error()` when generation raises inside the SSE generator.
-  `code` is a stable machine value (`generation_failed` is the only one
-  defined); `message` is fixed user-facing text. Exception detail is logged
-  server-side and never placed on the wire.
+  `code` is a stable machine value; `message` is fixed user-facing text, one
+  per code. Exception detail is logged server-side and never placed on the
+  wire. Defined codes:
+  - `generation_failed` -- the message above.
+  - `storage_failed` (v3 amendment, ADR-047) -- `"Ember couldn't save this
+    conversation, so the reply wasn't sent. Check that the vault is
+    reachable."` Sent when the exchange's user turn, conversation record or
+    reply cannot be written to the vault, including a vault whose writes are
+    blocked after an unverified swap.
 
 ### Terminator
 
@@ -85,6 +96,22 @@ Failed generation (v3): optional status frames -> initial `content: ""` ->
 `error` -> terminal `stop` -> `[DONE]`. No `sources` or `vault_sources` frame
 follows an `error`, and no content tokens are emitted by the grounded
 (buffer-then-stream) path before it.
+
+Storage failure (v3 amendment, ADR-047):
+- The user turn cannot be stored: `error` (`storage_failed`) -> terminal
+  `stop` -> `[DONE]`. No status frame, no initial content frame: nothing is
+  generated for an exchange Ember cannot save. A non-streaming request gets
+  HTTP 500.
+- The reply cannot be stored: optional status frames -> initial
+  `content: ""` -> `error` (`storage_failed`) -> terminal `stop` -> `[DONE]`.
+  The reply is never sent.
+
+Stored before `[DONE]` (v3 amendment, ADR-047): when the client reads
+`[DONE]`, the exchange's user turn, its assistant turn and any pending
+confirmation (ADR-038) are already in the vault. The grounded path stores the
+reply before re-streaming it, so a client that disconnects mid-stream still
+leaves a complete assistant turn. Derived work (state extraction, commitment
+and task-offer detection) runs after `[DONE]`.
 
 ## Resolved (generation failure)
 
@@ -155,6 +182,8 @@ was the first worked example of this procedure.
 - `src/api/sse.py` -- the serializer (single producer).
 - `tests/test_sse_contract.py` -- golden-frame tests (frozen to this contract).
 - `ember-2-ui/src/api/ember.js` -- the UI parser (consumer).
+- `docs/adr/ADR-047-exchange-persistence.md` -- what is stored before
+  `[DONE]`, and the `storage_failed` code.
 - `docs/adr/ADR-036-fast-streaming-review-signal.md` -- defers the richer
   review-event protocol; its `review_pending`/`review_complete` status values
   are pinned here.

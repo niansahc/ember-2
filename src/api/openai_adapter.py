@@ -20,9 +20,11 @@ from src.api.pregeneration import (
     PreGenerationRouter,
 )
 from src.api.sse import (
+    STORAGE_FAILED_CODE,
     guard_sse,
     sse_chunk,
     sse_done,
+    sse_error,
     sse_sources,
     sse_status,
     sse_vault_sources,
@@ -118,6 +120,25 @@ def early_return_response(
                 finish_reason="stop",
             )
         ],
+    )
+
+
+def storage_failed_response(completion_id: str) -> StreamingResponse:
+    """The SSE response for an exchange Ember could not save (ADR-047).
+
+    The storage_failed error frame, a stop chunk and [DONE]; no content frame,
+    because nothing was generated (ADR-040 v3 amendment). Streaming requests
+    only: a non-streaming request keeps its HTTP 500.
+    """
+    logger.info("[EARLY-RETURN] label=storage_failed stream=True id=%s", completion_id)
+
+    async def _sse():
+        yield sse_error(STORAGE_FAILED_CODE)
+        yield sse_chunk(completion_id, finish_reason="stop")
+        yield sse_done()
+
+    return StreamingResponse(
+        guard_sse(_sse(), completion_id), media_type="text/event-stream",
     )
 
 
@@ -1439,6 +1460,11 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         # The message is the step and the exception type only.
         logger.error("[EXCHANGE] %s", exc)
         _exchange.record_failure(exc)
+        # Ember cannot save this exchange, so it does not generate a reply.
+        # A streaming client gets the storage_failed frame, not an HTTP 500
+        # its parser would report as a model-server problem (ADR-040).
+        if gen_ctx.stream:
+            return storage_failed_response(gen_ctx.completion_id)
         raise
 
     # Every stored user turn ends in exactly one assistant turn or one exchange
@@ -1459,6 +1485,9 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         )
     except Exception as exc:
         _exchange.record_failure(exc)
+        if isinstance(exc, ExchangeStorageError) and gen_ctx.stream:
+            logger.error("[EXCHANGE] %s", exc)
+            return storage_failed_response(gen_ctx.completion_id)
         raise
 
 

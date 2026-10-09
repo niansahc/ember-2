@@ -13,7 +13,7 @@ Frame families (see ADR-040 for the full schema):
       {type, content}  status signal      via sse_status()
       {type, sources}  web citations       via sse_sources()
       {type, sources}  vault citations     via sse_vault_sources()
-      {type, code, message}  generation failure via sse_error() (v3)
+      {type, code, message}  generation or storage failure via sse_error() (v3)
   - the [DONE] terminator via sse_done()
 
 guard_sse() wraps every StreamingResponse body: an uncaught exception becomes
@@ -106,19 +106,44 @@ GENERATION_FAILED_MESSAGE = (
     "Ember couldn't generate a reply. Check that the model server is reachable."
 )
 
+# ADR-040 v3 amendment (ADR-047): the exchange could not be saved, so the reply
+# was not sent. A second value of the same `code` field, no new field.
+STORAGE_FAILED_CODE = "storage_failed"
+STORAGE_FAILED_MESSAGE = (
+    "Ember couldn't save this conversation, so the reply wasn't sent. "
+    "Check that the vault is reachable."
+)
 
-def sse_error() -> str:
+_ERROR_MESSAGES = {
+    GENERATION_FAILED_CODE: GENERATION_FAILED_MESSAGE,
+    STORAGE_FAILED_CODE: STORAGE_FAILED_MESSAGE,
+}
+
+
+def sse_error(code: str = GENERATION_FAILED_CODE) -> str:
     """Error frame: {"type": "error", "code": "<str>", "message": "<str>"}.
 
-    ADR-040 contract v3. Fixed text only: exception detail goes to the
-    application log, never onto the wire. v3 defines one code; add a
-    parameter when a second one exists.
+    ADR-040 contract v3. Fixed text per code only: exception detail goes to
+    the application log, never onto the wire. The UI renders `message` and
+    never reads `code`.
     """
     return "data: " + json.dumps({
         "type": "error",
-        "code": GENERATION_FAILED_CODE,
-        "message": GENERATION_FAILED_MESSAGE,
+        "code": code,
+        "message": _ERROR_MESSAGES[code],
     }) + "\n\n"
+
+
+def error_code_for(exc: BaseException) -> str:
+    """The error code an exception surfaces as.
+
+    An exception class opts in to a code with an `sse_error_code` attribute
+    (ExchangeStorageError declares storage_failed). Everything else, and any
+    unknown code, is generation_failed. Attribute-based so this module stays
+    free of imports from the rest of the app.
+    """
+    code = getattr(exc, "sse_error_code", GENERATION_FAILED_CODE)
+    return code if code in _ERROR_MESSAGES else GENERATION_FAILED_CODE
 
 
 def sse_done() -> str:
@@ -148,9 +173,10 @@ async def guard_sse(body, completion_id: str, on_abort=None):
     StreamingResponse in src/api wraps its body in this guard.
 
     - Exception before the terminal frames: log "[GENERATION] failed: <Type>"
-      with the traceback, call on_abort("failed", "<Type>"), then yield the
-      error frame (ADR-040 v3), a stop chunk and [DONE], once. Exception text
-      never reaches the wire.
+      (or "[STORAGE] failed: <Type>" for an exception that declares the
+      storage_failed code) with the traceback, call on_abort("failed",
+      "<Type>"), then yield the error frame with that code (ADR-040 v3), a
+      stop chunk and [DONE], once. Exception text never reaches the wire.
     - CancelledError / GeneratorExit before the terminal frames (the client
       disconnected): call on_abort("interrupted", None), then re-raise.
     - Anything after the body already yielded [DONE] (post-stream cleanup):
@@ -183,11 +209,18 @@ async def guard_sse(body, completion_id: str, on_abort=None):
                 "[SSE] post-terminal failure: %s", type(exc).__name__, exc_info=exc,
             )
             return
+        code = error_code_for(exc)
+        # A wrapping exception can name its underlying cause (cause_type);
+        # that type, not the wrapper's, is what the log and on_abort report.
+        type_name = getattr(exc, "cause_type", None) or type(exc).__name__
         _logger.error(
-            "[GENERATION] failed: %s", type(exc).__name__, exc_info=exc,
+            "[%s] failed: %s",
+            "STORAGE" if code == STORAGE_FAILED_CODE else "GENERATION",
+            type_name,
+            exc_info=exc,
         )
-        _notify_abort(on_abort, "failed", type(exc).__name__)
-        yield sse_error() + sse_chunk(completion_id, finish_reason="stop") + done_frame
+        _notify_abort(on_abort, "failed", type_name)
+        yield sse_error(code) + sse_chunk(completion_id, finish_reason="stop") + done_frame
     except (asyncio.CancelledError, GeneratorExit):
         if not terminated:
             _logger.warning("[SSE] client disconnected before [DONE]")

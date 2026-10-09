@@ -65,7 +65,12 @@ class ExchangeStorageError(Exception):
     `step` names the record ("user turn", "conversation record", "reply") and
     `cause_type` the underlying exception type. Exception text is never kept:
     it can carry vault paths, and only type names go to the log.
+
+    sse_error_code is the ADR-040 error code the stream guard sends for this
+    failure (src.api.sse.STORAGE_FAILED_CODE).
     """
+
+    sse_error_code = "storage_failed"
 
     def __init__(self, step: str, cause: BaseException):
         self.step = step

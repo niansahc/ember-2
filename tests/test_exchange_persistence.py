@@ -598,3 +598,101 @@ def test_user_turn_is_indexed_only_after_retrieval(client, vault, casual_policy)
     [turn] = _turns(vault, "user")
     assert rows_during_retrieval == [set()]
     assert turn["id"] in _row_ids(vault)
+
+
+# ---------------------------------------------------------------------------
+# Q10: a storage failure sends storage_failed, exactly once
+# ---------------------------------------------------------------------------
+
+STORAGE_CAUSES = pytest.mark.parametrize(
+    "cause",
+    ["oserror", "vault_write_blocked"],
+)
+
+
+def _cause(name: str) -> BaseException:
+    from src.core.config import VaultWriteBlocked
+
+    return OSError("disk full") if name == "oserror" else VaultWriteBlocked("unverified swap")
+
+
+def _fail_writes_for(role: str, exc: BaseException):
+    """Make the vault refuse the record with this metadata role, only."""
+    from src.memory import write_memory as wm
+
+    real = wm.write_canonical_record
+
+    def _write(*args, **kwargs):
+        if (kwargs.get("metadata") or {}).get("role") == role:
+            raise exc
+        return real(*args, **kwargs)
+
+    return patch("src.memory.exchange.write_canonical_record", side_effect=_write)
+
+
+def _errors(text: str) -> list[dict]:
+    return [e for e in _sse_events(text) if isinstance(e, dict) and e.get("type") == "error"]
+
+
+def _assert_storage_failed_once(resp):
+    from src.api.sse import STORAGE_FAILED_CODE, STORAGE_FAILED_MESSAGE
+
+    assert resp.status_code == 200
+    events = _sse_events(resp.text)
+    assert _errors(resp.text) == [
+        {"type": "error", "code": STORAGE_FAILED_CODE, "message": STORAGE_FAILED_MESSAGE}
+    ]
+    assert events[-2]["choices"][0]["finish_reason"] == "stop"
+    assert events[-1] == "[DONE]"
+    assert events.count("[DONE]") == 1
+
+
+@STORAGE_CAUSES
+def test_user_record_write_failure_sends_storage_failed_once(client, vault, casual_policy, cause):
+    from src.api import openai_adapter as oa
+
+    with patch.object(oa.llm_adapter, "generate_response_iter") as gen:
+        resp = _chat(client, policy=casual_policy, extra=(
+            _fail_writes_for("user", _cause(cause)),
+            patch.object(oa.llm_adapter, "generate_response_iter", gen),
+        ))
+    _assert_storage_failed_once(resp)
+    gen.assert_not_called()  # nothing is generated for an exchange Ember cannot save
+    assert _turns(vault) == []
+
+
+@STORAGE_CAUSES
+def test_reply_write_failure_sends_storage_failed_once(client, vault, casual_policy, cause):
+    resp = _chat(client, policy=casual_policy, extra=(_fail_writes_for("assistant", _cause(cause)),))
+    _assert_storage_failed_once(resp)
+    assert PLAIN_REPLY not in resp.text  # the reply is not sent
+    [outcome] = _outcomes(vault)
+    assert outcome["metadata"]["outcome"] == "failed"
+    assert outcome["metadata"]["reason"] == type(_cause(cause)).__name__
+
+
+def test_conversation_record_write_failure_sends_storage_failed_once(client, vault, casual_policy):
+    resp = _chat(client, policy=casual_policy, extra=(
+        patch("src.memory.exchange.create_session", side_effect=OSError("disk full")),
+    ))
+    _assert_storage_failed_once(resp)
+    assert len(_turns(vault, "user")) == 1
+    assert [o["metadata"]["reason"] for o in _outcomes(vault)] == ["OSError"]
+
+
+def test_generation_failure_still_sends_generation_failed(client, vault, casual_policy):
+    """Positive control: only storage failures use storage_failed."""
+    from src.api.sse import GENERATION_FAILED_CODE
+
+    resp = _chat(client, policy=casual_policy, gen_error=RuntimeError("model server down"))
+    assert [e["code"] for e in _errors(resp.text)] == [GENERATION_FAILED_CODE]
+
+
+def test_clarification_reply_write_failure_sends_storage_failed_once(client, vault):
+    """The clarification reply is stored by the handler before the stream
+    starts, so its failure takes the handler's storage branch."""
+    resp = _chat(client, "google please", extra=(
+        _fail_writes_for("assistant", OSError("disk full")),
+    ))
+    _assert_storage_failed_once(resp)
+    assert [o["metadata"]["reason"] for o in _outcomes(vault)] == ["OSError"]

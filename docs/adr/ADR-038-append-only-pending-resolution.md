@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-06-12
 **Target:** v0.18.1
+**Amended:** 2026-10-09 (ADR-047: written before `[DONE]`)
 
 ## Context
 
@@ -46,3 +47,11 @@ Scope is `pending_confirmation` only. `open_loop` and `resolve_open_loops_by_top
 - `src/state/state_resolver.py` -- `pending_confirmation` exclusion in `get_current_state`.
 - `src/api/openai_adapter.py` -- `_resolve_original_pending`, `_check_pending_confirmation`, `_write_pending_confirmation` derived-resolution sites.
 - CLAUDE.md -- Core Architectural Rule 3 (append-only memory).
+
+## Amendment (2026-10-09, ADR-047)
+
+The `pending_confirmation` record is written before `[DONE]`: right after the
+assistant turn is stored on the streaming paths, and before the JSON response on
+the non-stream path. Timing only. Resolution logic, the append-only tombstones
+and `resolved_ids` are unchanged. A client that reads `[DONE]` and sends "yes"
+immediately can no longer arrive before the pending record exists.

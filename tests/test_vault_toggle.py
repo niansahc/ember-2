@@ -213,7 +213,7 @@ class TestVaultDisabledNoWrites:
 
 
 # ---------------------------------------------------------------------------
-# 4. vault_enabled=False — no conversation record
+# 4. vault_enabled=False - no conversation record
 # ---------------------------------------------------------------------------
 
 

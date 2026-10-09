@@ -193,6 +193,7 @@ When true: full pipeline active for gated intent classes only.
 - **ADR-018:** intent classification gates which turns trigger detection — reuses existing classify_query() output
 - **MemoryService:** deviation records written via existing write path, new memory_type only
 - **ConversationBuffer:** position_collapse reads prior response from existing buffer
+- **ADR-047:** exchange persistence. Detection starts right after the reply is stored, once per exchange, and scores the stored reply; the user message it receives is the stored user turn, without Ember's task, timer and search notes
 
 ## Consequences
 

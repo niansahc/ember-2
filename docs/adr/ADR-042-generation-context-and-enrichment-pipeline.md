@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-07-20
 **Target:** v0.18.1
+**Amended:** 2026-10-09 (ADR-047: Phase A stores the user turn; one id now spans every response)
 **Related:** ADR-041 (PreGeneration terminal router), ADR-040 (SSE wire contract), issue #93 (decompose `chat_completions`)
 
 ## Context
@@ -126,3 +127,24 @@ runtime string carries U+2014.
   all unchanged. Verified by the existing endpoint integration suite plus new
   builder-level unit tests.
 - The SSE wire format is untouched; ADR-040 remains its governing authority.
+
+## Amendment (2026-10-09, ADR-047)
+
+- **Phase A order.** Test flag, vault flags, then project resolution. The
+  builder no longer writes: `_ensure_session` is gone. Right after Phase A the
+  handler's `ExchangeRecorder` stores the user turn, then the conversation record
+  if the conversation is new, so the user record can carry `project_id`.
+- **What the user turn is.** Normalization snapshots the text the client sent
+  before the image placeholder; `GenerationContext` carries it as
+  `user_turn_text`, with `image_count`. `raw_user_message` is unchanged and still
+  feeds classification and the pending-confirmation query.
+- **Clarification writes nothing.** The user turn was stored in Phase A; the
+  handler stores the scripted reply as the exchange's assistant turn, with the
+  `awaiting_search_content` flag B2 reads. The interceptor now only reads the
+  frozen context.
+- **One id, now true.** The stream and non-stream paths no longer mint their own
+  id; the response id is `GenerationContext.completion_id` on every path, and it
+  is the exchange id the stored turns and outcome carry.
+- **One failure guard.** Everything after the user-turn write runs in
+  `_complete_exchange` under the handler's guard, which records a `failed`
+  exchange outcome before re-raising.

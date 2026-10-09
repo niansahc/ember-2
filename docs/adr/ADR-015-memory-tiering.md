@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-04-02
 **Version:** v0.13.0
-**Amended:** v0.19.0, issues #150 and #175 (activation model); 2026-09-19 (two corrections: cold headroom, type-keyed decay); 2026-09-28 (tier weights re-derived under ADR-044's bound; the one-age-model claim becomes true)
+**Amended:** v0.19.0, issues #150 and #175 (activation model); 2026-09-19 (two corrections: cold headroom, type-keyed decay); 2026-09-28 (tier weights re-derived under ADR-044's bound; the one-age-model claim becomes true); 2026-10-09 (ADR-047: exchange persistence is independent of delivery accounting)
 
 ## Context
 
@@ -633,3 +633,13 @@ Deliberately not settled here, and not to be inferred from the above:
 - The three assistant-authored penalties above.
 - All implementation. This amendment states the contract; the follow-up work
   specifies and builds it.
+
+## Amendment (2026-10-09, ADR-047)
+
+Exchange persistence is independent of delivery accounting. The user turn is
+stored when the message arrives, before generation, and the assistant turn when
+the reply is stored, before `[DONE]`. Neither write credits retrieval access.
+Credit still comes only from `_commit_delivery`, after generation succeeds and
+only for records the model received. A failed exchange stores its user turn and
+an exchange outcome but commits no delivery. Exchange outcome records are never
+indexed, so they never enter tiering.

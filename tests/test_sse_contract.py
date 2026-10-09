@@ -166,3 +166,14 @@ def test_default_error_frame_is_still_generation_failed():
 
     assert sse_error() == sse_error(GENERATION_FAILED_CODE)
     assert _payload(sse_error())["code"] == "generation_failed"
+
+
+def test_exchange_storage_error_declares_the_storage_failed_code():
+    """src/memory/exchange.py repeats the code to avoid importing the API
+    layer; this keeps the two copies equal."""
+    from src.api.sse import STORAGE_FAILED_CODE, error_code_for
+    from src.memory.exchange import ExchangeStorageError
+
+    exc = ExchangeStorageError("reply", OSError("disk full"))
+    assert ExchangeStorageError.sse_error_code == STORAGE_FAILED_CODE
+    assert error_code_for(exc) == STORAGE_FAILED_CODE

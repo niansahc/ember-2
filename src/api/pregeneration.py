@@ -152,10 +152,17 @@ class TerminalReply:
     Interceptors return this instead of a response object so the stream-vs-JSON
     decision stays in a single downstream funnel (early_return_response). The
     label identifies the originating interceptor in the early-return log line.
+
+    An enrichment-dependent terminal whose reply belongs in the conversation
+    sets reply_metadata (and reply_tags): the handler then stores the text as
+    the exchange's assistant turn with them (ADR-047). Pre-enrichment terminals
+    run before any user turn is stored and leave both unset.
     """
 
     text: str
     label: str
+    reply_metadata: Optional[dict] = None
+    reply_tags: Optional[tuple] = None
 
 
 # Context type an interceptor dispatches over (RouterContext or GenerationContext).

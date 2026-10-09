@@ -298,6 +298,7 @@ def test_clarification_interceptor_fires_without_writing():
     assert reply is not None
     assert reply.label == "clarification"
     assert reply.text == SCRIPTED_CLARIFICATION_RESPONSE
+    assert reply.reply_metadata == CLARIFICATION_REPLY_METADATA
     w.assert_not_called()
 
 

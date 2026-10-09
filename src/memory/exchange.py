@@ -53,6 +53,11 @@ OUTCOME_INTERRUPTED = "interrupted"
 # and propagates unchanged.
 _STORAGE_ERRORS = (OSError, JsonIoError, VaultWriteBlocked)
 
+# (vault, session_id) pairs whose conversation record is known to exist.
+# Records are append-only, so once one exists it always will; this spares
+# session_exists() a scan of every conversation record on each user turn.
+_known_conversations: set[tuple[str, str]] = set()
+
 # Conversation title rules, moved here from the chat handler with the
 # conversation-record write itself.
 DEFAULT_CONVERSATION_TITLE = "New conversation"
@@ -67,7 +72,9 @@ class ExchangeStorageError(Exception):
     it can carry vault paths, and only type names go to the log.
 
     sse_error_code is the ADR-040 error code the stream guard sends for this
-    failure (src.api.sse.STORAGE_FAILED_CODE).
+    failure. It must equal src.api.sse.STORAGE_FAILED_CODE (pinned by
+    tests/test_sse_contract.py); the memory layer does not import the API
+    layer, so the value is repeated here.
     """
 
     sse_error_code = "storage_failed"
@@ -144,10 +151,6 @@ class ExchangeRecorder:
     def user_turn_stored(self) -> bool:
         return self._user_record is not None
 
-    @property
-    def finished(self) -> bool:
-        return self._finished
-
     def _metadata(self, role: str, content_kind: str) -> dict:
         metadata: dict[str, Any] = {
             "role": role,
@@ -158,6 +161,39 @@ class ExchangeRecorder:
         if self.project_id:
             metadata["project_id"] = self.project_id
         return metadata
+
+    def _write_turn(
+        self, step: str, text: str, metadata: dict, tags: list[str],
+    ) -> tuple[dict, Path]:
+        """Write one conversation turn, bound to the exchange's vault.
+
+        A storage failure becomes ExchangeStorageError naming `step`.
+        """
+        with vault_binding(self.vault):
+            try:
+                return write_canonical_record(
+                    text=text,
+                    memory_type="conversation",
+                    source="chat",
+                    tags=tags,
+                    metadata=metadata,
+                )
+            except _STORAGE_ERRORS as exc:
+                raise ExchangeStorageError(step, exc) from exc
+
+    def _ensure_conversation_record(self, text: str) -> None:
+        """Write the conversation record if this conversation has none yet."""
+        key = (str(self.vault), self.session_id)
+        if key in _known_conversations:
+            return
+        with vault_binding(self.vault):
+            try:
+                if not session_exists(self.session_id):
+                    create_session(self.session_id, conversation_title(text))
+                    logger.info("[EXCHANGE] created conversation record")
+            except _STORAGE_ERRORS as exc:
+                raise ExchangeStorageError("conversation record", exc) from exc
+        _known_conversations.add(key)
 
     def _schedule_index(self, record: dict, file_path: Path) -> None:
         spawn_vault_bound_thread(
@@ -187,25 +223,10 @@ class ExchangeRecorder:
         if image_count > 0:
             metadata["image_count"] = image_count
 
-        with vault_binding(self.vault):
-            try:
-                record, path = write_canonical_record(
-                    text=text,
-                    memory_type="conversation",
-                    source="chat",
-                    tags=["conversation"],
-                    metadata=metadata,
-                )
-            except _STORAGE_ERRORS as exc:
-                raise ExchangeStorageError("user turn", exc) from exc
-            self._user_record, self._user_path = record, path
-
-            try:
-                if not session_exists(self.session_id):
-                    create_session(self.session_id, conversation_title(text))
-                    logger.info("[EXCHANGE] created conversation record")
-            except _STORAGE_ERRORS as exc:
-                raise ExchangeStorageError("conversation record", exc) from exc
+        self._user_record, self._user_path = self._write_turn(
+            "user turn", text, metadata, ["conversation"],
+        )
+        self._ensure_conversation_record(text)
         return True
 
     def ensure_user_indexed(self) -> None:
@@ -238,17 +259,9 @@ class ExchangeRecorder:
                 return False
             reply_metadata = self._metadata("assistant", "answer")
             reply_metadata.update(metadata or {})
-            with vault_binding(self.vault):
-                try:
-                    record, path = write_canonical_record(
-                        text=text,
-                        memory_type="conversation",
-                        source="chat",
-                        tags=tags or ["conversation"],
-                        metadata=reply_metadata,
-                    )
-                except _STORAGE_ERRORS as exc:
-                    raise ExchangeStorageError("reply", exc) from exc
+            record, path = self._write_turn(
+                "reply", text, reply_metadata, tags or ["conversation"],
+            )
             self._finished = True
         self._schedule_index(record, path)
         return True

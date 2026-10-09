@@ -16,15 +16,19 @@ them. Every absence assertion has a positive control in this file.
 
 from __future__ import annotations
 
-import json
-import sqlite3
 from contextlib import ExitStack
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import synthetic_packet
+from tests.conftest import (
+    memory_db_ids as _row_ids,
+    run_bound_inline,
+    sse_events as _sse_events,
+    synthetic_packet,
+    vault_records as _records,
+)
 
 SESSION_ID = "sess_test_exchange_001"
 USER_TEXT = "hello there"
@@ -56,15 +60,10 @@ def vault(tmp_path, monkeypatch):
     previous = (config._vault_path_override, config._vault_label)
     config.set_vault_path_override(str(tmp_path), "test")
     monkeypatch.setattr("src.memory.write_memory.embed_text", lambda _t: [0.0] * 768)
-
-    def _sync_spawn(target, args=(), vault=None, name=None):
-        with config.vault_binding(vault):
-            target(*args)
-
     # Exists only once the recorder does; raising=False keeps the fixture
     # usable when these tests are run against the code before the change.
     monkeypatch.setattr(
-        "src.memory.exchange.spawn_vault_bound_thread", _sync_spawn, raising=False,
+        "src.memory.exchange.spawn_vault_bound_thread", run_bound_inline, raising=False,
     )
     yield tmp_path
     if previous[0] is None:
@@ -157,13 +156,6 @@ def _chat(
         )
 
 
-def _records(vault, memory_type: str) -> list[dict]:
-    folder = vault / "memory" / memory_type
-    if not folder.exists():
-        return []
-    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(folder.glob("*.json"))]
-
-
 def _turns(vault, role: str | None = None) -> list[dict]:
     turns = [r for r in _records(vault, "conversation")
              if r["metadata"].get("session_id") == SESSION_ID]
@@ -177,31 +169,10 @@ def _outcomes(vault) -> list[dict]:
             if r["metadata"].get("kind") == "exchange_outcome"]
 
 
-def _row_ids(vault) -> set[str]:
-    db = vault / "embeddings" / "memory.db"
-    if not db.exists():
-        return set()
-    conn = sqlite3.connect(str(db))
-    try:
-        return {r[0] for r in conn.execute("SELECT id FROM vectors")}
-    finally:
-        conn.close()
-
-
 def _history(client) -> list[dict]:
     resp = client.get(f"/v1/conversations/{SESSION_ID}")
     assert resp.status_code == 200, resp.status_code
     return resp.json()["turns"]
-
-
-def _sse_events(text: str) -> list:
-    out: list = []
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("data:"):
-            payload = line[len("data:"):].strip()
-            out.append("[DONE]" if payload == "[DONE]" else json.loads(payload))
-    return out
 
 
 def _chunk_ids(text: str) -> set[str]:

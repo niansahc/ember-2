@@ -16,12 +16,11 @@ Includes regression tests for the openai_adapter conversation format history:
 - current format — two separate writes, each passes on its own
 """
 
-import sqlite3
-
 import pytest
 
 from src.core.config import vault_binding
 from src.memory.write_memory import should_skip_memory
+from tests.conftest import memory_db_ids as _row_ids
 
 
 # ---------------------------------------------------------------------------
@@ -191,17 +190,6 @@ def _conversation_record(text: str, **metadata) -> dict:
         "tags": ["conversation"],
         "metadata": {"role": "assistant", **metadata},
     }
-
-
-def _row_ids(vault) -> set[str]:
-    db = vault / "embeddings" / "memory.db"
-    if not db.exists():
-        return set()
-    conn = sqlite3.connect(str(db))
-    try:
-        return {r[0] for r in conn.execute("SELECT id FROM vectors")}
-    finally:
-        conn.close()
 
 
 def test_should_index_rejects_code_fence_conversation(bound_vault):

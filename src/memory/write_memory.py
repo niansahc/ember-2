@@ -10,7 +10,7 @@ from src.core.config import (
     vault_writes_blocked,
 )
 from src.memory.authorship import classify_authorship
-from src.memory.eval_fixtures import should_index_record
+from src.memory.eval_fixtures import is_eval_fixture, should_index_record
 from src.memory.storage import MemoryStorage
 from src.retrieval.embed_memory import embed_text
 from src.retrieval.sqlite_vector_store import SqliteVectorStore
@@ -224,6 +224,9 @@ def should_index(record: dict, vault: Path | None = None) -> bool:
         record.get("text") or "", memory_type=record.get("type") or "journal",
     ):
         return False
+    if not is_eval_fixture(record.get("source"), metadata):
+        return True
+    # Only an eval fixture needs to know which vault it is in.
     if vault is None:
         vault = get_private_vault_path()
     return should_index_record(vault, record.get("source"), metadata)
@@ -339,13 +342,13 @@ def write_memory(
         metadata=metadata,
     )
 
-    # Eval fixtures are written to disk like any other record but are only
-    # indexed into the configured test vault. Indexing them elsewhere puts
-    # synthetic records into someone's personal memory where retrieval cannot
-    # tell them from real recollection -- see src/memory/eval_fixtures.py and
-    # issue #211. Fails closed: an unidentifiable vault does not get them.
-    # Checked before embedding, so a skipped fixture costs no model call.
-    if not should_index_record(get_private_vault_path(), source, memory["metadata"]):
+    # should_index is the shared filter. The text already passed
+    # should_skip_memory above, so the one case left is an eval fixture: written
+    # to disk like any other record but indexed only into the configured test
+    # vault, because elsewhere retrieval cannot tell it from real recollection
+    # (src/memory/eval_fixtures.py, issue #211). Fails closed. Checked before
+    # embedding, so a skipped fixture costs no model call.
+    if not should_index(memory):
         logger.warning(
             "[VAULT] eval fixture written to disk but not indexed: vault is not "
             "the configured test vault (memory_type=%s source=%s)",

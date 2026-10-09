@@ -31,6 +31,7 @@ procedure (backend + UI + ADR version bump + golden tests in lockstep).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -134,6 +135,14 @@ def sse_error(code: str = GENERATION_FAILED_CODE) -> str:
     }) + "\n\n"
 
 
+def sse_failure_frames(code: str, completion_id: str) -> str:
+    """The terminal sequence for a failed exchange: the error frame with
+    `code`, a stop chunk and [DONE] (ADR-040 v3). The one producer of that
+    sequence, for guard_sse and for responses that fail before any body runs.
+    """
+    return sse_error(code) + sse_chunk(completion_id, finish_reason="stop") + sse_done()
+
+
 def error_code_for(exc: BaseException) -> str:
     """The error code an exception surfaces as.
 
@@ -191,8 +200,6 @@ async def guard_sse(body, completion_id: str, on_abort=None):
     Sync bodies are iterated in the threadpool, as Starlette does for them,
     so blocking generation never runs on the event loop.
     """
-    import asyncio
-
     from starlette.concurrency import iterate_in_threadpool
 
     iterator = body if hasattr(body, "__aiter__") else iterate_in_threadpool(body)
@@ -220,7 +227,7 @@ async def guard_sse(body, completion_id: str, on_abort=None):
             exc_info=exc,
         )
         _notify_abort(on_abort, "failed", type_name)
-        yield sse_error(code) + sse_chunk(completion_id, finish_reason="stop") + done_frame
+        yield sse_failure_frames(code, completion_id)
     except (asyncio.CancelledError, GeneratorExit):
         if not terminated:
             _logger.warning("[SSE] client disconnected before [DONE]")

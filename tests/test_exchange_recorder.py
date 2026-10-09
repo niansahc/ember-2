@@ -15,14 +15,15 @@ assertions are deterministic. Every absence assertion has a positive control.
 
 from __future__ import annotations
 
-import json
 import logging
-import sqlite3
 import threading
 
 import pytest
 
 from src.core.config import VaultWriteBlocked, vault_binding
+from tests.conftest import memory_db_ids as _row_ids
+from tests.conftest import run_bound_inline
+from tests.conftest import vault_records as _records
 
 EXCHANGE_ID = "chatcmpl-test-exchange-001"
 SESSION_ID = "sess_test_recorder_001"
@@ -37,8 +38,7 @@ def spawned(monkeypatch):
 
     def _sync_spawn(target, args=(), vault=None, name=None):
         names.append(name)
-        with vault_binding(vault):
-            target(*args)
+        run_bound_inline(target, args, vault)
 
     monkeypatch.setattr("src.memory.exchange.spawn_vault_bound_thread", _sync_spawn)
     return names
@@ -61,27 +61,6 @@ def _recorder(vault, **kwargs):
     kwargs.setdefault("project_id", None)
     kwargs.setdefault("enabled", True)
     return ExchangeRecorder(EXCHANGE_ID, SESSION_ID, vault=vault, **kwargs)
-
-
-def _records(vault, memory_type: str) -> list[dict]:
-    folder = vault / "memory" / memory_type
-    if not folder.exists():
-        return []
-    return [
-        json.loads(p.read_text(encoding="utf-8"))
-        for p in sorted(folder.glob("*.json"))
-    ]
-
-
-def _row_ids(vault) -> set[str]:
-    db = vault / "embeddings" / "memory.db"
-    if not db.exists():
-        return set()
-    conn = sqlite3.connect(str(db))
-    try:
-        return {r[0] for r in conn.execute("SELECT id FROM vectors")}
-    finally:
-        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -358,3 +337,19 @@ def test_failed_reply_write_leaves_the_exchange_open_for_an_outcome(vault, monke
     monkeypatch.setattr(exchange, "write_canonical_record", real_write)
     assert rec.record_outcome("failed", err.value.cause_type) is True
     assert len(_records(vault, "system_event")) == 1
+
+
+def test_known_conversation_is_not_rescanned(vault, monkeypatch):
+    """Once a conversation record is known to exist, later turns skip the
+    session_exists scan of every conversation record."""
+    from src.memory import exchange
+
+    _recorder(vault).record_user_turn(USER_TEXT)
+    calls: list[str] = []
+    real = exchange.session_exists
+    monkeypatch.setattr(
+        exchange, "session_exists", lambda sid: calls.append(sid) or real(sid),
+    )
+    _recorder(vault).record_user_turn("A follow-up question about the same topic.")
+    assert calls == []
+    assert len(_records(vault, "session")) == 1

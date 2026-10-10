@@ -292,7 +292,7 @@ def update_session(
     storage.write_json(file_path, record)
     logger.info(
         "Updated session %s: title_changed=%s project_id=%s",
-        session_id, new_title is not None, new_project_id,
+        session_id, title is not None, new_project_id,
     )
     return file_path
 

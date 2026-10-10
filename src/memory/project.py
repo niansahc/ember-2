@@ -179,7 +179,7 @@ def update_project(project_id: str, name: Optional[str] = None, color: Optional[
     storage.write_json(file_path, record)
     logger.info(
         "Updated project %s: name_changed=%s color=%s",
-        project_id, new_name is not None, new_color,
+        project_id, name is not None, new_color,
     )
     return file_path
 

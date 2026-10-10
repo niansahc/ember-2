@@ -1,0 +1,1946 @@
+"""
+src/api/main.py
+
+FastAPI application entry point for Ember-2. Registers all API routes,
+middleware (auth, rate limiting, CORS, audit logging), and the nightly
+tiering scheduler. Serves the built Ember UI from ui/ as a static
+fallback after all API routes.
+
+This is the largest file in the backend. Route handlers are defined
+inline rather than split into route modules — acceptable for now but
+a refactor candidate if the file exceeds ~1500 lines.
+"""
+
+import json
+import logging
+import os
+import secrets
+import signal
+import time
+from contextlib import asynccontextmanager
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import ollama
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
+from src.api.chat import router as chat_router
+from src.api.limiter import limiter
+from src.api.openai_adapter import router as openai_adapter_router, llm_adapter
+from src.api.routes.ingest import router as ingest_router
+from src.context.service import ContextService
+from src.core.config import get_ember_api_key, get_cloud_models
+from src.memory.service import MemoryService
+from src.memory.session import (
+    list_sessions,
+    get_session,
+    get_turns,
+    update_session,
+    delete_session,
+    list_sessions_by_project,
+)
+from src.memory.project import (
+    list_projects,
+    get_project,
+    create_project,
+    update_project,
+    delete_project,
+)
+from src.reflection.generate_reflection import generate_reflection
+from src.memory.write_memory import _get_write_memory_store
+from src.retrieval.semantic_search import (
+    _get_memory_store,
+    _get_sqlite_store,
+    semantic_search,
+)
+from src.state.models import VALID_STATE_CATEGORIES
+from src.state.state_resolver import StateResolver
+from src.state.state_service import StateService
+from src.tasks.models import VALID_TASK_STATUSES
+from src.tasks.task_service import TaskService
+
+logger = logging.getLogger("ember.auth")
+
+_APP_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
+def configure_app_logging() -> Path | None:
+    """Send application logs (INFO and above) to a rotating file.
+
+    Path comes from EMBER_LOG_PATH; the default is outside the repo tree. The
+    single basicConfig call is a no-op when the root logger already has
+    handlers, so re-running this does not stack duplicate handlers. httpx and
+    httpcore log full request URLs at INFO (web search queries ride in the
+    URL), so they are held at WARNING. The file handler carries
+    ExceptionTextRedactor. Returns the log path, or None when the
+    file cannot be opened (the API must still start).
+    """
+    from logging.handlers import RotatingFileHandler
+
+    from src.core.config import get_ember_log_path
+    from src.core.log_redaction import ExceptionTextRedactor
+
+    path = get_ember_log_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.warning("[LOGGING] File log disabled: %s", type(exc).__name__)
+        return None
+    # Exception text can carry vault content; the file log keeps type names
+    # and traceback frames only (src/core/log_redaction.py).
+    handler.addFilter(ExceptionTextRedactor())
+    logging.basicConfig(level=logging.INFO, format=_APP_LOG_FORMAT, handlers=[handler])
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    return path
+
+
+configure_app_logging()
+
+_AUDIT_LOG_DIR = Path(__file__).resolve().parents[2] / "logs" / "audit"
+_AUDIT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _write_audit_log(method: str, path: str, client_ip: str, status: int, ms: int,
+                     intent_class: str | None = None) -> None:
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "method": method,
+        "path": path,
+        "ip": client_ip,
+        "status": status,
+        "ms": ms,
+    }
+    if intent_class:
+        record["intent"] = intent_class
+    entry = json.dumps(record)
+    log_file = _AUDIT_LOG_DIR / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.log"
+    with log_file.open("a", encoding="utf-8") as f:
+        f.write(entry + "\n")
+
+
+from fastapi.middleware.cors import CORSMiddleware
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Start the nightly tiering scheduler (defined further down)."""
+    _start_tiering_thread()
+    yield
+
+
+app = FastAPI(lifespan=_lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+
+# Content Security Policy. Applied to every response so the served UI is
+# locked down regardless of route. Constraints chosen for the actual UI
+# surface: self-hosted assets only, blob/data: image previews for vision
+# uploads, inline styles for the framework, no embedding.
+_CSP_POLICY = "; ".join((
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+))
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Attach Content Security Policy to every response."""
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = _CSP_POLICY
+    return response
+
+
+@app.middleware("http")
+async def api_key_auth(request: Request, call_next):
+    # Only require auth on API routes — UI static files are public
+    path = request.url.path
+    API_PREFIXES = ("/v1/", "/model", "/journal", "/write-", "/read-", "/search-",
+                    "/semantic-", "/reflect", "/debug-", "/state", "/ingest/")
+    if not any(path.startswith(p) for p in API_PREFIXES):
+        return await call_next(request)
+
+    # PIN verify and status endpoints bypass API key auth (they are the UI auth)
+    PIN_PUBLIC_PATHS = ("/v1/security/pin/verify", "/v1/security/pin/status")
+    if path in PIN_PUBLIC_PATHS:
+        return await call_next(request)
+
+    expected_key = get_ember_api_key()
+    if not expected_key:
+        # No key configured — open access (warn once at startup instead)
+        return await call_next(request)
+
+    # Accept Authorization: Bearer <key> (Open WebUI / OpenAI clients)
+    # or X-API-Key: <key> (direct access)
+    provided_key = ""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        provided_key = auth_header[7:]
+    if not provided_key:
+        provided_key = request.headers.get("X-API-Key", "")
+
+    if not provided_key or not secrets.compare_digest(provided_key, expected_key):
+        logger.warning("[AUTH] Rejected request to %s - invalid or missing API key", request.url.path)
+        return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def audit_log(request: Request, call_next):
+    if request.url.path == "/":
+        return await call_next(request)
+    start = time.perf_counter()
+    response = await call_next(request)
+    ms = int((time.perf_counter() - start) * 1000)
+    intent_class = getattr(request.state, "intent_class", None)
+    _write_audit_log(
+        method=request.method,
+        path=request.url.path,
+        client_ip=request.client.host,
+        status=response.status_code,
+        ms=ms,
+        intent_class=intent_class,
+    )
+    return response
+
+
+app.include_router(chat_router)
+app.include_router(openai_adapter_router)
+app.include_router(ingest_router)
+memory_service = MemoryService()
+context_service = ContextService()
+state_service = StateService()
+state_resolver = StateResolver(service=state_service)
+task_service = TaskService()
+
+
+class MemoryRequest(BaseModel):
+    text: str
+    memory_type: str = "journal"
+
+
+class JournalRequest(BaseModel):
+    text: str
+    tags: list[str] = []
+    mood: str | None = None
+    date_override: str | None = None
+
+
+class StateRequest(BaseModel):
+    type: str
+    text: str
+    source: str = "api"
+    tags: list[str] = []
+    metadata: dict = {}
+
+
+class ModelRequest(BaseModel):
+    model: str
+    # When False, the model reaches the generation path only and is not
+    # persisted to model_override.json, so every call-time role that resolves
+    # get_ember_model() -- intent classifier, coaching filter, deviation
+    # detector, reflection, onboarding -- keeps using the reference model.
+    # That is how an eval sweep tests a candidate as the generator without it
+    # also becoming the router that selects its own test path (ADR-043).
+    # Defaults True: every existing caller behaves exactly as it does today.
+    persist: bool = True
+
+
+class ConversationUpdateRequest(BaseModel):
+    title: str | None = None
+    project_id: str | None = None
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str
+    color: str = "#ff8c00"
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str | None = None
+    color: str | None = None
+
+
+def clean_context_packet(packet_dict: dict) -> dict:
+    for section in ["memory_items", "reflection_items", "state_items"]:
+        for item in packet_dict.get(section, []):
+            metadata = item.get("metadata", {})
+
+            if "embedding" in metadata:
+                del metadata["embedding"]
+
+            if "file_path" in metadata:
+                del metadata["file_path"]
+
+    return packet_dict
+
+
+_UI_DIR = Path(__file__).resolve().parents[2] / "ui"
+
+# Cache the index.html content. Invalidated automatically when
+# ui/index.html is modified (mtime check) so UI rebuilds take effect
+# without an API restart.
+_cached_index_html: str | None = None
+_cached_index_mtime: float = 0.0
+
+
+def _get_index_html() -> str:
+    """Read index.html with mtime-based caching.
+
+    The API key is no longer injected as an inline script — the UI bundle
+    now reads VITE_EMBER_API_KEY at compile time (see ember-2-ui's
+    build-with-key.js). Inline-script injection has been removed so the
+    page complies with `script-src 'self'` (no `unsafe-inline`).
+    """
+    global _cached_index_html, _cached_index_mtime
+
+    index_path = _UI_DIR / "index.html"
+    current_mtime = index_path.stat().st_mtime
+
+    if _cached_index_html is not None and current_mtime == _cached_index_mtime:
+        return _cached_index_html
+
+    _cached_index_html = index_path.read_text(encoding="utf-8")
+    _cached_index_mtime = current_mtime
+    return _cached_index_html
+
+
+@app.get("/")
+def root():
+    # Serve Ember UI if available, otherwise return API health check
+    if _UI_DIR.is_dir() and (_UI_DIR / "index.html").is_file():
+        return HTMLResponse(_get_index_html())
+    return {
+        "message": "Ember-2 API is running",
+        "model": llm_adapter.model,
+    }
+
+@app.get("/api/health")
+def health_check():
+    """API health check — always returns JSON, even when UI is served at /"""
+    import json as _json
+    version = "unknown"
+    try:
+        vf = Path(__file__).resolve().parents[2] / "version.json"
+        version = _json.loads(vf.read_text(encoding="utf-8")).get("version", "unknown")
+    except Exception:
+        pass
+    return {
+        "message": "Ember-2 API is running",
+        "model": llm_adapter.model,
+        "version": f"v{version}" if not version.startswith("v") else version,
+        "docker": _check_docker_status(),
+    }
+
+
+def _check_docker_status() -> str:
+    """Ping SearXNG on localhost:8888 to determine if Docker services are up."""
+    try:
+        import httpx as _httpx
+        resp = _httpx.get("http://localhost:8888/", timeout=3.0)
+        return "ok" if resp.status_code < 500 else "down"
+    except Exception:
+        return "down"
+
+
+# ── Conversation session endpoints ─────────────────────────────────────
+
+
+@app.get("/v1/conversations")
+def list_conversations_endpoint(limit: int = 50):
+    """List all conversation sessions, newest first."""
+    sessions = list_sessions(limit=limit)
+    return {"conversations": sessions}
+
+
+@app.get("/v1/conversations/{session_id}")
+def get_conversation_endpoint(session_id: str, limit: int = 200):
+    """Get a conversation's history: its newest `limit` turns, oldest first,
+    with retries shown once (ADR-047)."""
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    turns = get_turns(session_id, limit=limit)
+    return {
+        "session": {
+            "id": session_id,
+            "title": session.get("text", "Untitled"),
+            "created_at": session.get("metadata", {}).get("created_at", ""),
+        },
+        "turns": [
+            {
+                "id": t.get("id"),
+                "role": t.get("metadata", {}).get("role", "unknown"),
+                "content": t.get("text", ""),
+                "timestamp": t.get("timestamp", ""),
+                # Images are counted, never kept (ADR-047). 0 when none.
+                "image_count": int(t.get("metadata", {}).get("image_count", 0) or 0),
+            }
+            for t in turns
+        ],
+    }
+
+
+@app.patch("/v1/conversations/{session_id}")
+def update_conversation_endpoint(session_id: str, body: ConversationUpdateRequest):
+    """Update a conversation's title and/or project assignment. Append-only."""
+    if body.title is None and body.project_id is None:
+        raise HTTPException(status_code=400, detail="Provide at least one of: title, project_id")
+    result = update_session(session_id, title=body.title, project_id=body.project_id if body.project_id is not None else "__unset__")
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    return {"status": "updated", "session_id": session_id, "title": body.title, "project_id": body.project_id}
+
+
+def _cascade_soft_delete(session_id: str) -> None:
+    """Mark derived artifacts as deleted when their parent conversation is soft-deleted.
+
+    Task #9: auto-extracted state records, session reflections, and task
+    records carry session_id in metadata. Without cascade, deleting the
+    conversation leaves orphaned state records that surface as stale
+    open loops ("quarterly report", "busy day") on retrieval.
+
+    Append-only compliant — sets metadata.deleted=True on matching JSON
+    files, same pattern the conversation soft-delete uses.
+    """
+    import json
+    from src.core.config import get_private_vault_path
+
+    vault = get_private_vault_path()
+    target_folders = ("state", "session", "task", "deviation")
+    total = 0
+
+    for folder_name in target_folders:
+        folder = vault / "memory" / folder_name
+        if not folder.is_dir():
+            continue
+        for f in folder.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                meta = data.get("metadata", {})
+                if meta.get("session_id") == session_id and not meta.get("deleted"):
+                    meta["deleted"] = True
+                    data["metadata"] = meta
+                    f.write_text(
+                        json.dumps(data, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    total += 1
+            except Exception:
+                continue
+
+    if total:
+        logger.info("[CASCADE_DELETE] Soft-deleted %d derived records for session %s", total, session_id)
+
+
+@app.delete("/v1/conversations/{session_id}")
+def delete_conversation_endpoint(session_id: str):
+    """Soft-delete a conversation session. Append-only: writes a new record with deleted: true.
+    Triggers session reflection if buffer has 3+ turns (ADR-009)."""
+    # Both background writers below are bound to the vault active when this
+    # request arrived, so a swap landing while they are in flight cannot move
+    # their writes into another vault (issue #144).
+    from src.core.config import get_private_vault_path, spawn_vault_bound_thread
+
+    try:
+        _request_vault = get_private_vault_path()
+    except ValueError:
+        _request_vault = None
+
+    # Auto-trigger session reflection before delete (non-fatal)
+    try:
+        buffer = llm_adapter.prompt_builder.conversation_buffer.get_recent()
+        if buffer and len(buffer) >= 3:
+            from src.reflection.session_reflection import generate_session_reflection
+            spawn_vault_bound_thread(
+                generate_session_reflection,
+                args=(buffer, session_id),
+                vault=_request_vault,
+            )
+    except Exception as exc:
+        logger.warning("[SESSION_REFLECT] Auto-trigger on delete failed (non-fatal): %s", type(exc).__name__)
+
+    result = delete_session(session_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+
+    # Task #9: cascade soft-delete to derived artifacts (state records,
+    # session reflections, task records) written by background threads
+    # during this conversation. Without this, auto-extracted state from a
+    # deleted conversation ("quarterly report", "busy day") persists as
+    # current open loops. Runs in a background thread — non-blocking,
+    # non-fatal.
+    try:
+        spawn_vault_bound_thread(
+            _cascade_soft_delete,
+            args=(session_id,),
+            vault=_request_vault,
+        )
+    except Exception as exc:
+        logger.warning("[CASCADE_DELETE] Failed to start cascade (non-fatal): %s", type(exc).__name__)
+
+    return {"status": "deleted", "session_id": session_id}
+
+
+# ── Project endpoints ──────────────────────────────────────────────────
+
+
+@app.get("/v1/projects")
+def list_projects_endpoint():
+    """List all projects with conversation counts."""
+    projects = list_projects()
+    # Add conversation_count per project
+    for proj in projects:
+        convos = list_sessions_by_project(proj["id"], limit=9999)
+        proj["conversation_count"] = len(convos)
+    return {"projects": projects}
+
+
+@app.post("/v1/projects")
+def create_project_endpoint(body: ProjectCreateRequest):
+    """Create a new project."""
+    result = create_project(body.name, body.color)
+    return {"status": "created", **result}
+
+
+@app.patch("/v1/projects/{project_id}")
+def update_project_endpoint(project_id: str, body: ProjectUpdateRequest):
+    """Rename or recolor a project. Append-only."""
+    if body.name is None and body.color is None:
+        raise HTTPException(status_code=400, detail="Provide at least one of: name, color")
+    result = update_project(project_id, name=body.name, color=body.color)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    return {"status": "updated", "project_id": project_id, "name": body.name, "color": body.color}
+
+
+@app.delete("/v1/projects/{project_id}")
+def delete_project_endpoint(project_id: str):
+    """Soft-delete a project. Append-only."""
+    result = delete_project(project_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    return {"status": "deleted", "project_id": project_id}
+
+
+@app.get("/v1/projects/{project_id}/conversations")
+def list_project_conversations_endpoint(project_id: str, limit: int = 50):
+    """List conversations belonging to a project."""
+    proj = get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    sessions = list_sessions_by_project(project_id, limit=limit)
+    return {"project_id": project_id, "conversations": sessions}
+
+
+# ── Task endpoints ────────────────────────────────────────────────────
+
+
+class TaskCreateRequest(BaseModel):
+    title: str
+    status: str = "active"
+    project_id: str | None = None
+    text: str | None = None
+    tags: list[str] = []
+
+
+class TaskUpdateRequest(BaseModel):
+    status: str
+
+
+@app.post("/v1/tasks")
+@limiter.limit("30/minute")
+def create_task_endpoint(request: Request, body: TaskCreateRequest):
+    """Create a new task. Defaults to active status."""
+    if body.status not in VALID_TASK_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{body.status}'. Valid: {sorted(VALID_TASK_STATUSES)}",
+        )
+    record = TaskService.make_record(
+        title=body.title,
+        status=body.status,
+        source="user_input",
+        project_id=body.project_id,
+        text=body.text,
+        tags=body.tags,
+    )
+    path = task_service.write(record)
+    return {
+        "status": "created",
+        "id": record.id,
+        "title": record.title,
+        "task_status": record.status,
+        "path": str(path),
+    }
+
+
+@app.get("/v1/tasks")
+def list_tasks_endpoint(status: str | None = None, project_id: str | None = None):
+    """List tasks with optional status and project filters.
+
+    Resolves to latest record per task ID before filtering. A task
+    that has been cancelled or completed is excluded from active listings
+    even if earlier records for the same ID had status=active.
+    """
+    if status and status not in VALID_TASK_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{status}'. Valid: {sorted(VALID_TASK_STATUSES)}",
+        )
+
+    # Resolve to latest per task ID (read_all is newest-first)
+    all_records = task_service.read_all()
+    latest_by_id: dict[str, object] = {}
+    for r in all_records:
+        if r.id not in latest_by_id:
+            latest_by_id[r.id] = r
+    resolved = list(latest_by_id.values())
+
+    # Apply filters on resolved records
+    if status and project_id:
+        records = [r for r in resolved if r.status == status and r.project_id == project_id]
+    elif status:
+        records = [r for r in resolved if r.status == status]
+    elif project_id:
+        records = [r for r in resolved if r.project_id == project_id]
+    else:
+        records = resolved
+
+    return {
+        "tasks": [
+            {
+                "id": r.id,
+                "title": r.title,
+                "status": r.status,
+                "text": r.text,
+                "source": r.source,
+                "project_id": r.project_id,
+                "tags": r.tags,
+                "timestamp": r.timestamp,
+                "metadata": r.metadata,
+            }
+            for r in records
+        ]
+    }
+
+
+@app.get("/v1/tasks/{task_id}")
+def get_task_endpoint(task_id: str):
+    """Get a single task by ID (returns the most recent record for that ID)."""
+    record = task_service.read_by_id(task_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return {
+        "id": record.id,
+        "title": record.title,
+        "status": record.status,
+        "text": record.text,
+        "source": record.source,
+        "project_id": record.project_id,
+        "tags": record.tags,
+        "timestamp": record.timestamp,
+        "metadata": record.metadata,
+    }
+
+
+@app.patch("/v1/tasks/{task_id}")
+def update_task_status_endpoint(task_id: str, body: TaskUpdateRequest):
+    """
+    Update a task's status. Append-only: writes a new record with the
+    updated status and a new timestamp, preserving the original task ID.
+    """
+    if body.status not in VALID_TASK_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{body.status}'. Valid: {sorted(VALID_TASK_STATUSES)}",
+        )
+
+    existing = task_service.read_by_id(task_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+
+    # Write a new record with the same task ID but new timestamp and updated status.
+    # next_timestamp() spins on same-microsecond collisions so the new record
+    # cannot share a filename with the original (which would silently drop the
+    # update — the root cause of the test_update_status flake).
+    from src.tasks.task_service import next_timestamp
+    new_timestamp = next_timestamp()
+
+    from src.tasks.models import TaskRecord
+    updated = TaskRecord(
+        id=task_id,
+        timestamp=new_timestamp,
+        type="task",
+        title=existing.title,
+        status=body.status,
+        text=existing.text,
+        source=existing.source,
+        project_id=existing.project_id,
+        tags=existing.tags,
+        metadata={**existing.metadata, "previous_status": existing.status},
+    )
+    path = task_service.write(updated)
+    return {
+        "status": "updated",
+        "id": task_id,
+        "task_status": body.status,
+        "previous_status": existing.status,
+        "path": str(path),
+    }
+
+
+@app.delete("/v1/tasks/{task_id}")
+def delete_task_endpoint(task_id: str):
+    """
+    Soft-delete a task by setting status to 'cancelled'.
+    Append-only: writes a new record, does not remove the original.
+    """
+    existing = task_service.read_by_id(task_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+
+    if existing.status == "cancelled":
+        return {"status": "already_cancelled", "id": task_id}
+
+    from datetime import datetime
+    new_timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
+
+    from src.tasks.models import TaskRecord
+    cancelled = TaskRecord(
+        id=task_id,
+        timestamp=new_timestamp,
+        type="task",
+        title=existing.title,
+        status="cancelled",
+        text=existing.text,
+        source=existing.source,
+        project_id=existing.project_id,
+        tags=existing.tags,
+        metadata={**existing.metadata, "previous_status": existing.status},
+    )
+    task_service.write(cancelled)
+    return {"status": "cancelled", "id": task_id}
+
+
+# ── Deviation endpoints ────────────────────────────────────────────────
+
+
+class DeviationUpdateRequest(BaseModel):
+    confirmed: bool | None = None
+    reason: str | None = None
+    value_aligned: bool | None = None
+    user_note: str | None = None
+    flagged_as_noise: bool | None = None
+
+
+def _read_deviation_records(
+    confirmed: bool | None = None,
+    pattern_class: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Read deviation records from vault with optional filters."""
+    from src.core.config import get_private_vault_path
+    from src.memory.storage import MemoryStorage
+
+    vault = get_private_vault_path()
+    storage = MemoryStorage()
+    dev_dir = storage.get_memory_dir(vault, "deviation")
+
+    records = []
+    for f in sorted(dev_dir.glob("*.json"), reverse=True):
+        try:
+            data = storage.read_json(f)
+            if data.get("type") != "deviation":
+                continue
+
+            meta = data.get("metadata", {})
+            if confirmed is not None:
+                if meta.get("confirmed") != confirmed:
+                    continue
+            if pattern_class is not None:
+                if meta.get("pattern_class") != pattern_class:
+                    continue
+
+            records.append(data)
+            if len(records) >= limit:
+                break
+        except Exception:
+            continue
+
+    return records
+
+
+def _update_deviation_record(record_id: str, updates: dict) -> dict | None:
+    """Update a deviation record in-place."""
+    from src.core.config import get_private_vault_path
+    from src.memory.storage import MemoryStorage
+
+    vault = get_private_vault_path()
+    storage = MemoryStorage()
+    dev_dir = storage.get_memory_dir(vault, "deviation")
+
+    for f in dev_dir.glob("*.json"):
+        try:
+            data = storage.read_json(f)
+            if data.get("id") != record_id:
+                continue
+
+            meta = data.get("metadata", {})
+            if "confirmed" in updates:
+                meta["confirmed"] = bool(updates["confirmed"])
+            if "reason" in updates:
+                meta["reason"] = updates["reason"]
+            if "value_aligned" in updates:
+                meta["value_aligned"] = bool(updates["value_aligned"])
+            if "user_note" in updates:
+                meta["user_note"] = updates["user_note"]
+            if "flagged_as_noise" in updates:
+                meta["flagged_as_noise"] = bool(updates["flagged_as_noise"])
+            if "user_edited" not in meta:
+                meta["user_edited"] = False
+            if any(k in updates for k in ("reason", "user_note", "confirmed", "value_aligned")):
+                meta["user_edited"] = True
+
+            data["metadata"] = meta
+            storage.write_json(f, data)
+            return data
+        except Exception:
+            continue
+
+    return None
+
+
+@app.get("/v1/deviations")
+def get_deviations(
+    confirmed: bool | None = None,
+    pattern_class: str | None = None,
+    limit: int = 20,
+):
+    """Return deviation records with optional filters."""
+    records = _read_deviation_records(
+        confirmed=confirmed,
+        pattern_class=pattern_class,
+        limit=min(limit, 100),
+    )
+    return {"records": records, "count": len(records)}
+
+
+@app.patch("/v1/deviations/{record_id}")
+def update_deviation(record_id: str, body: DeviationUpdateRequest):
+    """Update a deviation record (confirm, add reason, flag as noise)."""
+    updates = {}
+    if body.confirmed is not None:
+        updates["confirmed"] = body.confirmed
+    if body.reason is not None:
+        updates["reason"] = body.reason
+    if body.value_aligned is not None:
+        updates["value_aligned"] = body.value_aligned
+    if body.user_note is not None:
+        updates["user_note"] = body.user_note
+    if body.flagged_as_noise is not None:
+        updates["flagged_as_noise"] = body.flagged_as_noise
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No updates provided")
+
+    result = _update_deviation_record(record_id, updates)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Deviation record '{record_id}' not found")
+
+    return {"status": "updated", "record": result}
+
+
+# ── Lodestone endpoints ────────────────────────────────────────────────
+
+from src.memory import lodestone_service
+
+
+class LodestoneCreateRequest(BaseModel):
+    value: str
+    taxonomy_category: str
+    source: str = "conversation"
+    question_context: str | None = None
+
+
+class LodestoneUpdateRequest(BaseModel):
+    confirmed: bool | None = None
+    user_note: str | None = None
+    flagged_as_noise: bool | None = None
+
+
+@app.get("/v1/lodestone")
+def get_lodestone():
+    """Return all lodestone records (confirmed + proposed)."""
+    records = lodestone_service.read_all()
+    return {"records": records, "count": len(records)}
+
+
+def _extract_lodestone_value(raw_answer: str, question_context: str | None = None) -> str | None:
+    """
+    Use LLM to extract a value statement from a raw answer.
+
+    Returns the inferred value, or None on failure.
+    Uses system/user message split — single-message prompts cause qwen3:8b
+    to consume all tokens in thinking mode and return empty.
+    """
+    try:
+        from src.core.config import get_ember_model
+
+        user_msg = raw_answer
+        if question_context:
+            user_msg = f"Question: {question_context}\nAnswer: {raw_answer}"
+
+        result = ollama.chat(
+            model=get_ember_model(),
+            messages=[
+                {"role": "system", "content": (
+                    "You extract values from answers. "
+                    "Write exactly one sentence: what does this person care about? "
+                    "Do not summarize — identify the underlying value. "
+                    "No preamble, just the value statement."
+                )},
+                {"role": "user", "content": user_msg},
+            ],
+            options={"temperature": 0, "num_predict": 100},
+            think=False,
+        )
+        inferred = result["message"]["content"].strip()
+        if inferred:
+            logger.info("[LODESTONE] Inferred value (%d chars)", len(inferred))
+            return inferred
+        logger.warning("[LODESTONE] Inference returned empty")
+        return None
+    except Exception as exc:
+        logger.warning("[LODESTONE] Value inference failed: %s", type(exc).__name__)
+        return None
+
+
+@app.post("/v1/lodestone")
+def create_lodestone(body: LodestoneCreateRequest):
+    """
+    Create an explicit lodestone record (Path 1 acquisition).
+    Infers a value statement from the raw answer via LLM.
+    Starts as confirmed: true.
+    """
+    valid_categories = {"character", "relational", "directional", "ground", "beyond"}
+    if body.taxonomy_category not in valid_categories:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid taxonomy_category. Must be one of: {sorted(valid_categories)}",
+        )
+
+    inferred_value = _extract_lodestone_value(body.value, body.question_context)
+
+    if inferred_value is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Inference unavailable, try again",
+        )
+
+    try:
+        record = lodestone_service.write(
+            value=inferred_value,
+            taxonomy_category=body.taxonomy_category,
+            acquisition_path="explicit",
+            source=body.source,
+            supporting_evidence=body.value,
+            confirmed=True,
+        )
+        return {"status": "created", "record": record}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/v1/lodestone/{record_id}")
+def update_lodestone(record_id: str, body: LodestoneUpdateRequest):
+    """Confirm, dismiss, or annotate a lodestone record."""
+    updates = {}
+    if body.confirmed is not None:
+        updates["confirmed"] = body.confirmed
+    if body.user_note is not None:
+        updates["user_note"] = body.user_note
+    if body.flagged_as_noise is not None:
+        updates["flagged_as_noise"] = body.flagged_as_noise
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No updates provided")
+
+    try:
+        result = lodestone_service.update(record_id, updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Lodestone record '{record_id}' not found")
+
+    return {"status": "updated", "record": result}
+
+
+# ── Security / PIN endpoints ───────────────────────────────────────────
+
+
+class PinSetRequest(BaseModel):
+    pin: str
+    recovery_passphrase: str
+
+
+class PinVerifyRequest(BaseModel):
+    pin: str
+
+
+class PinRecoverRequest(BaseModel):
+    recovery_passphrase: str
+    new_pin: str
+
+
+class PinChangeRequest(BaseModel):
+    current_pin: str
+    new_pin: str
+
+
+@app.get("/v1/security/pin/status")
+def pin_status_endpoint():
+    """Check if a PIN has been configured. No auth required.
+    Defensively wrapped — this is called on every page load and must never 500."""
+    try:
+        from src.security.pin_service import pin_is_set
+        return {"pin_set": pin_is_set()}
+    except Exception:
+        return {"pin_set": False}
+
+
+@app.post("/v1/security/pin/set")
+def pin_set_endpoint(body: PinSetRequest):
+    """Set PIN and recovery passphrase. Requires API key auth."""
+    try:
+        from src.security.pin_service import set_pin, set_recovery_passphrase
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"PIN service unavailable: {exc}")
+    if len(body.pin) < 4:
+        raise HTTPException(status_code=400, detail="PIN must be at least 4 characters")
+    if len(body.recovery_passphrase) < 20:
+        raise HTTPException(status_code=400, detail="Recovery passphrase must be at least 20 characters")
+    set_pin(body.pin)
+    set_recovery_passphrase(body.recovery_passphrase)
+    return {"status": "set"}
+
+
+@app.post("/v1/security/pin/verify")
+@limiter.limit("5/minute")
+def pin_verify_endpoint(request: Request, body: PinVerifyRequest):
+    """Verify a PIN. No API key auth — this IS the UI auth. Rate-limited."""
+    try:
+        from src.security.pin_service import verify_pin, check_rate_limit, record_failed_attempt, get_remaining_attempts
+    except Exception:
+        return {"valid": False, "error": "PIN service unavailable"}
+    client_ip = request.client.host
+    if not check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Too many attempts. Try again in 5 minutes.")
+    if verify_pin(body.pin):
+        return {"valid": True}
+    remaining = record_failed_attempt(client_ip)
+    return {"valid": False, "remaining_attempts": remaining}
+
+
+@app.post("/v1/security/pin/recover")
+@limiter.limit("5/minute")
+def pin_recover_endpoint(request: Request, body: PinRecoverRequest):
+    """Recover access with passphrase and set new PIN. Rate-limited."""
+    try:
+        from src.security.pin_service import verify_recovery_passphrase, set_pin, check_rate_limit, record_failed_attempt
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"PIN service unavailable: {exc}")
+    client_ip = request.client.host
+    if not check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Too many attempts. Try again in 5 minutes.")
+    if not verify_recovery_passphrase(body.recovery_passphrase):
+        record_failed_attempt(client_ip)
+        raise HTTPException(status_code=403, detail="Invalid recovery passphrase")
+    if len(body.new_pin) < 4:
+        raise HTTPException(status_code=400, detail="PIN must be at least 4 characters")
+    set_pin(body.new_pin)
+    return {"status": "recovered"}
+
+
+@app.post("/v1/security/pin/change")
+@limiter.limit("5/minute")
+def pin_change_endpoint(request: Request, body: PinChangeRequest):
+    """Change the PIN. Requires the current PIN for verification.
+
+    Rate-limited and API-key authenticated (routine rotation by a user
+    who is already signed in). Intentionally decoupled from the recovery
+    passphrase — this endpoint is for users who know their current PIN.
+    Users who have forgotten their PIN must use /v1/security/pin/recover
+    instead.
+    """
+    try:
+        from src.security.pin_service import (
+            change_pin,
+            check_rate_limit,
+            record_failed_attempt,
+            get_remaining_attempts,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"PIN service unavailable: {exc}")
+
+    client_ip = request.client.host
+    if not check_rate_limit(client_ip):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many attempts. Try again in 5 minutes.",
+        )
+
+    if len(body.new_pin) < 4:
+        raise HTTPException(
+            status_code=400,
+            detail="PIN must be at least 4 characters",
+        )
+
+    if not change_pin(body.current_pin, body.new_pin):
+        remaining = record_failed_attempt(client_ip)
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Invalid current PIN",
+                "remaining_attempts": remaining,
+            },
+        )
+
+    return {"status": "changed"}
+
+
+# ── Service management endpoints ─────────────────────────────────────
+
+
+def _shutdown_self(delay: float = 3.0) -> None:
+    """Send SIGTERM to our own process after a delay.
+
+    Fallback for dev runs without the watchdog. The delay lets a running
+    watchdog observe ember_stop.signal and kill us first, which prevents
+    the watchdog from seeing an "unexpected exit" and restarting
+    (scripts/watchdog.py:118).
+    """
+    time.sleep(delay)
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+    except Exception:
+        pass
+
+
+@app.post("/v1/service/{name}/restart")
+def service_restart_endpoint(name: str):
+    """Restart a named service (api or docker).
+
+    - api: writes ember_restart.signal in the repo root. The watchdog
+      process (scripts/watchdog.py) picks it up, kills the API, and
+      relaunches it. Returns immediately — the restart is async.
+    - docker: runs `docker compose restart` in the repo root.
+
+    Returns {"status": "restarting"} on success.
+    """
+    import subprocess
+
+    if name == "api":
+        repo_root = Path(__file__).resolve().parents[2]
+        signal_path = repo_root / "ember_restart.signal"
+        signal_path.write_text("restart", encoding="utf-8")
+        return {"status": "restarting", "service": "api", "note": "signal written, watchdog will restart"}
+
+    if name == "docker":
+        repo_root = Path(__file__).resolve().parents[2]
+        try:
+            subprocess.Popen(
+                ["docker", "compose", "restart"],
+                cwd=str(repo_root),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return {"status": "restarting", "service": "docker"}
+        except FileNotFoundError:
+            raise HTTPException(status_code=500, detail="docker command not found")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to restart docker: {exc}")
+
+    raise HTTPException(status_code=400, detail=f"Unknown service: {name}. Valid: api, docker.")
+
+
+@app.post("/v1/system/launch-installer")
+def launch_installer_endpoint():
+    """Open the Ember installer executable on the user's machine.
+
+    Uses the platform-appropriate open command (start on Windows,
+    open on macOS, xdg-open on Linux). Looks for the installer in
+    a sibling directory: ../ember-2-installer/dist/
+    """
+    import glob
+    import platform
+    import subprocess
+
+    repo_root = Path(__file__).resolve().parents[2]
+    installer_dir = repo_root.parent / "ember-2-installer" / "dist"
+
+    if not installer_dir.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Installer directory not found: {installer_dir}",
+        )
+
+    system = platform.system()
+    if system == "Windows":
+        exes = sorted(installer_dir.glob("*.exe"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not exes:
+            raise HTTPException(status_code=404, detail="No .exe found in installer dist/")
+        target = str(exes[0])
+        subprocess.Popen(["cmd", "/c", "start", "", target], cwd=str(installer_dir))
+    elif system == "Darwin":
+        dmgs = sorted(installer_dir.glob("*.dmg"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not dmgs:
+            raise HTTPException(status_code=404, detail="No .dmg found in installer dist/")
+        subprocess.Popen(["open", str(dmgs[0])])
+    else:
+        appimages = sorted(installer_dir.glob("*.AppImage"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not appimages:
+            raise HTTPException(status_code=404, detail="No .AppImage found in installer dist/")
+        subprocess.Popen(["xdg-open", str(appimages[0])])
+
+    return {"status": "launching", "platform": system}
+
+
+@app.post("/v1/service/{name}/stop")
+def service_stop_endpoint(name: str):
+    """Stop a named service.
+
+    - api: writes ember_stop.signal. The watchdog kills the API and
+      exits. Returns immediately.
+    - docker: runs `docker compose stop`.
+
+    Returns {"status": "stopping"} on success.
+    """
+    import subprocess
+
+    if name == "api":
+        repo_root = Path(__file__).resolve().parents[2]
+        signal_path = repo_root / "ember_stop.signal"
+        signal_path.write_text("stop", encoding="utf-8")
+        return {"status": "stopping", "service": "api", "note": "signal written, watchdog will stop"}
+
+    if name == "docker":
+        repo_root = Path(__file__).resolve().parents[2]
+        try:
+            subprocess.Popen(
+                ["docker", "compose", "stop"],
+                cwd=str(repo_root),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return {"status": "stopping", "service": "docker"}
+        except FileNotFoundError:
+            raise HTTPException(status_code=500, detail="docker command not found")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to stop docker: {exc}")
+
+    raise HTTPException(status_code=400, detail=f"Unknown service: {name}. Valid: api, docker.")
+
+
+@app.post("/v1/service/shutdown")
+def service_shutdown_endpoint(background_tasks: BackgroundTasks):
+    """Shut down the Ember API permanently (no auto-restart).
+
+    Writes ember_stop.signal so the watchdog kills the API and exits
+    itself. Also schedules an in-process SIGTERM as a fallback for dev
+    runs without the watchdog. Returns immediately; the kill fires
+    after the response is flushed.
+
+    The 3s delay in _shutdown_self is load-bearing: it lets a running
+    watchdog observe the signal and stop the API first, avoiding the
+    watchdog's unexpected-exit restart path.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    signal_path = repo_root / "ember_stop.signal"
+    signal_path.write_text("stop", encoding="utf-8")
+
+    background_tasks.add_task(_shutdown_self)
+    return {"status": "shutting_down"}
+
+
+# ── System endpoints ──────────────────────────────────────────────────
+
+
+@app.get("/v1/system/disk-encryption")
+def disk_encryption_status_endpoint():
+    """Check whether full-disk encryption is enabled on the host OS.
+
+    Detects BitLocker (Windows), FileVault (macOS), or LUKS (Linux).
+    Returns the status, platform name, and a human-readable
+    recommendation. Non-destructive read-only check — safe to poll.
+    """
+    from src.security.disk_encryption import detect
+    return detect()
+
+
+# ── Developer endpoints ───────────────────────────────────────────────
+
+
+class VaultSwapRequest(BaseModel):
+    vault_label: str
+
+
+def _verify_active_vault(expected_root: Path) -> str | None:
+    """Confirm the swap fully took effect. Returns a reason on failure.
+
+    Two things have to hold before a swap can be reported as ok: the
+    config resolver has to return the requested root, and every store the
+    read and write paths can reach has to sit under it. The second check
+    exercises the real accessors rather than inspecting the cache, so the
+    code path a request will take is the one being verified.
+
+    A read accessor returning None means that vault has no such db file
+    yet, which is a legitimate state for a fresh vault. The write
+    accessor creates memory.db when it is absent, exactly as the first
+    write would.
+    """
+    from src.core.config import get_private_vault_path
+
+    active = get_private_vault_path()
+    if active != expected_root:
+        return (
+            f"active vault path is {active}, expected {expected_root}"
+        )
+
+    accessors = (
+        ("memory store", _get_memory_store),
+        ("ingested store", _get_sqlite_store),
+        ("memory write store", _get_write_memory_store),
+    )
+    for name, accessor in accessors:
+        try:
+            store = accessor()
+        except Exception as exc:
+            return f"{name} failed to resolve: {exc}"
+        if store is None:
+            continue
+        if not store.db_path.is_relative_to(expected_root):
+            return (
+                f"{name} resolved to {store.db_path}, "
+                f"which is outside {expected_root}"
+            )
+
+    return None
+
+
+@app.post("/v1/developer/vault/swap")
+def vault_swap_endpoint(body: VaultSwapRequest):
+    """Swap the active vault at runtime (developer mode only).
+
+    Runtime-only — updates an in-memory override, never touches .env.
+    Reverts to the .env vault path on API restart. Clears all in-memory
+    vector indexes so they lazy-load from the new vault on next query.
+
+    Requires EMBER_DEV_MODE=true in the environment.
+    Known vault labels are read from .env at startup:
+      VAULT_PATH_LIVE, VAULT_PATH_DEMO, VAULT_PATH_TEST
+    """
+    from src.core.config import (
+        allow_vault_writes,
+        block_vault_writes,
+        is_dev_mode,
+        get_known_vault_paths,
+        get_vault_override,
+        set_vault_path_override,
+        clear_vault_path_override,
+        get_private_vault_path,
+        get_vault_label,
+    )
+
+    if not is_dev_mode():
+        raise HTTPException(
+            status_code=403,
+            detail="Vault swap requires EMBER_DEV_MODE=true in environment.",
+        )
+
+    known = get_known_vault_paths()
+    label = body.vault_label.lower()
+
+    def _restore(prior: tuple[str | None, str | None]) -> None:
+        prior_path, prior_label = prior
+        if prior_path is None:
+            clear_vault_path_override()
+        else:
+            set_vault_path_override(prior_path, prior_label)
+
+    def _fail(prior: tuple[str | None, str | None], reason: str):
+        """Put the previous vault back and refuse writes until a swap verifies.
+
+        An unverified vault is the one case where losing a write is the
+        better outcome: a record written into the wrong vault is a
+        privacy problem, and a refused write is a visible one.
+        """
+        _restore(prior)
+        block_vault_writes(reason)
+        logger.error("[VAULT_SWAP] verification failed, writes blocked: %s", reason)
+        raise HTTPException(status_code=500, detail=f"Vault swap not verified: {reason}")
+
+    # "default" reverts to the personal vault from PRIVATE_VAULT_PATH
+    # by clearing the runtime override. No env config needed.
+    if label == "default":
+        prior = get_vault_override()
+        clear_vault_path_override()
+        from src.retrieval.vector_index import clear_index_cache
+        clear_index_cache()
+
+        reason = _verify_active_vault(get_private_vault_path())
+        if reason:
+            _fail(prior, reason)
+
+        allow_vault_writes()
+        logger.info("[VAULT_SWAP] verified default vault")
+        return {
+            "status": "ok",
+            "active_vault": "default",
+            "vault_path": str(get_private_vault_path()),
+        }
+
+    if label not in known:
+        available = ", ".join(sorted(known.keys() | {"default"})) if known else "default"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown vault label '{label}'. Available: {available}.",
+        )
+
+    vault_path = known[label]
+    resolved = Path(vault_path).resolve()
+    if not resolved.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Vault path does not exist or is not a directory: {resolved}",
+        )
+
+    prior = get_vault_override()
+    set_vault_path_override(str(resolved), label)
+
+    # Clear all in-memory vector indexes — they belong to the previous vault.
+    from src.retrieval.vector_index import clear_index_cache
+    clear_index_cache()
+
+    # The SQLite stores need no reset: they are cached by resolved db path
+    # and their accessors resolve the active vault first, so the stores
+    # below are the new vault's by construction. Verify that rather than
+    # assume it.
+    reason = _verify_active_vault(resolved)
+    if reason:
+        _fail(prior, reason)
+
+    allow_vault_writes()
+    logger.info("[VAULT_SWAP] verified vault %s at %s", label, resolved)
+
+    return {
+        "active_vault": str(resolved),
+        "label": label,
+        "note": "indexes cleared, will rebuild on first query",
+    }
+
+
+@app.get("/v1/developer/vault/status")
+def vault_status_endpoint():
+    """Return the currently active vault path and label."""
+    from src.core.config import get_private_vault_path, get_vault_label
+    return {
+        "active_vault": str(get_private_vault_path()),
+        "label": get_vault_label(),
+    }
+
+
+@app.get("/v1/developer/status")
+def developer_status_endpoint():
+    """Return developer mode state, active vault, and available vaults.
+
+    Always accessible (does not require dev mode) so the UI can show
+    the developer panel toggle state without a chicken-and-egg problem.
+    """
+    from src.core.config import (
+        is_dev_mode,
+        get_private_vault_path,
+        get_vault_label,
+        get_known_vault_paths,
+    )
+    known = get_known_vault_paths()
+    return {
+        "dev_mode": is_dev_mode(),
+        "active_vault": {
+            "label": get_vault_label(),
+            "path": str(get_private_vault_path()),
+        },
+        "available_vaults": [
+            {"label": label, "path": path}
+            for label, path in sorted(known.items())
+        ],
+    }
+
+
+@app.get("/v1/developer/vaults")
+def developer_vaults_endpoint():
+    """Return list of configured vault paths from .env."""
+    from src.core.config import get_known_vault_paths
+    known = get_known_vault_paths()
+    return [
+        {"label": label, "path": path}
+        for label, path in sorted(known.items())
+    ]
+
+
+# ── Vault storage endpoint ─────────────────────────────────────────────
+
+
+@app.get("/v1/vault/storage")
+def vault_storage_endpoint():
+    """Return vault storage analysis: size, breakdown, growth rate, projection."""
+    from src.core.config import get_private_vault_path
+    from src.memory.vault_storage import analyze_vault
+    vault_path = get_private_vault_path()
+    return analyze_vault(vault_path)
+
+
+# ── Vault toggle endpoint ─────────────────────────────────────────────
+
+
+@app.post("/v1/settings/vault-enabled")
+def set_vault_toggle_endpoint(request: Request, body: dict):
+    """Enable or disable the per-conversation vault toggle feature.
+
+    When vault_toggle_enabled=True (default), individual requests can
+    set vault_enabled=False to run in stateless mode.
+    When vault_toggle_enabled=False, the toggle feature is disabled
+    and all requests use the vault normally regardless of per-request setting.
+
+    Body: {"vault_toggle_enabled": true/false}
+    """
+    from src.core.preferences import update as update_prefs, read as read_prefs
+    enabled = body.get("vault_toggle_enabled")
+    if enabled is None:
+        raise HTTPException(status_code=400, detail="Missing vault_toggle_enabled field")
+    update_prefs({"vault_toggle_enabled": bool(enabled)})
+    return {"vault_toggle_enabled": read_prefs().get("vault_toggle_enabled", True)}
+
+
+@app.get("/v1/settings/vault-enabled")
+def get_vault_toggle_endpoint():
+    """Return current vault toggle setting."""
+    from src.core.preferences import read as read_prefs
+    return {"vault_toggle_enabled": read_prefs().get("vault_toggle_enabled", True)}
+
+
+@app.post("/v1/settings/bare-mode")
+def set_bare_mode_endpoint(request: Request, body: dict):
+    """Toggle bare mode on or off.
+
+    When bare_mode=True, the prompt pipeline skips nature document,
+    lodestone layers, identity rules, and conversational style injection.
+    Constitutional review is limited to the three MVR criteria only
+    (position_collapse, sycophancy, embellishment). This produces a
+    minimal, personality-stripped inference path.
+
+    Body: {"bare_mode": true/false}
+    """
+    from src.core.preferences import update as update_prefs, read as read_prefs
+    enabled = body.get("bare_mode")
+    if enabled is None:
+        raise HTTPException(status_code=400, detail="Missing bare_mode field")
+    update_prefs({"bare_mode": bool(enabled)})
+    return {"bare_mode": read_prefs().get("bare_mode", False)}
+
+
+@app.get("/v1/settings/bare-mode")
+def get_bare_mode_endpoint():
+    """Return current bare mode setting."""
+    from src.core.preferences import read as read_prefs
+    return {"bare_mode": read_prefs().get("bare_mode", False)}
+
+
+# ── Preferences endpoints ──────────────────────────────────────────────
+
+
+@app.get("/v1/preferences")
+def get_preferences_endpoint():
+    """Return current user preferences."""
+    from src.core.preferences import read as read_prefs
+    return read_prefs()
+
+
+@app.patch("/v1/preferences")
+def update_preferences_endpoint(request: Request, body: dict):
+    """Update user preferences. Accepts {key: value} pairs."""
+    from src.core.preferences import update as update_prefs
+    update_prefs(body)
+    from src.core.preferences import read as read_prefs
+    return read_prefs()
+
+
+# ── Memory endpoints ───────────────────────────────────────────────────
+
+
+@app.post("/journal")
+def write_journal_endpoint(request: JournalRequest):
+    from src.memory.write_memory import write_memory
+
+    metadata: dict = {}
+    if request.mood:
+        metadata["mood"] = request.mood
+    if request.date_override:
+        metadata["date_override"] = request.date_override
+
+    tags = list(request.tags)
+    if request.mood and request.mood not in tags:
+        tags = [request.mood] + tags
+
+    path = write_memory(
+        text=request.text,
+        memory_type="journal",
+        source="api",
+        tags=tags,
+        metadata=metadata,
+    )
+
+    if path is None:
+        return {"status": "skipped", "reason": "content filtered"}
+
+    return {"status": "written", "path": str(path)}
+
+
+@app.post("/write-memory")
+def write_memory_endpoint(request: MemoryRequest):
+    memory_service.write(request.text, request.memory_type, metadata={})
+    return {"status": "memory written"}
+
+
+@app.get("/read-memories")
+def read_memories_endpoint(memory_type: str = "journal", limit: int = 5):
+    return {"memories": memory_service.read(memory_type, limit)}
+
+
+@app.get("/search-memories")
+def search_memories_endpoint(query: str, memory_type: str = "journal", limit: int = 5):
+    return {"results": memory_service.search(query, memory_type, limit)}
+
+
+@app.get("/semantic-search")
+def semantic_search_endpoint(
+    query: str,
+    limit: int = 5,
+    memory_type: str | None = None,
+    min_score: float | None = None,
+):
+    return {"results": semantic_search(query, limit, memory_type, min_score)}
+
+@app.post("/reflect")
+@limiter.limit("10/minute")
+def reflect_endpoint(request: Request, memory_type: str = "journal", limit: int = 5):
+    return generate_reflection(memory_types=[memory_type], limit=limit)
+
+
+class SessionReflectRequest(BaseModel):
+    session_id: str | None = None
+
+
+@app.post("/reflect/session")
+@limiter.limit("10/minute")
+def reflect_session_endpoint(request: Request, body: SessionReflectRequest = SessionReflectRequest()):
+    """Generate a narrative session reflection from the current conversation buffer."""
+    from src.reflection.session_reflection import generate_session_reflection
+
+    buffer = llm_adapter.prompt_builder.conversation_buffer.get_recent()
+    if not buffer or len(buffer) < 3:
+        return {"status": "skipped", "reason": f"Not enough turns ({len(buffer)}). Minimum 3."}
+
+    reflection = generate_session_reflection(buffer, session_id=body.session_id)
+    if reflection:
+        return {"status": "ok", "reflection": reflection[:200]}
+    return {"status": "error", "reason": "Reflection generation failed."}
+
+
+@app.post("/reflect/monthly")
+@limiter.limit("5/minute")
+def reflect_monthly_endpoint(request: Request):
+    """Generate a monthly synthesis reflection using LLM-driven analysis."""
+    from src.reflection.run_monthly_reflection import run_monthly_reflection
+    result = run_monthly_reflection()
+    return result
+
+
+@app.get("/debug-context")
+def debug_context_endpoint(message: str):
+    # read_only=True: this endpoint exists to inspect what retrieval would
+    # deliver, so it must not also count as a delivery. Without it, every
+    # investigative call wrote last_retrieved_at and frequency_score to the
+    # records it reported on, which under ADR-015 promotes them to hot and
+    # feeds the tier multiplier they are being inspected for (issue #206).
+    context_packet = context_service.build_context(message, read_only=True)
+    return clean_context_packet(asdict(context_packet))
+
+
+# ── State endpoints ────────────────────────────────────────────────────
+
+
+@app.get("/state")
+def get_state_endpoint():
+    items = state_resolver.get_current_state()
+    return {"state": [{"category": i.category, "text": i.text, "timestamp": i.timestamp, "priority": i.priority} for i in items]}
+
+
+@app.get("/state/{category}")
+def get_state_by_category_endpoint(category: str):
+    if category not in VALID_STATE_CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Invalid category '{category}'. Valid: {sorted(VALID_STATE_CATEGORIES)}")
+    item = state_resolver.get_current_by_category(category)
+    if not item:
+        return {"state": None}
+    return {"state": {"category": item.category, "text": item.text, "timestamp": item.timestamp, "priority": item.priority}}
+
+
+@app.post("/write-state")
+def write_state_endpoint(request: StateRequest):
+    if request.type not in VALID_STATE_CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Invalid type '{request.type}'. Valid: {sorted(VALID_STATE_CATEGORIES)}")
+    record = StateService.make_record(
+        state_type=request.type,
+        text=request.text,
+        source=request.source,
+        tags=request.tags,
+        metadata=request.metadata,
+    )
+    path = state_service.write(record)
+    return {"status": "state written", "type": record.type, "text": record.text, "path": str(path)}
+
+
+# ── Model endpoints ────────────────────────────────────────────────────
+
+
+def _chat_models_only(models: list[str]) -> list[str]:
+    """Drop embedding models -- not chat models, should not appear in a selector.
+
+    Shared by both lists below so the two cannot drift apart.
+    """
+    return [m for m in models if not any(p in m.lower() for p in ("embed", "embedding"))]
+
+
+@app.get("/model")
+def get_model_endpoint():
+    try:
+        available = _chat_models_only([m["model"] for m in ollama.list()["models"]])
+    except Exception:
+        available = []
+    cloud = get_cloud_models()
+    from src.core.config import get_ember_model
+
+    # model is the adapter's active generation model; reference_model is what
+    # every call-time role resolves. They are identical in production and
+    # diverge only under a non-persisted swap (ADR-043), so `pinned` lets an
+    # eval harness confirm the pin actually took effect -- a --reload uvicorn
+    # reverts an in-memory pin silently.
+    reference_model = get_ember_model()
+    response = {
+        "model": llm_adapter.model,
+        "available": available,
+        "cloud": cloud,
+        "reference_model": reference_model,
+        "pinned": llm_adapter.model != reference_model,
+    }
+
+    # `available` is the DEFAULT client's models, and stays that way: the UI
+    # splits that one list into a vision selector and a text selector, and
+    # vision always runs locally. Reporting the generation host's models there
+    # would offer vision models the vision service cannot reach -- moving the
+    # ambiguity rather than removing it.
+    #
+    # So when generation runs elsewhere, say so in its own fields. Omitted
+    # entirely when unset, which keeps the single-PC response byte-identical
+    # and makes the key's presence the signal that a split is active.
+    from src.core.config import get_ember_generation_ollama_host
+
+    generation_host = get_ember_generation_ollama_host()
+    if generation_host:
+        from src.llm.adapter import list_generation_models
+
+        response["generation_available"] = _chat_models_only(list_generation_models())
+        response["generation_host"] = generation_host
+
+    return response
+
+
+@app.post("/model")
+def set_model_endpoint(request: ModelRequest):
+    from src.core.config import set_ember_model_override
+    llm_adapter.set_model(request.model)
+    if request.persist:
+        set_ember_model_override(request.model)
+    return {"model": llm_adapter.model}
+
+
+class ProviderKeyRequest(BaseModel):
+    provider: str
+    api_key: str
+
+
+@app.post("/provider-key")
+def store_provider_key(body: ProviderKeyRequest):
+    """Store a cloud provider API key in the credential manager."""
+    allowed_providers = {"anthropic", "openai"}
+    if body.provider not in allowed_providers:
+        raise HTTPException(status_code=400, detail=f"Unknown provider '{body.provider}'. Allowed: {sorted(allowed_providers)}")
+    try:
+        import keyring
+        keyring.set_password(f"ember-2-{body.provider}", "api_key", body.api_key)
+        return {"status": "stored", "provider": body.provider}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to store key: {exc}")
+
+
+@app.get("/provider-key/{provider}")
+def check_provider_key(provider: str):
+    """Check if a cloud provider API key is configured. Never returns the actual key.
+    Reports configured=True for keys set via either keyring or env var so this
+    matches the actual lookup behavior in LLMAdapter."""
+    from src.core.config import get_provider_api_key
+    return {"provider": provider, "configured": bool(get_provider_api_key(provider))}
+
+
+@app.delete("/provider-key/{provider}")
+def remove_provider_key(provider: str):
+    """Remove a cloud provider API key from the credential store."""
+    try:
+        import keyring
+        keyring.delete_password(f"ember-2-{provider}", "api_key")
+        return {"status": "removed", "provider": provider}
+    except Exception:
+        return {"status": "not_found", "provider": provider}
+
+
+# ── Tiering ───────────────────────────────────────────────────────────
+
+
+@app.post("/tiering/run")
+@limiter.limit("10/minute")
+def run_tiering(request: Request):
+    """Manual trigger for memory tiering (ADR-015). Returns transition counts."""
+    from src.tiering.tiering_service import TieringService
+    transitions = TieringService().run()
+    return {"status": "complete", "transitions": transitions}
+
+
+# ── Nightly tiering scheduler ─────────────────────────────────────────
+# Daemon thread fires TieringService.run() once at 00:05 daily.
+# Simple sleep loop — no new dependencies.
+# Started from the app lifespan (_lifespan), not at import, so processes that
+# only import this module (test collection, scripts, probes) never run it.
+
+import threading
+import time as _time
+
+
+def _next_tiering_run_time(now: datetime) -> datetime:
+    """Return the next 00:05 datetime strictly after `now`.
+
+    Uses timedelta to advance by one day so month-end and year-end
+    rollovers (e.g. April 30, December 31) don't raise ValueError. The
+    earlier implementation used datetime.replace(day=day+1), which
+    failed on the last day of any month.
+    """
+    candidate = now.replace(hour=0, minute=5, second=0, microsecond=0)
+    if candidate <= now:
+        candidate = candidate + timedelta(days=1)
+    return candidate
+
+
+def _nightly_tiering_loop():
+    """Sleep until 00:05, run tiering (and monthly reflection on day 1), repeat."""
+    while True:
+        now = datetime.now()
+        next_run = _next_tiering_run_time(now)
+        sleep_seconds = (next_run - now).total_seconds()
+        _time.sleep(sleep_seconds)
+
+        try:
+            from src.tiering.tiering_service import TieringService
+            TieringService().run()
+        except Exception as exc:
+            logging.getLogger("ember.tiering").warning(
+                "[TIERING] Nightly run failed: %s", type(exc).__name__
+            )
+
+        # Monthly reflection fires on the 1st of each month
+        if datetime.now().day == 1:
+            try:
+                from src.reflection.run_monthly_reflection import run_monthly_reflection
+                run_monthly_reflection()
+                logging.getLogger("ember.reflection").info(
+                    "[REFLECTION] Monthly reflection generated"
+                )
+            except Exception as exc:
+                logging.getLogger("ember.reflection").warning(
+                    "[REFLECTION] Monthly reflection failed: %s", type(exc).__name__
+                )
+
+
+_tiering_thread: threading.Thread | None = None
+
+
+def _start_tiering_thread() -> None:
+    """Start the nightly tiering thread once per process. Idempotent: the
+    lifespan can run more than once in a process (each TestClient context)."""
+    global _tiering_thread
+    if _tiering_thread is not None and _tiering_thread.is_alive():
+        return
+    _tiering_thread = threading.Thread(
+        target=_nightly_tiering_loop, daemon=True, name="ember-nightly-tiering"
+    )
+    _tiering_thread.start()
+    logging.getLogger("ember.tiering").info(
+        "[TIERING] Nightly scheduler started at app startup"
+    )
+
+
+# ── UI static file serving ─────────────────────────────────────────────
+# Serves the built Ember UI from ui/ if it exists.
+# Must be registered AFTER all API routes — acts as a fallback.
+# If ui/ doesn't exist, the API runs in headless mode (API only).
+
+if _UI_DIR.is_dir():
+    # Serve static assets (js, css, images)
+    app.mount("/assets", StaticFiles(directory=_UI_DIR / "assets"), name="ui-assets")
+
+    # SPA catch-all: any non-API route returns index.html
+    @app.get("/{path:path}")
+    def serve_ui(path: str):
+        # If the file exists in ui/, serve it directly (favicon, etc.)
+        file_path = _UI_DIR / path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        # Otherwise serve index.html (with injected API key) for SPA routing
+        return HTMLResponse(_get_index_html())

@@ -13,6 +13,7 @@ from src.memory.authorship import classify_authorship
 from src.memory.eval_fixtures import is_eval_fixture, should_index_record
 from src.memory.storage import MemoryStorage
 from src.retrieval.embed_memory import embed_text
+from src.retrieval.markers import META_MARKERS
 from src.retrieval.sqlite_vector_store import SqliteVectorStore
 from src.retrieval.store_cache import get_store
 from src.retrieval.vector_index import VectorIndex
@@ -83,21 +84,7 @@ def should_skip_memory(text: str, memory_type: str = "journal") -> bool:
         if len(normalized) < min_length:
             return True
 
-    meta_markers = (
-        "user asked:",
-        "ember responded:",
-        "assistant responded:",
-        "assistant said:",
-        "### task:",
-        "generate 1-3 broad tags",
-        '"user_message":',
-        '"memory_items":',
-        '"reflection_items":',
-        '"conversation_id":',
-        '"chunk_id":',
-    )
-
-    if any(marker in normalized for marker in meta_markers):
+    if any(marker in normalized for marker in META_MARKERS):
         return True
 
     # Skip JSON payload detection for deviation records (they use [deviation:class] prefix)

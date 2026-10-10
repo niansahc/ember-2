@@ -3,6 +3,7 @@ import re
 from src.core.config import get_private_vault_path
 from src.observability.guard_counters import branch, count
 from src.retrieval.embed_memory import embed_text
+from src.retrieval.markers import META_MARKERS
 from src.retrieval.sqlite_vector_store import SqliteVectorStore
 from src.retrieval.store_cache import get_store
 from src.retrieval.vector_index import VectorIndex
@@ -535,23 +536,9 @@ def should_exclude_result(content: str) -> bool:
     if count("should_exclude_result.under_40_chars", len(content) < 40):
         return True
 
-    meta_markers = (
-        "user asked:",
-        "ember responded:",
-        "assistant responded:",
-        "assistant said:",
-        "### task:",
-        "generate 1-3 broad tags",
-        '"user_message":',
-        '"memory_items":',
-        '"reflection_items":',
-        '"conversation_id":',
-        '"chunk_id":',
-    )
-
     if count(
         "should_exclude_result.meta_marker",
-        any(marker in content for marker in meta_markers),
+        any(marker in content for marker in META_MARKERS),
     ):
         return True
 

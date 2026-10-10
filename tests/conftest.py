@@ -94,6 +94,7 @@ _LEAK_PRONE_ENV_VARS: tuple[str, ...] = (
     "OLLAMA_HOST",
     "EMBER_MODEL",
     "EMBER_HOST",
+    "EMBER_ALLOWED_HOSTS",
     # src/retrieval/vector_index.py
     "MAX_INDEX_SIZE_MB",
     # src/safety/deviation_detector.py
@@ -138,6 +139,12 @@ os.environ["PRIVATE_VAULT_PATH"] = str(_ENV_FALLBACK_VAULT)
 
 for _key in (*_LEAK_PRONE_ENV_VARS, "VAULT_PATH_LIVE", "VAULT_PATH_DEMO", "VAULT_PATH_TEST"):
     os.environ.pop(_key, None)
+
+# TestClient presents Host: testserver. The host allowlist in src/api/main.py
+# answers 421 for anything but loopback or EMBER_ALLOWED_HOSTS, so the
+# synthetic name is admitted here for the whole session. Tests of the
+# allowlist itself use monkeypatch to set their own value.
+os.environ["EMBER_ALLOWED_HOSTS"] = "testserver"
 
 import pytest  # noqa: E402
 

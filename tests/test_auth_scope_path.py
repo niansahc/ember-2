@@ -8,6 +8,7 @@ the URL path look like a public route (CVE-2026-48710, Starlette < 1.3.1).
 from __future__ import annotations
 
 import inspect
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,15 +35,20 @@ def test_security_middleware_reads_scope_path_not_url_path():
 
 
 def test_bad_host_cannot_reach_keyed_route_without_key(client: TestClient):
+    """Two layers: the host allowlist answers 421 first; with that layer
+    opened the key gate reads the scope path and answers 401."""
+    import src.api.main as main_module
+
     response = client.get("/v1/models", headers=BAD_HOST)
-    assert response.status_code != 200
-    assert "data" not in response.text
+    assert response.status_code == 421
+
+    with patch.object(main_module, "_allowed_hosts", return_value=frozenset({BAD_HOST["Host"]})):
+        response = client.get("/v1/models", headers=BAD_HOST)
+    assert response.status_code == 401
 
 
-def test_bad_host_with_valid_key_still_hits_the_real_path(client: TestClient):
-    """Positive control: the request line path is what gets served."""
-    response = client.get("/api/health", headers={**BAD_HOST, "X-API-Key": KEY})
-    assert response.status_code in (200, 421)
+def test_valid_key_and_host_reach_the_route(client: TestClient):
+    """Positive control for the gate the bad-host test exercises."""
     response = client.get("/v1/models", headers={"X-API-Key": KEY})
     assert response.status_code != 401
 

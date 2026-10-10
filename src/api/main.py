@@ -19,6 +19,7 @@ import signal
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from urllib.parse import urlsplit
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -36,7 +37,7 @@ from src.api.limiter import limiter
 from src.api.openai_adapter import router as openai_adapter_router, llm_adapter
 from src.api.routes.ingest import router as ingest_router
 from src.context.service import ContextService
-from src.core.config import get_ember_api_key, get_cloud_models
+from src.core.config import get_ember_api_key, get_cloud_models, get_extra_allowed_hosts
 from src.core.paths import resolve_inside
 from src.memory.service import MemoryService
 from src.memory.session import (
@@ -252,6 +253,61 @@ async def api_key_auth(request: Request, call_next):
     if not provided_key or not secrets.compare_digest(provided_key, expected_key):
         logger.warning("[AUTH] Rejected request to %s - invalid or missing API key", path)
         return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+
+    return await call_next(request)
+
+
+# Methods a browser can be made to send cross-site with a body; GET/HEAD are
+# left alone so SPA navigation and API reads keep working.
+_STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _allowed_hosts(request: Request) -> frozenset[str]:
+    """Host values this request may carry: loopback on the port the server is
+    listening on, plus EMBER_ALLOWED_HOSTS. Browsers omit a default port, so
+    the bare names are accepted when the server listens on 80 or 443."""
+    server = request.scope.get("server") or ("127.0.0.1", 8000)
+    port = server[1]
+    hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    if port in (80, 443):
+        hosts.update({"127.0.0.1", "localhost"})
+    return frozenset(hosts) | get_extra_allowed_hosts()
+
+
+def _origin_host(origin: str) -> str:
+    """The host[:port] of an Origin header value, lowercased; "" if unparseable
+    or the opaque `null` origin."""
+    try:
+        return urlsplit(origin).netloc.lower()
+    except ValueError:
+        return ""
+
+
+@app.middleware("http")
+async def host_origin_guard(request: Request, call_next):
+    """DNS rebinding and cross-site request defence.
+
+    421 Misdirected Request when the Host header is not one this server
+    answers for (a rebinding page resolves its own name to 127.0.0.1 and the
+    browser then sends that foreign name as Host). 403 on a state-changing
+    method when the browser marks the request cross-site (`Sec-Fetch-Site:
+    cross-site`) or sends an Origin that is not an allowed host. Non-browser
+    clients send neither header and are unaffected. Runs before the key gate.
+    """
+    allowed = _allowed_hosts(request)
+    host = request.headers.get("host", "").strip().lower()
+    if host not in allowed:
+        logger.warning("[HOST] Rejected request with unexpected Host header (%d chars)", len(host))
+        return JSONResponse(status_code=421, content={"detail": "Misdirected request"})
+
+    if request.method in _STATE_CHANGING_METHODS:
+        if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+            logger.warning("[ORIGIN] Rejected cross-site %s %s", request.method, _scope_path(request))
+            return JSONResponse(status_code=403, content={"detail": "Cross-site request rejected"})
+        origin = request.headers.get("origin")
+        if origin is not None and _origin_host(origin) not in allowed:
+            logger.warning("[ORIGIN] Rejected %s %s from foreign origin", request.method, _scope_path(request))
+            return JSONResponse(status_code=403, content={"detail": "Cross-site request rejected"})
 
     return await call_next(request)
 

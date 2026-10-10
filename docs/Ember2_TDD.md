@@ -2330,6 +2330,14 @@ Any route added in the future is denied until it is added to `PUBLIC_PATHS` or `
 
 Implementation: `api_key_auth` middleware in `src/api/main.py` using `secrets.compare_digest` (timing-safe). When no key is configured the gate is open; this is unchanged and tracked separately.
 
+Security middleware reads the path from `request.scope["path"]`, never `request.url.path` (rebuilt from the Host header; CVE-2026-48710). `requirements.txt` pins `starlette>=1.3.1`.
+
+**Host allowlist and origin check** (`host_origin_guard` middleware, runs before the key gate):
+
+- Host must be `127.0.0.1:<port>` or `localhost:<port>` for the port the server listens on, or a value from `EMBER_ALLOWED_HOSTS` (comma-separated, additive; loopback is always accepted). Anything else is 421. This defeats DNS rebinding: a page resolving its own name to 127.0.0.1 sends that foreign name as Host.
+- `POST`/`PUT`/`PATCH`/`DELETE` are 403 when `Sec-Fetch-Site: cross-site` or when `Origin` is present and not an allowed host. GET/HEAD and header-less non-browser clients are unaffected.
+- A reverse proxy that forwards the public hostname as Host (Tailscale Serve does) needs that hostname in `EMBER_ALLOWED_HOSTS`.
+
 **Key storage:** The API key is stored in Windows Credential Manager via the `keyring` library (DPAPI-encrypted, tied to Windows login). It is not written to `.env` or any plaintext file. To set or rotate: `python scripts/set_api_key.py`.
 
 **Cloud provider API keys:** Anthropic and OpenAI API keys stored separately in Windows Credential Manager under service names `ember-2-anthropic` and `ember-2-openai` respectively. Managed via `scripts/set_provider_key.py` (CLI) and `DELETE /provider-key/{provider}` (API). Never displayed in the UI after storage.

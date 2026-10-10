@@ -425,6 +425,23 @@ def get_ember_generation_ollama_host() -> str | None:
     return os.getenv("EMBER_GENERATION_OLLAMA_HOST") or None
 
 
+def get_extra_allowed_hosts() -> frozenset[str]:
+    """
+    Additional Host values the API accepts, from EMBER_ALLOWED_HOSTS
+    (comma-separated, case-insensitive, `host` or `host:port`).
+
+      EMBER_ALLOWED_HOSTS=my-machine.example.ts.net,100.64.0.5:8000
+
+    Additive only. The loopback defaults (127.0.0.1:<port>, localhost:<port>)
+    are always accepted and are built in src/api/main.py; this returns just
+    the extras. Needed when a reverse proxy forwards the public hostname as
+    Host, or when the API is bound to a non-loopback interface. Unset is the
+    single-PC default.
+    """
+    raw = os.getenv("EMBER_ALLOWED_HOSTS", "")
+    return frozenset(h.strip().lower() for h in raw.split(",") if h.strip())
+
+
 def get_ember_auxiliary_model() -> str:
     """
     Returns the Ollama model name for LOCAL auxiliary LLM callers: intent

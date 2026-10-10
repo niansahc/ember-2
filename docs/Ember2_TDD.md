@@ -2316,12 +2316,27 @@ Recovery key is stored in a password manager (not on the encrypted drive).
 
 ## 31.4 API Authentication
 
-All endpoints except `GET /` require authentication via:
+Authentication is default-deny. Every request requires a key except:
+
+- `GET /` and `GET /api/health`
+- `/v1/security/pin/verify` and `/v1/security/pin/status` (the UI's own login step, reachable before the UI holds a key)
+- `/assets/*` (built UI bundle)
+- `GET`/`HEAD` requests that no registered route answers except the SPA catch-all (deep links, root-level UI files such as `manifest.json` and icons)
+
+Any route added in the future is denied until it is added to `PUBLIC_PATHS` or `PUBLIC_PREFIXES` in `src/api/main.py` on purpose. The OpenAPI docs surface (`/docs`, `/redoc`, `/openapi.json`) is disabled at the `FastAPI` constructor; the schema remains available offline via `app.openapi()`. Keys are accepted via:
 
 - `Authorization: Bearer <key>` — Ember UI and OpenAI-compatible clients
 - `X-API-Key: <key>` — direct API access
 
-Implementation: `api_key_auth` middleware in `src/api/main.py` using `secrets.compare_digest` (timing-safe).
+Implementation: `api_key_auth` middleware in `src/api/main.py` using `secrets.compare_digest` (timing-safe). When no key is configured the gate is open; this is unchanged and tracked separately.
+
+Security middleware reads the path from `request.scope["path"]`, never `request.url.path` (rebuilt from the Host header; CVE-2026-48710). `requirements.txt` pins `starlette>=1.3.1`.
+
+**Host allowlist and origin check** (`host_origin_guard` middleware, runs before the key gate):
+
+- Host must be `127.0.0.1:<port>` or `localhost:<port>` for the port the server listens on, or a value from `EMBER_ALLOWED_HOSTS` (comma-separated, additive; loopback is always accepted). Anything else is 421. This defeats DNS rebinding: a page resolving its own name to 127.0.0.1 sends that foreign name as Host.
+- `POST`/`PUT`/`PATCH`/`DELETE` are 403 when `Sec-Fetch-Site: cross-site` or when `Origin` is present and not an allowed host. GET/HEAD and header-less non-browser clients are unaffected.
+- A reverse proxy that forwards the public hostname as Host (Tailscale Serve does) needs that hostname in `EMBER_ALLOWED_HOSTS`.
 
 **Key storage:** The API key is stored in Windows Credential Manager via the `keyring` library (DPAPI-encrypted, tied to Windows login). It is not written to `.env` or any plaintext file. To set or rotate: `python scripts/set_api_key.py`.
 

@@ -2,7 +2,7 @@
 src/api/main.py
 
 FastAPI application entry point for Ember-2. Registers all API routes,
-middleware (auth, rate limiting, CORS, audit logging), and the nightly
+middleware (auth, rate limiting, audit logging), and the nightly
 tiering scheduler. Serves the built Ember UI from ui/ as a static
 fallback after all API routes.
 
@@ -19,6 +19,7 @@ import signal
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from urllib.parse import urlsplit
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -30,13 +31,14 @@ from pydantic import BaseModel
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from starlette.routing import Match
 
-from src.api.chat import router as chat_router
 from src.api.limiter import limiter
 from src.api.openai_adapter import router as openai_adapter_router, llm_adapter
 from src.api.routes.ingest import router as ingest_router
 from src.context.service import ContextService
-from src.core.config import get_ember_api_key, get_cloud_models
+from src.core.config import get_ember_api_key, get_cloud_models, get_extra_allowed_hosts
+from src.core.paths import resolve_inside
 from src.memory.service import MemoryService
 from src.memory.session import (
     list_sessions,
@@ -129,9 +131,6 @@ def _write_audit_log(method: str, path: str, client_ip: str, status: int, ms: in
         f.write(entry + "\n")
 
 
-from fastapi.middleware.cors import CORSMiddleware
-
-
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     """Start the nightly tiering scheduler (defined further down)."""
@@ -139,15 +138,17 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=_lifespan)
+# No OpenAPI docs surface. Under default-deny auth, /docs and /redoc could
+# load only with a key and then fail fetching /openapi.json without one; a
+# half-working surface is worse than none for a single-user local product
+# (ultrareview #281). The schema is still available offline via app.openapi().
+app = FastAPI(lifespan=_lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# No CORS middleware. The UI is always same-origin with the API: Vite proxies
+# API paths to :8000 in development, FastAPI serves the built ui/ in
+# production, and remote access goes through a reverse proxy on the same
+# origin. A wildcard allow-origin with credentials let any website drive the
+# API from a logged-in browser (ultrareview finding on #281).
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -177,18 +178,62 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
+# Paths served without an API key. Everything not listed here is denied by
+# default, including any router added in the future, until it is added to
+# this list on purpose. The PIN endpoints are the UI's own login step and
+# must be reachable before the UI holds a key.
+PUBLIC_PATHS = frozenset({
+    "/",
+    "/api/health",
+    "/v1/security/pin/verify",
+    "/v1/security/pin/status",
+})
+PUBLIC_PREFIXES = ("/assets/",)
+
+# Name of the SPA catch-all route registered at the bottom of this module.
+UI_FALLBACK_ROUTE_NAME = "ui-fallback"
+
+
+def _is_ui_request(request: Request) -> bool:
+    """True when only the SPA catch-all can answer a GET/HEAD request.
+
+    SPA deep links and root-level UI files (manifest.json, icons) have no
+    route of their own, so they are public without hardcoding build
+    filenames. A path that matches any other registered route, even with the
+    wrong method, is an API request and goes through the key check.
+    """
+    if request.method not in ("GET", "HEAD"):
+        return False
+    for route in request.app.routes:
+        if getattr(route, "name", None) == UI_FALLBACK_ROUTE_NAME:
+            continue
+        match, _ = route.matches(request.scope)
+        if match is not Match.NONE:
+            return False
+    return True
+
+
+def _scope_path(request: Request) -> str:
+    """The request path as the ASGI server parsed it from the request line.
+
+    Security decisions read this, never `request.url.path`: the URL is rebuilt
+    from the Host header, and a crafted Host such as
+    `127.0.0.1:8000/api/health?x=` could make the URL path look public
+    (CVE-2026-48710, Starlette < 1.3.1).
+    """
+    return request.scope["path"]
+
+
 @app.middleware("http")
 async def api_key_auth(request: Request, call_next):
-    # Only require auth on API routes — UI static files are public
-    path = request.url.path
-    API_PREFIXES = ("/v1/", "/model", "/journal", "/write-", "/read-", "/search-",
-                    "/semantic-", "/reflect", "/debug-", "/state", "/ingest/")
-    if not any(path.startswith(p) for p in API_PREFIXES):
-        return await call_next(request)
+    """Default-deny API key gate (ultrareview #281).
 
-    # PIN verify and status endpoints bypass API key auth (they are the UI auth)
-    PIN_PUBLIC_PATHS = ("/v1/security/pin/verify", "/v1/security/pin/status")
-    if path in PIN_PUBLIC_PATHS:
+    Public: PUBLIC_PATHS, PUBLIC_PREFIXES, and GET/HEAD requests that only the
+    SPA catch-all answers. Every other request needs the key via
+    `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+    """
+    path = _scope_path(request)
+    if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES) or _is_ui_request(request):
         return await call_next(request)
 
     expected_key = get_ember_api_key()
@@ -206,15 +251,87 @@ async def api_key_auth(request: Request, call_next):
         provided_key = request.headers.get("X-API-Key", "")
 
     if not provided_key or not secrets.compare_digest(provided_key, expected_key):
-        logger.warning("[AUTH] Rejected request to %s - invalid or missing API key", request.url.path)
+        logger.warning("[AUTH] Rejected request to %s - invalid or missing API key", path)
         return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+
+    return await call_next(request)
+
+
+# Methods a browser can be made to send cross-site with a body; GET/HEAD are
+# left alone so SPA navigation and API reads keep working.
+_STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# scope["server"] is absent only under a bare ASGI harness; uvicorn's default.
+_DEFAULT_SERVER = ("127.0.0.1", 8000)
+
+
+def _allowed_hosts(request: Request) -> frozenset[str]:
+    """Host values this request may carry: loopback on the port the server is
+    listening on, plus EMBER_ALLOWED_HOSTS. Browsers omit a default port, so
+    the bare names are accepted when the server listens on 80 or 443."""
+    port = (request.scope.get("server") or _DEFAULT_SERVER)[1]
+    hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    if port in (80, 443):
+        hosts.update({"127.0.0.1", "localhost"})
+    return frozenset(hosts) | get_extra_allowed_hosts()
+
+
+def _origin_host(origin: str) -> str:
+    """The host[:port] of an Origin header value, lowercased; "" if unparseable
+    or the opaque `null` origin."""
+    try:
+        return urlsplit(origin).netloc.lower()
+    except ValueError:
+        return ""
+
+
+@app.middleware("http")
+async def host_origin_guard(request: Request, call_next):
+    """DNS rebinding and cross-site request defence.
+
+    421 Misdirected Request when the Host header is not one this server
+    answers for (a rebinding page resolves its own name to 127.0.0.1 and the
+    browser then sends that foreign name as Host). 403 on a state-changing
+    method when the browser marks the request cross-site (`Sec-Fetch-Site:
+    cross-site`) or sends an Origin that is not an allowed host. Non-browser
+    clients send neither header and are unaffected.
+
+    Hand-rolled rather than Starlette's TrustedHostMiddleware on purpose: that
+    middleware drops the port, and the port is load-bearing here. A page from
+    another local dev server (127.0.0.1:9999) is same-site to the browser, so
+    Sec-Fetch-Site never says cross-site; only the port-bearing Origin compare
+    against the same allowed set rejects it.
+
+    Middleware order, outermost first: audit_log, host_origin_guard,
+    api_key_auth, add_security_headers (`@app.middleware` wraps later
+    registrations outside earlier ones). Keep this guard registered after
+    api_key_auth so it runs before the key gate.
+    """
+    allowed = _allowed_hosts(request)
+    host = request.headers.get("host", "").lower()
+    if host not in allowed:
+        logger.warning("[HOST] Rejected request with unexpected Host header (%d chars)", len(host))
+        return JSONResponse(status_code=421, content={"detail": "Misdirected request"})
+
+    if request.method in _STATE_CHANGING_METHODS:
+        origin = request.headers.get("origin")
+        if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+            reason = "cross-site"
+        elif origin is not None and _origin_host(origin) not in allowed:
+            reason = "foreign origin"
+        else:
+            reason = None
+        if reason:
+            logger.warning("[ORIGIN] Rejected %s %s (%s)", request.method, _scope_path(request), reason)
+            return JSONResponse(status_code=403, content={"detail": "Cross-site request rejected"})
 
     return await call_next(request)
 
 
 @app.middleware("http")
 async def audit_log(request: Request, call_next):
-    if request.url.path == "/":
+    path = _scope_path(request)
+    if path == "/":
         return await call_next(request)
     start = time.perf_counter()
     response = await call_next(request)
@@ -222,7 +339,7 @@ async def audit_log(request: Request, call_next):
     intent_class = getattr(request.state, "intent_class", None)
     _write_audit_log(
         method=request.method,
-        path=request.url.path,
+        path=path,
         client_ip=request.client.host,
         status=response.status_code,
         ms=ms,
@@ -231,7 +348,6 @@ async def audit_log(request: Request, call_next):
     return response
 
 
-app.include_router(chat_router)
 app.include_router(openai_adapter_router)
 app.include_router(ingest_router)
 memory_service = MemoryService()
@@ -1927,20 +2043,36 @@ def _start_tiering_thread() -> None:
 
 
 # ── UI static file serving ─────────────────────────────────────────────
-# Serves the built Ember UI from ui/ if it exists.
-# Must be registered AFTER all API routes — acts as a fallback.
-# If ui/ doesn't exist, the API runs in headless mode (API only).
+# Must be registered AFTER all API routes: the catch-all answers whatever
+# no API route claimed.
 
-if _UI_DIR.is_dir():
+def _resolve_ui_file(path: str) -> Path | None:
+    """A regular file inside the UI build directory for a request path, or
+    None. Decoded `..` segments and absolute or drive-letter paths resolve
+    outside the directory and fall back to index.html. _UI_DIR is read at
+    call time so tests can point it at a fixture tree.
+    """
+    candidate = resolve_inside(_UI_DIR, path)
+    if candidate is None or not candidate.is_file():
+        return None
+    return candidate
+
+
+if (_UI_DIR / "assets").is_dir():
     # Serve static assets (js, css, images)
     app.mount("/assets", StaticFiles(directory=_UI_DIR / "assets"), name="ui-assets")
 
-    # SPA catch-all: any non-API route returns index.html
-    @app.get("/{path:path}")
-    def serve_ui(path: str):
-        # If the file exists in ui/, serve it directly (favicon, etc.)
-        file_path = _UI_DIR / path
-        if file_path.is_file():
-            return FileResponse(file_path)
-        # Otherwise serve index.html (with injected API key) for SPA routing
+
+# SPA catch-all, registered unconditionally so the route exists in every
+# deployment (and in CI, where ui/ is absent). Headless installs still 404
+# on unknown paths because there is no index.html to fall back to.
+@app.get("/{path:path}", name=UI_FALLBACK_ROUTE_NAME, include_in_schema=False)
+def serve_ui(path: str):
+    # Serve root-level UI files (favicon, manifest, icons) when they resolve
+    # inside the UI dir; everything else gets index.html for SPA routing.
+    file_path = _resolve_ui_file(path)
+    if file_path is not None:
+        return FileResponse(file_path)
+    if (_UI_DIR / "index.html").is_file():
         return HTMLResponse(_get_index_html())
+    return JSONResponse(status_code=404, content={"detail": "Not Found"})

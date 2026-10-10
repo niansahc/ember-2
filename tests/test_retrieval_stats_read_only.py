@@ -285,7 +285,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # The only callers that answer a real user turn. Everything else builds a
 # packet in order to look at retrieval, and must say so.
 WRITING_CALLERS = {
-    Path("src/api/chat.py"),
     Path("src/api/openai_adapter.py"),
 }
 

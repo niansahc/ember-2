@@ -94,6 +94,7 @@ _LEAK_PRONE_ENV_VARS: tuple[str, ...] = (
     "OLLAMA_HOST",
     "EMBER_MODEL",
     "EMBER_HOST",
+    "EMBER_ALLOWED_HOSTS",
     # src/retrieval/vector_index.py
     "MAX_INDEX_SIZE_MB",
     # src/safety/deviation_detector.py
@@ -138,6 +139,12 @@ os.environ["PRIVATE_VAULT_PATH"] = str(_ENV_FALLBACK_VAULT)
 
 for _key in (*_LEAK_PRONE_ENV_VARS, "VAULT_PATH_LIVE", "VAULT_PATH_DEMO", "VAULT_PATH_TEST"):
     os.environ.pop(_key, None)
+
+# TestClient presents Host: testserver. The host allowlist in src/api/main.py
+# answers 421 for anything but loopback or EMBER_ALLOWED_HOSTS, so the
+# synthetic name is admitted here for the whole session. Tests of the
+# allowlist itself use monkeypatch to set their own value.
+os.environ["EMBER_ALLOWED_HOSTS"] = "testserver"
 
 import pytest  # noqa: E402
 
@@ -523,3 +530,55 @@ def stub_both_embed_bindings(vector):
     with patch("src.retrieval.semantic_search.embed_text", return_value=vector), \
          patch("src.retrieval.embed_memory.embed_text", return_value=vector):
         yield vector
+
+
+# ---------------------------------------------------------------------------
+# Fixture UI tree and client (SPA catch-all, auth gate, CORS tests)
+# ---------------------------------------------------------------------------
+
+UI_FIXTURE_INDEX = "<html><body>fixture-index</body></html>"
+UI_FIXTURE_FAVICON = b"\x00\x00\x01\x00fixture-favicon"
+UI_FIXTURE_MANIFEST = '{"name": "fixture"}'
+UI_FIXTURE_SECRET = b"SENTINEL-OUTSIDE-UI-DIR"
+UI_FIXTURE_API_KEY = "test-api-key-0123456789"
+LOOPBACK_BASE_URL = "http://127.0.0.1:8000"
+
+
+@pytest.fixture
+def ui_tree(tmp_path: Path) -> Path:
+    """A built-UI stand-in under tmp_path/ui, plus a sibling tmp_path/outside/
+    secret.txt that the catch-all must never serve."""
+    ui_dir = tmp_path / "ui"
+    (ui_dir / "assets").mkdir(parents=True)
+    (ui_dir / "index.html").write_text(UI_FIXTURE_INDEX, encoding="utf-8")
+    (ui_dir / "favicon.ico").write_bytes(UI_FIXTURE_FAVICON)
+    (ui_dir / "manifest.json").write_text(UI_FIXTURE_MANIFEST, encoding="utf-8")
+    (ui_dir / "assets" / "app.js").write_text("console.log('fixture');", encoding="utf-8")
+    (tmp_path / "outside").mkdir()
+    (tmp_path / "outside" / "secret.txt").write_bytes(UI_FIXTURE_SECRET)
+    return ui_dir
+
+
+@contextlib.contextmanager
+def ui_client(ui_dir: Path, api_key: str | None = None, base_url: str = "http://testserver"):
+    """TestClient over the app with _UI_DIR pointed at `ui_dir`, the
+    index.html cache cleared, and the key gate set to `api_key` (None = open).
+    `base_url` sets the Host header and scope["server"] the client presents."""
+    from fastapi.testclient import TestClient
+
+    import src.api.main as main_module
+
+    with patch.object(main_module, "_UI_DIR", ui_dir), \
+         patch.object(main_module, "_cached_index_html", None), \
+         patch.object(main_module, "_cached_index_mtime", 0.0), \
+         patch("src.api.main.get_ember_api_key", return_value=api_key):
+        yield TestClient(main_module.app, base_url=base_url)
+
+
+@pytest.fixture
+def loopback_keyed_client(ui_tree: Path, monkeypatch):
+    """Keyed client presenting Host: 127.0.0.1:8000 with EMBER_ALLOWED_HOSTS
+    unset, so the host allowlist is exactly the loopback defaults."""
+    monkeypatch.delenv("EMBER_ALLOWED_HOSTS", raising=False)
+    with ui_client(ui_tree, api_key=UI_FIXTURE_API_KEY, base_url=LOOPBACK_BASE_URL) as c:
+        yield c

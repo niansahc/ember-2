@@ -3,6 +3,7 @@ Tests for NatureLoader — Ember's nature layer (ADR-016).
 """
 
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -197,6 +198,61 @@ def test_same_version_no_warning(tmp_path: Path, caplog) -> None:
         loader.load()
 
     assert "Version changed" not in caplog.text
+
+
+# -- Version file writes --------------------------------------------------
+#
+# Loading runs on every LLMAdapter construction, including at app import, so
+# the version file is written only when it is missing or stale. The "not
+# rewritten" check backdates the file and asserts the stamp survives a load;
+# the changed-version test is its control, using the same stamp to show a
+# real write is visible.
+
+_BACKDATED = 946684800  # 2000-01-01T00:00:00Z
+
+
+def _backdated_version_file(tmp_path: Path, version: str) -> Path:
+    system_dir = tmp_path / "system"
+    system_dir.mkdir(parents=True, exist_ok=True)
+    version_file = system_dir / "nature_version.txt"
+    version_file.write_text(version, encoding="utf-8")
+    os.utime(version_file, (_BACKDATED, _BACKDATED))
+    return version_file
+
+
+def test_same_version_does_not_rewrite_version_file(tmp_path: Path) -> None:
+    nature_file = _write_nature_file(tmp_path, VALID_NATURE_YAML)
+    version_file = _backdated_version_file(tmp_path, "v0.1")
+
+    loader = NatureLoader(config_path=nature_file)
+    loader._version_file_path = lambda: version_file
+    loader.load()
+
+    assert version_file.stat().st_mtime == _BACKDATED
+    assert version_file.read_text(encoding="utf-8") == "v0.1"
+
+
+def test_control_changed_version_rewrites_version_file(tmp_path: Path) -> None:
+    nature_file = _write_nature_file(tmp_path, VALID_NATURE_YAML)
+    version_file = _backdated_version_file(tmp_path, "v0.0")
+
+    loader = NatureLoader(config_path=nature_file)
+    loader._version_file_path = lambda: version_file
+    loader.load()
+
+    assert version_file.stat().st_mtime != _BACKDATED
+    assert version_file.read_text(encoding="utf-8") == "v0.1"
+
+
+def test_missing_version_file_is_created(tmp_path: Path) -> None:
+    nature_file = _write_nature_file(tmp_path, VALID_NATURE_YAML)
+    version_file = tmp_path / "vault" / "system" / "nature_version.txt"
+
+    loader = NatureLoader(config_path=nature_file)
+    loader._version_file_path = lambda: version_file
+    loader.load()
+
+    assert version_file.read_text(encoding="utf-8") == "v0.1"
 
 
 # ── Singleton / caching ─────────────────────────────────────────────────

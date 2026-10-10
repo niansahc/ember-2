@@ -17,6 +17,12 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+# Process entrypoint: load .env before any src import (see load_env_file).
+if __name__ == "__main__":
+    from src.core.config import load_env_file
+
+    load_env_file()
+
 from src.memory.write_memory import write_memory
 
 

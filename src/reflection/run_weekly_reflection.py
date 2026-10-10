@@ -1,3 +1,9 @@
+# Process entrypoint: load .env before any src import (see load_env_file).
+if __name__ == "__main__":
+    from src.core.config import load_env_file
+
+    load_env_file()
+
 from src.reflection.generate_reflection import generate_reflection
 
 

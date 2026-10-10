@@ -14,6 +14,12 @@ See ADR-016 prompt writing standards and TDD §32.6 for design rationale.
 import logging
 from pathlib import Path
 
+# Process entrypoint: load .env before any src import (see load_env_file).
+if __name__ == "__main__":
+    from src.core.config import load_env_file
+
+    load_env_file()
+
 from src.reflection.generate_reflection import generate_reflection
 from src.reflection.lodestone_synthesis import synthesize_lodestone_candidates
 

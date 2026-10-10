@@ -7,14 +7,15 @@ Ensures ALL tests run against a temporary test vault, never the live
 vault (C:\EmberVault). Two layers:
 
   1. At conftest import, before any `src` import, PRIVATE_VAULT_PATH is
-     pointed at a throwaway vault and .env loading is disabled, so the
-     environment fallback can never resolve the live vault in this process.
+     pointed at a throwaway vault, so the environment fallback can never
+     resolve the live vault in this process. Importing src reads no .env
+     (load_env_file() runs only in process entrypoints).
   2. For the session, the runtime override in src.core.config
      (set_vault_path_override / clear_vault_path_override) points at a
      fresh vault in pytest's tmp area.
 
 When the override is cleared (session teardown, or a test that clears it
-on purpose) resolution falls back to the layer-1 throwaway vault, not .env.
+on purpose) resolution falls back to the layer-1 throwaway vault.
 """
 
 import atexit
@@ -38,9 +39,11 @@ from unittest.mock import patch
 # Vault. When the runtime override is None -- during collection, after session
 # teardown, in tests that clear it on purpose (test_vault_swap.py), and after
 # every importlib.reload(src.core.config) -- get_private_vault_path() falls
-# back to PRIVATE_VAULT_PATH. Filled from .env, that was the live vault, and
-# app import during collection wrote <live vault>/system/nature_version.txt on
-# every pytest process. PRIVATE_VAULT_PATH is therefore pinned to a throwaway
+# back to PRIVATE_VAULT_PATH. Filled from .env (config.py loaded it at import
+# until loading moved to the process entrypoints) or the shell, that was the
+# live vault, and app import during collection wrote
+# <live vault>/system/nature_version.txt on every pytest process.
+# PRIVATE_VAULT_PATH is therefore pinned to a throwaway
 # vault owned by this process, and the labelled paths the swap endpoint reads
 # (VAULT_PATH_*) are removed. It is pinned rather than cleared: cleared, the
 # override-cleared paths would raise instead of resolving somewhere safe.
@@ -48,14 +51,11 @@ from unittest.mock import patch
 # Config env vars (issue #195). config.py getters re-read os.getenv() on every
 # call, so any value in os.environ leaks into whichever test runs next. Values
 # came from two places:
-#   - .env, through config.py's import-time load_dotenv(). This was hit and
-#     patched locally three times before a shared fix existed
-#     (test_generation_host.py, test_vision.py, test_deviation_detector.py).
-#     Clearing once was not enough: files that importlib.reload(
-#     src.core.config) -- test_vault_bound_threads.py must keep doing so --
-#     re-ran load_dotenv() and refilled every cleared key. dotenv.load_dotenv
-#     itself is neutered (the function `from dotenv import load_dotenv`
-#     resolves against fresh on every reload), so .env is never read here.
+#   - .env, through config.py's import-time load_dotenv(), which also re-ran
+#     on every importlib.reload(src.core.config). Closed at the source:
+#     config.py no longer reads .env on import; only process entrypoints
+#     call load_env_file() (src/api/asgi.py, and scripts/tools under their
+#     __main__ guard), so collection and reloads leave os.environ alone.
 #   - The ambient shell. _LEAK_PRONE_ENV_VARS is cleared. Clearing before the
 #     `ollama` package is imported also covers plain OLLAMA_HOST, which that
 #     package binds once at import (see src/llm/adapter.py::_client_for_host).
@@ -139,10 +139,6 @@ os.environ["PRIVATE_VAULT_PATH"] = str(_ENV_FALLBACK_VAULT)
 for _key in (*_LEAK_PRONE_ENV_VARS, "VAULT_PATH_LIVE", "VAULT_PATH_DEMO", "VAULT_PATH_TEST"):
     os.environ.pop(_key, None)
 
-import dotenv  # noqa: E402
-
-dotenv.load_dotenv = lambda *args, **kwargs: False
-
 import pytest  # noqa: E402
 
 from src.core.config import set_vault_path_override, clear_vault_path_override
@@ -159,10 +155,10 @@ def run_fresh_python(
 ) -> subprocess.CompletedProcess:
     """Run `python <args>` in a fresh interpreter from the repo root.
 
-    PRIVATE_VAULT_PATH is set to `vault`. Without this conftest, config.py's
-    load_dotenv() (override=False) keeps that value over .env, so a probe
-    never reaches a real vault. PYTEST_ADDOPTS is dropped so a child pytest
-    is not steered by the parent's options.
+    PRIVATE_VAULT_PATH is set to `vault`. Importing src reads no .env, and an
+    entrypoint's load_env_file() (override=False) keeps that value over
+    .env, so a probe never reaches a real vault. PYTEST_ADDOPTS is dropped so
+    a child pytest is not steered by the parent's options.
     """
     env = dict(os.environ)
     env["PRIVATE_VAULT_PATH"] = str(vault)

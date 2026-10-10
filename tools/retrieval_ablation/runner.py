@@ -52,6 +52,12 @@ if str(REPO_ROOT) not in sys.path:
 
 ENV_PATH = REPO_ROOT / ".env"
 
+# Process entrypoint: load .env before any src import (see load_env_file).
+if __name__ == "__main__":
+    from src.core.config import load_env_file
+
+    load_env_file()
+
 # Imported rather than spelled out so the flag has exactly one definition.
 from src.retrieval.retrieval_stats import ENV_FLAG as ENV_STATS_READ_ONLY  # noqa: E402
 

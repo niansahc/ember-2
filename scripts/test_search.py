@@ -3,6 +3,12 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+# Process entrypoint: load .env before any src import (see load_env_file).
+if __name__ == "__main__":
+    from src.core.config import load_env_file
+
+    load_env_file()
+
 from src.retrieval.semantic_search import semantic_search
 
 

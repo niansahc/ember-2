@@ -305,7 +305,7 @@ start_api.bat
 
 **Or directly:**
 ```
-python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn src.api.asgi:app --host 127.0.0.1 --port 8000
 ```
 
 > If using Tailscale, replace `127.0.0.1` in the direct command with your Tailscale IP, or just use `start_api.bat` which reads `EMBER_HOST` from `.env` automatically.

@@ -8,9 +8,33 @@ import threading
 from dotenv import load_dotenv
 
 
-load_dotenv()
-
 logger = logging.getLogger("ember.config")
+
+
+# The repo-root .env. Importing this module does not read it: loading .env is
+# a process-entrypoint decision, made by load_env_file() below. An
+# import-time load filled os.environ in every process that imported config,
+# including the test process, where it pointed collection-time vault
+# resolution at the private vault.
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+
+def load_env_file() -> Path | None:
+    """Load ENV_FILE into os.environ. Call once, from a process entrypoint.
+
+    Entrypoints call this before importing anything else from src, because
+    some modules read the environment when imported (the LLMAdapter
+    singletons resolve the model and vault at import). The API entrypoint is
+    src/api/asgi.py; scripts and tools call it under their __main__ guard so
+    importing them in tests loads nothing.
+
+    Values already set in the environment win (override=False), so a shell
+    export or a parent process can still pin a value over .env.
+
+    Returns the file loaded, or None when it is missing or empty.
+    """
+    env_file = ENV_FILE
+    return env_file if load_dotenv(env_file) else None
 
 
 # Runtime vault path override. Set by the developer vault-swap endpoint
@@ -40,8 +64,7 @@ _vault_binding: ContextVar[str | None] = ContextVar(
 
 def get_private_vault_path():
     """
-    Reads the PRIVATE_VAULT_PATH from the .env file
-    and returns the absolute path to the vault.
+    Returns the absolute path to the active vault.
 
     Resolution order:
       1. Deferred-work binding, set by vault_binding() or
@@ -49,7 +72,8 @@ def get_private_vault_path():
          vault even if a swap lands while it is in flight (issue #144).
       2. Runtime override set via set_vault_path_override() by the vault-swap
          endpoint. Memory-only, reverts on API restart.
-      3. PRIVATE_VAULT_PATH from the environment.
+      3. PRIVATE_VAULT_PATH from the environment (from .env when the
+         process entrypoint called load_env_file()).
 
     This is the only vault resolution point in src/ -- nothing reads the
     override global or the environment variable directly -- so the binding

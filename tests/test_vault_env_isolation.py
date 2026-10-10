@@ -7,8 +7,9 @@ inside a pytest process.
 tests/conftest.py sets the runtime override in a session fixture, which runs
 only after collection has imported every test module. Before that, and in
 every window where the override is cleared, get_private_vault_path() falls
-back to PRIVATE_VAULT_PATH. config.py fills that from .env at import, so
-collection alone used to write <real vault>/system/nature_version.txt (the
+back to PRIVATE_VAULT_PATH. config.py used to fill that from .env at import
+(see tests/test_env_file_loading.py), so collection alone wrote
+<real vault>/system/nature_version.txt (the
 app import builds LLMAdapter singletons, which load the nature document).
 
 The end-to-end check reproduces collection in a fresh interpreter -- run the
@@ -74,11 +75,3 @@ def test_control_cleared_override_with_a_live_env_path_is_flagged(
 ):
     monkeypatch.setenv("PRIVATE_VAULT_PATH", str(tmp_path / "stand_in_live_vault"))
     assert not _resolves_to_isolation_vault(env_fallback_vault)
-
-
-def test_dotenv_loading_is_disabled_in_this_process():
-    import dotenv
-
-    # Neutered at conftest import: a reload of src.core.config cannot pull
-    # .env values (PRIVATE_VAULT_PATH among them) back into os.environ.
-    assert dotenv.load_dotenv() is False

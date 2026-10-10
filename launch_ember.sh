@@ -117,7 +117,7 @@ if [ "$HEALTHY" -eq 0 ]; then
     echo " Troubleshooting:"
     echo "   1. Check terminal output above for error messages"
     echo "   2. Make sure port 8000 is not in use: lsof -i :8000"
-    echo "   3. Try starting manually: source .venv/bin/activate && uvicorn src.api.main:app --host 0.0.0.0 --port 8000"
+    echo "   3. Try starting manually: source .venv/bin/activate && uvicorn src.api.asgi:app --host 0.0.0.0 --port 8000"
     echo "   4. Check .env exists and PRIVATE_VAULT_PATH is set"
     echo ""
     exit 1

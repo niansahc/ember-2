@@ -53,7 +53,7 @@ def start_api(host: str, port: int) -> subprocess.Popen:
     python = _venv_python()
     cmd = [
         python, "-m", "uvicorn",
-        "src.api.main:app",
+        "src.api.asgi:app",
         "--host", host,
         "--port", str(port),
     ]

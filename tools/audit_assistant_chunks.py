@@ -5,6 +5,13 @@ import sys
 import os
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+# Process entrypoint: load .env before any src import (see load_env_file).
+if __name__ == "__main__":
+    from src.core.config import load_env_file
+
+    load_env_file()
 
 db_path = os.path.join(
     os.environ.get("PRIVATE_VAULT_PATH", ""),
@@ -14,7 +21,6 @@ db_path = os.path.join(
 
 if not os.path.exists(db_path):
     # fallback: load from config
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from src.core.config import get_private_vault_path
     db_path = os.path.join(str(get_private_vault_path()), "embeddings", "ingested.db")
 

@@ -200,7 +200,7 @@ The trigger layer (`SafetyPolicyService`) is fast and heuristic. Review (`Respon
 ```bash
 # Start API
 ./start_api.bat
-# or: uvicorn src.api.main:app --reload
+# or: uvicorn src.api.asgi:app --reload
 
 # Run retrieval evaluation
 python tools/eval_retrieval.py

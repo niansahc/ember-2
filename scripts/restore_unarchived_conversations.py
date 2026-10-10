@@ -66,6 +66,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+# Process entrypoint: load .env before any src import (see load_env_file).
+if __name__ == "__main__":
+    from src.core.config import load_env_file
+
+    load_env_file()
+
 from src.core.config import get_private_vault_path  # noqa: E402
 from src.observability.guard_counters import assert_outside_repo  # noqa: E402
 

@@ -180,4 +180,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Run as a file, sys.path[0] is scripts/; src lives at the repo root.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from src.core.config import load_env_file
+
+    load_env_file()
+
     sys.exit(main())

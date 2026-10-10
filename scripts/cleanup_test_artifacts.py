@@ -41,6 +41,12 @@ if str(REPO_ROOT) not in sys.path:
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+# Process entrypoint: load .env before any src import (see load_env_file).
+if __name__ == "__main__":
+    from src.core.config import load_env_file
+
+    load_env_file()
+
 from src.core.config import get_private_vault_path
 from src.memory.storage import MemoryStorage
 

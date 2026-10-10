@@ -72,7 +72,7 @@ If you restore a vault backup to a new machine or location and the embeddings ar
 ```bash
 # Delete any stale index files (they may reference old paths)
 # Then restart the API — indexes rebuild on first use
-python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn src.api.asgi:app --host 127.0.0.1 --port 8000
 ```
 
 The first startup after index deletion will be slow. Ember needs to re-embed all your memory records. For a vault with ~16K records, expect a few minutes.

@@ -10,4 +10,4 @@ if [ -f .env ]; then
     export EMBER_HOST="$ENV_HOST"
   fi
 fi
-uvicorn src.api.main:app --host "$EMBER_HOST" --port 8000
+uvicorn src.api.asgi:app --host "$EMBER_HOST" --port 8000

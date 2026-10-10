@@ -32,7 +32,7 @@ def test_vision_model_returns_value_when_set(monkeypatch):
 
 def test_vision_model_returns_none_when_unset(monkeypatch):
     # EMBER_VISION_MODEL is already absent from os.environ for the whole
-    # session (conftest.py::isolate_config_env, issue #195) -- no reload,
+    # session (cleared at conftest.py import, issue #195) -- no reload,
     # no getenv patch needed. get_ember_vision_model() reads os.getenv()
     # fresh on every call; it was never cached at import.
     monkeypatch.delenv("EMBER_VISION_MODEL", raising=False)

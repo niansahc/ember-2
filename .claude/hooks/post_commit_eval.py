@@ -20,8 +20,8 @@ against the test vault only.
 
 This hook therefore forces PRIVATE_VAULT_PATH=VAULT_PATH_TEST for the
 child process only. It never mutates its own environment or .env. The
-override survives eval_retrieval.py's own load_dotenv() because
-python-dotenv defaults to override=False, so a pre-existing environment
+override survives eval_retrieval.py's own .env load at startup
+(load_env_file(), override=False), so a pre-existing environment
 variable wins over the .env value.
 
 Fails closed: if the test vault cannot be resolved, is not a directory,

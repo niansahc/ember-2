@@ -292,6 +292,9 @@ def _should_skip_for_reflection(text: str) -> bool:
 
     skip_markers = (
         "uvicorn src.api.main:app --reload",
+        # Current API entrypoint (start_api, docs). No "--reload": start_api
+        # passes --host/--port instead. The old entry stays for past text.
+        "uvicorn src.api.asgi:app",
         "info:",
         "traceback",
         "file \"c:\\",

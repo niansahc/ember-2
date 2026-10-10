@@ -115,7 +115,7 @@ if !HEALTHY! equ 0 (
     echo  Troubleshooting:
     echo    1. Check the "Ember-2 API" window for error messages
     echo    2. Make sure port 8000 is not in use: netstat -ano ^| findstr :8000
-    echo    3. Try starting manually: .venv\Scripts\activate ^&^& uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+    echo    3. Try starting manually: .venv\Scripts\activate ^&^& uvicorn src.api.asgi:app --host 0.0.0.0 --port 8000
     echo    4. Check .env exists and PRIVATE_VAULT_PATH is set
     echo.
     pause

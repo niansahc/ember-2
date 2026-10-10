@@ -23,8 +23,8 @@ def clear_generation_host():
     """Every test states its own host explicitly, and none leaks.
 
     EMBER_GENERATION_OLLAMA_HOST itself is cleared session-wide by
-    conftest.py::isolate_config_env (issue #195) -- this fixture now
-    only owns _client_for_host's lru_cache, which that session fixture
+    conftest.py at import (issue #195) -- this fixture now
+    only owns _client_for_host's lru_cache, which that clear
     doesn't and shouldn't know about.
     """
     adapter._client_for_host.cache_clear()

@@ -3,6 +3,12 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+# Process entrypoint: load .env before any src import (see load_env_file).
+if __name__ == "__main__":
+    from src.core.config import load_env_file
+
+    load_env_file()
+
 from src.ingest.pipeline import run_ingestion_pipeline
 from src.ingest.writers import write_chunks_to_vault
 from src.ingest.importers.chatgpt import load_chatgpt_export

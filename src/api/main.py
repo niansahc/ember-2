@@ -17,6 +17,7 @@ import os
 import secrets
 import signal
 import time
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -130,7 +131,15 @@ def _write_audit_log(method: str, path: str, client_ip: str, status: int, ms: in
 
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI()
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Start the nightly tiering scheduler (defined further down)."""
+    _start_tiering_thread()
+    yield
+
+
+app = FastAPI(lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1848,6 +1857,8 @@ def run_tiering(request: Request):
 # ── Nightly tiering scheduler ─────────────────────────────────────────
 # Daemon thread fires TieringService.run() once at 00:05 daily.
 # Simple sleep loop — no new dependencies.
+# Started from the app lifespan (_lifespan), not at import, so processes that
+# only import this module (test collection, scripts, probes) never run it.
 
 import threading
 import time as _time
@@ -1897,8 +1908,22 @@ def _nightly_tiering_loop():
                 )
 
 
-_tiering_thread = threading.Thread(target=_nightly_tiering_loop, daemon=True)
-_tiering_thread.start()
+_tiering_thread: threading.Thread | None = None
+
+
+def _start_tiering_thread() -> None:
+    """Start the nightly tiering thread once per process. Idempotent: the
+    lifespan can run more than once in a process (each TestClient context)."""
+    global _tiering_thread
+    if _tiering_thread is not None and _tiering_thread.is_alive():
+        return
+    _tiering_thread = threading.Thread(
+        target=_nightly_tiering_loop, daemon=True, name="ember-nightly-tiering"
+    )
+    _tiering_thread.start()
+    logging.getLogger("ember.tiering").info(
+        "[TIERING] Nightly scheduler started at app startup"
+    )
 
 
 # ── UI static file serving ─────────────────────────────────────────────

@@ -76,9 +76,8 @@ def swap_to_test_vault() -> str:
         print(
             "FATAL: VAULT_PATH_TEST is not set. Eval tools require an "
             "explicit test vault to fail closed against the live vault. "
-            "Set VAULT_PATH_TEST in .env and export it into the shell "
-            "before invoking eval (load_dotenv runs inside the API, not "
-            "in eval-tool subprocesses)."
+            "Set VAULT_PATH_TEST in .env (eval tools load it at startup) "
+            "or export it into the shell before invoking eval."
         )
         sys.exit(1)
 

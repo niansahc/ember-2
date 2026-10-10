@@ -259,4 +259,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    from src.core.config import load_env_file
+
+    load_env_file()
+
     raise SystemExit(main())

@@ -52,6 +52,15 @@ def test_uvicorn_marker_is_skipped():
     assert _should_skip_for_reflection("uvicorn src.api.main:app --reload") is True
 
 
+def test_asgi_uvicorn_start_line_is_skipped():
+    # The start_api command line since the API entrypoint moved to src.api.asgi.
+    assert _should_skip_for_reflection("uvicorn src.api.asgi:app --host 127.0.0.1 --port 8000") is True
+
+
+def test_control_ordinary_sentence_is_not_skipped():
+    assert _should_skip_for_reflection("i restarted the api this morning and it came up without trouble.") is False
+
+
 def test_traceback_marker_is_skipped():
     assert _should_skip_for_reflection("traceback (most recent call last): something failed") is True
 

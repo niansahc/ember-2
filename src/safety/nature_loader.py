@@ -115,25 +115,40 @@ class NatureLoader:
         )
 
     def _check_version(self, current_version: str) -> None:
-        """Log a warning if the nature document version has changed."""
+        """Log a warning if the nature document version has changed.
+
+        The version file is written only when it is missing or holds a
+        different version. Loading runs on every LLMAdapter construction,
+        including at app import, so an unconditional write touched the vault
+        on every API start and every process that imported the app.
+        """
         version_file = self._version_file_path()
         if version_file is None:
             return
 
         try:
+            last_version = (
+                version_file.read_text(encoding="utf-8").strip()
+                if version_file.exists()
+                else None
+            )
+            if last_version == current_version:
+                logger.debug(
+                    "[NATURE] Version %s unchanged; version file not rewritten",
+                    current_version,
+                )
+                return
+            if last_version:
+                logger.warning(
+                    "[NATURE] Version changed: %s -> %s. "
+                    "Review nature document for coherence with system prompt.",
+                    last_version,
+                    current_version,
+                )
+
             version_file.parent.mkdir(parents=True, exist_ok=True)
-
-            if version_file.exists():
-                last_version = version_file.read_text(encoding="utf-8").strip()
-                if last_version and last_version != current_version:
-                    logger.warning(
-                        "[NATURE] Version changed: %s → %s. "
-                        "Review nature document for coherence with system prompt.",
-                        last_version,
-                        current_version,
-                    )
-
             version_file.write_text(current_version, encoding="utf-8")
+            logger.info("[NATURE] Recorded nature version %s", current_version)
         except Exception as exc:
             logger.warning("[NATURE] Could not check/write version file: %s", type(exc).__name__)
 

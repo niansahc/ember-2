@@ -1,6 +1,5 @@
 import logging
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,10 +8,12 @@ from src.core.config import (
     get_private_vault_path,
     vault_writes_blocked,
 )
+from src.core.timestamps import UniqueTimestampSource
 from src.memory.authorship import classify_authorship
 from src.memory.eval_fixtures import is_eval_fixture, should_index_record
 from src.memory.storage import MemoryStorage
 from src.retrieval.embed_memory import embed_text
+from src.retrieval.markers import META_MARKERS
 from src.retrieval.sqlite_vector_store import SqliteVectorStore
 from src.retrieval.store_cache import get_store
 from src.retrieval.vector_index import VectorIndex
@@ -26,30 +27,25 @@ vector_index = VectorIndex()
 # Memory types stored in SQLite (memory.db) rather than JSON indexes
 SQLITE_MEMORY_TYPES = {"conversation", "profile", "reflection", "journal"}
 
-# Module-level guard against same-microsecond filename collisions in
-# write_memory(). Filename convention is `{timestamp}.json` so two
-# back-to-back writes (e.g. user turn + assistant turn in the same
-# request, or rapid automated batches) that land on the same microsecond
-# produce identical paths and MemoryStorage.write_json overwrites the
-# prior record. Defense-in-depth — same fix as session._now_id() and
-# task_service.next_timestamp(). See BUG-005.
-_last_timestamp: str = ""
+# Guard against same-tick filename collisions in write_memory(). Filename
+# convention is `{timestamp}.json` so two back-to-back writes (e.g. user
+# turn + assistant turn in the same request, or rapid automated batches)
+# that land on the same clock tick produce identical paths and
+# MemoryStorage.write_json overwrites the prior record. Defense-in-depth --
+# same fix as session._now_id() and task_service.next_timestamp(). See
+# BUG-005; locked against concurrent callers since ultrareview #280.
+_timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f")
 
 
 def _next_timestamp() -> str:
-    """Generate a microsecond-precision timestamp string, guaranteed
-    unique per process.
+    """Generate a microsecond-format timestamp string, guaranteed unique
+    per process, including across threads.
 
-    Spins on `datetime.now()` until the result differs from the previous
-    return value. The spin can never run for longer than one microsecond
-    of real wall-clock time.
+    See UniqueTimestampSource: the spin is bounded by the clock's
+    resolution (about 15.6 ms on Windows under Python < 3.13), not by one
+    microsecond.
     """
-    global _last_timestamp
-    while True:
-        candidate = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
-        if candidate != _last_timestamp:
-            _last_timestamp = candidate
-            return candidate
+    return _timestamps.next()
 
 
 def _get_write_memory_store() -> SqliteVectorStore:
@@ -88,21 +84,7 @@ def should_skip_memory(text: str, memory_type: str = "journal") -> bool:
         if len(normalized) < min_length:
             return True
 
-    meta_markers = (
-        "user asked:",
-        "ember responded:",
-        "assistant responded:",
-        "assistant said:",
-        "### task:",
-        "generate 1-3 broad tags",
-        '"user_message":',
-        '"memory_items":',
-        '"reflection_items":',
-        '"conversation_id":',
-        '"chunk_id":',
-    )
-
-    if any(marker in normalized for marker in meta_markers):
+    if any(marker in normalized for marker in META_MARKERS):
         return True
 
     # Skip JSON payload detection for deviation records (they use [deviation:class] prefix)
@@ -281,11 +263,12 @@ def index_record(record: dict, file_path: Path) -> None:
                 memory_type,
             )
     else:
-        # Fallback to JSON index for non-migrated types
+        # Fallback to JSON index for non-migrated types. append_entry holds
+        # the index lock across load, append and save; an unlocked sequence
+        # here lost concurrent writers' entries (ultrareview #280).
         index_path = vector_index.get_index_path(vault, memory_type)
-        index_data = vector_index.load_index(index_path)
-
-        index_data.append(
+        vector_index.append_entry(
+            index_path,
             {
                 "id": memory_id,
                 "timestamp": record.get("timestamp", memory_id),
@@ -297,10 +280,8 @@ def index_record(record: dict, file_path: Path) -> None:
                 "file_path": str(file_path),
                 "embedding": embedding,
                 "metadata": clean_metadata,
-            }
+            },
         )
-
-        vector_index.save_index(index_path, index_data)
 
 
 def write_memory(

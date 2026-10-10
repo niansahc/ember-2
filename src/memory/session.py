@@ -19,21 +19,22 @@ from pathlib import Path
 from typing import Optional
 
 from src.core.config import get_private_vault_path
+from src.core.timestamps import UniqueTimestampSource
 from src.memory.storage import MemoryStorage
 
 logger = logging.getLogger("ember.session")
 
 storage = MemoryStorage()
 
-# Module-level guard against same-microsecond collisions in _now_id().
-# Two callers writing back-to-back (e.g. create_session followed immediately
-# by delete_session in tests, or rapid automated batches) can land on the
-# exact same microsecond timestamp on a fast machine. Without this guard,
-# the file-naming convention `{_now_id()}.json` produces a collision and
-# either overwrites the prior record (MemoryStorage.write_json) or silently
-# drops the new one. The spin loop ensures every call returns a value
-# strictly greater than the previous one in the same process.
-_last_id: str = ""
+# Guard against same-tick collisions in _now_id(). Two callers writing
+# back-to-back (e.g. create_session followed immediately by delete_session
+# in tests, or rapid automated batches) can land on the exact same clock
+# tick on a fast machine. Without this guard, the file-naming convention
+# `{_now_id()}.json` produces a collision and either overwrites the prior
+# record (MemoryStorage.write_json) or silently drops the new one. Every
+# call returns a value different from the previous one in the same
+# process, including across threads (ultrareview #280).
+_ids = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f", timezone.utc)
 
 
 def _session_dir() -> Path:
@@ -47,19 +48,14 @@ def _conversation_dir() -> Path:
 
 
 def _now_id() -> str:
-    """Generate a timestamp-based ID, guaranteed unique per process.
+    """Generate a UTC timestamp-based ID, guaranteed unique per process,
+    including across threads.
 
-    Spins on `datetime.now()` until the result differs from the previous
-    return value. This is a defense against same-microsecond collisions
-    when two callers write back-to-back. Bounded by the wall clock — the
-    spin can never run for longer than one microsecond of real time.
+    See UniqueTimestampSource: the spin is bounded by the clock's
+    resolution (about 15.6 ms on Windows under Python < 3.13), not by one
+    microsecond.
     """
-    global _last_id
-    while True:
-        candidate = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%f")
-        if candidate != _last_id:
-            _last_id = candidate
-            return candidate
+    return _ids.next()
 
 
 def _read_all_session_records() -> list[dict]:
@@ -271,6 +267,11 @@ def update_session(
     }
     if new_project_id is not None:
         new_meta["project_id"] = new_project_id
+    # The new record is the one _resolve_sessions picks, so an eval-harness
+    # session must stay flagged across renames and moves or it surfaces in
+    # list_sessions() (ultrareview #280).
+    if meta.get("test"):
+        new_meta["test"] = True
 
     tags = ["session"]
     if title is not None:
@@ -291,7 +292,7 @@ def update_session(
     storage.write_json(file_path, record)
     logger.info(
         "Updated session %s: title_changed=%s project_id=%s",
-        session_id, new_title is not None, new_project_id,
+        session_id, title is not None, new_project_id,
     )
     return file_path
 

@@ -87,17 +87,23 @@ def resolve_source_records(source_ids: list[str]) -> list[dict]:
 
 
 def find_conversation_ids_for_session(session_id: str, limit: int = 200) -> list[str]:
-    """Return the ids of conversation records carrying this session_id.
+    """Return the ids of this session's newest `limit` conversation records.
 
     limit bounds a pathologically long session. It is a real, if soft,
     bound: ConversationBuffer.max_turns (20) caps only what the in-memory
     buffer HOLDS, not how many turns a single session has had written to
     the vault over its lifetime.
+
+    The limit applies after the session filter. Applying it to the whole
+    conversation directory first meant any session older than the newest
+    `limit` turns vault-wide resolved to no ids (ultrareview #280). Reading
+    every record costs no more than before: read_memories() already parsed
+    every file before slicing.
     """
     if not session_id:
         return []
 
-    records = read_memories(memory_type="conversation", limit=limit)
+    records = read_memories(memory_type="conversation", limit=None)
     ids = []
     for record in records:
         metadata = record.get("metadata", {})
@@ -105,4 +111,4 @@ def find_conversation_ids_for_session(session_id: str, limit: int = 200) -> list
             record_id = record.get("id")
             if record_id:
                 ids.append(record_id)
-    return ids
+    return ids[:limit]

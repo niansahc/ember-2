@@ -10,7 +10,14 @@ from src.memory.storage import MemoryStorage
 storage = MemoryStorage()
 
 
-def read_memories(memory_type: str = "journal", limit: int = 5):
+def read_memories(memory_type: str = "journal", limit: int | None = 5):
+    """Read records of one memory type, newest first.
+
+    limit=None returns every record. A caller that filters the result
+    (e.g. by session_id) must pass None and apply its own limit after the
+    filter; slicing first and filtering second silently drops older
+    matches (ultrareview #280).
+    """
     vault = get_private_vault_path()
     memory_dir = storage.get_memory_dir(vault, memory_type)
 
@@ -62,4 +69,3 @@ def _memory_sort_key(memory: dict) -> float:
         return dt.timestamp()
     except ValueError:
         return 0.0
-    

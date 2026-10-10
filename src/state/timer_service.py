@@ -29,11 +29,11 @@ avoided.
 
 Storage notes
 -------------
-Timer records use microsecond-precision timestamps generated locally
-via _next_timestamp() with the same spin-on-collision guard as
-session._now_id() and write_memory._next_timestamp() (BUG-005). This
-deviates from StateService.make_record(), which uses second precision
-and is itself vulnerable to the same race — a separate follow-up.
+Timer records use microsecond-format timestamps generated locally
+via _next_timestamp() with the same locked spin-on-collision guard as
+session._now_id() and write_memory._next_timestamp() (BUG-005,
+ultrareview #280). This deviates from StateService.make_record(), which
+uses second precision.
 
 The microsecond format `%Y-%m-%dT%H-%M-%S-%f` sorts lexicographically
 later than the second-precision format `%Y-%m-%dT%H-%M-%S` for the same
@@ -49,6 +49,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+from src.core.timestamps import UniqueTimestampSource
 from src.state.models import StateRecord
 from src.state.state_service import StateService
 
@@ -56,27 +57,22 @@ logger = logging.getLogger("ember.timer_service")
 
 
 # ---------------------------------------------------------------------------
-# Timestamp helper — microsecond precision with spin guard
+# Timestamp helper -- microsecond format with locked spin guard
 # ---------------------------------------------------------------------------
 
-# Module-level guard against same-microsecond timestamp collisions when
-# multiple timer records are written back-to-back (e.g. in tests, or when
-# a user starts and stops a timer in quick succession). Mirrors the
-# BUG-005 fix in session._now_id() and task_service.next_timestamp().
-_last_timestamp: str = ""
+# Guard against same-tick timestamp collisions when multiple timer records
+# are written back-to-back or concurrently (e.g. in tests, or when a user
+# starts and stops a timer in quick succession). Mirrors the BUG-005 fix
+# in session._now_id() and task_service.next_timestamp().
+_timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f")
 
 
 def _next_timestamp() -> str:
-    """Return a microsecond-precision timestamp string, guaranteed unique
-    per process. Spins on datetime.now() until the result differs from the
-    previous return value. Hyphen format matches StateService convention
-    for Windows filename safety."""
-    global _last_timestamp
-    while True:
-        candidate = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
-        if candidate != _last_timestamp:
-            _last_timestamp = candidate
-            return candidate
+    """Return a microsecond-format timestamp string, guaranteed unique
+    per process, including across threads. See UniqueTimestampSource for
+    the spin bound. Hyphen format matches StateService convention for
+    Windows filename safety."""
+    return _timestamps.next()
 
 
 def _new_timer_id() -> str:

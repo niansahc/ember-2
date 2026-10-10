@@ -6,10 +6,17 @@ Vector index management for semantic search.
 Indexes are JSON files containing embeddings and text for each memory type.
 They are cached in memory after first load to avoid re-reading from disk
 on every query. The cache is invalidated when an index is written to.
+
+Index file I/O is serialized in-process by _index_io_lock. append_entry()
+holds it across load, append and save so concurrent writers cannot each
+save a copy that is missing the others' entries (ultrareview #280). Disk
+reads take it too: on Windows, os.replace() onto an index file fails while
+another thread has that file open.
 """
 
 import logging
 import os
+import threading
 from pathlib import Path
 
 from src.core.jsonio import safe_read_json, safe_write_json
@@ -19,6 +26,10 @@ logger = logging.getLogger("ember.vector_index")
 
 # Module-level index cache: path_string -> list of index entries
 _index_cache: dict[str, list] = {}
+
+# Reentrant so append_entry() can call load_index() and save_index() while
+# holding it.
+_index_io_lock = threading.RLock()
 
 
 def clear_index_cache(index_path: str | None = None) -> None:
@@ -48,13 +59,28 @@ class VectorIndex:
         return embeddings_dir / f"{memory_type}_index.json"
 
     def load_index(self, index_path: Path) -> list:
+        """Return the index entries for index_path.
+
+        The returned list is the cached object shared by every caller.
+        Treat it as read-only; append_entry() is the way to add to it.
+        """
         key = str(index_path)
 
-        # Check cache first
-        if key in _index_cache:
+        # Check cache first. A hit needs no lock: the cached list is never
+        # mutated in place, only replaced (by invalidation and reload).
+        cached = _index_cache.get(key)
+        if cached is not None:
             logger.info("[VECTOR_INDEX] Cache hit: %s", index_path.name)
-            return _index_cache[key]
+            return cached
 
+        with _index_io_lock:
+            # Another thread may have loaded it while this one waited.
+            cached = _index_cache.get(key)
+            if cached is not None:
+                return cached
+            return self._load_index_from_disk(index_path, key)
+
+    def _load_index_from_disk(self, index_path: Path, key: str) -> list:
         # Cache miss — load from disk
         if not index_path.exists():
             logger.info("[VECTOR_INDEX] Missing index: %s", index_path)
@@ -91,16 +117,30 @@ class VectorIndex:
             return []
 
     def save_index(self, index_path: Path, index_data: list) -> None:
-        # Atomic write (ADR-039): a torn write can no longer truncate the
-        # prior index. On failure safe_write_json raises and the old file
-        # (and cache) are left untouched, so we invalidate only after success.
-        safe_write_json(index_path, index_data)
+        with _index_io_lock:
+            # Atomic write (ADR-039): a torn write can no longer truncate the
+            # prior index. On failure safe_write_json raises and the old file
+            # (and cache) are left untouched, so we invalidate only after success.
+            safe_write_json(index_path, index_data)
 
-        # Invalidate cache for this index — next read will load fresh data
-        key = str(index_path)
-        if key in _index_cache:
-            del _index_cache[key]
-            logger.info("[VECTOR_INDEX] Cache invalidated after write: %s", index_path.name)
+            # Invalidate cache for this index — next read will load fresh data
+            key = str(index_path)
+            if key in _index_cache:
+                del _index_cache[key]
+                logger.info("[VECTOR_INDEX] Cache invalidated after write: %s", index_path.name)
+
+    def append_entry(self, index_path: Path, entry: dict) -> None:
+        """Append one entry to the index at index_path.
+
+        Holds _index_io_lock across load, append and save, so concurrent
+        callers serialize instead of each saving a copy that lacks the
+        others' entries. Appends to a copy: the cached list is shared with
+        readers and must not change before the save succeeds.
+        """
+        with _index_io_lock:
+            index_data = list(self.load_index(index_path))
+            index_data.append(entry)
+            self.save_index(index_path, index_data)
 
     def search(
         self,

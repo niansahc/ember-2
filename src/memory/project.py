@@ -31,11 +31,18 @@ from pathlib import Path
 from typing import Optional
 
 from src.core.config import get_private_vault_path
+from src.core.timestamps import UniqueTimestampSource
 from src.memory.storage import MemoryStorage
 
 logger = logging.getLogger("ember.project")
 
 storage = MemoryStorage()
+
+# Record ids double as filenames (`{id}.json`), so two project writes on
+# the same clock tick (create then update in quick succession, or two
+# requests at once) would overwrite each other. Same guard as
+# session._now_id() (BUG-005, ultrareview #280).
+_ids = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f", timezone.utc)
 
 
 def _project_dir() -> Path:
@@ -44,8 +51,9 @@ def _project_dir() -> Path:
 
 
 def _now_id() -> str:
-    """Generate a timestamp-based ID."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%f")
+    """Generate a UTC timestamp-based ID, guaranteed unique per process,
+    including across threads."""
+    return _ids.next()
 
 
 def _generate_project_id() -> str:
@@ -171,7 +179,7 @@ def update_project(project_id: str, name: Optional[str] = None, color: Optional[
     storage.write_json(file_path, record)
     logger.info(
         "Updated project %s: name_changed=%s color=%s",
-        project_id, new_name is not None, new_color,
+        project_id, name is not None, new_color,
     )
     return file_path
 

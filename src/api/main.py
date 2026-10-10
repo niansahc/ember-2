@@ -17,6 +17,7 @@ import os
 import secrets
 import signal
 import time
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -130,7 +131,21 @@ def _write_audit_log(method: str, path: str, client_ip: str, status: int, ms: in
 
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI()
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """App startup: start the nightly tiering scheduler.
+
+    Runs in the serving process (uvicorn) only. Importing this module --
+    test collection, scripts, probes -- does not start the thread.
+    _start_tiering_thread is defined with the scheduler further down and
+    resolved when the lifespan runs, after the module has fully loaded.
+    """
+    _start_tiering_thread()
+    yield
+
+
+app = FastAPI(lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1848,6 +1863,7 @@ def run_tiering(request: Request):
 # ── Nightly tiering scheduler ─────────────────────────────────────────
 # Daemon thread fires TieringService.run() once at 00:05 daily.
 # Simple sleep loop — no new dependencies.
+# Started at app startup (see _lifespan), not at import.
 
 import threading
 import time as _time
@@ -1897,8 +1913,27 @@ def _nightly_tiering_loop():
                 )
 
 
-_tiering_thread = threading.Thread(target=_nightly_tiering_loop, daemon=True)
-_tiering_thread.start()
+# Started from the app lifespan (_lifespan above), not at import. At import
+# the thread came up in every process that loaded this module, including
+# every pytest process during collection, and would resolve whichever vault
+# was active when 00:05 arrived.
+_tiering_thread: threading.Thread | None = None
+_tiering_thread_lock = threading.Lock()
+
+
+def _start_tiering_thread() -> None:
+    """Start the nightly tiering thread once per process. Idempotent."""
+    global _tiering_thread
+    with _tiering_thread_lock:
+        if _tiering_thread is not None and _tiering_thread.is_alive():
+            return
+        _tiering_thread = threading.Thread(
+            target=_nightly_tiering_loop, daemon=True, name="ember-nightly-tiering"
+        )
+        _tiering_thread.start()
+    logging.getLogger("ember.tiering").info(
+        "[TIERING] Nightly scheduler started at app startup"
+    )
 
 
 # ── UI static file serving ─────────────────────────────────────────────

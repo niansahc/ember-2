@@ -162,21 +162,29 @@ nature:
 # ── Version change detection ────────────────────────────────────────────
 
 
-def test_version_change_logs_warning(tmp_path: Path, caplog) -> None:
-    nature_file = _write_nature_file(tmp_path, VALID_NATURE_YAML)
+_BACKDATED = 946684800  # 2000-01-01T00:00:00Z
 
-    # Create a fake version file with an old version
-    system_dir = tmp_path / "system"
-    system_dir.mkdir(parents=True, exist_ok=True)
-    version_file = system_dir / "nature_version.txt"
-    version_file.write_text("v0.0", encoding="utf-8")
 
-    loader = NatureLoader(config_path=nature_file)
-    # Override version file path to use tmp_path
+def _version_file(tmp_path: Path, version: str) -> Path:
+    """A stored version file, backdated so a rewrite shows in its mtime."""
+    version_file = tmp_path / "system" / "nature_version.txt"
+    version_file.parent.mkdir(parents=True, exist_ok=True)
+    version_file.write_text(version, encoding="utf-8")
+    os.utime(version_file, (_BACKDATED, _BACKDATED))
+    return version_file
+
+
+def _load_with_version_file(tmp_path: Path, version_file: Path) -> None:
+    loader = NatureLoader(config_path=_write_nature_file(tmp_path, VALID_NATURE_YAML))
     loader._version_file_path = lambda: version_file
+    loader.load()
+
+
+def test_version_change_logs_warning(tmp_path: Path, caplog) -> None:
+    version_file = _version_file(tmp_path, "v0.0")
 
     with caplog.at_level(logging.WARNING, logger="ember.nature"):
-        loader.load()
+        _load_with_version_file(tmp_path, version_file)
 
     assert "Version changed" in caplog.text
     assert "v0.0" in caplog.text
@@ -184,73 +192,37 @@ def test_version_change_logs_warning(tmp_path: Path, caplog) -> None:
 
 
 def test_same_version_no_warning(tmp_path: Path, caplog) -> None:
-    nature_file = _write_nature_file(tmp_path, VALID_NATURE_YAML)
-
-    system_dir = tmp_path / "system"
-    system_dir.mkdir(parents=True, exist_ok=True)
-    version_file = system_dir / "nature_version.txt"
-    version_file.write_text("v0.1", encoding="utf-8")
-
-    loader = NatureLoader(config_path=nature_file)
-    loader._version_file_path = lambda: version_file
+    version_file = _version_file(tmp_path, "v0.1")
 
     with caplog.at_level(logging.WARNING, logger="ember.nature"):
-        loader.load()
+        _load_with_version_file(tmp_path, version_file)
 
     assert "Version changed" not in caplog.text
 
 
-# -- Version file writes --------------------------------------------------
-#
-# Loading runs on every LLMAdapter construction, including at app import, so
-# the version file is written only when it is missing or stale. The "not
-# rewritten" check backdates the file and asserts the stamp survives a load;
-# the changed-version test is its control, using the same stamp to show a
-# real write is visible.
-
-_BACKDATED = 946684800  # 2000-01-01T00:00:00Z
-
-
-def _backdated_version_file(tmp_path: Path, version: str) -> Path:
-    system_dir = tmp_path / "system"
-    system_dir.mkdir(parents=True, exist_ok=True)
-    version_file = system_dir / "nature_version.txt"
-    version_file.write_text(version, encoding="utf-8")
-    os.utime(version_file, (_BACKDATED, _BACKDATED))
-    return version_file
+# Written only when missing or stale; the changed-version test is the
+# control showing the mtime check sees a real write.
 
 
 def test_same_version_does_not_rewrite_version_file(tmp_path: Path) -> None:
-    nature_file = _write_nature_file(tmp_path, VALID_NATURE_YAML)
-    version_file = _backdated_version_file(tmp_path, "v0.1")
-
-    loader = NatureLoader(config_path=nature_file)
-    loader._version_file_path = lambda: version_file
-    loader.load()
+    version_file = _version_file(tmp_path, "v0.1")
+    _load_with_version_file(tmp_path, version_file)
 
     assert version_file.stat().st_mtime == _BACKDATED
     assert version_file.read_text(encoding="utf-8") == "v0.1"
 
 
 def test_control_changed_version_rewrites_version_file(tmp_path: Path) -> None:
-    nature_file = _write_nature_file(tmp_path, VALID_NATURE_YAML)
-    version_file = _backdated_version_file(tmp_path, "v0.0")
-
-    loader = NatureLoader(config_path=nature_file)
-    loader._version_file_path = lambda: version_file
-    loader.load()
+    version_file = _version_file(tmp_path, "v0.0")
+    _load_with_version_file(tmp_path, version_file)
 
     assert version_file.stat().st_mtime != _BACKDATED
     assert version_file.read_text(encoding="utf-8") == "v0.1"
 
 
 def test_missing_version_file_is_created(tmp_path: Path) -> None:
-    nature_file = _write_nature_file(tmp_path, VALID_NATURE_YAML)
     version_file = tmp_path / "vault" / "system" / "nature_version.txt"
-
-    loader = NatureLoader(config_path=nature_file)
-    loader._version_file_path = lambda: version_file
-    loader.load()
+    _load_with_version_file(tmp_path, version_file)
 
     assert version_file.read_text(encoding="utf-8") == "v0.1"
 

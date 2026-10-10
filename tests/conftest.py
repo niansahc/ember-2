@@ -21,43 +21,88 @@ import atexit
 import contextlib
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-# src/api/main.py attaches a rotating file handler at import. Point it at a
-# throwaway directory before any test module imports the app, so test runs
-# never write to the user's real application log.
-os.environ["EMBER_LOG_PATH"] = os.path.join(
-    tempfile.mkdtemp(prefix="ember-test-logs-"), "ember-api.log"
+
+# ---------------------------------------------------------------------------
+# Process environment isolation, applied at conftest import
+#
+# Everything here runs before the first `src` import. A session fixture would
+# be too late: fixtures run after collection, and collection is when
+# config.py, the app, and its LLMAdapter singletons are first imported.
+#
+# Vault. When the runtime override is None -- during collection, after session
+# teardown, in tests that clear it on purpose (test_vault_swap.py), and after
+# every importlib.reload(src.core.config) -- get_private_vault_path() falls
+# back to PRIVATE_VAULT_PATH. Filled from .env, that was the live vault, and
+# app import during collection wrote <live vault>/system/nature_version.txt on
+# every pytest process. PRIVATE_VAULT_PATH is therefore pinned to a throwaway
+# vault owned by this process, and the labelled paths the swap endpoint reads
+# (VAULT_PATH_*) are removed. It is pinned rather than cleared: cleared, the
+# override-cleared paths would raise instead of resolving somewhere safe.
+#
+# Config env vars (issue #195). config.py getters re-read os.getenv() on every
+# call, so any value in os.environ leaks into whichever test runs next. Values
+# came from two places:
+#   - .env, through config.py's import-time load_dotenv(). This was hit and
+#     patched locally three times before a shared fix existed
+#     (test_generation_host.py, test_vision.py, test_deviation_detector.py).
+#     Clearing once was not enough: files that importlib.reload(
+#     src.core.config) -- test_vault_bound_threads.py must keep doing so --
+#     re-ran load_dotenv() and refilled every cleared key. dotenv.load_dotenv
+#     itself is neutered (the function `from dotenv import load_dotenv`
+#     resolves against fresh on every reload), so .env is never read here.
+#   - The ambient shell. _LEAK_PRONE_ENV_VARS is cleared. Clearing before the
+#     `ollama` package is imported also covers plain OLLAMA_HOST, which that
+#     package binds once at import (see src/llm/adapter.py::_client_for_host).
+# A test that wants a value sets it with monkeypatch/patch.dict; teardown
+# lands back on "absent", never on a live value.
+#
+# Out of scope: get_ember_api_key()/get_provider_api_key() read the OS keyring
+# before the env var, so clearing ANTHROPIC_API_KEY does not stop a test from
+# reaching a key stored in Credential Manager.
+# ---------------------------------------------------------------------------
+
+# Explicit, audited list -- not runtime-discovered -- matching
+# _RESOLVER_BINDING_MODULES' own philosophy below: the list is the audit, and
+# a variable added to it should be a deliberate act. Enumerated from every
+# os.getenv()/os.environ call site in src/. The vault variables are handled
+# separately below.
+_LEAK_PRONE_ENV_VARS: tuple[str, ...] = (
+    # src/core/config.py
+    "EMBER_DEV_MODE",
+    "EMBER_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "EMBER_EMBED_MODEL",
+    "TIER_RECENCY_HALFLIFE_DAYS",
+    "TIER_ACCESS_CEILING",
+    "TIER_HOT_THRESHOLD",
+    "TIER_WARM_THRESHOLD",
+    "STATE_STALENESS_DAYS",
+    "RETRIEVAL_MIN_RAW_SCORE",
+    "INTENT_CLASSIFIER_TIMEOUT_MS",
+    "EMBER_DEBUG",
+    "EMBER_CLASSIFIER_TELEMETRY",
+    "EMBER_VISION_MODEL",
+    "EMBER_GENERATION_OLLAMA_HOST",
+    "EMBER_AUXILIARY_MODEL",
+    "OLLAMA_HOST",
+    "EMBER_MODEL",
+    "EMBER_HOST",
+    # src/retrieval/vector_index.py
+    "MAX_INDEX_SIZE_MB",
+    # src/safety/deviation_detector.py
+    "EMBER_DEVIATION_DETECTION",
+    "EMBER_DEVIATION_ENTROPY_THRESHOLD",
+    "EMBER_DEVIATION_JACCARD_THRESHOLD",
+    # src/state/state_resolver.py
+    "EMBER_STATE_DEBUG",
 )
-
-
-# ---------------------------------------------------------------------------
-# Vault env isolation, applied at conftest import
-#
-# isolate_to_test_vault (below) sets the runtime override, but it is a session
-# fixture, so it runs only after pytest has imported every test module. During
-# that collection window the override is None and get_private_vault_path()
-# falls through to PRIVATE_VAULT_PATH -- which config.py's import-time
-# load_dotenv() fills from the real .env. Nine test modules import the app at
-# module level, the app builds LLMAdapter singletons, and NatureLoader wrote
-# <real vault>/system/nature_version.txt on every pytest process.
-#
-# The same fallback is reached later in the session too: after session
-# teardown clears the override, in tests that clear it on purpose
-# (test_vault_swap.py), in the window after a monkeypatch undo but before
-# restore_process_state, and after every importlib.reload(src.core.config).
-#
-# So the environment itself is made safe here, before the first `src` import:
-#   1. PRIVATE_VAULT_PATH points at a throwaway vault owned by this process.
-#      load_dotenv() defaults to override=False, so .env cannot replace it.
-#   2. The labelled vault paths the swap endpoint reads are removed.
-#   3. dotenv.load_dotenv is neutered before config.py binds it, so no import
-#      or reload in this process ever reads .env at all.
-# The override then layers on top exactly as before; this only changes what
-# the fallback resolves to.
-# ---------------------------------------------------------------------------
 
 _TEST_VAULT_SUBDIRS = (
     "memory/conversation",
@@ -78,13 +123,21 @@ def _make_vault_tree(root: Path) -> None:
         (root / subdir).mkdir(parents=True, exist_ok=True)
 
 
-_ENV_FALLBACK_VAULT = Path(tempfile.mkdtemp(prefix="ember-test-vault-"))
+# One throwaway root per pytest process. Daemon threads and the app's log
+# handler may still hold files at exit, so removal is best-effort.
+_PROCESS_TMP_ROOT = Path(tempfile.mkdtemp(prefix="ember-test-"))
+atexit.register(shutil.rmtree, str(_PROCESS_TMP_ROOT), True)
+
+# src/api/main.py attaches a rotating file handler at import; keep test runs
+# out of the user's real application log.
+os.environ["EMBER_LOG_PATH"] = str(_PROCESS_TMP_ROOT / "logs" / "ember-api.log")
+
+_ENV_FALLBACK_VAULT = _PROCESS_TMP_ROOT / "vault"
 _make_vault_tree(_ENV_FALLBACK_VAULT)
 os.environ["PRIVATE_VAULT_PATH"] = str(_ENV_FALLBACK_VAULT)
-for _labelled_vault_key in ("VAULT_PATH_LIVE", "VAULT_PATH_DEMO", "VAULT_PATH_TEST"):
-    os.environ.pop(_labelled_vault_key, None)
-# Daemon threads may still hold files at exit, so removal is best-effort.
-atexit.register(shutil.rmtree, str(_ENV_FALLBACK_VAULT), True)
+
+for _key in (*_LEAK_PRONE_ENV_VARS, "VAULT_PATH_LIVE", "VAULT_PATH_DEMO", "VAULT_PATH_TEST"):
+    os.environ.pop(_key, None)
 
 import dotenv  # noqa: E402
 
@@ -97,6 +150,27 @@ from src.context.render_window import (
     rendered_memory_window,
     rendered_reflection_window,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def run_fresh_python(
+    args: list[str], vault: Path, timeout: int = 300
+) -> subprocess.CompletedProcess:
+    """Run `python <args>` in a fresh interpreter from the repo root.
+
+    PRIVATE_VAULT_PATH is set to `vault`. Without this conftest, config.py's
+    load_dotenv() (override=False) keeps that value over .env, so a probe
+    never reaches a real vault. PYTEST_ADDOPTS is dropped so a child pytest
+    is not steered by the parent's options.
+    """
+    env = dict(os.environ)
+    env["PRIVATE_VAULT_PATH"] = str(vault)
+    env.pop("PYTEST_ADDOPTS", None)
+    return subprocess.run(
+        [sys.executable, *args],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=timeout,
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -170,146 +244,6 @@ def env_fallback_vault() -> Path:
     return _ENV_FALLBACK_VAULT
 
 
-# ---------------------------------------------------------------------------
-# Config env-var isolation contract (issue #195)
-#
-# src.core.config calls load_dotenv() unconditionally at import time, so the
-# moment any test module imports it (nearly immediate -- it's pulled in
-# transitively by almost everything), the real ember-2/.env file's values
-# land in process-global os.environ. Every config.py getter re-reads
-# os.getenv() fresh on every call (no module-level caching), so clearing the
-# polluted keys once per session, before any test body runs, would be
-# sufficient ON ITS OWN -- EXCEPT for a second mechanism, below, that a
-# clear-once fixture cannot survive.
-#
-# This has already been hit and locally patched three separate times, once
-# per variable, in three different files, before this fixture existed:
-#   - test_generation_host.py::clear_generation_host --
-#     monkeypatch.delenv("EMBER_GENERATION_OLLAMA_HOST", ...), scoped to
-#     that one file.
-#   - test_vision.py::test_vision_model_returns_none_when_unset -- patches
-#     os.getenv directly, with a comment naming load_dotenv() as the cause.
-#   - test_deviation_detector.py -- os.environ.pop("EMBER_DEVIATION_DETECTION",
-#     None) inline in the test body.
-# Three independent rediscoveries of the same root cause is the signal that
-# the fix belongs here, session-wide and autouse, not in a fourth file.
-#
-# A clear-once-at-session-start fixture is NOT enough by itself: at least
-# six test files (test_write_memory_authorship.py,
-# test_generate_reflection_provenance.py, test_third_party_flag.py,
-# test_lodestone_synthesis.py x3, and test_vault_bound_threads.py x4 --
-# the latter a DELIBERATE regression test for reload survival, see
-# TestBindingSurvivesModuleReload there, and must keep reloading) call
-# importlib.reload(src.core.config) mid-session, for reasons unrelated to
-# this issue. Every reload re-executes config.py's module body, including
-# `from dotenv import load_dotenv` followed by `load_dotenv()` -- which
-# re-populates every cleared key straight back out of the real .env file,
-# with nothing to re-clear before whichever test runs next. Confirmed
-# empirically: the five affected test files pass in isolation and fail
-# again in the full suite, because some other file's legitimate reload
-# runs first and silently undoes the session-start clear.
-#
-# The fix is to neuter dotenv.load_dotenv itself (the function `from dotenv
-# import load_dotenv` resolves against, fresh, on every reload -- patching
-# src.core.config's own bound copy would just get overwritten by the next
-# reload's fresh import), not just its output. This makes every reload's
-# load_dotenv() call a no-op for the rest of the session, so reload keeps
-# doing everything it legitimately does (rebind globals, reset ContextVars
-# for test_vault_bound_threads.py) without being able to leak .env again.
-#
-# The neutering now happens at conftest import (see "Vault env isolation"
-# at the top of this file), not inside the fixture below: a session fixture
-# runs after collection, and collection is when config.py first imports. With
-# .env never loaded, the fixture's clear only removes values inherited from
-# the ambient shell.
-#
-# One documented exception this fixture cannot close: plain OLLAMA_HOST (the
-# ollama package's own env var, distinct from EMBER_GENERATION_OLLAMA_HOST)
-# binds when the `ollama` package is first imported, not per-call -- see
-# src/llm/adapter.py::_client_for_host's docstring. A fixture runs after that
-# import has already happened, so it cannot retroactively unbind an
-# already-cached module-level client if OLLAMA_HOST was present in the
-# ambient shell before pytest started. Not part of today's known failures
-# (not set in this project's .env), but a real limit, not an oversight.
-#
-# A separate, out-of-scope leak channel, noted for completeness:
-# get_ember_api_key()/get_provider_api_key() check the OS keyring before
-# falling back to the env var, so clearing ANTHROPIC_API_KEY here does not
-# stop a test from reaching a real stored key via Credential Manager if one
-# exists. Different mechanism than .env/os.environ; not fixed here.
-#
-# Explicit, audited list -- not runtime-discovered -- matching
-# _RESOLVER_BINDING_MODULES' own philosophy below: the list is the audit,
-# and a variable added to it should be a deliberate act. Enumerated from
-# every os.getenv()/os.environ call site in src/. PRIVATE_VAULT_PATH is
-# deliberately excluded -- it is not cleared but pinned, at conftest import,
-# to the throwaway vault (see "Vault env isolation" at the top of this file).
-# Clearing it would make override-cleared code paths raise instead of
-# resolving somewhere safe. VAULT_PATH_LIVE/_DEMO/_TEST are removed there too.
-# ---------------------------------------------------------------------------
-
-_LEAK_PRONE_ENV_VARS: tuple[str, ...] = (
-    # src/core/config.py
-    "EMBER_DEV_MODE",
-    "EMBER_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "EMBER_EMBED_MODEL",
-    "TIER_RECENCY_HALFLIFE_DAYS",
-    "TIER_ACCESS_CEILING",
-    "TIER_HOT_THRESHOLD",
-    "TIER_WARM_THRESHOLD",
-    "STATE_STALENESS_DAYS",
-    "RETRIEVAL_MIN_RAW_SCORE",
-    "INTENT_CLASSIFIER_TIMEOUT_MS",
-    "EMBER_DEBUG",
-    "EMBER_CLASSIFIER_TELEMETRY",
-    "EMBER_VISION_MODEL",
-    "EMBER_GENERATION_OLLAMA_HOST",
-    "EMBER_AUXILIARY_MODEL",
-    "OLLAMA_HOST",
-    "EMBER_MODEL",
-    "EMBER_HOST",
-    "VAULT_PATH_DEMO",
-    "VAULT_PATH_TEST",
-    # src/retrieval/vector_index.py
-    "MAX_INDEX_SIZE_MB",
-    # src/safety/deviation_detector.py
-    "EMBER_DEVIATION_DETECTION",
-    "EMBER_DEVIATION_ENTROPY_THRESHOLD",
-    "EMBER_DEVIATION_JACCARD_THRESHOLD",
-    # src/state/state_resolver.py
-    "EMBER_STATE_DEBUG",
-)
-
-
-@pytest.fixture(scope="session", autouse=True)
-def isolate_config_env():
-    """Clear every leak-prone env var for the whole session. Restores them
-    on session end.
-
-    dotenv.load_dotenv is already neutered at conftest import, so no
-    importlib.reload(src.core.config) can repopulate these from the real
-    .env file; what this clears is whatever the ambient shell exported.
-
-    A test that wants a specific value sets it itself via monkeypatch/
-    patch.dict inside that test; teardown of that per-test override lands
-    back on "absent" (this fixture's baseline), never back on a live
-    value -- so a future test file cannot opt out of this by omission,
-    including by reloading config.py. See the module comment above.
-    """
-    saved = {k: os.environ.get(k) for k in _LEAK_PRONE_ENV_VARS}
-    for k in _LEAK_PRONE_ENV_VARS:
-        os.environ.pop(k, None)
-
-    yield
-
-    for k, v in saved.items():
-        if v is None:
-            os.environ.pop(k, None)
-        else:
-            os.environ[k] = v
-
 
 # ---------------------------------------------------------------------------
 # Process-state isolation contract
@@ -327,9 +261,10 @@ def isolate_config_env():
 #      failed with a write store resolved under a toggle test's tmp_path.
 #
 #   2. Twelve tests in test_vault_swap.py end with the session override
-#      cleared. Resolution then falls through to PRIVATE_VAULT_PATH from .env
-#      -- the real vault -- so every later test that wrote without its own
-#      override wrote into it, against this module's own promise above.
+#      cleared. Resolution then fell through to PRIVATE_VAULT_PATH, which was
+#      the real vault from .env at the time (it is now pinned to a throwaway
+#      vault at conftest import), so every later test that wrote without its
+#      own override wrote into it, against this module's own promise above.
 #
 # The three fixtures below are the contract. They are autouse so no test file
 # can opt out, and so a file added later inherits them without knowing they

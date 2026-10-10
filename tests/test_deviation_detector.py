@@ -31,7 +31,7 @@ from src.safety.deviation_detector import (
 class TestIsEnabled:
     def test_default_is_false(self):
         # EMBER_DEVIATION_DETECTION is already absent from os.environ for
-        # the whole session (conftest.py::isolate_config_env, issue #195);
+        # the whole session (cleared at conftest.py import, issue #195);
         # no env manipulation needed here at all.
         assert is_enabled() is False
 

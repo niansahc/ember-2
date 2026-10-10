@@ -127,23 +127,24 @@ class NatureLoader:
             return
 
         try:
-            last_version = None
-            if version_file.exists():
-                last_version = version_file.read_text(encoding="utf-8").strip()
-                if last_version and last_version != current_version:
-                    logger.warning(
-                        "[NATURE] Version changed: %s → %s. "
-                        "Review nature document for coherence with system prompt.",
-                        last_version,
-                        current_version,
-                    )
-
+            last_version = (
+                version_file.read_text(encoding="utf-8").strip()
+                if version_file.exists()
+                else None
+            )
             if last_version == current_version:
                 logger.debug(
                     "[NATURE] Version %s unchanged; version file not rewritten",
                     current_version,
                 )
                 return
+            if last_version:
+                logger.warning(
+                    "[NATURE] Version changed: %s -> %s. "
+                    "Review nature document for coherence with system prompt.",
+                    last_version,
+                    current_version,
+                )
 
             version_file.parent.mkdir(parents=True, exist_ok=True)
             version_file.write_text(current_version, encoding="utf-8")

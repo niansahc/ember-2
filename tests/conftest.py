@@ -551,9 +551,10 @@ def ui_tree(tmp_path: Path) -> Path:
 
 
 @contextlib.contextmanager
-def ui_client(ui_dir: Path, api_key: str | None = None):
+def ui_client(ui_dir: Path, api_key: str | None = None, base_url: str = "http://testserver"):
     """TestClient over the app with _UI_DIR pointed at `ui_dir`, the
-    index.html cache cleared, and the key gate set to `api_key` (None = open)."""
+    index.html cache cleared, and the key gate set to `api_key` (None = open).
+    `base_url` sets the Host header and scope["server"] the client presents."""
     from fastapi.testclient import TestClient
 
     import src.api.main as main_module
@@ -562,4 +563,4 @@ def ui_client(ui_dir: Path, api_key: str | None = None):
          patch.object(main_module, "_cached_index_html", None), \
          patch.object(main_module, "_cached_index_mtime", 0.0), \
          patch("src.api.main.get_ember_api_key", return_value=api_key):
-        yield TestClient(main_module.app)
+        yield TestClient(main_module.app, base_url=base_url)

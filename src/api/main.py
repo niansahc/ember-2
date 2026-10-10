@@ -212,6 +212,17 @@ def _is_ui_request(request: Request) -> bool:
     return True
 
 
+def _scope_path(request: Request) -> str:
+    """The request path as the ASGI server parsed it from the request line.
+
+    Security decisions read this, never `request.url.path`: the URL is rebuilt
+    from the Host header, and a crafted Host such as
+    `127.0.0.1:8000/api/health?x=` could make the URL path look public
+    (CVE-2026-48710, Starlette < 1.3.1).
+    """
+    return request.scope["path"]
+
+
 @app.middleware("http")
 async def api_key_auth(request: Request, call_next):
     """Default-deny API key gate (ultrareview #281).
@@ -220,7 +231,7 @@ async def api_key_auth(request: Request, call_next):
     SPA catch-all answers. Every other request needs the key via
     `Authorization: Bearer <key>` or `X-API-Key: <key>`.
     """
-    path = request.url.path
+    path = _scope_path(request)
     if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES) or _is_ui_request(request):
         return await call_next(request)
 
@@ -239,7 +250,7 @@ async def api_key_auth(request: Request, call_next):
         provided_key = request.headers.get("X-API-Key", "")
 
     if not provided_key or not secrets.compare_digest(provided_key, expected_key):
-        logger.warning("[AUTH] Rejected request to %s - invalid or missing API key", request.url.path)
+        logger.warning("[AUTH] Rejected request to %s - invalid or missing API key", path)
         return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
 
     return await call_next(request)
@@ -247,7 +258,8 @@ async def api_key_auth(request: Request, call_next):
 
 @app.middleware("http")
 async def audit_log(request: Request, call_next):
-    if request.url.path == "/":
+    path = _scope_path(request)
+    if path == "/":
         return await call_next(request)
     start = time.perf_counter()
     response = await call_next(request)
@@ -255,7 +267,7 @@ async def audit_log(request: Request, call_next):
     intent_class = getattr(request.state, "intent_class", None)
     _write_audit_log(
         method=request.method,
-        path=request.url.path,
+        path=path,
         client_ip=request.client.host,
         status=response.status_code,
         ms=ms,

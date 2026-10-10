@@ -75,6 +75,34 @@ def _validate_import_path(file_path: str) -> Path:
     return resolved
 
 
+def _safe_upload_name(raw: str | None) -> str:
+    """Reduce a client-supplied upload filename to one safe path segment.
+
+    Browsers send a bare basename. Anything else (a path separator in either
+    style, a NUL byte, an empty name, `.` or `..`) is not a filename a user
+    picked and is rejected with HTTP 400 before any disk write. The name is
+    never joined onto the uploads directory until it has passed here
+    (ultrareview finding on #281).
+    """
+    if raw is None:
+        raise HTTPException(status_code=400, detail="Upload is missing a filename.")
+    name = raw.strip()
+    if not name or name in (".", "..") or "\x00" in name or "/" in name or "\\" in name:
+        logger.warning("[UPLOAD] Rejected unsafe filename (%d chars)", len(raw))
+        raise HTTPException(status_code=400, detail="Invalid upload filename.")
+    return name
+
+
+def _upload_target(uploads_dir: Path, name: str) -> Path:
+    """The path a sanitized upload is written to, confirmed to sit directly
+    inside uploads_dir after resolution. Second layer under _safe_upload_name."""
+    target = uploads_dir / name
+    if target.resolve().parent != uploads_dir.resolve():
+        logger.warning("[UPLOAD] Rejected filename resolving outside uploads dir")
+        raise HTTPException(status_code=400, detail="Invalid upload filename.")
+    return target
+
+
 # -----------------------------
 # Multipart File Upload
 # -----------------------------
@@ -94,7 +122,7 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
       Documents: {"status": "ingested", "filename": "...", "chunks": N}
       Images:    {"status": "image", "data": "base64...", "media_type": "image/..."}
     """
-    filename = file.filename or "unknown"
+    filename = _safe_upload_name(file.filename)
     ext = Path(filename).suffix.lower()
 
     # --- Image passthrough ---
@@ -124,7 +152,7 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
     # Write to vault/imports/uploads/ so it persists as a source file
-    saved_path = uploads_dir / filename
+    saved_path = _upload_target(uploads_dir, filename)
     saved_path.write_bytes(content)
     logger.info("[UPLOAD] Saved %s upload (%d bytes)", ext, len(content))
 

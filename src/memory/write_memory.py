@@ -1,6 +1,5 @@
 import logging
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +8,7 @@ from src.core.config import (
     get_private_vault_path,
     vault_writes_blocked,
 )
+from src.core.timestamps import UniqueTimestampSource
 from src.memory.authorship import classify_authorship
 from src.memory.eval_fixtures import is_eval_fixture, should_index_record
 from src.memory.storage import MemoryStorage
@@ -26,30 +26,25 @@ vector_index = VectorIndex()
 # Memory types stored in SQLite (memory.db) rather than JSON indexes
 SQLITE_MEMORY_TYPES = {"conversation", "profile", "reflection", "journal"}
 
-# Module-level guard against same-microsecond filename collisions in
-# write_memory(). Filename convention is `{timestamp}.json` so two
-# back-to-back writes (e.g. user turn + assistant turn in the same
-# request, or rapid automated batches) that land on the same microsecond
-# produce identical paths and MemoryStorage.write_json overwrites the
-# prior record. Defense-in-depth — same fix as session._now_id() and
-# task_service.next_timestamp(). See BUG-005.
-_last_timestamp: str = ""
+# Guard against same-tick filename collisions in write_memory(). Filename
+# convention is `{timestamp}.json` so two back-to-back writes (e.g. user
+# turn + assistant turn in the same request, or rapid automated batches)
+# that land on the same clock tick produce identical paths and
+# MemoryStorage.write_json overwrites the prior record. Defense-in-depth --
+# same fix as session._now_id() and task_service.next_timestamp(). See
+# BUG-005; locked against concurrent callers since ultrareview #280.
+_timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f")
 
 
 def _next_timestamp() -> str:
-    """Generate a microsecond-precision timestamp string, guaranteed
-    unique per process.
+    """Generate a microsecond-format timestamp string, guaranteed unique
+    per process, including across threads.
 
-    Spins on `datetime.now()` until the result differs from the previous
-    return value. The spin can never run for longer than one microsecond
-    of real wall-clock time.
+    See UniqueTimestampSource: the spin is bounded by the clock's
+    resolution (about 15.6 ms on Windows under Python < 3.13), not by one
+    microsecond.
     """
-    global _last_timestamp
-    while True:
-        candidate = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
-        if candidate != _last_timestamp:
-            _last_timestamp = candidate
-            return candidate
+    return _timestamps.next()
 
 
 def _get_write_memory_store() -> SqliteVectorStore:

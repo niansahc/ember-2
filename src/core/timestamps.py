@@ -1,20 +1,28 @@
 """
 src/core/timestamps.py
 
-Shared vault-record timestamp parsing.
+Shared vault-record timestamp parsing and generation.
 
-Three formats appear across the corpus and are handled independently in
-three call sites today (ranker._parse_age_days, prompt_builder._parse_timestamp,
-and -- until this fix -- tiering_service._recency_score, which only handled
-one of the three). This module is the parser for a fourth call site
-(_recency_score) rather than a consolidation of the other two: those are
-working and tested, and folding them in here is out of scope for the change
-that introduced this file. See ADR-015 amendment, implementation step 4.
+Parsing. Three formats appear across the corpus and are handled
+independently in three call sites today (ranker._parse_age_days,
+prompt_builder._parse_timestamp, and -- until this fix --
+tiering_service._recency_score, which only handled one of the three). This
+module is the parser for a fourth call site (_recency_score) rather than a
+consolidation of the other two: those are working and tested, and folding
+them in here is out of scope for the change that introduced this file. See
+ADR-015 amendment, implementation step 4.
+
+Generation. UniqueTimestampSource is the one implementation of the
+"never return the same timestamp twice" guard that record writers use to
+name files `{timestamp}.json` (BUG-005). Each writer module used to carry
+its own unlocked check-then-set copy, which two threads could pass at once
+and both return the same value (ultrareview #280).
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timezone, tzinfo
 
 
 def parse_vault_timestamp(timestamp: str | None) -> datetime | None:
@@ -71,3 +79,39 @@ def parse_vault_timestamp(timestamp: str | None) -> datetime | None:
         pass
 
     return None
+
+
+class UniqueTimestampSource:
+    """Formatted wall-clock timestamps, never the same value twice in a row.
+
+    next() spins on datetime.now() until the formatted value differs from
+    the one it last returned. The lock is held across the read, the
+    comparison, and the assignment, so concurrent callers cannot both pass
+    the check with the same value.
+
+    The spin is bounded by the clock's resolution, not by the format's
+    precision: one microsecond where datetime.now() has microsecond
+    resolution, about 15.6 ms on Windows under Python < 3.13, and up to one
+    second for a second-precision format. Callers block on the lock for at
+    most that long.
+
+    Use one instance per set of records that share a directory and format.
+    The guard compares only against the immediately preceding value, so a
+    single instance shared across different formats or timezones would not
+    prevent repeats within any one of them.
+    """
+
+    def __init__(self, fmt: str, tz: tzinfo | None = None) -> None:
+        self._fmt = fmt
+        self._tz = tz
+        self._lock = threading.Lock()
+        self._last = ""
+
+    def next(self) -> str:
+        """Return a timestamp string distinct from the previous return value."""
+        with self._lock:
+            while True:
+                candidate = datetime.now(self._tz).strftime(self._fmt)
+                if candidate != self._last:
+                    self._last = candidate
+                    return candidate

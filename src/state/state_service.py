@@ -22,7 +22,6 @@ import json
 import logging
 import warnings
 from dataclasses import asdict
-from datetime import datetime
 from pathlib import Path
 
 from src.core.config import (
@@ -31,6 +30,7 @@ from src.core.config import (
     vault_writes_blocked,
 )
 from src.core.jsonio import safe_write_json
+from src.core.timestamps import UniqueTimestampSource
 from src.state.models import VALID_STATE_CATEGORIES, StateRecord
 
 logger = logging.getLogger("ember.state_service")
@@ -39,28 +39,23 @@ logger = logging.getLogger("ember.state_service")
 # Subdirectory within the vault where state records live.
 STATE_MEMORY_SUBDIR = "memory/state"
 
-# Module-level guard against same-second timestamp collisions in
-# make_record(). Filename convention is `{timestamp}_{type}.json`, so
-# two records of the same type written in the same second collide on
-# filename and the second write is silently dropped by the exists-check
-# in StateService.write(). This is the same root cause as BUG-005 —
-# mirrors the fix in session._now_id(), task_service.next_timestamp(),
-# and write_memory._next_timestamp(). Uses second precision (not
-# microsecond) to match the existing state layer format, but the spin
-# guard ensures no two calls return the same value within a process.
-_last_state_id: str = ""
+# Guard against same-second timestamp collisions in make_record().
+# Filename convention is `{timestamp}_{type}.json`, so two records of the
+# same type written in the same second collide on filename and the second
+# write is silently dropped by the exists-check in StateService.write().
+# This is the same root cause as BUG-005 -- mirrors the fix in
+# session._now_id(), task_service.next_timestamp(), and
+# write_memory._next_timestamp(). Uses second precision (not microsecond)
+# to match the existing state layer format, so a caller that collides may
+# wait up to one second for the next value. Locked against concurrent
+# callers since ultrareview #280.
+_state_timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S")
 
 
 def _next_state_timestamp() -> str:
     """Generate a second-precision timestamp string, guaranteed unique
-    per process. Spins on datetime.now() until the result differs from
-    the previous return value."""
-    global _last_state_id
-    while True:
-        candidate = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-        if candidate != _last_state_id:
-            _last_state_id = candidate
-            return candidate
+    per process, including across threads. See UniqueTimestampSource."""
+    return _state_timestamps.next()
 
 
 class StateService:
@@ -442,9 +437,9 @@ class StateService:
         StateRecord
             A fully populated, validated StateRecord ready to be written.
         """
-        # _next_state_timestamp() spins on collision so two back-to-back
-        # calls never return the same second. See module-level comment for
-        # rationale and BUG-005 cross-reference.
+        # _next_state_timestamp() spins on collision so two calls,
+        # back-to-back or concurrent, never return the same second. See
+        # module-level comment for rationale and BUG-005 cross-reference.
         timestamp = _next_state_timestamp()
 
         return StateRecord(

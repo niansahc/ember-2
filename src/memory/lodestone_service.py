@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from src.core.config import get_private_vault_path
 from src.core.jsonio import safe_read_json
+from src.core.timestamps import UniqueTimestampSource
 from src.memory.storage import MemoryStorage
 
 logger = logging.getLogger("ember.lodestone")
@@ -31,6 +31,12 @@ MAX_ACTIVE_RECORDS = 15
 MAX_PROPOSED_RECORDS = 20
 
 storage = MemoryStorage()
+
+# write() and update() both name files `{timestamp}.json` in the same
+# directory, so they share one guard: two lodestone writes on the same
+# clock tick would otherwise overwrite each other (BUG-005 pattern,
+# ultrareview #280).
+_timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f")
 
 
 def _lodestone_dir() -> Path:
@@ -109,7 +115,7 @@ def write(
             "Confirm fewer records or dismiss existing ones before adding more."
         )
 
-    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
+    timestamp = _timestamps.next()
     extra_meta = metadata or {}
 
     record = {
@@ -196,7 +202,7 @@ def update(record_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
     if "flagged_as_noise" in updates:
         updated_record["metadata"]["flagged_as_noise"] = bool(updates["flagged_as_noise"])
 
-    new_timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
+    new_timestamp = _timestamps.next()
     updated_record["timestamp"] = new_timestamp
 
     ldir = _lodestone_dir()

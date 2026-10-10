@@ -4,18 +4,25 @@ tests/conftest.py
 Session-scoped vault isolation and rate-limiter fixtures.
 
 Ensures ALL tests run against a temporary test vault, never the live
-vault (C:\EmberVault). The override uses the runtime mechanism in
-src.core.config (set_vault_path_override / clear_vault_path_override)
-which takes precedence over PRIVATE_VAULT_PATH in .env.
+vault (C:\EmberVault). Two layers:
 
-Cleanup is guaranteed by pytest's fixture teardown — even on failure,
-KeyboardInterrupt, or crash, the override is cleared and the system
-reverts to the .env vault path.
+  1. At conftest import, before any `src` import, PRIVATE_VAULT_PATH is
+     pointed at a throwaway vault and .env loading is disabled, so the
+     environment fallback can never resolve the live vault in this process.
+  2. For the session, the runtime override in src.core.config
+     (set_vault_path_override / clear_vault_path_override) points at a
+     fresh vault in pytest's tmp area.
+
+When the override is cleared (session teardown, or a test that clears it
+on purpose) resolution falls back to the layer-1 throwaway vault, not .env.
 """
 
+import atexit
 import contextlib
 import os
+import shutil
 import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 # src/api/main.py attaches a rotating file handler at import. Point it at a
@@ -25,8 +32,65 @@ os.environ["EMBER_LOG_PATH"] = os.path.join(
     tempfile.mkdtemp(prefix="ember-test-logs-"), "ember-api.log"
 )
 
-import pytest
-from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Vault env isolation, applied at conftest import
+#
+# isolate_to_test_vault (below) sets the runtime override, but it is a session
+# fixture, so it runs only after pytest has imported every test module. During
+# that collection window the override is None and get_private_vault_path()
+# falls through to PRIVATE_VAULT_PATH -- which config.py's import-time
+# load_dotenv() fills from the real .env. Nine test modules import the app at
+# module level, the app builds LLMAdapter singletons, and NatureLoader wrote
+# <real vault>/system/nature_version.txt on every pytest process.
+#
+# The same fallback is reached later in the session too: after session
+# teardown clears the override, in tests that clear it on purpose
+# (test_vault_swap.py), in the window after a monkeypatch undo but before
+# restore_process_state, and after every importlib.reload(src.core.config).
+#
+# So the environment itself is made safe here, before the first `src` import:
+#   1. PRIVATE_VAULT_PATH points at a throwaway vault owned by this process.
+#      load_dotenv() defaults to override=False, so .env cannot replace it.
+#   2. The labelled vault paths the swap endpoint reads are removed.
+#   3. dotenv.load_dotenv is neutered before config.py binds it, so no import
+#      or reload in this process ever reads .env at all.
+# The override then layers on top exactly as before; this only changes what
+# the fallback resolves to.
+# ---------------------------------------------------------------------------
+
+_TEST_VAULT_SUBDIRS = (
+    "memory/conversation",
+    "memory/journal",
+    "memory/reflection",
+    "memory/state",
+    "memory/ingested",
+    "memory/archive",
+    "memory/session",
+    "embeddings",
+    "imports",
+)
+
+
+def _make_vault_tree(root: Path) -> None:
+    """Create the minimum directory structure services expect in a vault."""
+    for subdir in _TEST_VAULT_SUBDIRS:
+        (root / subdir).mkdir(parents=True, exist_ok=True)
+
+
+_ENV_FALLBACK_VAULT = Path(tempfile.mkdtemp(prefix="ember-test-vault-"))
+_make_vault_tree(_ENV_FALLBACK_VAULT)
+os.environ["PRIVATE_VAULT_PATH"] = str(_ENV_FALLBACK_VAULT)
+for _labelled_vault_key in ("VAULT_PATH_LIVE", "VAULT_PATH_DEMO", "VAULT_PATH_TEST"):
+    os.environ.pop(_labelled_vault_key, None)
+# Daemon threads may still hold files at exit, so removal is best-effort.
+atexit.register(shutil.rmtree, str(_ENV_FALLBACK_VAULT), True)
+
+import dotenv  # noqa: E402
+
+dotenv.load_dotenv = lambda *args, **kwargs: False
+
+import pytest  # noqa: E402
 
 from src.core.config import set_vault_path_override, clear_vault_path_override
 from src.context.render_window import (
@@ -71,29 +135,39 @@ def isolate_to_test_vault(tmp_path_factory):
     Creates a fresh vault directory structure in pytest's tmp area.
     Sets the runtime override at session start and clears it at session
     end. No test ever reads from or writes to the live vault.
+
+    Refuses to start if PRIVATE_VAULT_PATH no longer names the throwaway
+    vault set at conftest import: something during collection (a test
+    module, a plugin, a load_dotenv(override=True)) moved the fallback, and
+    every override-cleared window would then resolve wherever it now points.
     """
+    if os.environ.get("PRIVATE_VAULT_PATH") != str(_ENV_FALLBACK_VAULT):
+        raise RuntimeError(
+            "PRIVATE_VAULT_PATH changed during test collection; it no longer "
+            "names the throwaway vault set by tests/conftest.py. Refusing to "
+            "run: override-cleared code paths could reach a real vault."
+        )
+
     test_vault = tmp_path_factory.mktemp("test_vault")
 
     # Create the minimum directory structure needed by services that
     # call get_private_vault_path() and expect subdirectories to exist.
-    for subdir in (
-        "memory/conversation",
-        "memory/journal",
-        "memory/reflection",
-        "memory/state",
-        "memory/ingested",
-        "memory/archive",
-        "memory/session",
-        "embeddings",
-        "imports",
-    ):
-        (test_vault / subdir).mkdir(parents=True, exist_ok=True)
+    _make_vault_tree(test_vault)
 
     set_vault_path_override(str(test_vault), "test")
 
     yield test_vault
 
     clear_vault_path_override()
+
+
+@pytest.fixture(scope="session")
+def env_fallback_vault() -> Path:
+    """The throwaway vault PRIVATE_VAULT_PATH names for this whole process.
+
+    What get_private_vault_path() resolves whenever the override is cleared.
+    """
+    return _ENV_FALLBACK_VAULT
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +217,12 @@ def isolate_to_test_vault(tmp_path_factory):
 # doing everything it legitimately does (rebind globals, reset ContextVars
 # for test_vault_bound_threads.py) without being able to leak .env again.
 #
+# The neutering now happens at conftest import (see "Vault env isolation"
+# at the top of this file), not inside the fixture below: a session fixture
+# runs after collection, and collection is when config.py first imports. With
+# .env never loaded, the fixture's clear only removes values inherited from
+# the ambient shell.
+#
 # One documented exception this fixture cannot close: plain OLLAMA_HOST (the
 # ollama package's own env var, distinct from EMBER_GENERATION_OLLAMA_HOST)
 # binds when the `ollama` package is first imported, not per-call -- see
@@ -162,9 +242,10 @@ def isolate_to_test_vault(tmp_path_factory):
 # _RESOLVER_BINDING_MODULES' own philosophy below: the list is the audit,
 # and a variable added to it should be a deliberate act. Enumerated from
 # every os.getenv()/os.environ call site in src/. PRIVATE_VAULT_PATH is
-# deliberately excluded -- isolate_to_test_vault's override mechanism
-# already takes precedence over it; duplicating it here would be
-# redundant, not additive.
+# deliberately excluded -- it is not cleared but pinned, at conftest import,
+# to the throwaway vault (see "Vault env isolation" at the top of this file).
+# Clearing it would make override-cleared code paths raise instead of
+# resolving somewhere safe. VAULT_PATH_LIVE/_DEMO/_TEST are removed there too.
 # ---------------------------------------------------------------------------
 
 _LEAK_PRONE_ENV_VARS: tuple[str, ...] = (
@@ -204,29 +285,24 @@ _LEAK_PRONE_ENV_VARS: tuple[str, ...] = (
 
 @pytest.fixture(scope="session", autouse=True)
 def isolate_config_env():
-    """Clear every leak-prone env var for the whole session AND neuter
-    dotenv.load_dotenv so no later importlib.reload(src.core.config) can
-    repopulate them from the real .env file. Restores both on session end.
+    """Clear every leak-prone env var for the whole session. Restores them
+    on session end.
+
+    dotenv.load_dotenv is already neutered at conftest import, so no
+    importlib.reload(src.core.config) can repopulate these from the real
+    .env file; what this clears is whatever the ambient shell exported.
 
     A test that wants a specific value sets it itself via monkeypatch/
     patch.dict inside that test; teardown of that per-test override lands
-    back on "absent" (this fixture's baseline), never back on the live
-    .env value -- so a future test file cannot opt out of this by
-    omission, including by reloading config.py. See the module comment
-    above for why both halves are necessary.
+    back on "absent" (this fixture's baseline), never back on a live
+    value -- so a future test file cannot opt out of this by omission,
+    including by reloading config.py. See the module comment above.
     """
-    import dotenv
-
     saved = {k: os.environ.get(k) for k in _LEAK_PRONE_ENV_VARS}
     for k in _LEAK_PRONE_ENV_VARS:
         os.environ.pop(k, None)
 
-    real_load_dotenv = dotenv.load_dotenv
-    dotenv.load_dotenv = lambda *args, **kwargs: False
-
     yield
-
-    dotenv.load_dotenv = real_load_dotenv
 
     for k, v in saved.items():
         if v is None:
@@ -283,8 +359,11 @@ _RESOLVER_BINDING_MODULES = (
 def import_app_graph_before_any_patch(isolate_to_test_vault):
     """Import every capturable module once, before any test can patch.
 
-    Depends on isolate_to_test_vault so the imports resolve against the test
-    vault rather than the .env one.
+    Collection has normally imported most of this graph already, before any
+    session fixture runs. Those imports are safe because PRIVATE_VAULT_PATH
+    is pinned to a throwaway vault at conftest import; this fixture does not
+    provide that protection. It depends on isolate_to_test_vault so that any
+    module first imported here resolves against the session test vault.
 
     Imports the audited list explicitly rather than relying on what
     `src.api.main` happens to pull in. That distinction is load-bearing:

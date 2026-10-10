@@ -30,8 +30,8 @@ from pydantic import BaseModel
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from starlette.routing import Match
 
-from src.api.chat import router as chat_router
 from src.api.limiter import limiter
 from src.api.openai_adapter import router as openai_adapter_router, llm_adapter
 from src.api.routes.ingest import router as ingest_router
@@ -172,18 +172,51 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
+# Paths served without an API key. Everything not listed here is denied by
+# default, including any router added in the future, until it is added to
+# this list on purpose. The PIN endpoints are the UI's own login step and
+# must be reachable before the UI holds a key.
+PUBLIC_PATHS = frozenset({
+    "/",
+    "/api/health",
+    "/v1/security/pin/verify",
+    "/v1/security/pin/status",
+})
+PUBLIC_PREFIXES = ("/assets/",)
+
+# Name of the SPA catch-all route registered at the bottom of this module.
+UI_FALLBACK_ROUTE_NAME = "ui-fallback"
+
+
+def _is_ui_request(request: Request) -> bool:
+    """True when only the SPA catch-all can answer a GET/HEAD request.
+
+    SPA deep links and root-level UI files (manifest.json, icons) have no
+    route of their own, so they are public without hardcoding build
+    filenames. A path that matches any other registered route, even with the
+    wrong method, is an API request and goes through the key check.
+    """
+    if request.method not in ("GET", "HEAD"):
+        return False
+    for route in request.app.routes:
+        if getattr(route, "name", None) == UI_FALLBACK_ROUTE_NAME:
+            continue
+        match, _ = route.matches(request.scope)
+        if match is not Match.NONE:
+            return False
+    return True
+
+
 @app.middleware("http")
 async def api_key_auth(request: Request, call_next):
-    # Only require auth on API routes — UI static files are public
-    path = request.url.path
-    API_PREFIXES = ("/v1/", "/model", "/journal", "/write-", "/read-", "/search-",
-                    "/semantic-", "/reflect", "/debug-", "/state", "/ingest/")
-    if not any(path.startswith(p) for p in API_PREFIXES):
-        return await call_next(request)
+    """Default-deny API key gate (ultrareview #281).
 
-    # PIN verify and status endpoints bypass API key auth (they are the UI auth)
-    PIN_PUBLIC_PATHS = ("/v1/security/pin/verify", "/v1/security/pin/status")
-    if path in PIN_PUBLIC_PATHS:
+    Public: PUBLIC_PATHS, PUBLIC_PREFIXES, and GET/HEAD requests that only the
+    SPA catch-all answers. Every other request needs the key via
+    `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+    """
+    path = request.url.path
+    if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES) or _is_ui_request(request):
         return await call_next(request)
 
     expected_key = get_ember_api_key()
@@ -226,7 +259,6 @@ async def audit_log(request: Request, call_next):
     return response
 
 
-app.include_router(chat_router)
 app.include_router(openai_adapter_router)
 app.include_router(ingest_router)
 memory_service = MemoryService()
@@ -1925,9 +1957,6 @@ def _start_tiering_thread() -> None:
 # Serves the built Ember UI from ui/ if it exists.
 # Must be registered AFTER all API routes — acts as a fallback.
 # If ui/ doesn't exist, the API runs in headless mode (API only).
-
-UI_FALLBACK_ROUTE_NAME = "ui-fallback"
-
 
 def _resolve_ui_file(path: str) -> Path | None:
     """Map a request path onto a file inside the UI build directory.

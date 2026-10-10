@@ -2316,12 +2316,19 @@ Recovery key is stored in a password manager (not on the encrypted drive).
 
 ## 31.4 API Authentication
 
-All endpoints except `GET /` require authentication via:
+Authentication is default-deny. Every request requires a key except:
+
+- `GET /` and `GET /api/health`
+- `/v1/security/pin/verify` and `/v1/security/pin/status` (the UI's own login step, reachable before the UI holds a key)
+- `/assets/*` (built UI bundle)
+- `GET`/`HEAD` requests that no registered route answers except the SPA catch-all (deep links, root-level UI files such as `manifest.json` and icons)
+
+Any route added in the future is denied until it is added to `PUBLIC_PATHS` or `PUBLIC_PREFIXES` in `src/api/main.py` on purpose. Keys are accepted via:
 
 - `Authorization: Bearer <key>` — Ember UI and OpenAI-compatible clients
 - `X-API-Key: <key>` — direct API access
 
-Implementation: `api_key_auth` middleware in `src/api/main.py` using `secrets.compare_digest` (timing-safe).
+Implementation: `api_key_auth` middleware in `src/api/main.py` using `secrets.compare_digest` (timing-safe). When no key is configured the gate is open; this is unchanged and tracked separately.
 
 **Key storage:** The API key is stored in Windows Credential Manager via the `keyring` library (DPAPI-encrypted, tied to Windows login). It is not written to `.env` or any plaintext file. To set or rotate: `python scripts/set_api_key.py`.
 

@@ -267,6 +267,11 @@ def update_session(
     }
     if new_project_id is not None:
         new_meta["project_id"] = new_project_id
+    # The new record is the one _resolve_sessions picks, so an eval-harness
+    # session must stay flagged across renames and moves or it surfaces in
+    # list_sessions() (ultrareview #280).
+    if meta.get("test"):
+        new_meta["test"] = True
 
     tags = ["session"]
     if title is not None:

@@ -70,6 +70,10 @@ def _dynamic_arms() -> dict[str, tuple[str, ...]]:
         _PROJECT_FACTORS,
         RECENCY,
     )
+    from src.retrieval.semantic_search import (
+        EXCLUDE_COUNTER_SITES,
+        FLOOR_COUNTER_SITES,
+    )
 
     return {
         # prior.py: all three arm domains are read off the prior's own term
@@ -102,13 +106,22 @@ def _dynamic_arms() -> dict[str, tuple[str, ...]]:
             "unknown",
             "unrecognised",
         ),
+        # semantic_search.py: _score_candidate builds both names from the
+        # search path it is scoring. Read off the module's own site tuples,
+        # same reason as the prior's term tables.
+        "semantic_search.should_exclude_result": EXCLUDE_COUNTER_SITES,
+        "semantic_search.min_score_floor": FLOOR_COUNTER_SITES,
     }
 
 
 # Sites whose name is assembled from a variable rather than written out.
 # Each needs its arm domain declared above; the prefix is what the parser
 # sees.
-_DYNAMIC_NAME_SITES = {"diversity.group_yielded"}
+_DYNAMIC_NAME_SITES = {
+    "diversity.group_yielded",
+    "semantic_search.should_exclude_result",
+    "semantic_search.min_score_floor",
+}
 
 
 def _string_literal(node: ast.AST) -> str | None:

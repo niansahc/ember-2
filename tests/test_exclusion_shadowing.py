@@ -119,18 +119,35 @@ class TestTheRetrieverNoLongerDuplicates:
 class TestTheInvariantTheDeletionDependsOn:
     """Every result semantic_search returns has passed its filter.
 
-    Checked structurally: each `results.append` must sit in a function
-    that also calls `should_exclude_result`. A new branch that collects
-    results without filtering them would put unfiltered content in front
-    of a retriever that no longer re-checks.
+    Checked structurally: each `results.append` in semantic_search must be
+    matched by a filter call, either `should_exclude_result` directly or
+    `_score_candidate`, the shared scoring step every search path runs
+    (ultrareview #280), which must itself call `should_exclude_result`. A
+    new branch that collects results without filtering them would put
+    unfiltered content in front of a retriever that no longer re-checks.
     """
 
-    def _search_function(self) -> ast.FunctionDef:
+    def _function(self, name: str) -> ast.FunctionDef:
         tree = ast.parse(SEARCH_SOURCE.read_text(encoding="utf-8"))
         for node in tree.body:
-            if isinstance(node, ast.FunctionDef) and node.name == "semantic_search":
+            if isinstance(node, ast.FunctionDef) and node.name == name:
                 return node
-        raise AssertionError("semantic_search not found")
+        raise AssertionError(f"{name} not found")
+
+    def _search_function(self) -> ast.FunctionDef:
+        return self._function("semantic_search")
+
+    @staticmethod
+    def _calls_to(function: ast.FunctionDef, name: str) -> int:
+        return sum(
+            1 for n in ast.walk(function)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Name)
+            and n.func.id == name
+        )
+
+    def test_shared_scoring_step_applies_the_filter(self):
+        assert self._calls_to(self._function("_score_candidate"), "should_exclude_result") == 1
 
     def test_every_result_append_is_matched_by_a_filter_call(self):
         function = self._search_function()
@@ -142,11 +159,9 @@ class TestTheInvariantTheDeletionDependsOn:
             and isinstance(n.func.value, ast.Name)
             and n.func.value.id == "results"
         )
-        filters = sum(
-            1 for n in ast.walk(function)
-            if isinstance(n, ast.Call)
-            and isinstance(n.func, ast.Name)
-            and n.func.id == "should_exclude_result"
+        filters = (
+            self._calls_to(function, "should_exclude_result")
+            + self._calls_to(function, "_score_candidate")
         )
         assert appends > 0
         assert filters == appends, (

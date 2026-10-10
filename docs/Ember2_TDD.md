@@ -2323,7 +2323,7 @@ Authentication is default-deny. Every request requires a key except:
 - `/assets/*` (built UI bundle)
 - `GET`/`HEAD` requests that no registered route answers except the SPA catch-all (deep links, root-level UI files such as `manifest.json` and icons)
 
-Any route added in the future is denied until it is added to `PUBLIC_PATHS` or `PUBLIC_PREFIXES` in `src/api/main.py` on purpose. Keys are accepted via:
+Any route added in the future is denied until it is added to `PUBLIC_PATHS` or `PUBLIC_PREFIXES` in `src/api/main.py` on purpose. The OpenAPI docs surface (`/docs`, `/redoc`, `/openapi.json`) is disabled at the `FastAPI` constructor; the schema remains available offline via `app.openapi()`. Keys are accepted via:
 
 - `Authorization: Bearer <key>` — Ember UI and OpenAI-compatible clients
 - `X-API-Key: <key>` — direct API access

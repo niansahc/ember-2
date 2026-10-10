@@ -137,7 +137,11 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=_lifespan)
+# No OpenAPI docs surface. Under default-deny auth, /docs and /redoc could
+# load only with a key and then fail fetching /openapi.json without one; a
+# half-working surface is worse than none for a single-user local product
+# (ultrareview #281). The schema is still available offline via app.openapi().
+app = FastAPI(lifespan=_lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 # No CORS middleware. The UI is always same-origin with the API: Vite proxies
 # API paths to :8000 in development, FastAPI serves the built ui/ in

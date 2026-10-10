@@ -3,7 +3,8 @@ tests/test_api_auth_default_deny.py
 
 The API key gate is default-deny (ultrareview #281). Before this change the
 middleware only guarded a prefix list, so /provider-key*, /tiering/run,
-/docs, /openapi.json and /redoc were reachable with no key, and the legacy
+/docs, /openapi.json and /redoc were reachable with no key (the docs surface
+is now disabled outright), and the legacy
 unauthenticated POST /chat wrote to the vault. Public paths are an explicit
 allowlist plus GET/HEAD requests only the SPA catch-all answers.
 """
@@ -14,7 +15,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import ui_client
+from tests.conftest import UI_FIXTURE_INDEX, ui_client
 
 KEY = "test-api-key-0123456789"
 WRONG_KEY = "wrong-key-0123456789"
@@ -36,9 +37,6 @@ def client(ui_tree: Path):
         ("GET", "/provider-key/anthropic"),
         ("DELETE", "/provider-key/anthropic"),
         ("POST", "/tiering/run"),
-        ("GET", "/openapi.json"),
-        ("GET", "/docs"),
-        ("GET", "/redoc"),
         ("GET", "/v1/models"),
         ("POST", "/ingest/upload"),
         ("POST", "/v1/chat/completions"),
@@ -82,6 +80,31 @@ def test_legacy_chat_route_is_gone(client: TestClient):
 
 def test_legacy_chat_module_removed():
     assert not (Path(__file__).resolve().parents[1] / "src" / "api" / "chat.py").exists()
+
+
+# --- OpenAPI docs surface disabled -----------------------------------------
+
+def test_docs_routes_not_registered():
+    from src.api.main import app
+
+    assert app.docs_url is None
+    assert app.redoc_url is None
+    assert app.openapi_url is None
+    paths = {getattr(route, "path", None) for route in app.routes}
+    assert paths.isdisjoint({"/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"})
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_docs_paths_fall_to_catch_all(client: TestClient, path: str):
+    """With no route registered, these are plain GETs the SPA catch-all
+    answers (index.html here; 404 headless). None of them serve Swagger UI,
+    ReDoc, or the schema, with or without a key."""
+    for headers in ({}, {"X-API-Key": KEY}):
+        response = client.get(path, headers=headers)
+        assert response.status_code == 200, (path, headers, response.status_code)
+        assert response.text == UI_FIXTURE_INDEX
+        body = response.text.lower()
+        assert "swagger" not in body and "redoc" not in body and '"openapi"' not in body
 
 
 # --- Public without a key -------------------------------------------------

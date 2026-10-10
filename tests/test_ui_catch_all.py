@@ -11,55 +11,36 @@ ui/ does not exist. _UI_DIR is patched to a fixture tree.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-INDEX_BODY = "<html><body>fixture-index</body></html>"
-FAVICON_BYTES = b"\x00\x00\x01\x00fixture-favicon"
-SECRET_BYTES = b"SENTINEL-OUTSIDE-UI-DIR"
-
-
-@pytest.fixture
-def ui_tree(tmp_path: Path):
-    """A fixture UI dir with a sibling directory that must stay unreachable."""
-    ui_dir = tmp_path / "ui"
-    (ui_dir / "assets").mkdir(parents=True)
-    (ui_dir / "index.html").write_text(INDEX_BODY, encoding="utf-8")
-    (ui_dir / "favicon.ico").write_bytes(FAVICON_BYTES)
-    (ui_dir / "assets" / "app.js").write_text("console.log('fixture');", encoding="utf-8")
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "secret.txt").write_bytes(SECRET_BYTES)
-    return ui_dir
+from tests.conftest import (
+    UI_FIXTURE_FAVICON as FAVICON_BYTES,
+    UI_FIXTURE_INDEX as INDEX_BODY,
+    UI_FIXTURE_SECRET as SECRET_BYTES,
+    ui_client,
+)
 
 
 @pytest.fixture
 def client(ui_tree: Path):
-    import src.api.main as main_module
-
-    with patch.object(main_module, "_UI_DIR", ui_tree), \
-         patch.object(main_module, "_cached_index_html", None), \
-         patch.object(main_module, "_cached_index_mtime", 0.0), \
-         patch("src.api.main.get_ember_api_key", return_value=None):
-        yield TestClient(main_module.app)
+    with ui_client(ui_tree) as c:
+        yield c
 
 
 def _traversal_paths(ui_tree: Path) -> list[str]:
-    """Request paths that all name <tmp>/outside/secret.txt from the UI dir."""
+    """Request paths that all name <tmp>/outside/secret.txt from the UI dir.
+    The last is the absolute form: "/C:/.../secret.txt" on Windows,
+    "//tmp/.../secret.txt" on POSIX."""
     secret = ui_tree.parent / "outside" / "secret.txt"
-    if os.name == "nt":
-        absolute = "/" + secret.as_posix()  # "/C:/.../outside/secret.txt"
-    else:
-        absolute = "/" + secret.as_posix()  # "//tmp/.../outside/secret.txt"
     return [
         "/%2e%2e/outside/secret.txt",
         "/..%2foutside/secret.txt",
         "/%2e%2e%2foutside/secret.txt",
-        absolute,
+        "/" + secret.as_posix(),
     ]
 
 

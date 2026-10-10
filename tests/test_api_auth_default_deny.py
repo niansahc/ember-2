@@ -10,31 +10,21 @@ allowlist plus GET/HEAD requests only the SPA catch-all answers.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+from tests.conftest import ui_client
 
 KEY = "test-api-key-0123456789"
 WRONG_KEY = "wrong-key-0123456789"
 
 
 @pytest.fixture
-def client(tmp_path: Path):
-    """App with a configured key and a fixture UI dir behind the catch-all."""
-    import src.api.main as main_module
-
-    ui_dir = tmp_path / "ui"
-    (ui_dir / "assets").mkdir(parents=True)
-    (ui_dir / "index.html").write_text("<html>fixture</html>", encoding="utf-8")
-    (ui_dir / "manifest.json").write_text('{"name": "fixture"}', encoding="utf-8")
-    (ui_dir / "assets" / "app.js").write_text("// fixture", encoding="utf-8")
-
-    with patch.object(main_module, "_UI_DIR", ui_dir), \
-         patch.object(main_module, "_cached_index_html", None), \
-         patch.object(main_module, "_cached_index_mtime", 0.0), \
-         patch("src.api.main.get_ember_api_key", return_value=KEY):
-        yield TestClient(main_module.app)
+def client(ui_tree: Path):
+    """App with a configured key and the fixture UI tree behind the catch-all."""
+    with ui_client(ui_tree, api_key=KEY) as c:
+        yield c
 
 
 # --- Denied without a key -------------------------------------------------

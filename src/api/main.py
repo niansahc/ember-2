@@ -37,6 +37,7 @@ from src.api.openai_adapter import router as openai_adapter_router, llm_adapter
 from src.api.routes.ingest import router as ingest_router
 from src.context.service import ContextService
 from src.core.config import get_ember_api_key, get_cloud_models
+from src.core.paths import resolve_inside
 from src.memory.service import MemoryService
 from src.memory.session import (
     list_sessions,
@@ -1954,31 +1955,19 @@ def _start_tiering_thread() -> None:
 
 
 # ── UI static file serving ─────────────────────────────────────────────
-# Serves the built Ember UI from ui/ if it exists.
-# Must be registered AFTER all API routes — acts as a fallback.
-# If ui/ doesn't exist, the API runs in headless mode (API only).
+# Must be registered AFTER all API routes: the catch-all answers whatever
+# no API route claimed.
 
 def _resolve_ui_file(path: str) -> Path | None:
-    """Map a request path onto a file inside the UI build directory.
-
-    Returns the resolved path only when it is a regular file located inside
-    _UI_DIR after dot-segment and symlink resolution. Anything that escapes
-    the directory (decoded `..` segments, absolute or drive-letter paths)
-    returns None so the caller falls back to index.html. _UI_DIR is read at
+    """A regular file inside the UI build directory for a request path, or
+    None. Decoded `..` segments and absolute or drive-letter paths resolve
+    outside the directory and fall back to index.html. _UI_DIR is read at
     call time so tests can point it at a fixture tree.
     """
-    try:
-        root = _UI_DIR.resolve()
-        candidate = (root / path).resolve()
-        if not candidate.is_relative_to(root):
-            logger.warning("[UI] Rejected path outside UI dir: %r", path)
-            return None
-        if not candidate.is_file():
-            return None
-        return candidate
-    except (OSError, ValueError):
-        # Unresolvable path (embedded NUL, too long, bad drive) is never a UI file.
+    candidate = resolve_inside(_UI_DIR, path)
+    if candidate is None or not candidate.is_file():
         return None
+    return candidate
 
 
 if (_UI_DIR / "assets").is_dir():

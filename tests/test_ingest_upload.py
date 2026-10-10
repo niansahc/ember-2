@@ -8,7 +8,13 @@ Does NOT test actual PDF/DOCX parsing (those have their own importers).
 
 import base64
 import io
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
+from fastapi.testclient import TestClient
+
+from tests.conftest import _make_vault_tree
 
 
 class TestUploadRouting:
@@ -97,11 +103,6 @@ class TestSessionImportFix:
 # any disk write.
 # ---------------------------------------------------------------------------
 
-from pathlib import Path
-from unittest.mock import patch
-
-from fastapi.testclient import TestClient
-
 BACKSLASH = chr(92)
 NUL = chr(0)
 
@@ -114,8 +115,7 @@ def _tree(root: Path) -> list[str]:
 def upload_vault(tmp_path: Path):
     """A throwaway vault for the upload route, with the imports tree present."""
     vault = tmp_path / "vault"
-    (vault / "imports").mkdir(parents=True)
-    (vault / "memory" / "ingested").mkdir(parents=True)
+    _make_vault_tree(vault)
     return vault
 
 
@@ -147,6 +147,7 @@ class TestSafeUploadName:
             BACKSLASH.join(["..", "..", "escaped.pdf"]),
             "C:" + BACKSLASH + "outside" + BACKSLASH + "escaped.pdf",
             "sub/escaped.pdf",
+            "C:notes.pdf",
             "escaped" + NUL + ".pdf",
         ],
     )

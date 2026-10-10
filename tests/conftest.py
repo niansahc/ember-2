@@ -523,3 +523,43 @@ def stub_both_embed_bindings(vector):
     with patch("src.retrieval.semantic_search.embed_text", return_value=vector), \
          patch("src.retrieval.embed_memory.embed_text", return_value=vector):
         yield vector
+
+
+# ---------------------------------------------------------------------------
+# Fixture UI tree and client (SPA catch-all, auth gate, CORS tests)
+# ---------------------------------------------------------------------------
+
+UI_FIXTURE_INDEX = "<html><body>fixture-index</body></html>"
+UI_FIXTURE_FAVICON = b"\x00\x00\x01\x00fixture-favicon"
+UI_FIXTURE_MANIFEST = '{"name": "fixture"}'
+UI_FIXTURE_SECRET = b"SENTINEL-OUTSIDE-UI-DIR"
+
+
+@pytest.fixture
+def ui_tree(tmp_path: Path) -> Path:
+    """A built-UI stand-in under tmp_path/ui, plus a sibling tmp_path/outside/
+    secret.txt that the catch-all must never serve."""
+    ui_dir = tmp_path / "ui"
+    (ui_dir / "assets").mkdir(parents=True)
+    (ui_dir / "index.html").write_text(UI_FIXTURE_INDEX, encoding="utf-8")
+    (ui_dir / "favicon.ico").write_bytes(UI_FIXTURE_FAVICON)
+    (ui_dir / "manifest.json").write_text(UI_FIXTURE_MANIFEST, encoding="utf-8")
+    (ui_dir / "assets" / "app.js").write_text("console.log('fixture');", encoding="utf-8")
+    (tmp_path / "outside").mkdir()
+    (tmp_path / "outside" / "secret.txt").write_bytes(UI_FIXTURE_SECRET)
+    return ui_dir
+
+
+@contextlib.contextmanager
+def ui_client(ui_dir: Path, api_key: str | None = None):
+    """TestClient over the app with _UI_DIR pointed at `ui_dir`, the
+    index.html cache cleared, and the key gate set to `api_key` (None = open)."""
+    from fastapi.testclient import TestClient
+
+    import src.api.main as main_module
+
+    with patch.object(main_module, "_UI_DIR", ui_dir), \
+         patch.object(main_module, "_cached_index_html", None), \
+         patch.object(main_module, "_cached_index_mtime", 0.0), \
+         patch("src.api.main.get_ember_api_key", return_value=api_key):
+        yield TestClient(main_module.app)

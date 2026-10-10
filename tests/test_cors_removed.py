@@ -9,10 +9,11 @@ credentials let any site drive the API from a browser (ultrareview #281).
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+from tests.conftest import ui_client
 
 CORS_HEADERS = (
     "access-control-allow-origin",
@@ -24,20 +25,9 @@ FOREIGN_ORIGIN = {"Origin": "https://evil.example"}
 
 
 @pytest.fixture
-def client(tmp_path: Path):
-    import src.api.main as main_module
-
-    ui_dir = tmp_path / "ui"
-    ui_dir.mkdir()
-    (ui_dir / "index.html").write_text("<html>fixture</html>", encoding="utf-8")
-    (tmp_path / "outside").mkdir()
-    (tmp_path / "outside" / "secret.txt").write_text("sentinel", encoding="utf-8")
-
-    with patch.object(main_module, "_UI_DIR", ui_dir), \
-         patch.object(main_module, "_cached_index_html", None), \
-         patch.object(main_module, "_cached_index_mtime", 0.0), \
-         patch("src.api.main.get_ember_api_key", return_value=None):
-        yield TestClient(main_module.app)
+def client(ui_tree: Path):
+    with ui_client(ui_tree) as c:
+        yield c
 
 
 def _assert_no_cors(response):
@@ -64,7 +54,7 @@ def test_root_with_foreign_origin_has_no_cors_headers(client: TestClient):
 def test_traversal_attempt_with_foreign_origin_has_no_cors_headers(client: TestClient):
     response = client.get("/%2e%2e/outside/secret.txt", headers=FOREIGN_ORIGIN)
     assert response.status_code == 200
-    assert "sentinel" not in response.text
+    assert b"SENTINEL" not in response.content
     _assert_no_cors(response)
     assert "Content-Security-Policy" in response.headers
 

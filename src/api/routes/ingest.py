@@ -2,7 +2,7 @@ import base64
 import json
 import logging
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from src.api.limiter import limiter
 from src.core.config import get_private_vault_path
+from src.core.paths import resolve_inside
 from src.memory.write_memory import write_memory
 from src.ingest.importers.chatgpt import load_chatgpt_export
 from src.ingest.importers.csv import load_csv
@@ -59,11 +60,9 @@ def _validate_import_path(file_path: str) -> Path:
     """
     vault_path = get_private_vault_path()
     allowed_root = (vault_path / "imports").resolve()
-    resolved = Path(file_path).resolve()
+    resolved = resolve_inside(allowed_root, file_path)
 
-    try:
-        resolved.relative_to(allowed_root)
-    except ValueError:
+    if resolved is None:
         raise HTTPException(
             status_code=400,
             detail=f"file_path must be inside the vault imports directory: {allowed_root}",
@@ -76,29 +75,33 @@ def _validate_import_path(file_path: str) -> Path:
 
 
 def _safe_upload_name(raw: str | None) -> str:
-    """Reduce a client-supplied upload filename to one safe path segment.
+    """Accept a client-supplied upload filename only if it is a bare basename.
 
-    Browsers send a bare basename. Anything else (a path separator in either
-    style, a NUL byte, an empty name, `.` or `..`) is not a filename a user
-    picked and is rejected with HTTP 400 before any disk write. The name is
-    never joined onto the uploads directory until it has passed here
-    (ultrareview finding on #281).
+    Browsers send a bare basename. A name that either path flavour would
+    split (a directory part, a drive prefix such as `C:notes.pdf`), an empty
+    name, `.` or `..`, or an embedded NUL is rejected with HTTP 400 before any
+    disk write (ultrareview finding on #281).
     """
     if raw is None:
         raise HTTPException(status_code=400, detail="Upload is missing a filename.")
     name = raw.strip()
-    if not name or name in (".", "..") or "\x00" in name or "/" in name or "\\" in name:
+    is_basename = (
+        name not in ("", ".", "..")
+        and chr(0) not in name
+        and PureWindowsPath(name).name == name
+        and PurePosixPath(name).name == name
+    )
+    if not is_basename:
         logger.warning("[UPLOAD] Rejected unsafe filename (%d chars)", len(raw))
         raise HTTPException(status_code=400, detail="Invalid upload filename.")
     return name
 
 
 def _upload_target(uploads_dir: Path, name: str) -> Path:
-    """The path a sanitized upload is written to, confirmed to sit directly
-    inside uploads_dir after resolution. Second layer under _safe_upload_name."""
-    target = uploads_dir / name
-    if target.resolve().parent != uploads_dir.resolve():
-        logger.warning("[UPLOAD] Rejected filename resolving outside uploads dir")
+    """Where a sanitized upload is written: confirmed to resolve directly
+    inside uploads_dir. Second layer under _safe_upload_name."""
+    target = resolve_inside(uploads_dir, name, direct_child=True)
+    if target is None:
         raise HTTPException(status_code=400, detail="Invalid upload filename.")
     return target
 

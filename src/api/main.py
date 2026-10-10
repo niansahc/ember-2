@@ -2,7 +2,7 @@
 src/api/main.py
 
 FastAPI application entry point for Ember-2. Registers all API routes,
-middleware (auth, rate limiting, CORS, audit logging), and the nightly
+middleware (auth, rate limiting, audit logging), and the nightly
 tiering scheduler. Serves the built Ember UI from ui/ as a static
 fallback after all API routes.
 
@@ -129,9 +129,6 @@ def _write_audit_log(method: str, path: str, client_ip: str, status: int, ms: in
         f.write(entry + "\n")
 
 
-from fastapi.middleware.cors import CORSMiddleware
-
-
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     """Start the nightly tiering scheduler (defined further down)."""
@@ -141,13 +138,11 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(lifespan=_lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# No CORS middleware. The UI is always same-origin with the API: Vite proxies
+# API paths to :8000 in development, FastAPI serves the built ui/ in
+# production, and remote access goes through a reverse proxy on the same
+# origin. A wildcard allow-origin with credentials let any website drive the
+# API from a logged-in browser (ultrareview finding on #281).
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)

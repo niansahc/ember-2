@@ -261,13 +261,15 @@ async def api_key_auth(request: Request, call_next):
 # left alone so SPA navigation and API reads keep working.
 _STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
+# scope["server"] is absent only under a bare ASGI harness; uvicorn's default.
+_DEFAULT_SERVER = ("127.0.0.1", 8000)
+
 
 def _allowed_hosts(request: Request) -> frozenset[str]:
     """Host values this request may carry: loopback on the port the server is
     listening on, plus EMBER_ALLOWED_HOSTS. Browsers omit a default port, so
     the bare names are accepted when the server listens on 80 or 443."""
-    server = request.scope.get("server") or ("127.0.0.1", 8000)
-    port = server[1]
+    port = (request.scope.get("server") or _DEFAULT_SERVER)[1]
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     if port in (80, 443):
         hosts.update({"127.0.0.1", "localhost"})
@@ -292,21 +294,35 @@ async def host_origin_guard(request: Request, call_next):
     browser then sends that foreign name as Host). 403 on a state-changing
     method when the browser marks the request cross-site (`Sec-Fetch-Site:
     cross-site`) or sends an Origin that is not an allowed host. Non-browser
-    clients send neither header and are unaffected. Runs before the key gate.
+    clients send neither header and are unaffected.
+
+    Hand-rolled rather than Starlette's TrustedHostMiddleware on purpose: that
+    middleware drops the port, and the port is load-bearing here. A page from
+    another local dev server (127.0.0.1:9999) is same-site to the browser, so
+    Sec-Fetch-Site never says cross-site; only the port-bearing Origin compare
+    against the same allowed set rejects it.
+
+    Middleware order, outermost first: audit_log, host_origin_guard,
+    api_key_auth, add_security_headers (`@app.middleware` wraps later
+    registrations outside earlier ones). Keep this guard registered after
+    api_key_auth so it runs before the key gate.
     """
     allowed = _allowed_hosts(request)
-    host = request.headers.get("host", "").strip().lower()
+    host = request.headers.get("host", "").lower()
     if host not in allowed:
         logger.warning("[HOST] Rejected request with unexpected Host header (%d chars)", len(host))
         return JSONResponse(status_code=421, content={"detail": "Misdirected request"})
 
     if request.method in _STATE_CHANGING_METHODS:
-        if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
-            logger.warning("[ORIGIN] Rejected cross-site %s %s", request.method, _scope_path(request))
-            return JSONResponse(status_code=403, content={"detail": "Cross-site request rejected"})
         origin = request.headers.get("origin")
-        if origin is not None and _origin_host(origin) not in allowed:
-            logger.warning("[ORIGIN] Rejected %s %s from foreign origin", request.method, _scope_path(request))
+        if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+            reason = "cross-site"
+        elif origin is not None and _origin_host(origin) not in allowed:
+            reason = "foreign origin"
+        else:
+            reason = None
+        if reason:
+            logger.warning("[ORIGIN] Rejected %s %s (%s)", request.method, _scope_path(request), reason)
             return JSONResponse(status_code=403, content={"detail": "Cross-site request rejected"})
 
     return await call_next(request)

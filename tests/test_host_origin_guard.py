@@ -11,23 +11,20 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import ui_client
+from tests.conftest import LOOPBACK_BASE_URL, UI_FIXTURE_API_KEY as KEY, ui_client
 
-KEY = "test-api-key-0123456789"
 EXTRA_HOST = "ember.example.ts.net"
 
 
 @pytest.fixture
-def client(ui_tree, monkeypatch):
-    monkeypatch.delenv("EMBER_ALLOWED_HOSTS", raising=False)
-    with ui_client(ui_tree, api_key=KEY, base_url="http://127.0.0.1:8000") as c:
-        yield c
+def client(loopback_keyed_client):
+    return loopback_keyed_client
 
 
 @pytest.fixture
 def client_with_extra_host(ui_tree, monkeypatch):
     monkeypatch.setenv("EMBER_ALLOWED_HOSTS", f" {EXTRA_HOST} , other.example:9000")
-    with ui_client(ui_tree, api_key=KEY, base_url="http://127.0.0.1:8000") as c:
+    with ui_client(ui_tree, api_key=KEY, base_url=LOOPBACK_BASE_URL) as c:
         yield c
 
 
@@ -138,11 +135,7 @@ def test_cross_site_get_is_not_blocked(client: TestClient):
 
 
 # --- Positive controls with a valid key --------------------------------------
-
-def test_keyed_route_with_valid_key_and_good_host(client: TestClient):
-    response = client.get("/v1/models", headers={"X-API-Key": KEY})
-    assert response.status_code not in (401, 403, 421)
-
+# GET with a valid key is covered in test_auth_scope_path.py on the same client.
 
 def test_keyed_post_with_valid_key_and_same_origin(client: TestClient):
     response = client.post(

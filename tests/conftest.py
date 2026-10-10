@@ -540,6 +540,8 @@ UI_FIXTURE_INDEX = "<html><body>fixture-index</body></html>"
 UI_FIXTURE_FAVICON = b"\x00\x00\x01\x00fixture-favicon"
 UI_FIXTURE_MANIFEST = '{"name": "fixture"}'
 UI_FIXTURE_SECRET = b"SENTINEL-OUTSIDE-UI-DIR"
+UI_FIXTURE_API_KEY = "test-api-key-0123456789"
+LOOPBACK_BASE_URL = "http://127.0.0.1:8000"
 
 
 @pytest.fixture
@@ -571,3 +573,12 @@ def ui_client(ui_dir: Path, api_key: str | None = None, base_url: str = "http://
          patch.object(main_module, "_cached_index_mtime", 0.0), \
          patch("src.api.main.get_ember_api_key", return_value=api_key):
         yield TestClient(main_module.app, base_url=base_url)
+
+
+@pytest.fixture
+def loopback_keyed_client(ui_tree: Path, monkeypatch):
+    """Keyed client presenting Host: 127.0.0.1:8000 with EMBER_ALLOWED_HOSTS
+    unset, so the host allowlist is exactly the loopback defaults."""
+    monkeypatch.delenv("EMBER_ALLOWED_HOSTS", raising=False)
+    with ui_client(ui_tree, api_key=UI_FIXTURE_API_KEY, base_url=LOOPBACK_BASE_URL) as c:
+        yield c

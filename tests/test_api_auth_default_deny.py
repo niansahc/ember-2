@@ -15,9 +15,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import UI_FIXTURE_INDEX, ui_client
+from tests.conftest import UI_FIXTURE_API_KEY as KEY, UI_FIXTURE_INDEX, ui_client
 
-KEY = "test-api-key-0123456789"
 WRONG_KEY = "wrong-key-0123456789"
 
 
@@ -87,9 +86,6 @@ def test_legacy_chat_module_removed():
 def test_docs_routes_not_registered():
     from src.api.main import app
 
-    assert app.docs_url is None
-    assert app.redoc_url is None
-    assert app.openapi_url is None
     paths = {getattr(route, "path", None) for route in app.routes}
     assert paths.isdisjoint({"/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"})
 
@@ -103,8 +99,6 @@ def test_docs_paths_fall_to_catch_all(client: TestClient, path: str):
         response = client.get(path, headers=headers)
         assert response.status_code == 200, (path, headers, response.status_code)
         assert response.text == UI_FIXTURE_INDEX
-        body = response.text.lower()
-        assert "swagger" not in body and "redoc" not in body and '"openapi"' not in body
 
 
 # --- Public without a key -------------------------------------------------

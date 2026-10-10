@@ -1931,16 +1931,47 @@ def _start_tiering_thread() -> None:
 # Must be registered AFTER all API routes — acts as a fallback.
 # If ui/ doesn't exist, the API runs in headless mode (API only).
 
-if _UI_DIR.is_dir():
+UI_FALLBACK_ROUTE_NAME = "ui-fallback"
+
+
+def _resolve_ui_file(path: str) -> Path | None:
+    """Map a request path onto a file inside the UI build directory.
+
+    Returns the resolved path only when it is a regular file located inside
+    _UI_DIR after dot-segment and symlink resolution. Anything that escapes
+    the directory (decoded `..` segments, absolute or drive-letter paths)
+    returns None so the caller falls back to index.html. _UI_DIR is read at
+    call time so tests can point it at a fixture tree.
+    """
+    try:
+        root = _UI_DIR.resolve()
+        candidate = (root / path).resolve()
+        if not candidate.is_relative_to(root):
+            logger.warning("[UI] Rejected path outside UI dir: %r", path)
+            return None
+        if not candidate.is_file():
+            return None
+        return candidate
+    except (OSError, ValueError):
+        # Unresolvable path (embedded NUL, too long, bad drive) is never a UI file.
+        return None
+
+
+if (_UI_DIR / "assets").is_dir():
     # Serve static assets (js, css, images)
     app.mount("/assets", StaticFiles(directory=_UI_DIR / "assets"), name="ui-assets")
 
-    # SPA catch-all: any non-API route returns index.html
-    @app.get("/{path:path}")
-    def serve_ui(path: str):
-        # If the file exists in ui/, serve it directly (favicon, etc.)
-        file_path = _UI_DIR / path
-        if file_path.is_file():
-            return FileResponse(file_path)
-        # Otherwise serve index.html (with injected API key) for SPA routing
+
+# SPA catch-all, registered unconditionally so the route exists in every
+# deployment (and in CI, where ui/ is absent). Headless installs still 404
+# on unknown paths because there is no index.html to fall back to.
+@app.get("/{path:path}", name=UI_FALLBACK_ROUTE_NAME, include_in_schema=False)
+def serve_ui(path: str):
+    # Serve root-level UI files (favicon, manifest, icons) when they resolve
+    # inside the UI dir; everything else gets index.html for SPA routing.
+    file_path = _resolve_ui_file(path)
+    if file_path is not None:
+        return FileResponse(file_path)
+    if (_UI_DIR / "index.html").is_file():
         return HTMLResponse(_get_index_html())
+    return JSONResponse(status_code=404, content={"detail": "Not Found"})

@@ -276,11 +276,12 @@ def index_record(record: dict, file_path: Path) -> None:
                 memory_type,
             )
     else:
-        # Fallback to JSON index for non-migrated types
+        # Fallback to JSON index for non-migrated types. append_entry holds
+        # the index lock across load, append and save; an unlocked sequence
+        # here lost concurrent writers' entries (ultrareview #280).
         index_path = vector_index.get_index_path(vault, memory_type)
-        index_data = vector_index.load_index(index_path)
-
-        index_data.append(
+        vector_index.append_entry(
+            index_path,
             {
                 "id": memory_id,
                 "timestamp": record.get("timestamp", memory_id),
@@ -292,10 +293,8 @@ def index_record(record: dict, file_path: Path) -> None:
                 "file_path": str(file_path),
                 "embedding": embedding,
                 "metadata": clean_metadata,
-            }
+            },
         )
-
-        vector_index.save_index(index_path, index_data)
 
 
 def write_memory(

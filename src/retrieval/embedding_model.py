@@ -17,7 +17,7 @@ from src.core.config import get_ember_embed_model
 
 
 # nomic-embed-text has an 8192 token context window.
-# Truncate at 8000 chars (~2000 tokens) to stay well within limits.
+# Truncate at 4000 chars (~1000 tokens) to stay well within limits.
 _MAX_EMBED_CHARS = 4000
 
 

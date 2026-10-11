@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from src.core.config import get_private_vault_path
 from src.core.jsonio import JsonIoError
+from src.core.timestamps import parse_vault_timestamp
 from src.memory.storage import MemoryStorage
 
 
@@ -65,16 +64,9 @@ def _memory_sort_key(memory: dict) -> float:
     if timestamp is None:
         return 0.0
 
-    try:
+    if isinstance(timestamp, (int, float)):
         return float(timestamp)
-    except (TypeError, ValueError):
-        pass
 
-    try:
-        normalized = str(timestamp).replace("Z", "+00:00")
-        dt = datetime.fromisoformat(normalized)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.timestamp()
-    except ValueError:
-        return 0.0
+    # Epoch strings, the vault's hyphenated form and ISO 8601 alike.
+    parsed = parse_vault_timestamp(str(timestamp))
+    return parsed.timestamp() if parsed is not None else 0.0

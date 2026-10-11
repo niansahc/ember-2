@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -530,6 +531,43 @@ def stub_both_embed_bindings(vector):
     with patch("src.retrieval.semantic_search.embed_text", return_value=vector), \
          patch("src.retrieval.embed_memory.embed_text", return_value=vector):
         yield vector
+
+
+@pytest.fixture
+def stub_write_embeddings(monkeypatch):
+    """write_memory always embeds; stub it so a test needs no Ollama."""
+    monkeypatch.setattr("src.memory.write_memory.embed_text", lambda _t: [0.0] * 768)
+
+
+# ---------------------------------------------------------------------------
+# Concurrency harness (ultrareview #280 race tests)
+# ---------------------------------------------------------------------------
+
+def run_in_threads(fn, threads: int) -> tuple[list, list[BaseException]]:
+    """Call fn(i) once on each of `threads` threads, released together by a
+    barrier. Returns (return values, raised exceptions); callers assert on
+    both, so a worker failure is never swallowed."""
+    barrier = threading.Barrier(threads)
+    results: list = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def worker(i: int):
+        try:
+            barrier.wait()
+            value = fn(i)
+            with lock:
+                results.append(value)
+        except BaseException as exc:  # collected and asserted by the caller
+            with lock:
+                errors.append(exc)
+
+    workers = [threading.Thread(target=worker, args=(i,)) for i in range(threads)]
+    for t in workers:
+        t.start()
+    for t in workers:
+        t.join(timeout=60)
+    return results, errors
 
 
 # ---------------------------------------------------------------------------

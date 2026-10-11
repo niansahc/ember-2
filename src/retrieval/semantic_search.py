@@ -3,6 +3,7 @@ import re
 from src.core.config import get_private_vault_path
 from src.observability.guard_counters import branch, count
 from src.retrieval.embed_memory import embed_text
+from src.retrieval.markers import META_MARKERS
 from src.retrieval.sqlite_vector_store import SqliteVectorStore
 from src.retrieval.store_cache import get_store
 from src.retrieval.vector_index import VectorIndex
@@ -35,6 +36,67 @@ def _get_memory_store() -> SqliteVectorStore | None:
     if not db_path.exists():
         return None
     return get_store(db_path)
+
+
+# Guard-counter sites for _score_candidate, one per search path in
+# semantic_search(). tools/guard_counter_sites.py reads these tuples as the
+# domains of the two f-string counter names, so the declared inventory
+# follows a path added here instead of relying on a retyped copy. Only the
+# SQLite paths count a floor (see _score_candidate).
+EXCLUDE_COUNTER_SITES = (
+    "memory_typed",
+    "memory_all_types",
+    "json_typed",
+    "json_all_types",
+    "ingested",
+)
+FLOOR_COUNTER_SITES = ("memory_typed", "memory_all_types", "ingested")
+
+
+def _score_candidate(
+    result: dict,
+    mem_type: str,
+    site: str,
+    *,
+    query: str,
+    normalized_query: str,
+    query_terms: list[str],
+    min_score: float | None,
+) -> dict | None:
+    """Filter and score one raw search hit. Returns None when it is dropped.
+
+    Every search path in semantic_search() runs this same step: exclude
+    meta/junk content, apply the raw-cosine floor, then add the lexical
+    and query-intent adjustments to the raw cosine, in that order.
+
+    site names the guard counters
+    (semantic_search.should_exclude_result.<site> and, for sites in
+    FLOOR_COUNTER_SITES, semantic_search.min_score_floor.<site>). The
+    JSON-index sites apply no floor here: VectorIndex.search() already
+    applied min_score to the raw cosine, and those paths have never counted
+    a floor of their own.
+    """
+    normalized_content = normalize_text(result.get("content", ""))
+
+    if count(f"semantic_search.should_exclude_result.{site}",
+             should_exclude_result(normalized_content)):
+        return None
+
+    raw_score = float(result.get("score", 0.0))
+    # Floor on raw cosine, before any adjustment (#205).
+    if site in FLOOR_COUNTER_SITES and count(
+            f"semantic_search.min_score_floor.{site}",
+            min_score is not None and raw_score < min_score):
+        return None
+
+    score = raw_score
+    score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
+    score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
+
+    result["score"] = score
+    result["raw_score"] = raw_score
+    result["memory_type"] = mem_type
+    return result
 
 
 def semantic_search(
@@ -75,165 +137,74 @@ def semantic_search(
     query_terms = extract_query_terms(normalized_query)
 
     per_type_limit = max(limit * 4, 10)
-    results = []
 
-    # Search memory.db for migrated types (conversation, profile, reflection, journal)
+    # (hits, memory_type, counter site) per search path. Every hit is then
+    # scored by the same _score_candidate step below.
+    batches: list[tuple[list[dict], str, str]] = []
+
+    # Search memory.db for migrated types (conversation, profile, reflection, journal).
+    # The store filters on memory_type, so every hit carries the searched type.
     memory_store = _get_memory_store()
     if memory_store is not None:
         if memory_type and memory_type in SQLITE_MEMORY_TYPES:
-            # Search a specific migrated type
-            sqlite_results = memory_store.search(
+            sqlite_types, site = [memory_type], "memory_typed"
+        elif memory_type is None:
+            sqlite_types, site = SQLITE_MEMORY_TYPES, "memory_all_types"
+        else:
+            sqlite_types = []
+        for mem_type in sqlite_types:
+            hits = memory_store.search(
                 query_embedding=query_embedding,
                 limit=per_type_limit,
-                memory_type=memory_type,
+                memory_type=mem_type,
             )
-            for result in sqlite_results:
-                content = result.get("content", "")
-                normalized_content = normalize_text(content)
-
-                if count("semantic_search.should_exclude_result.memory_typed",
-                         should_exclude_result(normalized_content)):
-                    continue
-
-                metadata = result.get("metadata", {})
-                mem_type = result.get("memory_type", memory_type)
-                raw_score = float(result.get("score", 0.0))
-                # Floor on raw cosine, before any adjustment (#205).
-                if count("semantic_search.min_score_floor.memory_typed",
-                         min_score is not None and raw_score < min_score):
-                    continue
-                score = raw_score
-                score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
-                score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
-
-                result["score"] = score
-                result["raw_score"] = raw_score
-                result["memory_type"] = mem_type
-                results.append(result)
-
-        elif memory_type is None:
-            # Search all migrated types
-            for mem_type in SQLITE_MEMORY_TYPES:
-                sqlite_results = memory_store.search(
-                    query_embedding=query_embedding,
-                    limit=per_type_limit,
-                    memory_type=mem_type,
-                )
-                for result in sqlite_results:
-                    content = result.get("content", "")
-                    normalized_content = normalize_text(content)
-
-                    if count("semantic_search.should_exclude_result.memory_all_types",
-                             should_exclude_result(normalized_content)):
-                        continue
-
-                    metadata = result.get("metadata", {})
-                    raw_score = float(result.get("score", 0.0))
-                    # Floor on raw cosine, before any adjustment (#205).
-                    if count("semantic_search.min_score_floor.memory_all_types",
-                             min_score is not None and raw_score < min_score):
-                        continue
-                    score = raw_score
-                    score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
-                    score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
-
-                    result["score"] = score
-                    result["raw_score"] = raw_score
-                    result["memory_type"] = mem_type
-                    results.append(result)
+            batches.append((hits, mem_type, site))
 
     # Fallback: search any remaining JSON indexes for non-migrated, non-ingested types
     if memory_type and memory_type not in SQLITE_MEMORY_TYPES and memory_type != "ingested":
-        index_results = vector_index.search(
-            vault_path=vault,
-            memory_type=memory_type,
-            query_embedding=query_embedding,
-            top_k=per_type_limit,
-            min_score=min_score,
-        )
-        for result in index_results:
-            content = result.get("content", "")
-            normalized_content = normalize_text(content)
-
-            if count("semantic_search.should_exclude_result.json_typed",
-                     should_exclude_result(normalized_content)):
-                continue
-
-            raw_score = float(result.get("score", 0.0))
-            score = raw_score
-            score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
-            metadata = result.get("metadata", {})
-            score += query_intent_adjustment(normalized_query, memory_type, normalized_content)
-
-            result["score"] = score
-            result["raw_score"] = raw_score
-            result["memory_type"] = memory_type
-            results.append(result)
+        json_types, site = [memory_type], "json_typed"
     elif memory_type is None:
-        # Search any remaining JSON indexes (non-migrated, non-ingested)
         json_types = [
             index_file.stem.replace("_index", "")
             for index_file in embeddings_dir.glob("*_index.json")
         ]
         json_types = [t for t in json_types if t != "ingested" and t not in SQLITE_MEMORY_TYPES]
+        site = "json_all_types"
+    else:
+        json_types = []
+    for mem_type in json_types:
+        hits = vector_index.search(
+            vault_path=vault,
+            memory_type=mem_type,
+            query_embedding=query_embedding,
+            top_k=per_type_limit,
+            min_score=min_score,
+        )
+        batches.append((hits, mem_type, site))
 
-        for mem_type in json_types:
-            index_results = vector_index.search(
-                vault_path=vault,
-                memory_type=mem_type,
-                query_embedding=query_embedding,
-                top_k=per_type_limit,
-                min_score=min_score,
-            )
-            for result in index_results:
-                content = result.get("content", "")
-                normalized_content = normalize_text(content)
-
-                if count("semantic_search.should_exclude_result.json_all_types",
-                         should_exclude_result(normalized_content)):
-                    continue
-
-                raw_score = float(result.get("score", 0.0))
-                score = raw_score
-                score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
-                metadata = result.get("metadata", {})
-                score += query_intent_adjustment(normalized_query, mem_type, normalized_content)
-
-                result["score"] = score
-                result["raw_score"] = raw_score
-                result["memory_type"] = mem_type
-                results.append(result)
-
-    # Search ingested content via SQLite store
+    # Search ingested content via SQLite store. Rows there can carry another
+    # memory_type, so the type is fixed to "ingested" here.
     if memory_type is None or memory_type == "ingested":
         sqlite_store = _get_sqlite_store()
         if sqlite_store is not None:
-            sqlite_results = sqlite_store.search(
+            hits = sqlite_store.search(
                 query_embedding=query_embedding,
                 limit=per_type_limit,
             )
-            for result in sqlite_results:
-                content = result.get("content", "")
-                normalized_content = normalize_text(content)
+            batches.append((hits, "ingested", "ingested"))
 
-                if count("semantic_search.should_exclude_result.ingested",
-                         should_exclude_result(normalized_content)):
-                    continue
-
-                metadata = result.get("metadata", {})
-                raw_score = float(result.get("score", 0.0))
-                # Floor on raw cosine, before any adjustment (#205).
-                if count("semantic_search.min_score_floor.ingested",
-                         min_score is not None and raw_score < min_score):
-                    continue
-                score = raw_score
-                score += lexical_relevance_bonus(normalized_query, query_terms, normalized_content, raw_query=query)
-                score += query_intent_adjustment(normalized_query, "ingested", normalized_content)
-
-                result["score"] = score
-                result["raw_score"] = raw_score
-                result["memory_type"] = "ingested"
-                results.append(result)
+    results = []
+    for hits, mem_type, site in batches:
+        for result in hits:
+            scored = _score_candidate(
+                result, mem_type, site,
+                query=query,
+                normalized_query=normalized_query,
+                query_terms=query_terms,
+                min_score=min_score,
+            )
+            if scored is not None:
+                results.append(scored)
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return results[:limit]
@@ -535,23 +506,9 @@ def should_exclude_result(content: str) -> bool:
     if count("should_exclude_result.under_40_chars", len(content) < 40):
         return True
 
-    meta_markers = (
-        "user asked:",
-        "ember responded:",
-        "assistant responded:",
-        "assistant said:",
-        "### task:",
-        "generate 1-3 broad tags",
-        '"user_message":',
-        '"memory_items":',
-        '"reflection_items":',
-        '"conversation_id":',
-        '"chunk_id":',
-    )
-
     if count(
         "should_exclude_result.meta_marker",
-        any(marker in content for marker in meta_markers),
+        any(marker in content for marker in META_MARKERS),
     ):
         return True
 

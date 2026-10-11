@@ -44,8 +44,8 @@ def next_timestamp() -> str:
     """Generate a microsecond-format timestamp string, guaranteed unique
     per process, including across threads.
 
-    Used by make_record() and by update_task_status_endpoint() in
-    src/api/main.py.
+    Used by make_record() and by update_task_status_endpoint() and
+    delete_task_endpoint() in src/api/main.py.
     """
     return _timestamps.next()
 

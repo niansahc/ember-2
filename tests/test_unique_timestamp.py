@@ -36,13 +36,11 @@ zero-duplicate assertions cannot pass vacuously.
 
 from __future__ import annotations
 
-import itertools
 import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-import src.core.timestamps as timestamps_mod
 import src.memory.lodestone_service as lodestone_service
 import src.memory.project as project
 import src.memory.session as session
@@ -50,7 +48,7 @@ import src.memory.write_memory as write_memory
 import src.state.state_service as state_service
 import src.state.timer_service as timer_service
 import src.tasks.task_service as task_service
-from tests.conftest import run_in_threads
+from tests.conftest import TickClock, install_tick_clock, run_in_threads
 
 READS_PER_TICK = 4
 THREADS = 8
@@ -77,32 +75,6 @@ class _FakeDateTime(datetime):
         return _YieldingStr(super().strftime(fmt))
 
 
-class _CoarseClock:
-    """Stands in for the `datetime` class in a patched module.
-
-    now() advances by `step` once every READS_PER_TICK reads. itertools.count
-    is thread-safe under the GIL, so the tick sequence is exact. Every other
-    attribute delegates to the real datetime class.
-    """
-
-    def __init__(self, step: timedelta) -> None:
-        self._reads = itertools.count()
-        self._step = step
-        self._base = datetime(2026, 1, 1, 12, 0, 0)
-
-    def now(self, tz=None):
-        n = next(self._reads)
-        value = self._base + self._step * (n // READS_PER_TICK)
-        return _FakeDateTime(
-            value.year, value.month, value.day,
-            value.hour, value.minute, value.second, value.microsecond,
-            tzinfo=tz,
-        )
-
-    def __getattr__(self, name):
-        return getattr(datetime, name)
-
-
 def _race(fn, threads: int = THREADS, per_thread: int = PER_THREAD) -> list[str]:
     """Call fn per_thread times on each of `threads` threads, started together."""
     batches, errors = run_in_threads(lambda _i: [fn() for _ in range(per_thread)], threads)
@@ -117,8 +89,7 @@ def _duplicates(values: list[str]) -> int:
 
 
 def _install_clock(monkeypatch, step: timedelta) -> None:
-    """Patch the clock UniqueTimestampSource reads (src.core.timestamps)."""
-    monkeypatch.setattr(timestamps_mod, "datetime", _CoarseClock(step))
+    install_tick_clock(monkeypatch, step, READS_PER_TICK, _FakeDateTime)
 
 
 GENERATORS = [
@@ -182,7 +153,7 @@ def test_generated_values_keep_each_module_format_and_timezone():
 def test_control_unlocked_check_then_set_collides():
     """The harness must be able to produce the defect. An unlocked
     check-then-set generator on the same fake clock has to collide."""
-    clock = _CoarseClock(timedelta(microseconds=1))
+    clock = TickClock(timedelta(microseconds=1), READS_PER_TICK, _FakeDateTime)
     state = {"last": ""}
 
     def unlocked() -> str:

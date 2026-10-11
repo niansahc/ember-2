@@ -4,14 +4,12 @@ tests/test_state_extractor.py
 Tests for automatic state extraction from conversation turns.
 """
 
-import itertools
 import json
 from datetime import datetime, timedelta
 
 import pytest
 from unittest.mock import patch, MagicMock
 
-import src.core.timestamps as timestamps_mod
 from src.state.state_extractor import (
     StateExtractor,
     EXTRACTABLE_CATEGORIES,
@@ -19,27 +17,14 @@ from src.state.state_extractor import (
 )
 from src.state.models import VALID_STATE_CATEGORIES, StateRecord
 from src.state.state_service import StateService
-
-
-class _SecondTickClock:
-    """Stands in for `datetime` in src.core.timestamps: every now() is one
-    second after the previous one, so the second-precision state source
-    that stamps extracted records never has to spin on the real clock."""
-
-    def __init__(self) -> None:
-        self._base = datetime(2026, 1, 1, 12, 0, 0)
-        self._reads = itertools.count()
-
-    def now(self, tz=None):
-        return (self._base + timedelta(seconds=next(self._reads))).replace(tzinfo=tz)
-
-    def __getattr__(self, name):
-        return getattr(datetime, name)
+from tests.conftest import install_tick_clock
 
 
 @pytest.fixture(autouse=True)
 def second_tick_clock(monkeypatch):
-    monkeypatch.setattr(timestamps_mod, "datetime", _SecondTickClock())
+    """Every clock read is one second later, so the second-precision state
+    source that stamps extracted records never spins on the real clock."""
+    install_tick_clock(monkeypatch, timedelta(seconds=1))
 
 
 class TestShortMessageSkipping:

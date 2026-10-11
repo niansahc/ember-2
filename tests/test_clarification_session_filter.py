@@ -18,47 +18,33 @@ synthetic records only.
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 
 from src.api.openai_adapter import _prior_turn_awaits_search_content
 from src.memory.read_memory import read_memories
-from src.memory.write_memory import write_memory
+from tests.conftest import synthetic_session_id, write_conversation_turn
 
 pytestmark = pytest.mark.usefixtures("stub_write_embeddings")
 
 
-def _session_id() -> str:
-    return f"sess_test_{uuid.uuid4().hex[:8]}"
-
-
-def _write_turn(session_id: str, role: str, text: str, **extra) -> str:
-    path = write_memory(
-        text=text, memory_type="conversation", source="test",
-        metadata={"session_id": session_id, "role": role, **extra},
-    )
-    assert path is not None
-    return path.stem
-
-
 def _write_clarification(session_id: str) -> str:
-    return _write_turn(
-        session_id, "assistant",
-        "What would you like me to search for on the web today?",
-        awaiting_search_content=True,
+    return write_conversation_turn(
+        session_id, "What would you like me to search for on the web today?",
+        role="assistant", awaiting_search_content=True,
     )
 
 
 def _write_other_traffic(turns: int = 6) -> None:
-    other = _session_id()
+    other = synthetic_session_id()
     for i in range(turns):
         role = "user" if i % 2 == 0 else "assistant"
-        _write_turn(other, role, f"Unrelated synthetic turn number {i} in another conversation.")
+        write_conversation_turn(
+            other, f"Unrelated synthetic turn number {i} in another conversation.", role=role,
+        )
 
 
 def test_clarification_found_when_newer_turns_from_other_sessions_exceed_limit():
-    sid = _session_id()
+    sid = synthetic_session_id()
     _write_clarification(sid)
     _write_other_traffic(6)
 
@@ -66,9 +52,9 @@ def test_clarification_found_when_newer_turns_from_other_sessions_exceed_limit()
 
 
 def test_clarification_in_another_session_does_not_leak():
-    sid = _session_id()
-    _write_turn(sid, "assistant", "Here is a plain answer with no clarification attached.")
-    _write_clarification(_session_id())
+    sid = synthetic_session_id()
+    write_conversation_turn(sid, "Here is a plain answer with no clarification attached.", role="assistant")
+    _write_clarification(synthetic_session_id())
 
     assert _prior_turn_awaits_search_content(sid) is False
 
@@ -76,16 +62,16 @@ def test_clarification_in_another_session_does_not_leak():
 def test_control_clarification_in_own_session_is_found():
     """Positive control for the no-leak test: the same flagged turn written
     in this session is detected, so the False above is not vacuous."""
-    sid = _session_id()
-    _write_turn(sid, "assistant", "Here is a plain answer with no clarification attached.")
+    sid = synthetic_session_id()
+    write_conversation_turn(sid, "Here is a plain answer with no clarification attached.", role="assistant")
     _write_clarification(sid)
 
     assert _prior_turn_awaits_search_content(sid) is True
 
 
 def test_read_memories_session_filter_applies_before_limit():
-    sid = _session_id()
-    own = [_write_turn(sid, "user", f"Own conversation synthetic turn {i}.") for i in range(3)]
+    sid = synthetic_session_id()
+    own = [write_conversation_turn(sid, f"Own conversation synthetic turn {i}.", role="user") for i in range(3)]
     _write_other_traffic(6)
 
     records = read_memories(memory_type="conversation", limit=2, session_id=sid)

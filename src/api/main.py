@@ -846,10 +846,7 @@ def delete_task_endpoint(task_id: str):
     if existing.status == "cancelled":
         return {"status": "already_cancelled", "id": task_id}
 
-    # next_timestamp(), as in update_task_status_endpoint: a raw clock read
-    # could repeat an update's timestamp within one tick, and the cancel
-    # record would share its filename and be silently dropped by
-    # TaskService.write().
+    # Same filename-collision guard as update_task_status_endpoint.
     from src.tasks.task_service import next_timestamp
     new_timestamp = next_timestamp()
 

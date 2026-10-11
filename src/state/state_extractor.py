@@ -26,7 +26,7 @@ import ollama
 
 from src.core.config import get_ember_auxiliary_model
 from src.state.models import VALID_STATE_CATEGORIES, StateRecord
-from src.state.state_service import _next_state_timestamp
+from src.state.state_service import StateService
 
 logger = logging.getLogger("ember.state_extractor")
 
@@ -196,7 +196,7 @@ class StateExtractor:
 
         records = []
 
-        for i, item in enumerate(extractions):
+        for item in extractions:
             state_type = item.get("type", "")
             text = item.get("text", "")
             confidence = item.get("confidence", "low")
@@ -230,18 +230,12 @@ class StateExtractor:
                 )
                 continue
 
-            # One timestamp per record, from the source make_record() uses.
-            # StateService names files {timestamp}_{type}.json and skips a
-            # write whose file exists, so a timestamp shared by the turn
-            # dropped every same-type extraction after the first. Second
-            # precision: a turn with several records waits up to one second
-            # per extra record (background thread, off the reply path).
-            timestamp = _next_state_timestamp()
-            record = StateRecord(
-                id=f"{timestamp}_{i}",
-                timestamp=timestamp,
-                type=state_type,
-                text=text.strip(),
+            # make_record() gives each record its own timestamp; one shared
+            # by the turn collided on {timestamp}_{type}.json for same-type
+            # extractions (see _state_timestamps in state_service).
+            record = StateService.make_record(
+                state_type,
+                text.strip(),
                 source="state_extractor",
                 tags=["auto_extracted", state_type],
                 metadata={
@@ -252,7 +246,7 @@ class StateExtractor:
             records.append(record)
             logger.info(
                 "[STATE_EXTRACT] Found: %s (confidence: %s, timestamp: %s)",
-                state_type, confidence, timestamp,
+                state_type, confidence, record.timestamp,
             )
 
         if records:

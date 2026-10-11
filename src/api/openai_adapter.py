@@ -248,21 +248,15 @@ def _prior_turn_awaits_search_content(session_id: str) -> bool:
     """True when this session's most recent assistant turn was a B2
     clarification (metadata.awaiting_search_content).
 
-    The session filter runs before the limit (read_memories session_id), so
-    newer turns from other conversations cannot push the clarification out
-    of the window. Raises on a vault read failure; the caller treats that
-    as non-fatal.
+    read_memories filters by session before the limit, so newer turns from
+    other conversations cannot push the clarification out of the window.
+    Raises on a vault read failure; the caller treats that as non-fatal.
     """
     for record in read_memories(memory_type="conversation", limit=5, session_id=session_id):
-        meta = record.get("metadata", {}) if isinstance(record, dict) else {}
-        if not isinstance(meta, dict):
-            continue
-        if meta.get("session_id") != session_id:
-            continue
-        if meta.get("role") != "assistant":
-            continue
-        # First (most recent) assistant turn in this session decides.
-        return meta.get("awaiting_search_content") is True
+        meta = record["metadata"]
+        if meta.get("role") == "assistant":
+            # First (most recent) assistant turn in this session decides.
+            return meta.get("awaiting_search_content") is True
     return False
 
 

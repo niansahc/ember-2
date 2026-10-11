@@ -37,13 +37,13 @@ def read_memories(
             # A single corrupt/unreadable record must not crash the whole read
             # (ADR-039). It is logged by safe_read_json; skip it and continue.
             continue
+        metadata = memory.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
         # Skip suppressed records (junk flagged by audit tools)
-        metadata = memory.get("metadata", {})
-        if isinstance(metadata, dict) and metadata.get("quality") == "suppressed":
+        if metadata.get("quality") == "suppressed":
             continue
-        if session_id is not None and (
-            not isinstance(metadata, dict) or metadata.get("session_id") != session_id
-        ):
+        if session_id is not None and metadata.get("session_id") != session_id:
             continue
         memories.append(memory)
 

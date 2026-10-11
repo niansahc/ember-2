@@ -20,12 +20,15 @@ on purpose) resolution falls back to the layer-1 throwaway vault.
 
 import atexit
 import contextlib
+import itertools
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import uuid
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -539,9 +542,62 @@ def stub_write_embeddings(monkeypatch):
     monkeypatch.setattr("src.memory.write_memory.embed_text", lambda _t: [0.0] * 768)
 
 
+def synthetic_session_id() -> str:
+    """A fresh synthetic session id. No vault content."""
+    return f"sess_test_{uuid.uuid4().hex[:8]}"
+
+
+def write_conversation_turn(session_id: str, text: str, **metadata) -> str:
+    """Write one synthetic conversation turn for `session_id` to the session
+    test vault and return its record id. Use with stub_write_embeddings."""
+    from src.memory.write_memory import write_memory
+
+    path = write_memory(
+        text=text, memory_type="conversation", source="test",
+        metadata={"session_id": session_id, **metadata},
+    )
+    assert path is not None
+    return path.stem
+
+
 # ---------------------------------------------------------------------------
-# Concurrency harness (ultrareview #280 race tests)
+# Concurrency harness and fake clock (ultrareview #280 race tests)
 # ---------------------------------------------------------------------------
+
+class TickClock:
+    """Stands in for the `datetime` class in src.core.timestamps.
+
+    now() advances by `step` once every `reads_per_tick` reads from a fixed
+    base. itertools.count is thread-safe under the GIL, so the tick sequence
+    is exact. Each value is built with `datetime_cls`, so a datetime subclass
+    can hook strftime. Every other attribute delegates to the real datetime.
+    """
+
+    def __init__(self, step, reads_per_tick: int = 1, datetime_cls=datetime) -> None:
+        self._reads = itertools.count()
+        self._step = step
+        self._reads_per_tick = reads_per_tick
+        self._datetime_cls = datetime_cls
+        self._base = datetime(2026, 1, 1, 12, 0, 0)
+
+    def now(self, tz=None):
+        value = self._base + self._step * (next(self._reads) // self._reads_per_tick)
+        return self._datetime_cls(
+            value.year, value.month, value.day,
+            value.hour, value.minute, value.second, value.microsecond,
+            tzinfo=tz,
+        )
+
+    def __getattr__(self, name):
+        return getattr(datetime, name)
+
+
+def install_tick_clock(monkeypatch, step, reads_per_tick: int = 1, datetime_cls=datetime) -> None:
+    """Patch the clock UniqueTimestampSource reads (src.core.timestamps)."""
+    import src.core.timestamps as timestamps_mod
+
+    monkeypatch.setattr(timestamps_mod, "datetime", TickClock(step, reads_per_tick, datetime_cls))
+
 
 def run_in_threads(fn, threads: int) -> tuple[list, list[BaseException]]:
     """Call fn(i) once on each of `threads` threads, released together by a

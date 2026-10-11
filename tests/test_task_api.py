@@ -137,3 +137,59 @@ class TestUpdateTaskStatus:
     def test_update_nonexistent_task(self, client):
         resp = client.patch("/v1/tasks/nonexistent", json={"status": "done"})
         assert resp.status_code == 404
+
+
+# Far-future so the record carrying it is the task's latest.
+SENTINEL_TIMESTAMP = "2099-01-01T00-00-00-000001"
+
+
+def _patch_task_timestamp_source(monkeypatch):
+    """Route task_service.next_timestamp() to a sentinel. Applied after the
+    task is created so the create record keeps a real timestamp."""
+    monkeypatch.setattr("src.tasks.task_service.next_timestamp", lambda: SENTINEL_TIMESTAMP)
+
+
+class TestDeleteTask:
+    """DELETE /v1/tasks/{id}"""
+
+    def test_delete_cancels_task(self, client):
+        task_id = client.post("/v1/tasks", json={"title": "Drop it"}).json()["id"]
+
+        resp = client.delete(f"/v1/tasks/{task_id}")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "cancelled", "id": task_id}
+        assert client.get(f"/v1/tasks/{task_id}").json()["status"] == "cancelled"
+
+        again = client.delete(f"/v1/tasks/{task_id}")
+        assert again.json() == {"status": "already_cancelled", "id": task_id}
+
+    def test_delete_nonexistent_task(self, client):
+        assert client.delete("/v1/tasks/nonexistent").status_code == 404
+
+    def test_delete_timestamp_comes_from_task_timestamp_source(self, client, monkeypatch):
+        """The cancel record is named {timestamp}_{slug}.json like every
+        other record for the task. A raw datetime.now() could repeat the
+        timestamp of an update written in the same clock tick, and
+        TaskService.write() would then silently drop the cancel record.
+        next_timestamp() never repeats a value."""
+        task_id = client.post("/v1/tasks", json={"title": "Cancel me"}).json()["id"]
+        _patch_task_timestamp_source(monkeypatch)
+
+        client.delete(f"/v1/tasks/{task_id}")
+
+        latest = client.get(f"/v1/tasks/{task_id}").json()
+        assert latest["timestamp"] == SENTINEL_TIMESTAMP
+        assert latest["status"] == "cancelled"
+
+    def test_control_update_timestamp_comes_from_task_timestamp_source(self, client, monkeypatch):
+        """Positive control: PATCH already uses next_timestamp(), so the same
+        patch shows up in its record. This proves the patch takes effect at
+        call time and the delete test fails only on the delete path."""
+        task_id = client.post("/v1/tasks", json={"title": "Finish me"}).json()["id"]
+        _patch_task_timestamp_source(monkeypatch)
+
+        client.patch(f"/v1/tasks/{task_id}", json={"status": "done"})
+
+        latest = client.get(f"/v1/tasks/{task_id}").json()
+        assert latest["timestamp"] == SENTINEL_TIMESTAMP
+        assert latest["status"] == "done"

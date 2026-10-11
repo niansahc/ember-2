@@ -846,8 +846,12 @@ def delete_task_endpoint(task_id: str):
     if existing.status == "cancelled":
         return {"status": "already_cancelled", "id": task_id}
 
-    from datetime import datetime
-    new_timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
+    # next_timestamp(), as in update_task_status_endpoint: a raw clock read
+    # could repeat an update's timestamp within one tick, and the cancel
+    # record would share its filename and be silently dropped by
+    # TaskService.write().
+    from src.tasks.task_service import next_timestamp
+    new_timestamp = next_timestamp()
 
     from src.tasks.models import TaskRecord
     cancelled = TaskRecord(
@@ -863,6 +867,10 @@ def delete_task_endpoint(task_id: str):
         metadata={**existing.metadata, "previous_status": existing.status},
     )
     task_service.write(cancelled)
+    # Timestamp only: the filename carries a slug of the task title.
+    logging.getLogger("ember.tasks").info(
+        "[TASK] Cancel record written, timestamp from next_timestamp(): %s", new_timestamp,
+    )
     return {"status": "cancelled", "id": task_id}
 
 

@@ -30,7 +30,7 @@ avoided.
 Storage notes
 -------------
 Timer records use microsecond-format timestamps generated locally
-via _next_timestamp() with the same locked spin-on-collision guard as
+via _next_timestamp() with the same locked uniqueness guard as
 session._now_id() and write_memory._next_timestamp() (BUG-005,
 ultrareview #280). This deviates from StateService.make_record(), which
 uses second precision.
@@ -57,7 +57,7 @@ logger = logging.getLogger("ember.timer_service")
 
 
 # ---------------------------------------------------------------------------
-# Timestamp helper -- microsecond format with locked spin guard
+# Timestamp helper -- microsecond format with locked uniqueness guard
 # ---------------------------------------------------------------------------
 
 # Guard against same-tick timestamp collisions when multiple timer records

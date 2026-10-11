@@ -16,13 +16,17 @@ Generation. UniqueTimestampSource is the one implementation of the
 "never return the same timestamp twice" guard that record writers use to
 name files `{timestamp}.json` (BUG-005). Each writer module used to carry
 its own unlocked check-then-set copy, which two threads could pass at once
-and both return the same value (ultrareview #280).
+and both return the same value (ultrareview #280). It advances logically
+rather than waiting on the clock, so no caller blocks for a clock tick.
 """
 
 from __future__ import annotations
 
+import logging
 import threading
-from datetime import datetime, timezone, tzinfo
+from datetime import datetime, timedelta, timezone, tzinfo
+
+logger = logging.getLogger("ember.timestamps")
 
 
 def parse_vault_timestamp(timestamp: str | None) -> datetime | None:
@@ -82,36 +86,44 @@ def parse_vault_timestamp(timestamp: str | None) -> datetime | None:
 
 
 class UniqueTimestampSource:
-    """Formatted wall-clock timestamps, never the same value twice in a row.
+    """Formatted wall-clock timestamps, strictly increasing per instance.
 
-    next() spins on datetime.now() until the formatted value differs from
-    the one it last returned. The lock is held across the read, the
-    comparison, and the assignment, so concurrent callers cannot both pass
-    the check with the same value.
+    next() returns max(now, last + one unit), where the unit is the format's
+    resolution: one microsecond for a format with %f, one second otherwise.
+    `now` is truncated to that unit first, so two reads inside one unit
+    compare equal. The lock is held across the read, the comparison and the
+    assignment, so concurrent callers each get their own value.
 
-    The spin is bounded by the clock's resolution, not by the format's
-    precision: one microsecond where datetime.now() has microsecond
-    resolution, about 15.6 ms on Windows under Python < 3.13, and up to one
-    second for a second-precision format. Callers block on the lock for at
-    most that long.
+    No call waits on the clock. When calls arrive faster than the unit, or
+    the wall clock steps backward (DST fall-back, an NTP correction), values
+    run ahead of the wall clock by one unit per call until it catches up. For
+    the second-precision state format, a burst of K records is stamped K
+    consecutive seconds starting now.
 
     Use one instance per set of records that share a directory and format.
-    The guard compares only against the immediately preceding value, so a
-    single instance shared across different formats or timezones would not
-    prevent repeats within any one of them.
+    Values are unique only within one instance and one process.
     """
 
     def __init__(self, fmt: str, tz: tzinfo | None = None) -> None:
+        if "%f" in fmt:
+            self._unit = timedelta(microseconds=1)
+        elif "%S" in fmt:
+            self._unit = timedelta(seconds=1)
+        else:
+            raise ValueError(f"timestamp format needs %S or %f: {fmt!r}")
         self._fmt = fmt
         self._tz = tz
         self._lock = threading.Lock()
-        self._last = ""
+        self._last: datetime | None = None
 
     def next(self) -> str:
-        """Return a timestamp string distinct from the previous return value."""
+        """Return a timestamp string later than every previous return value."""
         with self._lock:
-            while True:
-                candidate = datetime.now(self._tz).strftime(self._fmt)
-                if candidate != self._last:
-                    self._last = candidate
-                    return candidate
+            now = datetime.now(self._tz)
+            if self._unit >= timedelta(seconds=1):
+                now = now.replace(microsecond=0)
+            if self._last is not None and now <= self._last:
+                now = self._last + self._unit
+                logger.debug("[TIMESTAMP] Advanced logically past the clock (%s)", self._fmt)
+            self._last = now
+            return now.strftime(self._fmt)

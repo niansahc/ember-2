@@ -5,7 +5,7 @@ Tests for automatic state extraction from conversation turns.
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pytest
 from unittest.mock import patch, MagicMock
@@ -17,14 +17,6 @@ from src.state.state_extractor import (
 )
 from src.state.models import VALID_STATE_CATEGORIES, StateRecord
 from src.state.state_service import StateService
-from tests.conftest import install_tick_clock
-
-
-@pytest.fixture(autouse=True)
-def second_tick_clock(monkeypatch):
-    """Every clock read is one second later, so the second-precision state
-    source that stamps extracted records never spins on the real clock."""
-    install_tick_clock(monkeypatch, timedelta(seconds=1))
 
 
 class TestShortMessageSkipping:

@@ -21,12 +21,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
 
 import ollama
 
 from src.core.config import get_ember_auxiliary_model
 from src.state.models import VALID_STATE_CATEGORIES, StateRecord
+from src.state.state_service import _next_state_timestamp
 
 logger = logging.getLogger("ember.state_extractor")
 
@@ -194,7 +194,6 @@ class StateExtractor:
             logger.info("[STATE_EXTRACT] No state signals found this turn")
             return []
 
-        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
         records = []
 
         for i, item in enumerate(extractions):
@@ -231,6 +230,13 @@ class StateExtractor:
                 )
                 continue
 
+            # One timestamp per record, from the source make_record() uses.
+            # StateService names files {timestamp}_{type}.json and skips a
+            # write whose file exists, so a timestamp shared by the turn
+            # dropped every same-type extraction after the first. Second
+            # precision: a turn with several records waits up to one second
+            # per extra record (background thread, off the reply path).
+            timestamp = _next_state_timestamp()
             record = StateRecord(
                 id=f"{timestamp}_{i}",
                 timestamp=timestamp,
@@ -245,8 +251,8 @@ class StateExtractor:
             )
             records.append(record)
             logger.info(
-                "[STATE_EXTRACT] Found: %s (confidence: %s)",
-                state_type, confidence,
+                "[STATE_EXTRACT] Found: %s (confidence: %s, timestamp: %s)",
+                state_type, confidence, timestamp,
             )
 
         if records:

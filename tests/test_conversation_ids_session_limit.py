@@ -23,10 +23,7 @@ from src.memory.resolve_memory import find_conversation_ids_for_session
 from src.memory.write_memory import write_memory
 
 
-@pytest.fixture(autouse=True)
-def stub_embeddings(monkeypatch):
-    """write_memory always embeds; no Ollama dependency for these tests."""
-    monkeypatch.setattr("src.memory.write_memory.embed_text", lambda _t: [0.0] * 768)
+pytestmark = pytest.mark.usefixtures("stub_write_embeddings")
 
 
 def _session_id() -> str:

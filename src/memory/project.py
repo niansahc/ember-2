@@ -40,8 +40,8 @@ storage = MemoryStorage()
 
 # Record ids double as filenames (`{id}.json`), so two project writes on
 # the same clock tick (create then update in quick succession, or two
-# requests at once) would overwrite each other. Same guard as
-# session._now_id() (BUG-005, ultrareview #280).
+# requests at once) would overwrite each other. See UniqueTimestampSource
+# (BUG-005, ultrareview #280).
 _ids = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f", timezone.utc)
 
 

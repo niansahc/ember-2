@@ -15,7 +15,8 @@ let the other side keep writing or returning the content it targets.
 
 Markers are lowercase; callers match them against normalized (lowercased)
 text. The context layer's echo filter (ContextService._is_echo_or_meta_memory)
-keeps its own, deliberately different list.
+and the ingest chunk filters (src/ingest/chunking.py) keep their own lists,
+which overlap with this one but are not derived from it.
 
 No imports: write_memory and semantic_search both depend on this module,
 and it must not depend on either.

@@ -134,9 +134,6 @@ class TestTheInvariantTheDeletionDependsOn:
                 return node
         raise AssertionError(f"{name} not found")
 
-    def _search_function(self) -> ast.FunctionDef:
-        return self._function("semantic_search")
-
     @staticmethod
     def _calls_to(function: ast.FunctionDef, name: str) -> int:
         return sum(
@@ -150,7 +147,7 @@ class TestTheInvariantTheDeletionDependsOn:
         assert self._calls_to(self._function("_score_candidate"), "should_exclude_result") == 1
 
     def test_every_result_append_is_matched_by_a_filter_call(self):
-        function = self._search_function()
+        function = self._function("semantic_search")
         appends = sum(
             1 for n in ast.walk(function)
             if isinstance(n, ast.Call)

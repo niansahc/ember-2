@@ -36,8 +36,7 @@ TASK_MEMORY_SUBDIR = "memory/task"
 # write hits TaskService.write()'s "file already exists" guard, silently
 # dropping the new record. This was the root cause of flaky
 # test_update_status: POST + PATCH within one tick on a fast machine.
-# Mirrors the same fix in src/memory/session.py:_now_id(); locked against
-# concurrent callers since ultrareview #280.
+# See UniqueTimestampSource (BUG-005, ultrareview #280).
 _timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f")
 
 
@@ -45,10 +44,8 @@ def next_timestamp() -> str:
     """Generate a microsecond-format timestamp string, guaranteed unique
     per process, including across threads.
 
-    See UniqueTimestampSource: the spin is bounded by the clock's
-    resolution (about 15.6 ms on Windows under Python < 3.13), not by one
-    microsecond. Used by every code path that writes a TaskRecord --
-    make_record() and update_task_status_endpoint() in src/api/main.py.
+    Used by make_record() and by update_task_status_endpoint() in
+    src/api/main.py.
     """
     return _timestamps.next()
 

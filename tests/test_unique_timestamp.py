@@ -18,7 +18,7 @@ second write overwrites or is dropped. project._now_id() and the two
 lodestone sites had no guard at all.
 
 The race harness is deterministic, not timing-dependent:
-  - the module's `datetime` is replaced by a fake clock that advances one
+  - src.core.timestamps' `datetime` is replaced by a fake clock that advances one
     step every READS_PER_TICK reads, so concurrent readers see the same
     value, and
   - the value's strftime() returns a str whose __ne__ sleeps before
@@ -37,7 +37,6 @@ zero-duplicate assertions cannot pass vacuously.
 from __future__ import annotations
 
 import itertools
-import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -51,6 +50,7 @@ import src.memory.write_memory as write_memory
 import src.state.state_service as state_service
 import src.state.timer_service as timer_service
 import src.tasks.task_service as task_service
+from tests.conftest import run_in_threads
 
 READS_PER_TICK = 4
 THREADS = 8
@@ -105,26 +105,9 @@ class _CoarseClock:
 
 def _race(fn, threads: int = THREADS, per_thread: int = PER_THREAD) -> list[str]:
     """Call fn per_thread times on each of `threads` threads, started together."""
-    barrier = threading.Barrier(threads)
-    results: list[str] = []
-    results_lock = threading.Lock()
-    errors: list[BaseException] = []
-
-    def worker():
-        try:
-            barrier.wait()
-            local = [fn() for _ in range(per_thread)]
-            with results_lock:
-                results.extend(local)
-        except BaseException as exc:  # surface worker failures in the test
-            errors.append(exc)
-
-    workers = [threading.Thread(target=worker) for _ in range(threads)]
-    for t in workers:
-        t.start()
-    for t in workers:
-        t.join(timeout=60)
+    batches, errors = run_in_threads(lambda _i: [fn() for _ in range(per_thread)], threads)
     assert not errors, errors
+    results = [value for batch in batches for value in batch]
     assert len(results) == threads * per_thread
     return results
 
@@ -133,12 +116,9 @@ def _duplicates(values: list[str]) -> int:
     return len(values) - len(set(values))
 
 
-def _install_clock(monkeypatch, module, step: timedelta) -> None:
-    """Patch the clock both where the generator used to read it (the
-    module) and where the shared helper reads it (src.core.timestamps)."""
-    clock = _CoarseClock(step)
-    monkeypatch.setattr(module, "datetime", clock, raising=False)
-    monkeypatch.setattr(timestamps_mod, "datetime", clock)
+def _install_clock(monkeypatch, step: timedelta) -> None:
+    """Patch the clock UniqueTimestampSource reads (src.core.timestamps)."""
+    monkeypatch.setattr(timestamps_mod, "datetime", _CoarseClock(step))
 
 
 GENERATORS = [
@@ -153,7 +133,7 @@ GENERATORS = [
 
 @pytest.mark.parametrize("module, func_name, step", GENERATORS)
 def test_concurrent_generation_yields_no_duplicates(monkeypatch, module, func_name, step):
-    _install_clock(monkeypatch, module, step)
+    _install_clock(monkeypatch, step)
     fn = getattr(module, func_name)
 
     values = _race(fn)
@@ -165,7 +145,7 @@ def test_concurrent_lodestone_writes_get_distinct_ids(monkeypatch, tmp_path):
     """Lodestone has no id generator function; exercise write() directly.
     The directory is redirected to tmp_path so these proposed records do
     not count against other tests' lodestone caps."""
-    _install_clock(monkeypatch, lodestone_service, timedelta(microseconds=1))
+    _install_clock(monkeypatch, timedelta(microseconds=1))
     monkeypatch.setattr(lodestone_service, "_lodestone_dir", lambda: tmp_path)
 
     def write_one() -> str:

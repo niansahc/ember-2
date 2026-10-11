@@ -43,12 +43,9 @@ STATE_MEMORY_SUBDIR = "memory/state"
 # Filename convention is `{timestamp}_{type}.json`, so two records of the
 # same type written in the same second collide on filename and the second
 # write is silently dropped by the exists-check in StateService.write().
-# This is the same root cause as BUG-005 -- mirrors the fix in
-# session._now_id(), task_service.next_timestamp(), and
-# write_memory._next_timestamp(). Uses second precision (not microsecond)
-# to match the existing state layer format, so a caller that collides may
-# wait up to one second for the next value. Locked against concurrent
-# callers since ultrareview #280.
+# See UniqueTimestampSource (BUG-005, ultrareview #280). Uses second
+# precision (not microsecond) to match the existing state layer format, so
+# a caller that collides may wait up to one second for the next value.
 _state_timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S")
 
 

@@ -24,7 +24,6 @@ cannot pass vacuously.
 from __future__ import annotations
 
 import json
-import threading
 import time
 
 import pytest
@@ -33,17 +32,14 @@ import src.retrieval.vector_index as vector_index_mod
 from src.core.config import get_private_vault_path
 from src.memory.write_memory import write_memory
 from src.retrieval.vector_index import VectorIndex, clear_index_cache
+from tests.conftest import run_in_threads
 
 THREADS = 8
 IO_DELAY_SECONDS = 0.05
 # Not in SQLITE_MEMORY_TYPES, so write_memory indexes it into a JSON index.
 JSON_INDEXED_TYPE = "decision"
 
-
-@pytest.fixture(autouse=True)
-def stub_embeddings(monkeypatch):
-    """write_memory always embeds; no Ollama dependency for these tests."""
-    monkeypatch.setattr("src.memory.write_memory.embed_text", lambda _t: [0.0] * 8)
+pytestmark = pytest.mark.usefixtures("stub_write_embeddings")
 
 
 @pytest.fixture
@@ -65,28 +61,6 @@ def slow_index_io(monkeypatch):
     monkeypatch.setattr(vector_index_mod, "safe_write_json", slow_write)
 
 
-def _run_threads(fn, threads: int = THREADS) -> list[BaseException]:
-    """Run fn(i) on `threads` threads started together; return their errors."""
-    barrier = threading.Barrier(threads)
-    errors: list[BaseException] = []
-    errors_lock = threading.Lock()
-
-    def worker(i: int):
-        try:
-            barrier.wait()
-            fn(i)
-        except BaseException as exc:  # collected and asserted by the caller
-            with errors_lock:
-                errors.append(exc)
-
-    workers = [threading.Thread(target=worker, args=(i,)) for i in range(threads)]
-    for t in workers:
-        t.start()
-    for t in workers:
-        t.join(timeout=60)
-    return errors
-
-
 def _index_texts(index_path) -> set[str]:
     if not index_path.exists():
         return set()
@@ -105,7 +79,7 @@ def test_concurrent_json_index_appends_lose_no_entries(slow_index_io):
     def write_one(i: int) -> None:
         assert write_memory(text=texts[i], memory_type=JSON_INDEXED_TYPE, source="test")
 
-    errors = _run_threads(write_one)
+    _, errors = run_in_threads(write_one, THREADS)
 
     assert not errors, errors
     missing = set(texts) - _index_texts(index_path)
@@ -127,7 +101,7 @@ def test_control_unlocked_load_append_save_loses_entries(slow_index_io, tmp_path
         data.append({"text": texts[i]})
         vector_index_mod.safe_write_json(index_path, data)
 
-    errors = _run_threads(unlocked_append)
+    _, errors = run_in_threads(unlocked_append, THREADS)
     missing = set(texts) - _index_texts(index_path)
 
     assert errors or missing

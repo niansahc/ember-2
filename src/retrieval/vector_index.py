@@ -78,9 +78,9 @@ class VectorIndex:
             cached = _index_cache.get(key)
             if cached is not None:
                 return cached
-            return self._load_index_from_disk(index_path, key)
+            return self._load_index_from_disk(index_path)
 
-    def _load_index_from_disk(self, index_path: Path, key: str) -> list:
+    def _load_index_from_disk(self, index_path: Path) -> list:
         # Cache miss — load from disk
         if not index_path.exists():
             logger.info("[VECTOR_INDEX] Missing index: %s", index_path)
@@ -104,7 +104,7 @@ class VectorIndex:
             data = safe_read_json(index_path, default=None)
 
             if isinstance(data, list):
-                _index_cache[key] = data
+                _index_cache[str(index_path)] = data
                 return data
 
             if data is not None:

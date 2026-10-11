@@ -31,9 +31,8 @@ storage = MemoryStorage()
 # in tests, or rapid automated batches) can land on the exact same clock
 # tick on a fast machine. Without this guard, the file-naming convention
 # `{_now_id()}.json` produces a collision and either overwrites the prior
-# record (MemoryStorage.write_json) or silently drops the new one. Every
-# call returns a value different from the previous one in the same
-# process, including across threads (ultrareview #280).
+# record (MemoryStorage.write_json) or silently drops the new one. See
+# UniqueTimestampSource (BUG-005, ultrareview #280).
 _ids = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f", timezone.utc)
 
 
@@ -49,12 +48,7 @@ def _conversation_dir() -> Path:
 
 def _now_id() -> str:
     """Generate a UTC timestamp-based ID, guaranteed unique per process,
-    including across threads.
-
-    See UniqueTimestampSource: the spin is bounded by the clock's
-    resolution (about 15.6 ms on Windows under Python < 3.13), not by one
-    microsecond.
-    """
+    including across threads."""
     return _ids.next()
 
 

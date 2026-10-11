@@ -62,16 +62,15 @@ logger = logging.getLogger("ember.timer_service")
 
 # Guard against same-tick timestamp collisions when multiple timer records
 # are written back-to-back or concurrently (e.g. in tests, or when a user
-# starts and stops a timer in quick succession). Mirrors the BUG-005 fix
-# in session._now_id() and task_service.next_timestamp().
+# starts and stops a timer in quick succession). See UniqueTimestampSource
+# (BUG-005, ultrareview #280).
 _timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f")
 
 
 def _next_timestamp() -> str:
     """Return a microsecond-format timestamp string, guaranteed unique
-    per process, including across threads. See UniqueTimestampSource for
-    the spin bound. Hyphen format matches StateService convention for
-    Windows filename safety."""
+    per process, including across threads. Hyphen format matches
+    StateService convention for Windows filename safety."""
     return _timestamps.next()
 
 

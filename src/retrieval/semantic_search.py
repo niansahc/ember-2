@@ -62,7 +62,6 @@ def _score_candidate(
     normalized_query: str,
     query_terms: list[str],
     min_score: float | None,
-    floor: bool,
 ) -> dict | None:
     """Filter and score one raw search hit. Returns None when it is dropped.
 
@@ -71,10 +70,11 @@ def _score_candidate(
     and query-intent adjustments to the raw cosine, in that order.
 
     site names the guard counters
-    (semantic_search.should_exclude_result.<site> and, with floor=True,
-    semantic_search.min_score_floor.<site>). The JSON-index paths pass
-    floor=False: VectorIndex.search() already applied min_score to the raw
-    cosine, and those paths have never counted a floor of their own.
+    (semantic_search.should_exclude_result.<site> and, for sites in
+    FLOOR_COUNTER_SITES, semantic_search.min_score_floor.<site>). The
+    JSON-index sites apply no floor here: VectorIndex.search() already
+    applied min_score to the raw cosine, and those paths have never counted
+    a floor of their own.
     """
     normalized_content = normalize_text(result.get("content", ""))
 
@@ -84,8 +84,9 @@ def _score_candidate(
 
     raw_score = float(result.get("score", 0.0))
     # Floor on raw cosine, before any adjustment (#205).
-    if floor and count(f"semantic_search.min_score_floor.{site}",
-                       min_score is not None and raw_score < min_score):
+    if site in FLOOR_COUNTER_SITES and count(
+            f"semantic_search.min_score_floor.{site}",
+            min_score is not None and raw_score < min_score):
         return None
 
     score = raw_score
@@ -134,101 +135,76 @@ def semantic_search(
         query_embedding = embed_text(query)
     normalized_query = normalize_text(query)
     query_terms = extract_query_terms(normalized_query)
-    scoring = {
-        "query": query,
-        "normalized_query": normalized_query,
-        "query_terms": query_terms,
-        "min_score": min_score,
-    }
 
     per_type_limit = max(limit * 4, 10)
-    results = []
 
-    # Search memory.db for migrated types (conversation, profile, reflection, journal)
+    # (hits, memory_type, counter site) per search path. Every hit is then
+    # scored by the same _score_candidate step below.
+    batches: list[tuple[list[dict], str, str]] = []
+
+    # Search memory.db for migrated types (conversation, profile, reflection, journal).
+    # The store filters on memory_type, so every hit carries the searched type.
     memory_store = _get_memory_store()
     if memory_store is not None:
         if memory_type and memory_type in SQLITE_MEMORY_TYPES:
-            # Search a specific migrated type
-            sqlite_results = memory_store.search(
+            sqlite_types, site = [memory_type], "memory_typed"
+        elif memory_type is None:
+            sqlite_types, site = SQLITE_MEMORY_TYPES, "memory_all_types"
+        else:
+            sqlite_types = []
+        for mem_type in sqlite_types:
+            hits = memory_store.search(
                 query_embedding=query_embedding,
                 limit=per_type_limit,
-                memory_type=memory_type,
+                memory_type=mem_type,
             )
-            for result in sqlite_results:
-                scored = _score_candidate(
-                    result, result.get("memory_type", memory_type), "memory_typed",
-                    floor=True, **scoring,
-                )
-                if scored is not None:
-                    results.append(scored)
-
-        elif memory_type is None:
-            # Search all migrated types
-            for mem_type in SQLITE_MEMORY_TYPES:
-                sqlite_results = memory_store.search(
-                    query_embedding=query_embedding,
-                    limit=per_type_limit,
-                    memory_type=mem_type,
-                )
-                for result in sqlite_results:
-                    scored = _score_candidate(
-                        result, mem_type, "memory_all_types", floor=True, **scoring,
-                    )
-                    if scored is not None:
-                        results.append(scored)
+            batches.append((hits, mem_type, site))
 
     # Fallback: search any remaining JSON indexes for non-migrated, non-ingested types
     if memory_type and memory_type not in SQLITE_MEMORY_TYPES and memory_type != "ingested":
-        index_results = vector_index.search(
-            vault_path=vault,
-            memory_type=memory_type,
-            query_embedding=query_embedding,
-            top_k=per_type_limit,
-            min_score=min_score,
-        )
-        for result in index_results:
-            scored = _score_candidate(
-                result, memory_type, "json_typed", floor=False, **scoring,
-            )
-            if scored is not None:
-                results.append(scored)
+        json_types, site = [memory_type], "json_typed"
     elif memory_type is None:
-        # Search any remaining JSON indexes (non-migrated, non-ingested)
         json_types = [
             index_file.stem.replace("_index", "")
             for index_file in embeddings_dir.glob("*_index.json")
         ]
         json_types = [t for t in json_types if t != "ingested" and t not in SQLITE_MEMORY_TYPES]
+        site = "json_all_types"
+    else:
+        json_types = []
+    for mem_type in json_types:
+        hits = vector_index.search(
+            vault_path=vault,
+            memory_type=mem_type,
+            query_embedding=query_embedding,
+            top_k=per_type_limit,
+            min_score=min_score,
+        )
+        batches.append((hits, mem_type, site))
 
-        for mem_type in json_types:
-            index_results = vector_index.search(
-                vault_path=vault,
-                memory_type=mem_type,
-                query_embedding=query_embedding,
-                top_k=per_type_limit,
-                min_score=min_score,
-            )
-            for result in index_results:
-                scored = _score_candidate(
-                    result, mem_type, "json_all_types", floor=False, **scoring,
-                )
-                if scored is not None:
-                    results.append(scored)
-
-    # Search ingested content via SQLite store
+    # Search ingested content via SQLite store. Rows there can carry another
+    # memory_type, so the type is fixed to "ingested" here.
     if memory_type is None or memory_type == "ingested":
         sqlite_store = _get_sqlite_store()
         if sqlite_store is not None:
-            sqlite_results = sqlite_store.search(
+            hits = sqlite_store.search(
                 query_embedding=query_embedding,
                 limit=per_type_limit,
             )
-            for result in sqlite_results:
-                scored = _score_candidate(
-                    result, "ingested", "ingested", floor=True, **scoring,
-                )
-                if scored is not None:
-                    results.append(scored)
+            batches.append((hits, "ingested", "ingested"))
+
+    results = []
+    for hits, mem_type, site in batches:
+        for result in hits:
+            scored = _score_candidate(
+                result, mem_type, site,
+                query=query,
+                normalized_query=normalized_query,
+                query_terms=query_terms,
+                min_score=min_score,
+            )
+            if scored is not None:
+                results.append(scored)
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return results[:limit]

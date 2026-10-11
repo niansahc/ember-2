@@ -31,20 +31,14 @@ SQLITE_MEMORY_TYPES = {"conversation", "profile", "reflection", "journal"}
 # convention is `{timestamp}.json` so two back-to-back writes (e.g. user
 # turn + assistant turn in the same request, or rapid automated batches)
 # that land on the same clock tick produce identical paths and
-# MemoryStorage.write_json overwrites the prior record. Defense-in-depth --
-# same fix as session._now_id() and task_service.next_timestamp(). See
-# BUG-005; locked against concurrent callers since ultrareview #280.
+# MemoryStorage.write_json overwrites the prior record. See
+# UniqueTimestampSource (BUG-005, ultrareview #280).
 _timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f")
 
 
 def _next_timestamp() -> str:
     """Generate a microsecond-format timestamp string, guaranteed unique
-    per process, including across threads.
-
-    See UniqueTimestampSource: the spin is bounded by the clock's
-    resolution (about 15.6 ms on Windows under Python < 3.13), not by one
-    microsecond.
-    """
+    per process, including across threads."""
     return _timestamps.next()
 
 

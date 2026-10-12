@@ -804,7 +804,7 @@ def update_task_status_endpoint(task_id: str, body: TaskUpdateRequest):
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
 
     # Write a new record with the same task ID but new timestamp and updated status.
-    # next_timestamp() spins on same-microsecond collisions so the new record
+    # next_timestamp() is strictly increasing so the new record
     # cannot share a filename with the original (which would silently drop the
     # update — the root cause of the test_update_status flake).
     from src.tasks.task_service import next_timestamp
@@ -846,8 +846,9 @@ def delete_task_endpoint(task_id: str):
     if existing.status == "cancelled":
         return {"status": "already_cancelled", "id": task_id}
 
-    from datetime import datetime
-    new_timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
+    # Same filename-collision guard as update_task_status_endpoint.
+    from src.tasks.task_service import next_timestamp
+    new_timestamp = next_timestamp()
 
     from src.tasks.models import TaskRecord
     cancelled = TaskRecord(
@@ -863,6 +864,10 @@ def delete_task_endpoint(task_id: str):
         metadata={**existing.metadata, "previous_status": existing.status},
     )
     task_service.write(cancelled)
+    # Timestamp only: the filename carries a slug of the task title.
+    logging.getLogger("ember.tasks").info(
+        "[TASK] Cancel record written, timestamp from next_timestamp(): %s", new_timestamp,
+    )
     return {"status": "cancelled", "id": task_id}
 
 

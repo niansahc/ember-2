@@ -5,6 +5,8 @@ Tests for automatic state extraction from conversation turns.
 """
 
 import json
+from datetime import datetime
+
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -13,7 +15,8 @@ from src.state.state_extractor import (
     EXTRACTABLE_CATEGORIES,
     MIN_WORDS_FOR_EXTRACTION,
 )
-from src.state.models import VALID_STATE_CATEGORIES
+from src.state.models import VALID_STATE_CATEGORIES, StateRecord
+from src.state.state_service import StateService
 
 
 class TestShortMessageSkipping:
@@ -209,3 +212,50 @@ class TestRecordStructure:
             }
             result = extractor.extract(long_msg, "Okay.", is_live_turn=True)
             assert result == []
+
+
+class TestUniqueTimestampPerRecord:
+    """Every extracted record gets its own timestamp.
+
+    StateService names files {timestamp}_{type}.json and skips a write
+    whose file already exists. One timestamp shared by a whole turn meant
+    two extractions of the same type collided and the second was dropped.
+    """
+
+    TWO_OPEN_LOOPS = json.dumps({
+        "extractions": [
+            {"type": "open_loop", "text": "Reply to the landlord about the lease", "confidence": "medium"},
+            {"type": "open_loop", "text": "Book the car service appointment", "confidence": "high"},
+        ]
+    })
+
+    def test_same_type_extractions_get_distinct_timestamps_and_both_persist(self, tmp_path):
+        records = StateExtractor()._parse_response(self.TWO_OPEN_LOOPS)
+
+        assert len(records) == 2
+        assert records[0].timestamp != records[1].timestamp
+        for record in records:
+            datetime.strptime(record.timestamp, "%Y-%m-%dT%H-%M-%S")
+
+        service = StateService(vault_path=tmp_path)
+        for record in records:
+            service.write(record)
+        assert len(list((tmp_path / "memory" / "state").glob("*.json"))) == 2
+
+    def test_control_shared_timestamp_and_type_drops_the_second_write(self, tmp_path):
+        """Positive control: two records with one timestamp and one type
+        produce one file, so the 2-file assertion above can fail."""
+        records = [
+            StateRecord(
+                id=f"2026-01-01T12-00-00_{i}", timestamp="2026-01-01T12-00-00",
+                type="open_loop", text=f"Synthetic open loop {i}",
+                source="state_extractor",
+            )
+            for i in range(2)
+        ]
+
+        service = StateService(vault_path=tmp_path)
+        with pytest.warns(UserWarning, match="already exists"):
+            for record in records:
+                service.write(record)
+        assert len(list((tmp_path / "memory" / "state").glob("*.json"))) == 1

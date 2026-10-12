@@ -44,8 +44,8 @@ STATE_MEMORY_SUBDIR = "memory/state"
 # same type written in the same second collide on filename and the second
 # write is silently dropped by the exists-check in StateService.write().
 # See UniqueTimestampSource (BUG-005, ultrareview #280). Uses second
-# precision (not microsecond) to match the existing state layer format, so
-# a caller that collides may wait up to one second for the next value.
+# precision (not microsecond) to match the existing state layer format; a
+# caller that collides gets the next second without waiting for it.
 _state_timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S")
 
 
@@ -434,7 +434,7 @@ class StateService:
         StateRecord
             A fully populated, validated StateRecord ready to be written.
         """
-        # _next_state_timestamp() spins on collision so two calls,
+        # _next_state_timestamp() is strictly increasing so two calls,
         # back-to-back or concurrent, never return the same second. See
         # module-level comment for rationale and BUG-005 cross-reference.
         timestamp = _next_state_timestamp()

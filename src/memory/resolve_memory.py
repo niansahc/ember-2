@@ -94,21 +94,13 @@ def find_conversation_ids_for_session(session_id: str, limit: int = 200) -> list
     buffer HOLDS, not how many turns a single session has had written to
     the vault over its lifetime.
 
-    The limit applies after the session filter. Applying it to the whole
-    conversation directory first meant any session older than the newest
-    `limit` turns vault-wide resolved to no ids (ultrareview #280). Reading
-    every record costs no more than before: read_memories() already parsed
-    every file before slicing.
+    The limit applies after the session filter (read_memories session_id).
+    Applying it to the whole conversation directory first meant any session
+    older than the newest `limit` turns vault-wide resolved to no ids
+    (ultrareview #280).
     """
     if not session_id:
         return []
 
-    records = read_memories(memory_type="conversation", limit=None)
-    ids = []
-    for record in records:
-        metadata = record.get("metadata", {})
-        if isinstance(metadata, dict) and metadata.get("session_id") == session_id:
-            record_id = record.get("id")
-            if record_id:
-                ids.append(record_id)
-    return ids[:limit]
+    records = read_memories(memory_type="conversation", limit=limit, session_id=session_id)
+    return [record["id"] for record in records if record.get("id")]

@@ -244,6 +244,22 @@ def _detect_task_in_response(reply: str, session_id: str) -> None:
         logger.warning("[TASK_DETECT] Detection failed (non-fatal): %s", type(exc).__name__)
 
 
+def _prior_turn_awaits_search_content(session_id: str) -> bool:
+    """True when this session's most recent assistant turn was a B2
+    clarification (metadata.awaiting_search_content).
+
+    read_memories filters by session before the limit, so newer turns from
+    other conversations cannot push the clarification out of the window.
+    Raises on a vault read failure; the caller treats that as non-fatal.
+    """
+    for record in read_memories(memory_type="conversation", limit=5, session_id=session_id):
+        meta = record["metadata"]
+        if meta.get("role") == "assistant":
+            # First (most recent) assistant turn in this session decides.
+            return meta.get("awaiting_search_content") is True
+    return False
+
+
 def _background_state_extraction(user_message: str, reply: str) -> None:
     """Run state extraction in a background thread so it doesn't delay the HTTP response.
 
@@ -1681,24 +1697,13 @@ async def _complete_exchange(
         # classifier (which would inspect the bare follow-up in isolation
         # and may mis-route) and dispatch directly to web_search.
         try:
-            _recent_conv = read_memories(memory_type="conversation", limit=5)
-            for _r in _recent_conv:
-                _meta = _r.get("metadata", {}) if isinstance(_r, dict) else {}
-                if not isinstance(_meta, dict):
-                    continue
-                if _meta.get("session_id") != session_id:
-                    continue
-                if _meta.get("role") != "assistant":
-                    continue
-                # First (most recent) assistant turn in this session.
-                if _meta.get("awaiting_search_content") is True:
-                    logger.info(
-                        "[CLARIFY] Next-turn dispatch: prior assistant turn "
-                        "carried awaiting_search_content; bypassing classifier "
-                        "and routing user message to web_search"
-                    )
-                    _early_policy = _force_web_search_policy(explicit=True)
-                break
+            if _prior_turn_awaits_search_content(session_id):
+                logger.info(
+                    "[CLARIFY] Next-turn dispatch: prior assistant turn "
+                    "carried awaiting_search_content; bypassing classifier "
+                    "and routing user message to web_search"
+                )
+                _early_policy = _force_web_search_policy(explicit=True)
         except Exception as exc:
             logger.warning(
                 "[CLARIFY] Next-turn check failed (non-fatal): %s", type(exc).__name__,

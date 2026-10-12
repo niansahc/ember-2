@@ -44,8 +44,8 @@ def next_timestamp() -> str:
     """Generate a microsecond-format timestamp string, guaranteed unique
     per process, including across threads.
 
-    Used by make_record() and by update_task_status_endpoint() in
-    src/api/main.py.
+    Used by make_record() and by update_task_status_endpoint() and
+    delete_task_endpoint() in src/api/main.py.
     """
     return _timestamps.next()
 
@@ -287,8 +287,8 @@ class TaskService:
         metadata : dict | None
             Optional structured context.
         """
-        # next_timestamp() spins on collision so two calls, back-to-back or
-        # concurrent, never share a timestamp. See the module-level comment
+        # next_timestamp() is strictly increasing, so two calls, back-to-back
+        # or concurrent, never share a timestamp. See the module-level comment
         # on _timestamps and the BUG-005 / test_update_status flake.
         timestamp = next_timestamp()
 

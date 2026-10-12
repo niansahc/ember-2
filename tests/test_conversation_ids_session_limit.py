@@ -15,36 +15,21 @@ failure the first test guards against rather than masking it.
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 
 from src.memory.resolve_memory import find_conversation_ids_for_session
-from src.memory.write_memory import write_memory
+from tests.conftest import synthetic_session_id, write_conversation_turn
 
 
 pytestmark = pytest.mark.usefixtures("stub_write_embeddings")
 
 
-def _session_id() -> str:
-    return f"sess_test_{uuid.uuid4().hex[:8]}"
-
-
-def _write_turn(session_id: str, text: str) -> str:
-    path = write_memory(
-        text=text, memory_type="conversation", source="test",
-        metadata={"session_id": session_id},
-    )
-    assert path is not None
-    return path.stem
-
-
 def test_older_session_resolves_when_newer_turns_exceed_limit():
-    older = _session_id()
-    newer = _session_id()
-    older_ids = [_write_turn(older, f"Older session turn {i}.") for i in range(2)]
+    older = synthetic_session_id()
+    newer = synthetic_session_id()
+    older_ids = [write_conversation_turn(older, f"Older session turn {i}.") for i in range(2)]
     for i in range(3):
-        _write_turn(newer, f"Newer session turn {i}.")
+        write_conversation_turn(newer, f"Newer session turn {i}.")
 
     ids = find_conversation_ids_for_session(older, limit=2)
 
@@ -54,8 +39,8 @@ def test_older_session_resolves_when_newer_turns_exceed_limit():
 def test_control_limit_still_bounds_a_long_session_to_its_newest_turns():
     """Positive control: the limit still applies, now per session. A
     four-turn session at limit=2 yields exactly its two newest ids."""
-    sid = _session_id()
-    turn_ids = [_write_turn(sid, f"Long session turn {i}.") for i in range(4)]
+    sid = synthetic_session_id()
+    turn_ids = [write_conversation_turn(sid, f"Long session turn {i}.") for i in range(4)]
 
     ids = find_conversation_ids_for_session(sid, limit=2)
 

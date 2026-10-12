@@ -26,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -537,6 +538,24 @@ def stub_both_embed_bindings(vector):
 def stub_write_embeddings(monkeypatch):
     """write_memory always embeds; stub it so a test needs no Ollama."""
     monkeypatch.setattr("src.memory.write_memory.embed_text", lambda _t: [0.0] * 768)
+
+
+def synthetic_session_id() -> str:
+    """A fresh synthetic session id. No vault content."""
+    return f"sess_test_{uuid.uuid4().hex[:8]}"
+
+
+def write_conversation_turn(session_id: str, text: str, **metadata) -> str:
+    """Write one synthetic conversation turn for `session_id` to the session
+    test vault and return its record id. Use with stub_write_embeddings."""
+    from src.memory.write_memory import write_memory
+
+    path = write_memory(
+        text=text, memory_type="conversation", source="test",
+        metadata={"session_id": session_id, **metadata},
+    )
+    assert path is not None
+    return path.stem
 
 
 # ---------------------------------------------------------------------------

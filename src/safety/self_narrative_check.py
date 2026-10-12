@@ -28,11 +28,20 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+
+from src.core.timestamps import UniqueTimestampSource
 
 
 logger = logging.getLogger("ember.self_narrative")
+
+_LOG_DIR = Path(__file__).resolve().parents[2] / "logs" / "safety_reviews"
+
+# One file per flagged response, named by UTC second. The source advances
+# past the clock instead of repeating a second, so two entries in the same
+# second no longer overwrite each other.
+_log_timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%SZ", timezone.utc)
 
 
 # Identity subjects. "Ember", "the system", "my system", "this system"
@@ -167,8 +176,7 @@ def log_self_narrative_outcome(
     if flag_count <= 0:
         return
     try:
-        log_dir = Path(__file__).resolve().parents[2] / "logs" / "safety_reviews"
-        log_dir.mkdir(parents=True, exist_ok=True)
+        _LOG_DIR.mkdir(parents=True, exist_ok=True)
         entry: dict = {
             "timestamp": datetime.now().isoformat(),
             "type": "self_narrative_check",
@@ -177,10 +185,7 @@ def log_self_narrative_outcome(
         }
         if intent_class is not None:
             entry["intent_class"] = intent_class
-        log_file = (
-            log_dir
-            / f"{datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}Z-self_narrative.json"
-        )
+        log_file = _LOG_DIR / f"{_log_timestamps.next()}-self_narrative.json"
         log_file.write_text(json.dumps(entry, indent=2), encoding="utf-8")
     except Exception as exc:
         logger.warning("[SELF_NARRATIVE] Failed to log outcome: %s", type(exc).__name__)

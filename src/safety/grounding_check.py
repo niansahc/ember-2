@@ -15,14 +15,22 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
 
 from src.core.config import get_ollama_base_url
+from src.core.timestamps import UniqueTimestampSource
 
 logger = logging.getLogger("ember.grounding_check")
+
+_LOG_DIR = Path(__file__).resolve().parents[2] / "logs" / "safety_reviews"
+
+# One file per outcome, named by UTC second. The source advances past the
+# clock instead of repeating a second, so two outcomes in the same second
+# no longer overwrite each other.
+_log_timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%SZ", timezone.utc)
 
 GROUNDING_CHECK_INTENTS = {
     "factual_recall",
@@ -153,8 +161,7 @@ def log_grounding_outcome(
 ) -> None:
     """Log grounding check outcome alongside constitutional review logs."""
     try:
-        log_dir = Path(__file__).resolve().parents[2] / "logs" / "safety_reviews"
-        log_dir.mkdir(parents=True, exist_ok=True)
+        _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
         entry = {
             "timestamp": datetime.now().isoformat(),
@@ -165,7 +172,7 @@ def log_grounding_outcome(
             "revision_triggered": revision_triggered,
         }
 
-        log_file = log_dir / f"{datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}Z-grounding.json"
+        log_file = _LOG_DIR / f"{_log_timestamps.next()}-grounding.json"
         log_file.write_text(json.dumps(entry, indent=2), encoding="utf-8")
     except Exception as exc:
         logger.warning("[GROUNDING] Failed to log outcome: %s", type(exc).__name__)

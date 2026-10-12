@@ -3,14 +3,13 @@ src/core/timestamps.py
 
 Shared vault-record timestamp parsing and generation.
 
-Parsing. Three formats appear across the corpus and are handled
-independently in three call sites today (ranker._parse_age_days,
-prompt_builder._parse_timestamp, and -- until this fix --
-tiering_service._recency_score, which only handled one of the three). This
-module is the parser for a fourth call site (_recency_score) rather than a
-consolidation of the other two: those are working and tested, and folding
-them in here is out of scope for the change that introduced this file. See
-ADR-015 amendment, implementation step 4.
+Parsing. Three formats appear across the corpus (epoch, hyphenated vault
+form, ISO 8601). parse_vault_timestamp is the shared parser, used by
+tiering_service._recency_score (ADR-015 amendment, step 4),
+sqlite_vector_store and read_memory._memory_sort_key. ranker._parse_age_days,
+prompt_builder._parse_timestamp and timer_service._parse_state_timestamp
+still carry their own copies; prompt_builder's returns naive datetimes and
+drops microseconds, so folding it in needs its own tests.
 
 Generation. UniqueTimestampSource is the one implementation of the
 "never return the same timestamp twice" guard that record writers use to
@@ -111,6 +110,7 @@ class UniqueTimestampSource:
             self._unit = timedelta(seconds=1)
         else:
             raise ValueError(f"timestamp format needs %S or %f: {fmt!r}")
+        self._truncate_to_second = "%f" not in fmt
         self._fmt = fmt
         self._tz = tz
         self._lock = threading.Lock()
@@ -120,10 +120,11 @@ class UniqueTimestampSource:
         """Return a timestamp string later than every previous return value."""
         with self._lock:
             now = datetime.now(self._tz)
-            if self._unit >= timedelta(seconds=1):
+            if self._truncate_to_second:
                 now = now.replace(microsecond=0)
             if self._last is not None and now <= self._last:
                 now = self._last + self._unit
                 logger.debug("[TIMESTAMP] Advanced logically past the clock (%s)", self._fmt)
             self._last = now
-            return now.strftime(self._fmt)
+        # Formatting needs no lock: `now` is a local, immutable datetime.
+        return now.strftime(self._fmt)

@@ -64,9 +64,6 @@ def _memory_sort_key(memory: dict) -> float:
     if timestamp is None:
         return 0.0
 
-    if isinstance(timestamp, (int, float)):
-        return float(timestamp)
-
-    # Epoch strings, the vault's hyphenated form and ISO 8601 alike.
+    # Epoch values, the vault's hyphenated form and ISO 8601 alike.
     parsed = parse_vault_timestamp(str(timestamp))
     return parsed.timestamp() if parsed is not None else 0.0

@@ -18,6 +18,7 @@ import json
 import pytest
 
 import src.memory.read_memory as read_memory
+from src.core.config import vault_binding
 
 # Filenames deliberately disagree with timestamp order, so a sort that
 # falls back to filename order gives a different answer.
@@ -30,8 +31,7 @@ RECORDS = [
 
 
 @pytest.fixture
-def journal_vault(tmp_path, monkeypatch):
-    monkeypatch.setattr(read_memory, "get_private_vault_path", lambda: tmp_path)
+def journal_vault(tmp_path):
     folder = tmp_path / "memory" / "journal"
     folder.mkdir(parents=True)
     for filename, record_id, timestamp in RECORDS:
@@ -40,7 +40,8 @@ def journal_vault(tmp_path, monkeypatch):
             "text": f"Synthetic journal record {record_id}.", "source": "test",
             "tags": [], "metadata": {},
         }), encoding="utf-8")
-    return tmp_path
+    with vault_binding(tmp_path):
+        yield tmp_path
 
 
 def test_mixed_hyphenated_and_iso_records_come_back_newest_first(journal_vault):
@@ -57,17 +58,15 @@ def test_limit_keeps_the_newest_by_timestamp(journal_vault):
     assert [r["id"] for r in records] == ["newest_hyphen", "second_iso_z"]
 
 
-@pytest.mark.parametrize("timestamp, expected", [
-    ("2026-01-01T00-00-00", 1767225600.0),
-    ("2026-01-01T00-00-00-500000", 1767225600.5),
-    ("2026-01-01T00:00:00Z", 1767225600.0),
-    ("1767225600.25", 1767225600.25),
-    (1767225600, 1767225600.0),
+@pytest.mark.parametrize("record, expected", [
+    ({"timestamp": "2026-01-01T00-00-00"}, 1767225600.0),
+    ({"timestamp": "2026-01-01T00-00-00-500000"}, 1767225600.5),
+    ({"timestamp": "2026-01-01T00:00:00Z"}, 1767225600.0),
+    ({"timestamp": "1767225600.25"}, 1767225600.25),
+    ({"timestamp": 1767225600}, 1767225600.0),
+    ({"timestamp": 1767225600.25}, 1767225600.25),
+    ({"timestamp": "not a timestamp"}, 0.0),
+    ({}, 0.0),
 ])
-def test_sort_key_parses_each_format(timestamp, expected):
-    assert read_memory._memory_sort_key({"timestamp": timestamp}) == expected
-
-
-def test_unparseable_or_missing_timestamp_sorts_last():
-    assert read_memory._memory_sort_key({"timestamp": "not a timestamp"}) == 0.0
-    assert read_memory._memory_sort_key({}) == 0.0
+def test_sort_key(record, expected):
+    assert read_memory._memory_sort_key(record) == expected

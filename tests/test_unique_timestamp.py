@@ -5,38 +5,30 @@ Concurrent id generation must never return the same timestamp twice
 (ultrareview #280, item 1).
 
 Every timestamp-named record writer used to guard against same-tick
-collisions with an unlocked check-then-set:
-
-    candidate = datetime.now().strftime(fmt)
-    if candidate != _last:
-        _last = candidate
-        return candidate
-
-Two threads can both pass the check before either assigns, and both
-return the same value. Records are named `{timestamp}.json`, so the
-second write overwrites or is dropped. project._now_id() and the two
-lodestone sites had no guard at all.
+collisions with an unlocked check-then-set, which two threads could both
+pass before either assigned. Records are named `{timestamp}.json`, so the
+second write overwrote or was dropped. UniqueTimestampSource now holds a
+lock across read-compare-set and advances logically (max(now, last + unit))
+instead of spinning on the clock.
 
 The race harness is deterministic, not timing-dependent:
   - src.core.timestamps' `datetime` is replaced by a fake clock that advances one
     step every READS_PER_TICK reads, so concurrent readers see the same
     value, and
-  - the value's <= comparison, and the __ne__ of the str its strftime()
-    returns, sleep before comparing, which releases the GIL between the
-    check and the set. The right-hand operand is bound before the sleep, so
-    a second thread that compares during the sleep still sees the stale
-    `_last`.
+  - the value's <= comparison sleeps before comparing, which releases the
+    GIL between the check and the set. The right-hand operand is bound
+    before the sleep, so a second thread that compares during the sleep
+    still sees the stale `_last`.
 
-Without a lock that held across read-compare-set, collisions are certain.
-With one, the other threads block on the lock and every value is unique.
-
-The positive control runs the same harness against an unlocked
-check-then-set generator defined here and asserts it does collide, so the
-zero-duplicate assertions cannot pass vacuously.
+Without the lock, collisions are certain. With it, the other threads block
+on the lock and every value is unique. The positive control runs the same
+harness against the shipped algorithm with the lock removed and asserts it
+does collide, so the zero-duplicate assertions cannot pass vacuously.
 """
 
 from __future__ import annotations
 
+import itertools
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -51,7 +43,7 @@ import src.memory.write_memory as write_memory
 import src.state.state_service as state_service
 import src.state.timer_service as timer_service
 import src.tasks.task_service as task_service
-from tests.conftest import TickClock, install_tick_clock, run_in_threads
+from tests.conftest import run_in_threads
 
 READS_PER_TICK = 4
 THREADS = 8
@@ -61,28 +53,37 @@ US_FORMAT = "%Y-%m-%dT%H-%M-%S-%f"
 SECOND_FORMAT = "%Y-%m-%dT%H-%M-%S"
 
 
-class _YieldingStr(str):
-    """A str whose inequality check yields the GIL before comparing."""
-
-    __hash__ = str.__hash__
-
-    def __ne__(self, other):
-        time.sleep(0.001)
-        return str.__ne__(self, other)
-
-
 class _FakeDateTime(datetime):
-    """A datetime that yields the GIL inside its own <= comparison and
-    whose strftime result yields inside comparisons, so both the shipped
-    compare-then-set (on datetimes) and the control's (on strings) have a
-    yield point between the check and the set."""
+    """A datetime whose <= comparison yields the GIL before comparing."""
 
     def __le__(self, other):
         time.sleep(0.001)
         return super().__le__(other)
 
-    def strftime(self, fmt):
-        return _YieldingStr(super().strftime(fmt))
+
+class _CoarseClock:
+    """Stands in for `datetime` in src.core.timestamps.
+
+    now() advances by `step` once every READS_PER_TICK reads. itertools.count
+    is thread-safe under the GIL, so the tick sequence is exact. Every other
+    attribute delegates to the real datetime class.
+    """
+
+    def __init__(self, step: timedelta) -> None:
+        self._reads = itertools.count()
+        self._step = step
+        self._base = datetime(2026, 1, 1, 12, 0, 0)
+
+    def now(self, tz=None):
+        value = self._base + self._step * (next(self._reads) // READS_PER_TICK)
+        return _FakeDateTime(
+            value.year, value.month, value.day,
+            value.hour, value.minute, value.second, value.microsecond,
+            tzinfo=tz,
+        )
+
+    def __getattr__(self, name):
+        return getattr(datetime, name)
 
 
 def _race(fn, threads: int = THREADS, per_thread: int = PER_THREAD) -> list[str]:
@@ -99,7 +100,7 @@ def _duplicates(values: list[str]) -> int:
 
 
 def _install_clock(monkeypatch, step: timedelta) -> None:
-    install_tick_clock(monkeypatch, step, READS_PER_TICK, _FakeDateTime)
+    monkeypatch.setattr(timestamps_mod, "datetime", _CoarseClock(step))
 
 
 GENERATORS = [
@@ -160,29 +161,12 @@ def test_generated_values_keep_each_module_format_and_timezone():
 # Positive control
 # ---------------------------------------------------------------------------
 
-def test_control_unlocked_check_then_set_collides():
-    """The harness must be able to produce the defect. An unlocked
-    check-then-set generator on the same fake clock has to collide."""
-    clock = TickClock(timedelta(microseconds=1), READS_PER_TICK, _FakeDateTime)
-    state = {"last": ""}
-
-    def unlocked() -> str:
-        while True:
-            candidate = clock.now().strftime(US_FORMAT)
-            if candidate != state["last"]:
-                state["last"] = candidate
-                return candidate
-
-    values = _race(unlocked)
-
-    assert _duplicates(values) > 0
-
-
 def test_control_unlocked_logical_advance_collides():
-    """The same harness against the shipped algorithm (max(now, last + unit))
-    with the lock removed: the <= yield point lets two threads read the same
-    tick and both return it, so the race tests above exercise the lock."""
-    clock = TickClock(timedelta(microseconds=1), READS_PER_TICK, _FakeDateTime)
+    """The harness must be able to produce the defect. The shipped algorithm
+    (max(now, last + unit)) with the lock removed: the <= yield point lets
+    two threads read the same tick and both return it, so the race tests
+    above exercise the lock."""
+    clock = _CoarseClock(timedelta(microseconds=1))
     unit = timedelta(microseconds=1)
     state = {"last": None}
 

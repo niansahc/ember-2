@@ -45,6 +45,17 @@ Deferred (filed as **B-IO-001** in KNOWN_ISSUES): `retrieval/vector_index.py` R/
 - **Privacy-safe logging.** Failures log path + exception type only; file content never reaches logs.
 - **Partial coverage by design.** B-IO-001 tracks the deferred sites so the gap is visible rather than implied-complete.
 
+## Amendment (2026-10-12, exclusive create for append-only records)
+
+`StateService.write()` and `TaskService.write()` guarded append-only with `if file_path.exists(): warn; return file_path` before `safe_write_json`. On a taken name the new record was dropped while the caller got a path back and believed it was written, and `warnings.warn` never reached the API log. The check was also separate from the publish: two writers (threads, or the API and a CLI script with their own timestamp sources) could both pass it, and the second `os.replace` overwrote the first.
+
+**`safe_create_json(path, data)`** is added for records that must never replace an existing file:
+- Same temp file as `safe_write_json`, then `os.link(tmp, path)` and the temp file is removed. A hard link fails with `FileExistsError` when the target exists, so the existence check and the publish are one atomic step on NTFS and POSIX filesystems.
+- A taken name raises `RecordExistsError` (a `FileExistsError` subclass); nothing is written and the existing file is untouched. Other failures raise `JsonIoError` as before.
+- Where hard links are unsupported (FAT/exFAT, some network shares) it falls back to an `O_EXCL` create, logged once per process at WARNING: still exclusive, but a reader can briefly see a partly written file.
+
+`StateService.write()` and `TaskService.write()` route through it, log the collision at ERROR at the fix point (the task log names the timestamp only, since the filename carries a slug of the title), and re-raise. Callers decide what a collision means: the API maps `RecordExistsError` to 409 with one app-level exception handler; background state extraction loses only the colliding record and keeps writing the rest of the turn; onboarding logs and continues (the step is asked again); `scripts/add_state.py` prints a one-line error and exits 1. The remaining record writers (`write_memory`, session, project, lodestone) still use `safe_write_json` and move to `safe_create_json` in a follow-up.
+
 ## References
 
 - `src/core/jsonio.py` -- the helpers.

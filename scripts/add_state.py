@@ -42,6 +42,7 @@ if __name__ == "__main__":
 
     load_env_file()
 
+from src.core.jsonio import RecordExistsError
 from src.state.models import VALID_STATE_CATEGORIES
 from src.state.state_service import StateService
 
@@ -128,7 +129,17 @@ def main() -> None:
         metadata=metadata,
     )
 
-    file_path = service.write(record)
+    try:
+        file_path = service.write(record)
+    except RecordExistsError:
+        # This process has its own timestamp source, so a record of the same
+        # type written by the API in the same second can take the name first.
+        print(
+            f"Not written: a record named {record.timestamp}_{record.type} "
+            "already exists. Run the command again.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     print(f"✓ State record written: [{record.type}] {record.text}")
     print(f"  Path: {file_path}")

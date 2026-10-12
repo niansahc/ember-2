@@ -35,6 +35,7 @@ from src.core.config import (
     spawn_vault_bound_thread,
     vault_binding,
 )
+from src.core.jsonio import RecordExistsError
 from src.memory.service import MemoryService
 from src.memory.read_memory import read_memories
 from src.memory.exchange import ExchangeRecorder, ExchangeStorageError, OUTCOME_FAILED
@@ -270,10 +271,20 @@ def _background_state_extraction(user_message: str, reply: str) -> None:
     """
     try:
         records = state_extractor.extract(user_message, reply, is_live_turn=True)
+        written = 0
         for record in records:
-            state_service.write(record)
+            # A filename collision loses only that record (StateService
+            # logs it); the rest of the turn's records are still written.
+            try:
+                state_service.write(record)
+                written += 1
+            except RecordExistsError:
+                continue
         if records:
-            logger.info("[STATE_EXTRACT] Wrote %d state record(s) to vault", len(records))
+            logger.info(
+                "[STATE_EXTRACT] Wrote %d of %d state record(s) to vault",
+                written, len(records),
+            )
     except Exception as exc:
         logger.warning("[STATE_EXTRACT] Background extraction failed (non-fatal): %s", type(exc).__name__)
 

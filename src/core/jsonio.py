@@ -22,6 +22,16 @@ Write policy (safe_write_json):
     os.replace() onto the target. os.replace is atomic on Windows and POSIX.
   - On OSError the temp file is cleaned up and JsonIoError is raised: a failed
     canonical write must be visible, not silent.
+
+Create policy (safe_create_json), for append-only records that must never
+replace an existing file:
+  - Same temp file, then os.link() onto the target. A hard link fails with
+    FileExistsError when the target exists, atomically, so the existence check
+    and the publish are one step and two writers can never both succeed.
+  - On a filesystem without hard links (FAT/exFAT, some network shares) it
+    falls back to an O_EXCL create: still exclusive, but a reader can briefly
+    see a partly written file.
+  - A taken name raises RecordExistsError; nothing is written.
 """
 
 from __future__ import annotations
@@ -72,6 +82,44 @@ def safe_read_json(path: str | os.PathLike, *, default: Any = _RAISE) -> Any:
         return default
 
 
+def _write_failed(p: Path, exc: OSError) -> JsonIoError:
+    logger.warning("[JSONIO] write failed: %s (%s)", p, type(exc).__name__)
+    return JsonIoError(f"failed to write JSON: {p} ({type(exc).__name__})")
+
+
+def _discard(p: Path) -> None:
+    try:
+        p.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _write_temp_json(p: Path, data: Any) -> Path:
+    """Write `data` to a new uniquely-named temp file beside `p`; return it.
+
+    Unique temp name in the SAME directory: same filesystem keeps os.replace
+    and os.link atomic, and the unique name prevents concurrent writers from
+    clobbering each other's temp file. mkdir/mkstemp failures are write
+    failures too.
+    """
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp"
+        )
+    except OSError as exc:
+        raise _write_failed(p, exc) from exc
+
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except OSError as exc:
+        _discard(tmp_path)
+        raise _write_failed(p, exc) from exc
+    return tmp_path
+
+
 def safe_write_json(path: str | os.PathLike, data: Any) -> Path:
     """Atomically write `data` as JSON to `path`.
 
@@ -81,32 +129,70 @@ def safe_write_json(path: str | os.PathLike, data: Any) -> Path:
     canonical write must not be silent). Returns the written path.
     """
     p = Path(path)
-    # Unique temp name in the SAME directory: same filesystem keeps os.replace
-    # atomic, and the unique name prevents concurrent writers from clobbering
-    # each other's temp file. mkdir/mkstemp failures are write failures too.
+    tmp_path = _write_temp_json(p, data)
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(
-            dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp"
-        )
+        os.replace(tmp_path, p)
     except OSError as exc:
-        logger.warning("[JSONIO] write failed: %s (%s)", p, type(exc).__name__)
-        raise JsonIoError(
-            f"failed to write JSON: {p} ({type(exc).__name__})"
-        ) from exc
+        _discard(tmp_path)
+        raise _write_failed(p, exc) from exc
+    return p
 
-    tmp_path = Path(tmp_name)
+
+class RecordExistsError(FileExistsError):
+    """safe_create_json found its target name already taken. Nothing was
+    written and the existing file is untouched."""
+
+
+# One WARNING per process when the hard-link path is unavailable.
+_link_fallback_logged = False
+
+
+def safe_create_json(path: str | os.PathLike, data: Any) -> Path:
+    """Write `data` as JSON to `path` only if `path` does not exist yet.
+
+    For append-only records: an existing file is never replaced. The record
+    is written to a temp file, then hard-linked onto the target. os.link
+    fails with FileExistsError when the target exists, so the existence
+    check and the publish are one atomic step even across processes.
+
+    Raises RecordExistsError when the name is taken, JsonIoError on any
+    other write failure. Returns the written path.
+    """
+    global _link_fallback_logged
+    p = Path(path)
+    tmp_path = _write_temp_json(p, data)
+    try:
+        os.link(tmp_path, p)
+    except FileExistsError as exc:
+        raise RecordExistsError("record already exists") from exc
+    except OSError as exc:
+        # No hard links on this filesystem (FAT/exFAT, some network shares).
+        if not _link_fallback_logged:
+            _link_fallback_logged = True
+            logger.warning(
+                "[JSONIO] hard link unavailable (%s); exclusive create falls back to O_EXCL",
+                type(exc).__name__,
+            )
+        _create_exclusive(p, data)
+    finally:
+        _discard(tmp_path)
+    return p
+
+
+def _create_exclusive(p: Path, data: Any) -> None:
+    """O_EXCL fallback for safe_create_json: exclusive, but not atomic for
+    readers (one can briefly see a partly written file)."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(p, flags)
+    except FileExistsError as exc:
+        raise RecordExistsError("record already exists") from exc
+    except OSError as exc:
+        raise _write_failed(p, exc) from exc
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, p)
     except OSError as exc:
-        logger.warning("[JSONIO] write failed: %s (%s)", p, type(exc).__name__)
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise JsonIoError(
-            f"failed to write JSON: {p} ({type(exc).__name__})"
-        ) from exc
-    return p
+        # The file is ours (created exclusively above), so removing it is safe.
+        _discard(p)
+        raise _write_failed(p, exc) from exc

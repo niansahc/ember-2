@@ -7,6 +7,7 @@ Tests for TaskService (vault I/O for task records).
 import json
 import pytest
 
+from src.core.jsonio import RecordExistsError
 from src.tasks.models import VALID_TASK_STATUSES, TaskRecord
 from src.tasks.task_service import TaskService
 
@@ -48,12 +49,13 @@ class TestTaskServiceWrite:
         service = TaskService(vault_path=tmp_path)
         record = _make_record()
         path1 = service.write(record)
+        original = path1.read_bytes()
 
-        # Writing the same record again should skip (file already exists)
-        with pytest.warns(match="already exists"):
-            path2 = service.write(record)
+        # Writing the same record again raises; the file is untouched.
+        with pytest.raises(RecordExistsError):
+            service.write(record)
 
-        assert path1 == path2
+        assert path1.read_bytes() == original
 
     def test_write_creates_directory(self, tmp_path):
         vault = tmp_path / "nested" / "vault"

@@ -29,7 +29,7 @@ from src.core.config import (
     get_private_vault_path,
     vault_writes_blocked,
 )
-from src.core.jsonio import safe_write_json
+from src.core.jsonio import RecordExistsError, safe_create_json
 from src.core.timestamps import UniqueTimestampSource
 from src.state.models import VALID_STATE_CATEGORIES, StateRecord
 
@@ -42,7 +42,7 @@ STATE_MEMORY_SUBDIR = "memory/state"
 # Guard against same-second timestamp collisions in make_record().
 # Filename convention is `{timestamp}_{type}.json`, so two records of the
 # same type written in the same second collide on filename and the second
-# write is silently dropped by the exists-check in StateService.write().
+# write raises RecordExistsError in StateService.write().
 # See UniqueTimestampSource (BUG-005, ultrareview #280). Uses second
 # precision (not microsecond) to match the existing state layer format; a
 # caller that collides gets the next second without waiting for it.
@@ -183,8 +183,9 @@ class StateService:
         is guaranteed at the model level.
 
         This method is append-only: it will never overwrite an existing
-        file. If a file with the same name already exists, a warning is
-        issued and the write is skipped.
+        file. The file is created exclusively (safe_create_json), so a name
+        that is already taken, by this process or another, raises instead
+        of silently dropping the new record.
 
         Parameters
         ----------
@@ -197,11 +198,14 @@ class StateService:
             When a vault swap could not be verified. Checked before
             _get_state_dir(), which would otherwise mkdir into a vault
             that has not been confirmed.
+        RecordExistsError
+            When a file with this record's name already exists. Nothing is
+            written and the existing file is untouched.
 
         Returns
         -------
         Path
-            The path of the written (or already-existing) file.
+            The path of the written file.
         """
         reason = vault_writes_blocked()
         if reason:
@@ -212,20 +216,15 @@ class StateService:
         filename = self._filename_for(record)
         file_path = state_dir / filename
 
-        if file_path.exists():
-            warnings.warn(
-                f"[STATE_SERVICE] File already exists, skipping write: {filename}",
-                stacklevel=2,
-            )
-            return file_path
-
         data = self._record_to_dict(record)
 
-        # Atomic write (ADR-039): a torn write can no longer leave a truncated
-        # record file in the state directory. safe_write_json writes to a temp
-        # file and os.replace()s it onto the target, so a reader (read_all)
-        # sees either no file or a complete one, never a half-written record.
-        safe_write_json(file_path, data)
+        # Atomic, exclusive create (ADR-039): read_all never sees a partial
+        # record, and an existing record is never replaced.
+        try:
+            safe_create_json(file_path, data)
+        except RecordExistsError:
+            logger.error("[STATE_SERVICE] Filename collision, record not written: %s", filename)
+            raise
 
         return file_path
 

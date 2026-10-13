@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from src.context.models import ContextPacket
+from src.core.timestamps import utc_log_timestamp_source
 from src.safety.models import SafetyReviewResult, SafetyTriggerResult
+
+# One file per review; two reviews in the same second get distinct names.
+_log_timestamps = utc_log_timestamp_source()
 
 
 def _sha256(text: str) -> str:
@@ -60,7 +63,7 @@ class SafetyReviewLogger:
         review_result: SafetyReviewResult,
         session_id: str | None = None,
     ) -> Path:
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+        timestamp = _log_timestamps.next()
         file_path = self.log_dir / f"{timestamp}.json"
 
         user_message = context_packet.user_message

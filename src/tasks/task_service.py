@@ -15,15 +15,18 @@ Design rules (per CLAUDE.md):
 
 from __future__ import annotations
 
+import logging
 import re
 import warnings
 from dataclasses import asdict
 from pathlib import Path
 
 from src.core.config import get_private_vault_path
-from src.core.jsonio import safe_read_json, safe_write_json
+from src.core.jsonio import RecordExistsError, safe_create_json, safe_read_json
 from src.core.timestamps import UniqueTimestampSource
 from src.tasks.models import VALID_TASK_STATUSES, TaskRecord
+
+logger = logging.getLogger("ember.task_service")
 
 
 # Subdirectory within the vault where task records live.
@@ -33,9 +36,9 @@ TASK_MEMORY_SUBDIR = "memory/task"
 # Guard against same-tick timestamp collisions in next_timestamp().
 # Filename convention is `{timestamp}_{slug}.json`, so two timestamps
 # colliding on the same clock tick produce the same path and the second
-# write hits TaskService.write()'s "file already exists" guard, silently
-# dropping the new record. This was the root cause of flaky
-# test_update_status: POST + PATCH within one tick on a fast machine.
+# write raises RecordExistsError in TaskService.write(). Same-tick
+# collisions were the root cause of flaky test_update_status: POST + PATCH
+# within one tick on a fast machine.
 # See UniqueTimestampSource (BUG-005, ultrareview #280).
 _timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f")
 
@@ -151,28 +154,38 @@ class TaskService:
         """
         Write a TaskRecord to the vault as a JSON file.
 
-        Append-only: never overwrites an existing file. If a file with the
-        same name already exists, a warning is issued and the write is skipped.
+        Append-only: never overwrites an existing file. The file is created
+        exclusively (safe_create_json), so a name that is already taken, by
+        this process or another, raises instead of silently dropping the new
+        record.
+
+        Raises
+        ------
+        RecordExistsError
+            When a file with this record's name already exists. Nothing is
+            written and the existing file is untouched.
 
         Returns
         -------
         Path
-            The path of the written (or already-existing) file.
+            The path of the written file.
         """
         task_dir = self._get_task_dir()
         filename = self._filename_for(record)
         file_path = task_dir / filename
 
-        if file_path.exists():
-            warnings.warn(
-                f"[TASK_SERVICE] File already exists, skipping write: {filename}",
-                stacklevel=2,
-            )
-            return file_path
-
         data = self._record_to_dict(record)
-        # Atomic write (ADR-039): a reader never sees a half-written task.
-        safe_write_json(file_path, data)
+        # Atomic, exclusive write (ADR-039): a reader never sees a half-written
+        # task, and an existing task file is never replaced.
+        try:
+            safe_create_json(file_path, data)
+        except RecordExistsError:
+            # Timestamp only: the filename carries a slug of the task title.
+            logger.error(
+                "[TASK_SERVICE] Filename collision, record not written: %s",
+                record.timestamp,
+            )
+            raise
 
         return file_path
 

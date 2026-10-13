@@ -38,6 +38,7 @@ from src.api.openai_adapter import router as openai_adapter_router, llm_adapter
 from src.api.routes.ingest import router as ingest_router
 from src.context.service import ContextService
 from src.core.config import get_ember_api_key, get_cloud_models, get_extra_allowed_hosts
+from src.core.jsonio import RecordExistsError
 from src.core.paths import resolve_inside
 from src.memory.service import MemoryService
 from src.memory.session import (
@@ -152,6 +153,19 @@ app = FastAPI(lifespan=_lifespan, docs_url=None, redoc_url=None, openapi_url=Non
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+async def _record_exists_handler(request: Request, exc: RecordExistsError) -> JSONResponse:
+    """An append-only record name was already taken (StateService.write or
+    TaskService.write, which log the collision). Nothing was written, so the
+    client gets a retryable 409 instead of a 500."""
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "Record already exists; nothing was written. Retry the request."},
+    )
+
+
+app.add_exception_handler(RecordExistsError, _record_exists_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 
@@ -805,8 +819,9 @@ def update_task_status_endpoint(task_id: str, body: TaskUpdateRequest):
 
     # Write a new record with the same task ID but new timestamp and updated status.
     # next_timestamp() is strictly increasing so the new record
-    # cannot share a filename with the original (which would silently drop the
-    # update — the root cause of the test_update_status flake).
+    # cannot share a filename with the original (which used to silently drop
+    # the update - the root cause of the test_update_status flake). A
+    # collision from another process raises RecordExistsError -> 409.
     from src.tasks.task_service import next_timestamp
     new_timestamp = next_timestamp()
 

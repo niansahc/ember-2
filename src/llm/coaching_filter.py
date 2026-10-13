@@ -20,11 +20,18 @@ import json
 import logging
 import re
 import unicodedata
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.core.timestamps import utc_log_timestamp_source
+
 logger = logging.getLogger("ember.coaching_filter")
+
+_LOG_DIR = Path(__file__).resolve().parents[2] / "logs" / "coaching_filter"
+
+# One file per intervention; stages that fire in the same second get
+# distinct names.
+_log_timestamps = utc_log_timestamp_source()
 
 # Intent classes that trigger the filter.
 _EMOTIONAL_INTENTS = frozenset({"reflective", "default"})
@@ -390,10 +397,9 @@ def _log_intervention(
 ) -> None:
     """Log filter intervention to the safety logs directory."""
     try:
-        log_dir = Path(__file__).resolve().parents[2] / "logs" / "coaching_filter"
-        log_dir.mkdir(parents=True, exist_ok=True)
+        _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+        timestamp = _log_timestamps.next()
         payload = {
             "timestamp": timestamp,
             "intent_class": intent_class,
@@ -404,7 +410,7 @@ def _log_intervention(
             "changed": result != original,
         }
 
-        file_path = log_dir / f"{timestamp}.json"
+        file_path = _LOG_DIR / f"{timestamp}.json"
         file_path.write_text(
             json.dumps(payload, indent=2, ensure_ascii=False),
             encoding="utf-8",

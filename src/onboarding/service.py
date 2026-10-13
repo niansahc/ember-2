@@ -27,8 +27,10 @@ import logging
 import ollama
 
 from src.core.config import get_ember_model
+from src.core.jsonio import RecordExistsError
 from src.memory.service import MemoryService
 from src.onboarding.steps import ONBOARDING_STEPS
+from src.state.models import StateRecord
 from src.state.state_service import StateService
 
 logger = logging.getLogger("ember.onboarding")
@@ -136,7 +138,7 @@ class OnboardingService:
     # ------------------------------------------------------------------
 
     def _write_progress(self, step: int, completed: list[str]) -> None:
-        self._state.write(StateService.make_record(
+        self._write_state(StateService.make_record(
             state_type="onboarding",
             text="onboarding_in_progress",
             source="onboarding_service",
@@ -145,12 +147,25 @@ class OnboardingService:
         ))
 
     def _write_complete(self) -> None:
-        self._state.write(StateService.make_record(
+        self._write_state(StateService.make_record(
             state_type="onboarding",
             text="onboarding_complete",
             source="onboarding_service",
             tags=["onboarding", "system"],
         ))
+
+    def _write_state(self, record: StateRecord) -> None:
+        """Write an onboarding state record. A filename collision must not
+        fail the user's turn: the record is lost (StateService logs the
+        collision), so the vault still shows the previous step and that step
+        is asked again on the next turn."""
+        try:
+            self._state.write(record)
+        except RecordExistsError:
+            logger.error(
+                "[ONBOARDING] State write collided, %s not recorded; continuing",
+                record.text,
+            )
 
     def _format_answer(self, answer: str, category: str) -> str:
         """

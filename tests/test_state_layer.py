@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from src.core.jsonio import RecordExistsError
 from src.state.models import StateItem, StateRecord
 from src.state.state_resolver import StateResolver
 
@@ -106,7 +107,7 @@ def test_state_service_write_and_read(tmp_path: Path) -> None:
 def test_state_service_append_only(tmp_path: Path) -> None:
     """
     Writing the same record twice should not overwrite the original file.
-    A UserWarning should be issued on the second write attempt.
+    The second write attempt raises RecordExistsError.
     """
     service = make_service(tmp_path)
 
@@ -122,14 +123,9 @@ def test_state_service_append_only(tmp_path: Path) -> None:
     file_path = service.write(record)
     original_content = file_path.read_text(encoding="utf-8")
 
-    # Second write — same filename, should warn and skip.
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    # Second write - same filename, should raise and write nothing.
+    with pytest.raises(RecordExistsError):
         service.write(record)
-
-    assert any("already exists" in str(w.message) for w in caught), (
-        "Expected a warning about the file already existing"
-    )
 
     # File content must be unchanged.
     assert file_path.read_text(encoding="utf-8") == original_content

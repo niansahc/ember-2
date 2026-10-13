@@ -15,6 +15,7 @@ from src.state.state_extractor import (
     EXTRACTABLE_CATEGORIES,
     MIN_WORDS_FOR_EXTRACTION,
 )
+from src.core.jsonio import RecordExistsError
 from src.state.models import VALID_STATE_CATEGORIES, StateRecord
 from src.state.state_service import StateService
 
@@ -217,9 +218,9 @@ class TestRecordStructure:
 class TestUniqueTimestampPerRecord:
     """Every extracted record gets its own timestamp.
 
-    StateService names files {timestamp}_{type}.json and skips a write
+    StateService names files {timestamp}_{type}.json and refuses a write
     whose file already exists. One timestamp shared by a whole turn meant
-    two extractions of the same type collided and the second was dropped.
+    two extractions of the same type collided and the second was lost.
     """
 
     TWO_OPEN_LOOPS = json.dumps({
@@ -242,7 +243,7 @@ class TestUniqueTimestampPerRecord:
             service.write(record)
         assert len(list((tmp_path / "memory" / "state").glob("*.json"))) == 2
 
-    def test_control_shared_timestamp_and_type_drops_the_second_write(self, tmp_path):
+    def test_control_shared_timestamp_and_type_loses_the_second_write(self, tmp_path):
         """Positive control: two records with one timestamp and one type
         produce one file, so the 2-file assertion above can fail."""
         records = [
@@ -255,7 +256,7 @@ class TestUniqueTimestampPerRecord:
         ]
 
         service = StateService(vault_path=tmp_path)
-        with pytest.warns(UserWarning, match="already exists"):
-            for record in records:
-                service.write(record)
+        service.write(records[0])
+        with pytest.raises(RecordExistsError):
+            service.write(records[1])
         assert len(list((tmp_path / "memory" / "state").glob("*.json"))) == 1

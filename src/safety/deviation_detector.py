@@ -303,9 +303,8 @@ def write_deviation_record(
 
     Only called when second_pass_result is YES.
     Record starts as proposed (confirmed: false).
+    The record's id and filename come from write_memory().
     """
-    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
-
     record_data = {
         "friction_context": user_message[:500],
         "pattern_class": result.pattern_class,

@@ -128,3 +128,16 @@ class UniqueTimestampSource:
             self._last = now
         # Formatting needs no lock: `now` is a local, immutable datetime.
         return now.strftime(self._fmt)
+
+
+# Per-event log filenames (one JSON file per event, named by UTC second).
+# tools/eval/coaching_filter_audit.py and tools/eval/policy_trigger_audit.py
+# parse this exact format, so it lives in one place.
+LOG_FILENAME_FORMAT = "%Y-%m-%dT%H-%M-%SZ"
+
+
+def utc_log_timestamp_source() -> UniqueTimestampSource:
+    """A UniqueTimestampSource for per-event log filenames: UTC, in
+    LOG_FILENAME_FORMAT. Two events in the same second get consecutive
+    seconds instead of the same name, so neither overwrites the other."""
+    return UniqueTimestampSource(LOG_FILENAME_FORMAT, timezone.utc)

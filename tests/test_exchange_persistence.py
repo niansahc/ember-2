@@ -323,7 +323,7 @@ def test_order_is_user_turn_generation_reply_done(client, vault, casual_policy):
     from src.memory import write_memory as wm
 
     events: list[str] = []
-    real_write = wm.storage.write_json
+    real_write = wm.storage.create_json
 
     def _write(path, data):
         if data.get("type") == "conversation":
@@ -339,7 +339,7 @@ def test_order_is_user_turn_generation_reply_done(client, vault, casual_policy):
         return real_done()
 
     _chat(client, policy=casual_policy, extra=(
-        patch.object(wm.storage, "write_json", side_effect=_write),
+        patch.object(wm.storage, "create_json", side_effect=_write),
         patch.object(oa.llm_adapter, "generate_response_iter", side_effect=_iter),
         patch("src.api.openai_adapter.sse_done", side_effect=_done),
     ))

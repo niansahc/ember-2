@@ -26,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 from pathlib import Path
 from unittest.mock import patch
@@ -587,6 +588,30 @@ def run_in_threads(fn, threads: int) -> tuple[list, list[BaseException]]:
     for t in workers:
         t.join(timeout=60)
     return results, errors
+
+
+class FixedSource:
+    """Stand-in for a UniqueTimestampSource that always returns one value,
+    so a test can make two writers pick the same record name."""
+
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def next(self) -> str:
+        return self.value
+
+
+@pytest.fixture
+def slow_temp_files(monkeypatch):
+    """Every temp file creation waits 50 ms, so concurrent writers have all
+    passed any pre-publish existence check before the first one publishes."""
+    real_mkstemp = tempfile.mkstemp
+
+    def slow_mkstemp(*args, **kwargs):
+        time.sleep(0.05)
+        return real_mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr(tempfile, "mkstemp", slow_mkstemp)
 
 
 # ---------------------------------------------------------------------------

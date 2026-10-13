@@ -30,9 +30,9 @@ storage = MemoryStorage()
 # back-to-back (e.g. create_session followed immediately by delete_session
 # in tests, or rapid automated batches) can land on the exact same clock
 # tick on a fast machine. Without this guard, the file-naming convention
-# `{_now_id()}.json` produces a collision and either overwrites the prior
-# record (MemoryStorage.write_json) or silently drops the new one. See
-# UniqueTimestampSource (BUG-005, ultrareview #280).
+# `{_now_id()}.json` produces a collision, and the exclusive create
+# (MemoryStorage.create_json) would refuse the second record with
+# RecordExistsError. See UniqueTimestampSource (BUG-005, ultrareview #280).
 _ids = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f", timezone.utc)
 
 
@@ -228,7 +228,7 @@ def create_session(session_id: str, title: str, *, test: bool = False) -> Path:
         "metadata": meta,
     }
     file_path = _session_dir() / f"{record['id']}.json"
-    storage.write_json(file_path, record)
+    storage.create_json(file_path, record)
     logger.info("Created session %s", session_id)
     return file_path
 
@@ -283,7 +283,7 @@ def update_session(
         "metadata": new_meta,
     }
     file_path = _session_dir() / f"{record['id']}.json"
-    storage.write_json(file_path, record)
+    storage.create_json(file_path, record)
     logger.info(
         "Updated session %s: title_changed=%s project_id=%s",
         session_id, title is not None, new_project_id,
@@ -327,6 +327,6 @@ def delete_session(session_id: str) -> Optional[Path]:
         },
     }
     file_path = _session_dir() / f"{record['id']}.json"
-    storage.write_json(file_path, record)
+    storage.create_json(file_path, record)
     logger.info("Soft-deleted session %s", session_id)
     return file_path

@@ -143,7 +143,7 @@ def create_project(name: str, color: str = "#ff8c00") -> dict:
         },
     }
     file_path = _project_dir() / f"{record['id']}.json"
-    storage.write_json(file_path, record)
+    storage.create_json(file_path, record)
     logger.info("Created project %s", project_id)
     return {"id": project_id, "name": name, "color": color}
 
@@ -176,7 +176,7 @@ def update_project(project_id: str, name: Optional[str] = None, color: Optional[
         },
     }
     file_path = _project_dir() / f"{record['id']}.json"
-    storage.write_json(file_path, record)
+    storage.create_json(file_path, record)
     logger.info(
         "Updated project %s: name_changed=%s color=%s",
         project_id, name is not None, new_color,
@@ -209,6 +209,6 @@ def delete_project(project_id: str) -> Optional[Path]:
         },
     }
     file_path = _project_dir() / f"{record['id']}.json"
-    storage.write_json(file_path, record)
+    storage.create_json(file_path, record)
     logger.info("Soft-deleted project %s", project_id)
     return file_path

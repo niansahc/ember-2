@@ -30,9 +30,9 @@ SQLITE_MEMORY_TYPES = {"conversation", "profile", "reflection", "journal"}
 # Guard against same-tick filename collisions in write_memory(). Filename
 # convention is `{timestamp}.json` so two back-to-back writes (e.g. user
 # turn + assistant turn in the same request, or rapid automated batches)
-# that land on the same clock tick produce identical paths and
-# MemoryStorage.write_json overwrites the prior record. See
-# UniqueTimestampSource (BUG-005, ultrareview #280).
+# that land on the same clock tick produce identical paths, and
+# MemoryStorage.create_json refuses the second record with
+# RecordExistsError. See UniqueTimestampSource (BUG-005, ultrareview #280).
 _timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f")
 
 
@@ -180,7 +180,9 @@ def write_canonical_record(
     }
 
     file_path = memory_dir / f"{timestamp}.json"
-    storage.write_json(file_path, memory)
+    # Exclusive create: a name another process already took raises
+    # RecordExistsError instead of replacing that record.
+    storage.create_json(file_path, memory)
     return memory, file_path
 
 

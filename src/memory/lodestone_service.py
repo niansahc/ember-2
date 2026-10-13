@@ -151,7 +151,7 @@ def write(
 
     ldir = _lodestone_dir()
     file_path = ldir / f"{timestamp}.json"
-    storage.write_json(file_path, record)
+    storage.create_json(file_path, record)
 
     logger.info(
         "[LODESTONE] Wrote %s record: %d chars (%s)",
@@ -207,7 +207,7 @@ def update(record_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
 
     ldir = _lodestone_dir()
     file_path = ldir / f"{new_timestamp}.json"
-    storage.write_json(file_path, updated_record)
+    storage.create_json(file_path, updated_record)
 
     logger.info("[LODESTONE] Updated record %s (append-only, new version %s)", record_id, new_timestamp)
     return updated_record

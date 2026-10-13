@@ -41,6 +41,7 @@ if __name__ == "__main__":
 
     load_env_file()
 
+from src.core.jsonio import RecordExistsError
 from src.memory.service import MemoryService
 
 memory_service = MemoryService()
@@ -137,17 +138,25 @@ def seed_identity() -> None:
 
     written = 0
     skipped = 0
+    failed = 0
 
     for record in PROFILE_RECORDS:
-        result = memory_service.write(
-            text=record["text"],
-            memory_type="profile",
-            source="seed_identity",
-            tags=record.get("tags", []),
-            metadata=record.get("metadata", {}),
-        )
-
         preview = record["text"][:60].replace("\n", " ")
+
+        try:
+            result = memory_service.write(
+                text=record["text"],
+                memory_type="profile",
+                source="seed_identity",
+                tags=record.get("tags", []),
+                metadata=record.get("metadata", {}),
+            )
+        except RecordExistsError:
+            # Another process took this record's timestamp name. Re-running
+            # is safe: duplicates of records already written are skipped.
+            print(f"  ! not written (name collision, re-run to retry): {preview}...")
+            failed += 1
+            continue
 
         if result:
             print(f"  + {preview}...")
@@ -156,7 +165,7 @@ def seed_identity() -> None:
             print(f"  - skipped (duplicate): {preview}...")
             skipped += 1
 
-    print(f"\nDone. {written} written, {skipped} skipped.")
+    print(f"\nDone. {written} written, {skipped} skipped, {failed} failed.")
 
 
 if __name__ == "__main__":

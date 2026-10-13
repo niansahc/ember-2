@@ -20,6 +20,7 @@ from datetime import datetime
 import ollama
 
 from src.core.config import get_ember_auxiliary_model
+from src.core.jsonio import RecordExistsError
 from src.memory.resolve_memory import find_conversation_ids_for_session
 from src.memory.write_memory import write_memory
 
@@ -129,13 +130,19 @@ def generate_session_reflection(
     else:
         metadata["source_record_ids"] = []
 
-    write_memory(
-        text=reflection_text,
-        memory_type="reflection",
-        source="session_reflection",
-        tags=["session", "reflection"],
-        metadata=metadata,
-    )
+    # Also runs in a background thread on conversation delete, where a raise
+    # would surface only as an unhandled thread exception.
+    try:
+        write_memory(
+            text=reflection_text,
+            memory_type="reflection",
+            source="session_reflection",
+            tags=["session", "reflection"],
+            metadata=metadata,
+        )
+    except RecordExistsError:
+        logger.error("[SESSION_REFLECT] Reflection not written: record name collision")
+        return None
 
     logger.info("[SESSION_REFLECT] Written: %d chars", len(reflection_text))
     return reflection_text

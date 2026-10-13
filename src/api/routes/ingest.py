@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from src.api.limiter import limiter
 from src.core.config import get_private_vault_path
+from src.core.jsonio import RecordExistsError
 from src.core.paths import resolve_inside
 from src.memory.write_memory import write_memory
 from src.ingest.importers.chatgpt import load_chatgpt_export
@@ -246,13 +247,20 @@ def _import_json_records(data: Any) -> dict:
             if key in record:
                 metadata[key] = record[key]
 
-        result = write_memory(
-            text=text.strip(),
-            memory_type=memory_type,
-            source=source,
-            tags=tags,
-            metadata=metadata,
-        )
+        # A taken record name loses only this record (create_json logs it).
+        # Raising would abort the batch after earlier records were already
+        # written, and a client retry would then duplicate them.
+        try:
+            result = write_memory(
+                text=text.strip(),
+                memory_type=memory_type,
+                source=source,
+                tags=tags,
+                metadata=metadata,
+            )
+        except RecordExistsError:
+            errors.append({"index": i, "error": "Record name collision; not written."})
+            continue
 
         if result:
             imported += 1

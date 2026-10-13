@@ -212,3 +212,202 @@ def test_control_old_path_never_reports_a_concurrent_collision(
     _results, errors = run_in_threads(bound_write, 2)
 
     assert not any(isinstance(e, RecordExistsError) for e in errors)
+
+# ---------------------------------------------------------------------------
+# Callers: a collision loses that one record, never the caller's whole job
+# ---------------------------------------------------------------------------
+
+OTHER_TS = "2026-01-01T12-00-01-000000"
+
+
+class SequenceSource:
+    """Timestamp source that returns `values` in order."""
+
+    def __init__(self, *values: str) -> None:
+        self._values = list(values)
+
+    def next(self) -> str:
+        return self._values.pop(0)
+
+
+@pytest.fixture
+def no_indexing(monkeypatch):
+    """Indexing is not under test; skip the embedding call."""
+    monkeypatch.setattr(write_memory_mod, "index_record", lambda *_a, **_k: None)
+
+
+def test_json_import_collision_skips_that_record_and_imports_the_rest(vault, monkeypatch, no_indexing):
+    from src.api.routes.ingest import _import_json_records
+
+    monkeypatch.setattr(write_memory_mod, "_timestamps", SequenceSource(FIXED_TS, FIXED_TS, OTHER_TS))
+    records = [
+        {"text": f"synthetic journal entry number {i} for import", "type": "journal"}
+        for i in range(3)
+    ]
+
+    result = _import_json_records(records)
+
+    assert result["imported"] == 2
+    assert result["errors"] == [{"index": 1, "error": "Record name collision; not written."}]
+    names = sorted(p.name for p in (vault / "memory" / "journal").glob("*.json"))
+    assert names == [f"{FIXED_TS}.json", f"{OTHER_TS}.json"]
+
+SYNTHETIC_TURNS = [
+    {"user": f"synthetic question {i}", "assistant": f"synthetic answer {i}"}
+    for i in range(3)
+]
+SYNTHETIC_REFLECTION = "The user and Ember worked through a synthetic planning task and left one item open."
+
+
+def test_session_reflection_collision_returns_none_without_raising(vault, monkeypatch, no_indexing, caplog):
+    """Runs in a background thread on conversation delete: a collision must
+    end in a log line, not an unhandled thread exception."""
+    import src.reflection.session_reflection as session_reflection
+
+    monkeypatch.setattr(
+        session_reflection.ollama, "chat",
+        lambda **_k: {"message": {"content": SYNTHETIC_REFLECTION}},
+    )
+    _taken_name(vault, monkeypatch, write_memory_mod, "_timestamps", "reflection")
+
+    with caplog.at_level(logging.ERROR):
+        result = session_reflection.generate_session_reflection(
+            SYNTHETIC_TURNS, session_id=SESSION_ID, model="synthetic-local-model",
+        )
+
+    assert result is None
+    assert any("[SESSION_REFLECT] Reflection not written" in r.getMessage() for r in caplog.records)
+
+def test_session_summary_collision_still_injects_the_summary_turn(vault, monkeypatch, no_indexing, caplog):
+    """Buffer compression pops the oldest turns before the summary write. A
+    collision on that write must not lose them: the summary turn still
+    replaces them in the buffer."""
+    from unittest.mock import MagicMock
+
+    from src.context.conversation_buffer import ConversationBuffer
+    from src.llm.adapter import LLMAdapter
+    from src.memory.service import MemoryService
+
+    adapter = LLMAdapter.__new__(LLMAdapter)
+    adapter.model = "synthetic-local-model"
+    adapter.prompt_builder = MagicMock()
+    adapter.prompt_builder.conversation_buffer = ConversationBuffer()
+    adapter.memory_service = MemoryService()
+    buf = adapter.prompt_builder.conversation_buffer
+    long_msg = " ".join(f"word{j}" for j in range(100))
+    for _ in range(8):
+        buf.add_turn(long_msg, long_msg)
+    monkeypatch.setattr(adapter, "_summarize_with_plain_prompt", lambda _p: SYNTHETIC_REFLECTION)
+    _taken_name(vault, monkeypatch, write_memory_mod, "_timestamps", "reflection")
+
+    with caplog.at_level(logging.ERROR):
+        adapter._maybe_compress_buffer()
+
+    first = buf.get_recent()[0]
+    assert first.get("is_summary") is True
+    assert first["assistant"] == SYNTHETIC_REFLECTION
+    assert any("[BUFFER] Session summary not written" in r.getMessage() for r in caplog.records)
+
+def test_onboarding_profile_collision_reasks_the_same_step(vault, monkeypatch, no_indexing, caplog):
+    """A raise here would reach a streaming chat client as a JSON 409 (blank
+    reply). The answer is lost, so the step is not advanced and its question
+    is asked again."""
+    from src.onboarding.service import OnboardingService
+    from src.onboarding.steps import ONBOARDING_STEPS
+    from src.state.state_service import StateService
+
+    service = OnboardingService()
+    service._state = StateService(vault_path=vault)
+    service._write_progress(step=0, completed=[])
+    monkeypatch.setattr(
+        service, "_format_answer",
+        lambda answer, _category: f"The user said this in a synthetic onboarding answer: {answer}",
+    )
+    _taken_name(vault, monkeypatch, write_memory_mod, "_timestamps", "profile")
+
+    with caplog.at_level(logging.ERROR):
+        reply = service.handle("synthetic answer")
+
+    assert reply == ONBOARDING_STEPS[0].question
+    progress = service._state.read_by_category("onboarding")
+    assert len(progress) == 1 and progress[0].metadata["current_step"] == 0
+    assert any("[ONBOARDING] Profile write collided" in r.getMessage() for r in caplog.records)
+
+def test_journal_cli_collision_exits_1_with_a_message(vault, monkeypatch, no_indexing, capsys):
+    import sys
+
+    import scripts.journal as journal
+
+    target = _taken_name(vault, monkeypatch, write_memory_mod, "_timestamps", "journal")
+    monkeypatch.setattr(
+        sys, "argv", ["journal.py", "--text", "synthetic journal entry for a collision test"],
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        journal.main()
+
+    assert exit_info.value.code == 1
+    assert "already exists" in capsys.readouterr().err
+    assert json.loads(target.read_text(encoding="utf-8")) == PLACEHOLDER
+
+def test_seed_script_collision_counts_a_failure_and_seeds_the_rest(vault, monkeypatch, no_indexing, capsys):
+    import scripts.seed_identity_template as seed
+
+    _taken_name(vault, monkeypatch, write_memory_mod, "_timestamps", "profile")
+    monkeypatch.setattr(write_memory_mod, "_timestamps", SequenceSource(FIXED_TS, OTHER_TS))
+    monkeypatch.setattr(seed, "PROFILE_RECORDS", [
+        {"text": "The user is a synthetic profile subject number one for seeding.", "tags": []},
+        {"text": "The user is a synthetic profile subject number two for seeding.", "tags": []},
+    ])
+
+    seed.seed_identity()
+
+    assert "1 written, 0 skipped, 1 failed" in capsys.readouterr().out
+    assert (vault / "memory" / "profile" / f"{OTHER_TS}.json").exists()
+
+# ---------------------------------------------------------------------------
+# API routes: a collision is a retryable 409, not a 500
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def api_client(vault, monkeypatch, no_indexing):
+    from fastapi.testclient import TestClient
+
+    import src.api.main as main
+
+    monkeypatch.setattr(main, "get_ember_api_key", lambda: None)
+    return TestClient(main.app)
+
+
+def test_journal_route_collision_returns_409(api_client, vault, monkeypatch):
+    _taken_name(vault, monkeypatch, write_memory_mod, "_timestamps", "journal")
+
+    response = api_client.post("/journal", json={"text": "synthetic journal entry for a collision test"})
+
+    assert response.status_code == 409
+
+
+def test_conversation_rename_collision_returns_409(api_client, vault, monkeypatch):
+    _make_session()
+    _taken_name(vault, monkeypatch, session_mod, "_ids", "session")
+
+    response = api_client.patch(f"/v1/conversations/{SESSION_ID}", json={"title": "Renamed synthetic"})
+
+    assert response.status_code == 409
+
+
+def test_project_create_collision_returns_409(api_client, vault, monkeypatch):
+    _taken_name(vault, monkeypatch, project_mod, "_ids", "project")
+
+    response = api_client.post("/v1/projects", json={"name": "Synthetic project"})
+
+    assert response.status_code == 409
+
+
+def test_lodestone_update_collision_returns_409(api_client, vault, monkeypatch):
+    rec_id = _make_lodestone()
+    _taken_name(vault, monkeypatch, lodestone_service, "_timestamps", "lodestone")
+
+    response = api_client.patch(f"/v1/lodestone/{rec_id}", json={"user_note": "synthetic note"})
+
+    assert response.status_code == 409

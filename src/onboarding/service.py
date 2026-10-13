@@ -112,13 +112,23 @@ class OnboardingService:
 
         if user_message.strip():
             formatted = self._format_answer(user_message.strip(), step.category)
-            self._memory.write(
-                text=formatted,
-                memory_type="profile",
-                source="onboarding",
-                tags=step.tags,
-                metadata={"category": step.category, "onboarding_step": step.key},
-            )
+            # A collision must not fail the user's turn (a streaming client
+            # would get a JSON 409). The answer was not saved, so the step
+            # does not advance and its question is asked again.
+            try:
+                self._memory.write(
+                    text=formatted,
+                    memory_type="profile",
+                    source="onboarding",
+                    tags=step.tags,
+                    metadata={"category": step.category, "onboarding_step": step.key},
+                )
+            except RecordExistsError:
+                logger.error(
+                    "[ONBOARDING] Profile write collided, step %d (%s) not saved; asking again",
+                    current, step.key,
+                )
+                return step.question
             completed = completed + [step.key]
             logger.info("[ONBOARDING] Saved answer for step %d (%s)", current, step.key)
 

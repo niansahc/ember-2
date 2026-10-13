@@ -65,14 +65,21 @@ def test_grounding_intents_does_not_contain_casual():
 # ── Logging ────────────────────────────────────────────────────────────
 
 
-def test_log_grounding_outcome_does_not_crash(tmp_path):
-    """Logging should not raise even if the log directory doesn't exist."""
+def test_log_grounding_outcome_does_not_crash(tmp_path, monkeypatch):
+    """Logging should not raise even if the log directory doesn't exist.
+
+    The log dir is redirected to a missing tmp subdirectory so the test
+    never writes into the repo's logs/.
+    """
+    log_dir = tmp_path / "safety_reviews"
+    monkeypatch.setattr("src.safety.grounding_check._LOG_DIR", log_dir)
     log_grounding_outcome(
         intent_class="factual_recall",
         triggered=True,
         grounded=True,
         revision_triggered=False,
     )
+    assert len(list(log_dir.glob("*-grounding.json"))) == 1
 
 
 # ── Async function signatures ──────────────────────────────────────────

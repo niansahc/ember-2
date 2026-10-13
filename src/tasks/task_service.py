@@ -36,9 +36,9 @@ TASK_MEMORY_SUBDIR = "memory/task"
 # Guard against same-tick timestamp collisions in next_timestamp().
 # Filename convention is `{timestamp}_{slug}.json`, so two timestamps
 # colliding on the same clock tick produce the same path and the second
-# write raises RecordExistsError in TaskService.write() (before the
-# exclusive create, it was silently dropped). This was the root cause of flaky
-# test_update_status: POST + PATCH within one tick on a fast machine.
+# write raises RecordExistsError in TaskService.write(). Same-tick
+# collisions were the root cause of flaky test_update_status: POST + PATCH
+# within one tick on a fast machine.
 # See UniqueTimestampSource (BUG-005, ultrareview #280).
 _timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f")
 

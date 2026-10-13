@@ -28,20 +28,19 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
-from src.core.timestamps import UniqueTimestampSource
+from src.core.timestamps import utc_log_timestamp_source
 
 
 logger = logging.getLogger("ember.self_narrative")
 
 _LOG_DIR = Path(__file__).resolve().parents[2] / "logs" / "safety_reviews"
 
-# One file per flagged response, named by UTC second. The source advances
-# past the clock instead of repeating a second, so two entries in the same
-# second no longer overwrite each other.
-_log_timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%SZ", timezone.utc)
+# One file per flagged response; two entries in the same second get
+# distinct names.
+_log_timestamps = utc_log_timestamp_source()
 
 
 # Identity subjects. "Ember", "the system", "my system", "this system"

@@ -2,19 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import timezone
 from pathlib import Path
 from typing import Any
 
 from src.context.models import ContextPacket
-from src.core.timestamps import UniqueTimestampSource
+from src.core.timestamps import utc_log_timestamp_source
 from src.safety.models import SafetyReviewResult, SafetyTriggerResult
 
-# One file per review, named by UTC second (the format
-# tools/eval/policy_trigger_audit.py parses). The source advances past the
-# clock instead of repeating a second, so two reviews in the same second no
-# longer overwrite each other.
-_log_timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%SZ", timezone.utc)
+# One file per review; two reviews in the same second get distinct names.
+_log_timestamps = utc_log_timestamp_source()
 
 
 def _sha256(text: str) -> str:

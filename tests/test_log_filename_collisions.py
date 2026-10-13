@@ -28,7 +28,7 @@ import src.llm.coaching_filter as coaching_filter
 import src.safety.grounding_check as grounding_check
 import src.safety.self_narrative_check as self_narrative_check
 from src.context.models import ContextPacket
-from src.core.timestamps import UniqueTimestampSource
+from src.core.timestamps import LOG_FILENAME_FORMAT, utc_log_timestamp_source
 from src.safety.models import SafetyReviewResult, SafetyTriggerResult
 from src.safety.review_logger import SafetyReviewLogger
 from tools.eval.coaching_filter_audit import (
@@ -39,7 +39,6 @@ from tools.eval.policy_trigger_audit import (
 )
 
 CALLS = 5
-LOG_FORMAT = "%Y-%m-%dT%H-%M-%SZ"
 
 # 12:00:00 UTC. On a machine whose local zone is not UTC, a writer that
 # formats local time produces a different hour and fails the name checks.
@@ -65,9 +64,9 @@ def frozen_clock(monkeypatch):
     clock = _FrozenClock()
     monkeypatch.setattr(timestamps_mod, "datetime", clock)
     # Writers that still read the clock directly (payload fields) see the
-    # same frozen instant. raising=False: some modules no longer import it.
-    for module in (coaching_filter, grounding_check, self_narrative_check):
-        monkeypatch.setattr(module, "datetime", clock, raising=False)
+    # same frozen instant.
+    for module in (grounding_check, self_narrative_check):
+        monkeypatch.setattr(module, "datetime", clock)
     return clock
 
 
@@ -78,14 +77,11 @@ def frozen_clock(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def _fresh_source(monkeypatch, module) -> None:
-    monkeypatch.setattr(
-        module, "_log_timestamps", UniqueTimestampSource(LOG_FORMAT, timezone.utc),
-        raising=False,
-    )
+    monkeypatch.setattr(module, "_log_timestamps", utc_log_timestamp_source())
 
 
 def _grounding(monkeypatch, tmp_path):
-    monkeypatch.setattr(grounding_check, "_LOG_DIR", tmp_path, raising=False)
+    monkeypatch.setattr(grounding_check, "_LOG_DIR", tmp_path)
     _fresh_source(monkeypatch, grounding_check)
     return lambda: grounding_check.log_grounding_outcome(
         intent_class="factual_recall",
@@ -96,7 +92,7 @@ def _grounding(monkeypatch, tmp_path):
 
 
 def _self_narrative(monkeypatch, tmp_path):
-    monkeypatch.setattr(self_narrative_check, "_LOG_DIR", tmp_path, raising=False)
+    monkeypatch.setattr(self_narrative_check, "_LOG_DIR", tmp_path)
     _fresh_source(monkeypatch, self_narrative_check)
     return lambda: self_narrative_check.log_self_narrative_outcome(
         flag_count=1,
@@ -106,7 +102,7 @@ def _self_narrative(monkeypatch, tmp_path):
 
 
 def _coaching(monkeypatch, tmp_path):
-    monkeypatch.setattr(coaching_filter, "_LOG_DIR", tmp_path, raising=False)
+    monkeypatch.setattr(coaching_filter, "_LOG_DIR", tmp_path)
     _fresh_source(monkeypatch, coaching_filter)
     return lambda: coaching_filter._log_intervention(
         intent_class="default",
@@ -151,16 +147,10 @@ def test_same_second_writes_keep_every_entry(frozen_clock, monkeypatch, tmp_path
     assert names == _expected_names(suffix)
 
 
-@pytest.mark.parametrize("make_writer, suffix", [
-    p for p in WRITERS if p.id in ("coaching_filter", "review_logger")
-])
-def test_filenames_still_parse_in_the_audit_tools(frozen_clock, monkeypatch, tmp_path, make_writer, suffix):
-    write = make_writer(monkeypatch, tmp_path)
-
-    for _ in range(CALLS):
-        write()
-
-    names = [p.name for p in tmp_path.glob("*.json")]
+def test_filenames_still_parse_in_the_audit_tools():
+    """The names asserted above (no-suffix form, as coaching_filter and
+    review_logger write them) parse with both audit tools."""
+    names = _expected_names("")
     for parse in (coaching_audit_parse, policy_audit_parse):
         parsed = {parse(name) for name in names}
         assert None not in parsed
@@ -176,7 +166,7 @@ def test_control_raw_clock_naming_overwrites(frozen_clock, tmp_path):
     naming (the clock formatted to the second) gives every call the same
     name, so the "every entry kept" assertion above can fail."""
     for i in range(CALLS):
-        name = timestamps_mod.datetime.now(timezone.utc).strftime(LOG_FORMAT)
+        name = timestamps_mod.datetime.now(timezone.utc).strftime(LOG_FILENAME_FORMAT)
         (tmp_path / f"{name}.json").write_text(f'{{"entry": {i}}}', encoding="utf-8")
 
     assert len(list(tmp_path.glob("*.json"))) < CALLS

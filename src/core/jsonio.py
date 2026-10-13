@@ -94,6 +94,18 @@ def _discard(p: Path) -> None:
         pass
 
 
+def _dump_to_fd(fd: int, written: Path, p: Path, data: Any) -> None:
+    """Serialise `data` into the open file `fd` (the file at `written`), in
+    the one canonical vault JSON encoding. On OSError, remove `written` and
+    raise JsonIoError for target `p`."""
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except OSError as exc:
+        _discard(written)
+        raise _write_failed(p, exc) from exc
+
+
 def _write_temp_json(p: Path, data: Any) -> Path:
     """Write `data` to a new uniquely-named temp file beside `p`; return it.
 
@@ -111,12 +123,7 @@ def _write_temp_json(p: Path, data: Any) -> Path:
         raise _write_failed(p, exc) from exc
 
     tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except OSError as exc:
-        _discard(tmp_path)
-        raise _write_failed(p, exc) from exc
+    _dump_to_fd(fd, tmp_path, p, data)
     return tmp_path
 
 
@@ -189,10 +196,6 @@ def _create_exclusive(p: Path, data: Any) -> None:
         raise RecordExistsError("record already exists") from exc
     except OSError as exc:
         raise _write_failed(p, exc) from exc
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except OSError as exc:
-        # The file is ours (created exclusively above), so removing it is safe.
-        _discard(p)
-        raise _write_failed(p, exc) from exc
+    # The file is ours (created exclusively above), so removing it on a
+    # failed write is safe.
+    _dump_to_fd(fd, p, p, data)

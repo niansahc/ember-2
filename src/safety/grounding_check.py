@@ -15,22 +15,20 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import httpx
 
 from src.core.config import get_ollama_base_url
-from src.core.timestamps import UniqueTimestampSource
+from src.core.timestamps import utc_log_timestamp_source
 
 logger = logging.getLogger("ember.grounding_check")
 
 _LOG_DIR = Path(__file__).resolve().parents[2] / "logs" / "safety_reviews"
 
-# One file per outcome, named by UTC second. The source advances past the
-# clock instead of repeating a second, so two outcomes in the same second
-# no longer overwrite each other.
-_log_timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%SZ", timezone.utc)
+# One file per outcome; two outcomes in the same second get distinct names.
+_log_timestamps = utc_log_timestamp_source()
 
 GROUNDING_CHECK_INTENTS = {
     "factual_recall",

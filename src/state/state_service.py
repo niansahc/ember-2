@@ -218,11 +218,8 @@ class StateService:
 
         data = self._record_to_dict(record)
 
-        # Atomic, exclusive write (ADR-039): safe_create_json writes a temp
-        # file and hard-links it onto the target, so a reader (read_all) sees
-        # either no file or a complete one, and an existing record is never
-        # replaced. The existence check is part of the link, so two writers
-        # (threads or processes) cannot both pass it.
+        # Atomic, exclusive create (ADR-039): read_all never sees a partial
+        # record, and an existing record is never replaced.
         try:
             safe_create_json(file_path, data)
         except RecordExistsError:

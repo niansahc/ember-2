@@ -56,9 +56,15 @@ Deferred (filed as **B-IO-001** in KNOWN_ISSUES): `retrieval/vector_index.py` R/
 
 `StateService.write()` and `TaskService.write()` route through it, log the collision at ERROR at the fix point (the task log names the timestamp only, since the filename carries a slug of the title), and re-raise. Callers decide what a collision means: the API maps `RecordExistsError` to 409 with one app-level exception handler; background state extraction loses only the colliding record and keeps writing the rest of the turn; onboarding logs and continues (the step is asked again); `scripts/add_state.py` prints a one-line error and exits 1. The remaining record writers (`write_memory`, session, project, lodestone) still use `safe_write_json` and move to `safe_create_json` in a follow-up.
 
+## Amendment (2026-10-13, exclusive create for every append-only record writer)
+
+The follow-up above. `MemoryStorage.create_json()` wraps `safe_create_json`, logs a collision at ERROR naming only the type folder and the timestamp filename, and re-raises. `write_canonical_record()` (and so `write_memory()` and the exchange recorder), `create_session`/`update_session`/`delete_session`, `create_project`/`update_project`/`delete_project`, and lodestone `write`/`update` all publish through it. `MemoryStorage.write_json()` keeps its replace semantics for the callers that still rewrite a file in place.
+
+Each writer picks its own name from a per-process `UniqueTimestampSource`, so a collision needs a second process on the same vault in the same microsecond. Policy is the same as for state and task records: raise, never retry inside the writer. API routes return 409 through the existing handler; the exchange recorder already maps any `OSError` (which `RecordExistsError` is) to `storage_failed`. Callers where a raise would lose more than the one record handle it: `POST /ingest/json` reports the record in `errors` and imports the rest; session reflection and the session compression summary (both can run in background threads) log and drop the record, and compression still injects its summary turn; onboarding logs and asks the same step again instead of returning a 409 to a streaming client; `scripts/journal.py` exits 1 with a message; `scripts/seed_identity_template.py` counts a failure and seeds the rest.
+
 ## References
 
 - `src/core/jsonio.py` -- the helpers.
 - `docs/KNOWN_ISSUES.md` -- B-IO-001 (deferred unguarded sites).
-- `src/memory/storage.py`, `src/memory/read_memory.py`, `src/memory/search_memory.py`, `src/core/preferences.py`, `src/core/config.py`, `src/tasks/task_service.py`, `src/memory/lodestone_service.py`, `src/ingest/importers/chatgpt.py`, `src/ingest/importers/gdrive_sync.py` -- routed call sites.
+- `src/memory/storage.py`, `src/memory/read_memory.py`, `src/memory/search_memory.py`, `src/core/preferences.py`, `src/core/config.py`, `src/tasks/task_service.py`, `src/memory/lodestone_service.py`, `src/memory/write_memory.py`, `src/memory/session.py`, `src/memory/project.py`, `src/ingest/importers/chatgpt.py`, `src/ingest/importers/gdrive_sync.py` -- routed call sites.
 - CLAUDE.md -- append-only memory, rebuildable derived artifacts, and vault privacy rules.

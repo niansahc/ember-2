@@ -27,6 +27,7 @@ class TestHealthCheckDocker:
         assert "docker" in data
         assert data["docker"] in ("ok", "down")
 
+    @pytest.mark.docker_probe
     def test_health_docker_ok_when_searxng_responds(self):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -35,12 +36,14 @@ class TestHealthCheckDocker:
                 from src.api.main import _check_docker_status
                 assert _check_docker_status() == "ok"
 
+    @pytest.mark.docker_probe
     def test_health_docker_down_when_searxng_unreachable(self):
         with patch("src.api.main.get_ember_api_key", return_value=None):
             with patch("httpx.get", side_effect=ConnectionError):
                 from src.api.main import _check_docker_status
                 assert _check_docker_status() == "down"
 
+    @pytest.mark.docker_probe
     def test_health_docker_down_on_500(self):
         mock_resp = MagicMock()
         mock_resp.status_code = 500

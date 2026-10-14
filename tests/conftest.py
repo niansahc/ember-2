@@ -207,6 +207,17 @@ def disable_rate_limiter():
     limiter.enabled = previous
 
 
+@pytest.fixture(autouse=True)
+def stub_searxng_probe(request, monkeypatch):
+    """GET /api/health requests SearXNG to report Docker status. In a test
+    that is a real network call (~2-5 s per health request, more when
+    SearXNG is down) and its result depends on the machine. Stubbed to "ok"
+    unless the test is marked `docker_probe` (tests/test_service_endpoints.py,
+    tests/test_searxng_probe_stub.py)."""
+    if request.node.get_closest_marker("docker_probe") is None:
+        monkeypatch.setattr("src.api.main._check_docker_status", lambda: "ok")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def isolate_to_test_vault(tmp_path_factory):
     """Redirect all vault access to a temporary test vault for the session.

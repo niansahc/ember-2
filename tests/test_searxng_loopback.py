@@ -23,10 +23,6 @@ import src.api.main as main
 import src.tools.web_search as web_search_mod
 from tests.conftest import REPO_ROOT
 
-# Captured at import, before any test-wide stub of the health probe, so these
-# tests always exercise the real function.
-from src.api.main import _check_docker_status as real_check_docker_status
-
 
 def test_web_search_requests_ipv4_loopback(monkeypatch):
     urls: list[str] = []
@@ -54,6 +50,7 @@ def test_searxng_url_matches_the_compose_port_binding():
     assert (parts.hostname, parts.port) == (host, int(port))
 
 
+@pytest.mark.docker_probe
 def test_health_probe_requests_ipv4_loopback_with_a_1s_timeout(monkeypatch):
     calls: list[tuple] = []
 
@@ -63,7 +60,7 @@ def test_health_probe_requests_ipv4_loopback_with_a_1s_timeout(monkeypatch):
 
     monkeypatch.setattr("httpx.get", fake_get)
 
-    assert real_check_docker_status() == "ok"
+    assert main._check_docker_status() == "ok"
     assert calls == [("http://127.0.0.1:8888/", 1.0)]
 
 
@@ -77,11 +74,12 @@ def silent_listener():
     server.close()
 
 
+@pytest.mark.docker_probe
 def test_health_probe_gives_up_within_its_bound(monkeypatch, silent_listener):
     monkeypatch.setattr(main, "SEARXNG_BASE_URL", silent_listener)
 
     start = time.perf_counter()
-    status = real_check_docker_status()
+    status = main._check_docker_status()
     elapsed = time.perf_counter() - start
 
     assert status == "down"

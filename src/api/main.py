@@ -67,6 +67,7 @@ from src.state.models import VALID_STATE_CATEGORIES
 from src.state.state_resolver import StateResolver
 from src.state.state_service import StateService
 from src.tasks.models import VALID_TASK_STATUSES
+from src.tools.web_search import SEARXNG_BASE_URL
 from src.tasks.task_service import TaskService
 
 logger = logging.getLogger("ember.auth")
@@ -491,10 +492,15 @@ def health_check():
 
 
 def _check_docker_status() -> str:
-    """Ping SearXNG on localhost:8888 to determine if Docker services are up."""
+    """Ping SearXNG to determine if Docker services are up.
+
+    Same address as web search (SEARXNG_BASE_URL, IPv4 loopback). Bounded to
+    1 s: every /api/health call waits on this, and a SearXNG that accepts
+    but does not answer must not stall the health check.
+    """
     try:
         import httpx as _httpx
-        resp = _httpx.get("http://localhost:8888/", timeout=3.0)
+        resp = _httpx.get(f"{SEARXNG_BASE_URL}/", timeout=1.0)
         return "ok" if resp.status_code < 500 else "down"
     except Exception:
         return "down"

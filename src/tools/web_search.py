@@ -6,7 +6,11 @@ import requests
 
 logger = logging.getLogger("ember.web_search")
 
-SEARXNG_URL = "http://localhost:8888/search"
+# IPv4 loopback, matching the port binding in docker-compose.yml. "localhost"
+# resolves to ::1 first on Windows; SearXNG is not published there, and the
+# refused IPv6 connect costs ~2 s before the IPv4 fallback on every request.
+SEARXNG_BASE_URL = "http://127.0.0.1:8888"
+SEARXNG_URL = f"{SEARXNG_BASE_URL}/search"
 # Internal candidate pool fetched from SearXNG before re-ranking. Caller-
 # visible result count stays at MAX_RESULTS so prompt-section size and
 # every downstream consumer is unaffected.

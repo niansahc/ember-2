@@ -23,6 +23,7 @@ if __name__ == "__main__":
 
     load_env_file()
 
+from src.core.jsonio import RecordExistsError
 from src.memory.write_memory import write_memory
 
 
@@ -75,13 +76,23 @@ def main() -> None:
     if args.mood and args.mood not in tags:
         tags = [args.mood] + tags  # mood surfaces as a tag for retrieval
 
-    path = write_memory(
-        text=text,
-        memory_type="journal",
-        source="cli",
-        tags=tags,
-        metadata=metadata,
-    )
+    try:
+        path = write_memory(
+            text=text,
+            memory_type="journal",
+            source="cli",
+            tags=tags,
+            metadata=metadata,
+        )
+    except RecordExistsError:
+        # This process has its own timestamp source, so a record written by
+        # the API in the same microsecond can take the name first.
+        print(
+            "Not written: a journal record with this timestamp already exists. "
+            "Run the command again.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     if path is None:
         print("Entry not written — content was filtered (too short or low quality).")

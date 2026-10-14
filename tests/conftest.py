@@ -26,9 +26,10 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -587,6 +588,68 @@ def run_in_threads(fn, threads: int) -> tuple[list, list[BaseException]]:
     for t in workers:
         t.join(timeout=60)
     return results, errors
+
+
+class PinnedSource:
+    """Stand-in for a UniqueTimestampSource: returns `values` in order, then
+    repeats the last one, so a test can make writers pick a taken name."""
+
+    def __init__(self, *values: str) -> None:
+        self._values = list(values)
+
+    def next(self) -> str:
+        return self._values.pop(0) if len(self._values) > 1 else self._values[0]
+
+
+@pytest.fixture
+def slow_temp_files(monkeypatch):
+    """Every temp file creation waits 50 ms, so concurrent writers have all
+    passed any pre-publish existence check before the first one publishes."""
+    real_mkstemp = tempfile.mkstemp
+
+    def slow_mkstemp(*args, **kwargs):
+        time.sleep(0.05)
+        return real_mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr(tempfile, "mkstemp", slow_mkstemp)
+
+
+@pytest.fixture
+def keyless_client(monkeypatch):
+    """TestClient over the app with the API key gate open."""
+    from fastapi.testclient import TestClient
+
+    import src.api.main as main
+
+    monkeypatch.setattr(main, "get_ember_api_key", lambda: None)
+    return TestClient(main.app)
+
+
+# ---------------------------------------------------------------------------
+# Conversation buffer compression (LLMAdapter._maybe_compress_buffer)
+# ---------------------------------------------------------------------------
+
+def adapter_with_real_buffer():
+    """A bare LLMAdapter wired to a real ConversationBuffer plus mocks for
+    everything _maybe_compress_buffer touches. Bypasses __init__ to avoid
+    loading the full service graph."""
+    from src.context.conversation_buffer import ConversationBuffer
+    from src.llm.adapter import LLMAdapter
+
+    adapter = LLMAdapter.__new__(LLMAdapter)
+    adapter.model = "test-model"
+    adapter.prompt_builder = MagicMock()
+    adapter.prompt_builder.conversation_buffer = ConversationBuffer()
+    adapter.memory_service = MagicMock()
+    return adapter
+
+
+def fill_buffer_past_threshold(buf) -> None:
+    """Add enough long turns to trip needs_compression()."""
+    long_msg = " ".join(f"word{j}" for j in range(100))
+    for _ in range(8):
+        buf.add_turn(long_msg, long_msg)
+    assert buf.needs_compression() is True
 
 
 # ---------------------------------------------------------------------------

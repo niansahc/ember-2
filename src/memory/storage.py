@@ -9,9 +9,17 @@ single enforcement point for typed memory — any invalid type raises
 a ValueError before a directory is created or a file is written.
 """
 
+import logging
 from pathlib import Path
 
-from src.core.jsonio import safe_read_json, safe_write_json
+from src.core.jsonio import (
+    RecordExistsError,
+    safe_create_json,
+    safe_read_json,
+    safe_write_json,
+)
+
+logger = logging.getLogger("ember.storage")
 
 
 # Canonical list of valid memory types. Any write to the vault must use
@@ -66,7 +74,25 @@ class MemoryStorage:
 
     def write_json(self, file_path: Path, data: dict):
         # Atomic write (ADR-039): a reader never sees a half-written record.
+        # Replaces an existing file; append-only records use create_json.
         safe_write_json(file_path, data)
+
+    def create_json(self, file_path: Path, data: dict):
+        """Write a new append-only record; never replace an existing file.
+
+        Atomic and exclusive (ADR-039): a name already taken, by this process
+        or another, raises RecordExistsError and leaves the existing record
+        untouched. The log names the type folder and the file (a timestamp),
+        never record content.
+        """
+        try:
+            safe_create_json(file_path, data)
+        except RecordExistsError:
+            logger.error(
+                "[VAULT] Filename collision, record not written: %s/%s",
+                file_path.parent.name, file_path.name,
+            )
+            raise
 
     def read_json(self, file_path: Path) -> dict:
         # Raises JsonIoError on a corrupt/unreadable file (ADR-039); collection

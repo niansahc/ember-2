@@ -19,39 +19,17 @@ from __future__ import annotations
 
 import logging
 
-from unittest.mock import MagicMock
-
-from src.context.conversation_buffer import ConversationBuffer, COMPRESSION_THRESHOLD
-from src.llm.adapter import LLMAdapter
-
-
-def _adapter_with_real_buffer() -> LLMAdapter:
-    """Build a bare LLMAdapter wired to a real ConversationBuffer plus
-    mocks for everything _maybe_compress_buffer touches. Bypasses
-    __init__ to avoid loading the full service graph."""
-    adapter = LLMAdapter.__new__(LLMAdapter)
-    adapter.model = "test-model"
-    adapter.prompt_builder = MagicMock()
-    adapter.prompt_builder.conversation_buffer = ConversationBuffer()
-    adapter.memory_service = MagicMock()
-    return adapter
-
-
-def _fill_buffer_past_threshold(buf: ConversationBuffer) -> None:
-    """Add enough long turns to trip needs_compression()."""
-    long_msg = " ".join(f"word{j}" for j in range(100))
-    for _ in range(8):
-        buf.add_turn(long_msg, long_msg)
-    assert buf.needs_compression() is True
+from src.context.conversation_buffer import COMPRESSION_THRESHOLD
+from tests.conftest import adapter_with_real_buffer, fill_buffer_past_threshold
 
 
 def test_compression_failure_restores_turns(monkeypatch, caplog) -> None:
     """When the summarization LLM call raises, the popped turns must be
     restored to the buffer and a structured log line must be emitted.
     No turns are silently lost."""
-    adapter = _adapter_with_real_buffer()
+    adapter = adapter_with_real_buffer()
     buf = adapter.prompt_builder.conversation_buffer
-    _fill_buffer_past_threshold(buf)
+    fill_buffer_past_threshold(buf)
 
     pre_compression_turns = list(buf.get_recent())
     pre_compression_len = len(pre_compression_turns)
@@ -81,9 +59,9 @@ def test_compression_success_path_unchanged(monkeypatch) -> None:
     """Happy path: summarization succeeds, oldest turns are replaced by a
     synthetic summary turn at index 0, and the surviving recent turns are
     intact."""
-    adapter = _adapter_with_real_buffer()
+    adapter = adapter_with_real_buffer()
     buf = adapter.prompt_builder.conversation_buffer
-    _fill_buffer_past_threshold(buf)
+    fill_buffer_past_threshold(buf)
 
     pre_turns = list(buf.get_recent())
     expected_popped = len(pre_turns) // 2
@@ -113,7 +91,7 @@ def test_compression_success_path_unchanged(monkeypatch) -> None:
 def test_compression_skips_when_below_threshold() -> None:
     """needs_compression() False short-circuit: no pop, no LLM call,
     no log line."""
-    adapter = _adapter_with_real_buffer()
+    adapter = adapter_with_real_buffer()
     buf = adapter.prompt_builder.conversation_buffer
     buf.add_turn("hello", "hi")
     assert buf.token_count() < COMPRESSION_THRESHOLD
@@ -141,9 +119,9 @@ def test_compression_skips_when_below_threshold() -> None:
 def test_skip_vault_write_suppresses_the_summary_record(monkeypatch) -> None:
     """skip_vault_write=True: no session summary is persisted, but the buffer
     is still compressed and the summary turn still injected."""
-    adapter = _adapter_with_real_buffer()
+    adapter = adapter_with_real_buffer()
     buf = adapter.prompt_builder.conversation_buffer
-    _fill_buffer_past_threshold(buf)
+    fill_buffer_past_threshold(buf)
 
     monkeypatch.setattr(
         adapter,
@@ -168,9 +146,9 @@ def test_skip_vault_write_suppresses_the_summary_record(monkeypatch) -> None:
 
 def test_default_still_writes_the_summary_record(monkeypatch) -> None:
     """The gate is opt-in: a normal turn still persists the summary."""
-    adapter = _adapter_with_real_buffer()
+    adapter = adapter_with_real_buffer()
     buf = adapter.prompt_builder.conversation_buffer
-    _fill_buffer_past_threshold(buf)
+    fill_buffer_past_threshold(buf)
 
     monkeypatch.setattr(
         adapter,

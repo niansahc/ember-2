@@ -23,8 +23,6 @@ import json
 import logging
 import os
 import sys
-import tempfile
-import time
 
 import pytest
 
@@ -36,7 +34,7 @@ from src.core.jsonio import RecordExistsError, safe_create_json, safe_write_json
 from src.state.models import StateRecord
 from src.state.state_service import StateService
 from src.tasks.task_service import TaskService
-from tests.conftest import run_in_threads
+from tests.conftest import PinnedSource, run_in_threads
 
 FIXED_TS = "2026-01-01T12-00-00"
 
@@ -106,19 +104,6 @@ def test_task_collision_log_carries_no_title(tmp_path, caplog):
 # ---------------------------------------------------------------------------
 # Concurrent collision: the existence check and the publish are one step
 # ---------------------------------------------------------------------------
-
-@pytest.fixture
-def slow_temp_files(monkeypatch):
-    """Every temp file creation waits 50 ms, so concurrent writers have all
-    passed any pre-publish existence check before the first one publishes."""
-    real_mkstemp = tempfile.mkstemp
-
-    def slow_mkstemp(*args, **kwargs):
-        time.sleep(0.05)
-        return real_mkstemp(*args, **kwargs)
-
-    monkeypatch.setattr(tempfile, "mkstemp", slow_mkstemp)
-
 
 @pytest.mark.parametrize("service_cls, make, subdir, tag", SERVICES)
 def test_concurrent_writers_to_one_name_exactly_one_succeeds(
@@ -203,25 +188,12 @@ def test_safe_create_json_without_hard_links_falls_back_to_exclusive_create(
 # Callers
 # ---------------------------------------------------------------------------
 
-class _FixedSource:
-    def __init__(self, value: str) -> None:
-        self.value = value
-
-    def next(self) -> str:
-        return self.value
-
-
 @pytest.fixture
-def api_client(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
-
-    import src.api.main as main
-
-    monkeypatch.setattr(main, "get_ember_api_key", lambda: None)
-    monkeypatch.setattr(state_service_mod, "_state_timestamps", _FixedSource(FIXED_TS))
-    monkeypatch.setattr(task_service_mod, "_timestamps", _FixedSource(FIXED_TS + "-000000"))
+def api_client(keyless_client, tmp_path, monkeypatch):
+    monkeypatch.setattr(state_service_mod, "_state_timestamps", PinnedSource(FIXED_TS))
+    monkeypatch.setattr(task_service_mod, "_timestamps", PinnedSource(FIXED_TS + "-000000"))
     with vault_binding(tmp_path):
-        yield TestClient(main.app)
+        yield keyless_client
 
 
 def test_write_state_collision_returns_409(api_client, tmp_path):
@@ -273,7 +245,7 @@ def test_onboarding_state_collision_does_not_fail_the_turn(tmp_path, monkeypatch
 
     service = OnboardingService()
     service._state = StateService(vault_path=tmp_path)
-    monkeypatch.setattr(state_service_mod, "_state_timestamps", _FixedSource(FIXED_TS))
+    monkeypatch.setattr(state_service_mod, "_state_timestamps", PinnedSource(FIXED_TS))
     service._state.write(StateService.make_record(
         state_type="onboarding", text="onboarding_in_progress", source="test",
     ))
@@ -291,7 +263,7 @@ def test_onboarding_state_collision_does_not_fail_the_turn(tmp_path, monkeypatch
 def test_add_state_cli_collision_exits_1_with_a_message(tmp_path, monkeypatch, capsys):
     import scripts.add_state as add_state
 
-    monkeypatch.setattr(state_service_mod, "_state_timestamps", _FixedSource(FIXED_TS))
+    monkeypatch.setattr(state_service_mod, "_state_timestamps", PinnedSource(FIXED_TS))
     monkeypatch.setattr(sys, "argv", ["add_state.py", "--type", "open_loop", "--text", "Synthetic loop"])
 
     with vault_binding(tmp_path):

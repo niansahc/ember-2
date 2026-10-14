@@ -19,14 +19,36 @@ class TestHealthCheckDocker:
             return TestClient(app)
 
     def test_health_includes_docker_field(self):
-        with patch("src.api.main._check_docker_status", return_value="ok"), \
-             patch("src.api.main.get_ember_api_key", return_value=None):
+        with patch("src.api.main.get_ember_api_key", return_value=None):
             resp = self._client().get("/api/health")
         assert resp.status_code == 200
         data = resp.json()
         assert "docker" in data
         assert data["docker"] in ("ok", "down")
 
+    # conftest stubs the probe unless a test is marked docker_probe; the
+    # pair below shows the stub holds at the endpoint and the marker lifts it.
+
+    def test_health_makes_no_searxng_request_by_default(self):
+        with patch("src.api.main.get_ember_api_key", return_value=None), \
+             patch("httpx.get") as http_get:
+            resp = self._client().get("/api/health")
+        assert resp.status_code == 200
+        http_get.assert_not_called()
+
+    @pytest.mark.docker_probe
+    def test_control_docker_probe_marker_reaches_searxng(self):
+        """Positive control: with the marker the real probe runs, so the
+        no-call assertion above means the stub held, not a probe that never
+        fires."""
+        with patch("src.api.main.get_ember_api_key", return_value=None), \
+             patch("httpx.get", return_value=MagicMock(status_code=200)) as http_get:
+            resp = self._client().get("/api/health")
+        assert resp.status_code == 200
+        http_get.assert_called_once()
+        assert ":8888" in http_get.call_args.args[0]
+
+    @pytest.mark.docker_probe
     def test_health_docker_ok_when_searxng_responds(self):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -35,12 +57,14 @@ class TestHealthCheckDocker:
                 from src.api.main import _check_docker_status
                 assert _check_docker_status() == "ok"
 
+    @pytest.mark.docker_probe
     def test_health_docker_down_when_searxng_unreachable(self):
         with patch("src.api.main.get_ember_api_key", return_value=None):
             with patch("httpx.get", side_effect=ConnectionError):
                 from src.api.main import _check_docker_status
                 assert _check_docker_status() == "down"
 
+    @pytest.mark.docker_probe
     def test_health_docker_down_on_500(self):
         mock_resp = MagicMock()
         mock_resp.status_code = 500

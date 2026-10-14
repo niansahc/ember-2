@@ -161,22 +161,43 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def run_fresh_python(
-    args: list[str], vault: Path, timeout: int = 300
+    args: list[str], vault: Path, env: dict[str, str] | None = None, timeout: int = 300,
 ) -> subprocess.CompletedProcess:
     """Run `python <args>` in a fresh interpreter from the repo root.
 
     PRIVATE_VAULT_PATH is set to `vault`. Importing src reads no .env, and an
     entrypoint's load_env_file() (override=False) keeps that value over
     .env, so a probe never reaches a real vault. PYTEST_ADDOPTS is dropped so
-    a child pytest is not steered by the parent's options.
+    a child pytest is not steered by the parent's options. A probe that
+    imports the app attaches a rotating log handler, so EMBER_LOG_PATH
+    defaults to a file beside `vault` rather than one log shared with this
+    process and every other child. `env` adds or overrides variables for
+    this child only.
     """
-    env = dict(os.environ)
-    env["PRIVATE_VAULT_PATH"] = str(vault)
-    env.pop("PYTEST_ADDOPTS", None)
+    vault = Path(vault)
+    child_env = dict(os.environ)
+    child_env["PRIVATE_VAULT_PATH"] = str(vault)
+    child_env["EMBER_LOG_PATH"] = str(vault.parent / f"{vault.name}-ember-api.log")
+    child_env.pop("PYTEST_ADDOPTS", None)
+    child_env.update(env or {})
     return subprocess.run(
         [sys.executable, *args],
-        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=timeout,
+        cwd=REPO_ROOT, env=child_env, capture_output=True, text=True, timeout=timeout,
     )
+
+
+def run_fresh_pythons(jobs: dict) -> dict[str, subprocess.CompletedProcess]:
+    """Run several run_fresh_python probes at once; return results by key.
+
+    `jobs` maps a key to (args, vault) or (args, vault, env). Each probe is
+    still its own fresh interpreter, so isolation is unchanged; only the wall
+    time is shared.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        futures = {key: pool.submit(run_fresh_python, *job) for key, job in jobs.items()}
+        return {key: future.result() for key, future in futures.items()}
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -206,6 +227,17 @@ def disable_rate_limiter():
     limiter.enabled = False
     yield
     limiter.enabled = previous
+
+
+@pytest.fixture(autouse=True)
+def stub_searxng_probe(request, monkeypatch):
+    """GET /api/health requests SearXNG to report Docker status. In a test
+    that is a real network call (~2-5 s per health request, more when
+    SearXNG is down) and its result depends on the machine. Stubbed to "ok"
+    unless the test is marked `docker_probe` (tests/test_service_endpoints.py
+    TestHealthCheckDocker)."""
+    if request.node.get_closest_marker("docker_probe") is None:
+        monkeypatch.setattr("src.api.main._check_docker_status", lambda: "ok")
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -137,6 +137,8 @@ class GenerationWork:
     confirmation_web_items: list = field(default_factory=list)
     confirmation_confirmed: bool = False
     confirmation_search_failed: bool = False
+    # run_web_search status of the deferred search; None when none ran.
+    confirmation_search_status: str | None = None
     pending_records: list = field(default_factory=list)
 
     def __post_init__(self):

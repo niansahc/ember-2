@@ -16,6 +16,12 @@ Followed by an empty-response guard that fills zero-byte replies with a
 fallback so the streaming path never emits a blank message to the client
 .
 
+Then, when this turn's web search was unavailable (every engine blocked or
+the request failed), a fixed disclosure line is prepended so the user knows
+the answer did not come from a search. Skipped for refusals, for substituted
+replies (the confirm-path retry offer already says search failed), and for
+the empty-guard fallback.
+
 The ordering is deliberate:
   - Source stripping first so downstream validators see the cleaned text.
   - Web search refusal before vision/ask-first: if the model had web
@@ -53,6 +59,13 @@ from src.safety.url_validator import (
 
 logger = logging.getLogger(__name__)
 
+# Deterministic, not left to the model: an 8B model told "search was
+# unavailable" still sometimes answers as if it had searched.
+WEB_SEARCH_UNAVAILABLE_DISCLOSURE = (
+    "Web search isn't working right now, so this answer is from what I "
+    "already know and may be out of date."
+)
+
 _EMPTY_FALLBACK = (
     "I had trouble generating a response to that. Try rephrasing, or let me "
     "know what you're actually trying to figure out."
@@ -69,6 +82,7 @@ class PostGenResult:
     empty_fallback_fired: bool
     stripped_urls: list[dict] = field(default_factory=list)
     kept_urls: list[str] = field(default_factory=list)
+    search_unavailable_disclosed: bool = False
 
 
 def run_post_gen_pipeline(
@@ -88,6 +102,8 @@ def run_post_gen_pipeline(
     user_message: str | None = None,
     memory_items: list | None = None,
     state_items: list | None = None,
+    web_search_status: str | None = None,
+    is_refusal: bool = False,
 ) -> PostGenResult:
     """Run source → vision → ask-first → empty-guard against a full reply.
 
@@ -163,6 +179,17 @@ def run_post_gen_pipeline(
         empty_fallback_fired = True
         logger.warning("[POSTGEN] empty-response guard fired")
 
+    search_unavailable_disclosed = False
+    if (
+        web_search_status == "unavailable"
+        and not is_refusal
+        and not ask_first_substituted
+        and not empty_fallback_fired
+    ):
+        reply = f"{WEB_SEARCH_UNAVAILABLE_DISCLOSURE}\n\n{reply}"
+        search_unavailable_disclosed = True
+        logger.info("[POSTGEN] web search unavailable - disclosure line prepended")
+
     stripped_urls: list[dict] = []
     kept_urls: list[str] = []
     try:
@@ -198,4 +225,5 @@ def run_post_gen_pipeline(
         empty_fallback_fired=empty_fallback_fired,
         stripped_urls=stripped_urls,
         kept_urls=kept_urls,
+        search_unavailable_disclosed=search_unavailable_disclosed,
     )

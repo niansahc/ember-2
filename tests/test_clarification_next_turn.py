@@ -20,8 +20,10 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+
 import pytest
 from fastapi.testclient import TestClient
+from src.tools.web_search import WebSearchResult
 
 
 @pytest.fixture
@@ -89,7 +91,8 @@ def test_next_turn_after_clarification_dispatches_user_message_to_web_search(cli
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
          patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.api.openai_adapter.get_session") as _get_session, \
-         patch("src.tools.web_search.web_search", return_value=[]) as _search:
+         patch("src.tools.web_search.run_web_search",
+               return_value=WebSearchResult(status="empty")) as _search:
         # The test checks the dispatch, not search results. Unstubbed, the
         # autonomous search path made a real SearXNG request (2-29 s).
         _onb.is_active.return_value = False

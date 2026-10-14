@@ -21,6 +21,7 @@ from src.api.openai_adapter import (
     _apply_timers,
 )
 from src.api.pregeneration import GenerationContext, GenerationWork
+from src.tools.web_search import WebSearchResult
 
 
 class _FakeReq:
@@ -137,7 +138,8 @@ def test_apply_confirmation_confirmed_web_search_overwrites_message():
     result = {"confirmed": True, "action": "web_search", "query": "population of tokyo"}
     with patch("src.api.openai_adapter._check_pending_confirmation",
                return_value=(result, ["rec"])), \
-         patch("src.tools.web_search.web_search", return_value=[{"title": "x"}]):
+         patch("src.tools.web_search.run_web_search",
+               return_value=WebSearchResult(items=[{"title": "x"}])):
         _apply_confirmation(ctx, work)
     # Both the working message AND the clean snapshot become the original query.
     assert work.message == "population of tokyo"

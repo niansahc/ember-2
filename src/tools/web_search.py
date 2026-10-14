@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -81,13 +82,32 @@ def _freshness_multiplier(
     return max(floor, decay)
 
 
-def web_search(query):
-    """Query local SearXNG, re-rank by combined SearXNG-rank + freshness,
-    return top MAX_RESULTS as dicts with title/url/snippet/published_at.
+@dataclass
+class WebSearchResult:
+    """Outcome of one SearXNG query.
 
-    published_at is an ISO 8601 string (UTC) or None when SearXNG did not
-    provide a parseable date. Silent failure on the request itself:
-    returns [] on any exception.
+    status:
+      "ok"          -- at least one result.
+      "empty"       -- the search ran and every engine answered, with nothing.
+      "unavailable" -- the request failed, or nothing came back while one or
+                       more engines were unresponsive (rate limit, CAPTCHA,
+                       timeout). SearXNG still answers HTTP 200 in that case,
+                       so `unresponsive_engines` is the only signal.
+    unresponsive: engine names SearXNG reported as unresponsive.
+    """
+
+    items: list[dict] = field(default_factory=list)
+    status: str = "ok"
+    unresponsive: list[str] = field(default_factory=list)
+
+
+def run_web_search(query) -> WebSearchResult:
+    """Query local SearXNG, re-rank by combined SearXNG-rank + freshness,
+    and return the top MAX_RESULTS with a status (see WebSearchResult).
+
+    Items are dicts with title/url/snippet/published_at; published_at is an
+    ISO 8601 string (UTC) or None when SearXNG did not provide a parseable
+    date. Never raises.
     """
     try:
         response = requests.get(
@@ -118,9 +138,36 @@ def web_search(query):
             for c in candidates[:MAX_RESULTS]
         ]
 
-        logger.info("[WEB_SEARCH] %d results", len(results))
-        return results
+        # SearXNG lists each blocked engine as [name, reason]. ASCII-only
+        # log line: engine names come from SearXNG's own engine keys.
+        unresponsive = [
+            str(entry[0]) for entry in data.get("unresponsive_engines", [])
+            if entry
+        ]
+        if results:
+            status = "ok"
+        elif unresponsive:
+            status = "unavailable"
+        else:
+            status = "empty"
+
+        if status == "unavailable":
+            logger.warning(
+                "[WEB_SEARCH] unavailable: 0 results, unresponsive engines: %s",
+                ", ".join(unresponsive),
+            )
+        else:
+            logger.info(
+                "[WEB_SEARCH] %d results (%s), unresponsive engines: %s",
+                len(results), status, ", ".join(unresponsive) or "none",
+            )
+        return WebSearchResult(items=results, status=status, unresponsive=unresponsive)
 
     except Exception as exc:
         logger.warning("[WEB_SEARCH] Failed: %s", type(exc).__name__)
-        return []
+        return WebSearchResult(status="unavailable")
+
+
+def web_search(query):
+    """Result items only, [] on failure. See run_web_search for the status."""
+    return run_web_search(query).items

@@ -256,6 +256,27 @@ def _render_authority_rules(
 AUTHORITY_RULES = _render_authority_rules(is_conversational=False)
 
 
+# Rendered inside <web_search_results status="..."> when a search ran this
+# turn but returned no items (ContextPacket.web_search_status). Without it
+# the model sees no search section at all and can answer as if it had
+# searched. For "unavailable" the reply already gets a fixed disclosure line
+# in post_gen_pipeline, so the model is told not to repeat it.
+_WEB_SEARCH_STATUS_NOTICES = {
+    "unavailable": (
+        "[You tried to search the web for this, but web search is unavailable "
+        "right now. You have no search results. Answer from what you already "
+        "know. Do not say or imply that you searched, and do not cite or "
+        "describe search results. A note telling the user that search was "
+        "unavailable is added to your reply automatically; do not repeat it.]"
+    ),
+    "empty": (
+        "[You searched the web for this and the search found nothing. Tell "
+        "the user the search found nothing, then answer from what you already "
+        "know if you can. Do not cite or describe search results.]"
+    ),
+}
+
+
 _DECLINE_STOPWORDS = frozenset(
     {"my", "the", "this", "that", "a", "an", "his", "her", "their",
      "our", "its", "about", "with", "from", "and", "or", "of", "in", "on"}
@@ -785,7 +806,17 @@ class PromptBuilder:
 
     def _build_web_search_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.web_items:
-            return ""
+            notice = _WEB_SEARCH_STATUS_NOTICES.get(
+                getattr(context_packet, "web_search_status", None)
+            )
+            if notice is None:
+                return ""
+            status = context_packet.web_search_status
+            return (
+                f'<web_search_results status="{status}">\n'
+                f"{notice}\n"
+                "</web_search_results>"
+            )
 
         lines = []
         for i, item in enumerate(context_packet.web_items, 1):

@@ -18,6 +18,12 @@ logger = logging.getLogger("ember.config")
 # resolution at the private vault.
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
+# Local SearXNG, used by web search and the /api/health Docker probe. IPv4
+# loopback, matching the port binding in docker-compose.yml: "localhost"
+# resolves to ::1 first on Windows, SearXNG is not published there, and the
+# refused IPv6 connect costs ~2 s before the IPv4 fallback on every request.
+SEARXNG_BASE_URL = "http://127.0.0.1:8888"
+
 
 def load_env_file() -> Path | None:
     """Load ENV_FILE into os.environ. Call once, from a process entrypoint.

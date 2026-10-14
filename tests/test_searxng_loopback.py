@@ -1,67 +1,47 @@
 """
 tests/test_searxng_loopback.py
 
-docker-compose.yml publishes SearXNG on 127.0.0.1 only. "localhost" resolves
-to ::1 first on Windows, which SearXNG does not listen on, and the refused
-IPv6 connect costs ~2 s before the IPv4 fallback, on every web search and
-every /api/health. Both clients now name 127.0.0.1, and the health probe
-waits at most 1 s.
+Web search and the /api/health probe reach SearXNG on IPv4 loopback
+(SEARXNG_BASE_URL in src/core/config.py explains why not "localhost"), and
+the health probe waits at most 1 s. The probe's exact URL and timeout are
+pinned in tests/test_service_endpoints.py TestHealthCheckDocker.
 """
 
 from __future__ import annotations
 
-import re
 import socket
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from urllib.parse import urlsplit
 
 import httpx
 import pytest
+import yaml
 
 import src.api.main as main
 import src.tools.web_search as web_search_mod
+from src.core.config import SEARXNG_BASE_URL
 from tests.conftest import REPO_ROOT
 
 
-def test_web_search_requests_ipv4_loopback(monkeypatch):
-    urls: list[str] = []
+def test_web_search_requests_ipv4_loopback():
+    response = MagicMock(status_code=200, json=lambda: {"results": []})
+    with patch.object(web_search_mod.requests, "get", return_value=response) as get:
+        web_search_mod.web_search("synthetic query")
 
-    def fake_get(url, *args, **kwargs):
-        urls.append(url)
-        return MagicMock(status_code=200, json=lambda: {"results": []})
-
-    monkeypatch.setattr(web_search_mod.requests, "get", fake_get)
-
-    web_search_mod.web_search("synthetic query")
-
-    parts = urlsplit(urls[0])
+    parts = urlsplit(get.call_args.args[0])
     assert (parts.hostname, parts.port, parts.path) == ("127.0.0.1", 8888, "/search")
 
 
 def test_searxng_url_matches_the_compose_port_binding():
     """The client must use the address compose publishes; this fails if
     either file changes without the other."""
-    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    host, port = re.search(r'"(\d+\.\d+\.\d+\.\d+):(\d+):\d+"', compose).groups()
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    host, port, _ = compose["services"]["searxng"]["ports"][0].split(":")
 
-    parts = urlsplit(web_search_mod.SEARXNG_BASE_URL)
+    parts = urlsplit(SEARXNG_BASE_URL)
 
     assert (parts.hostname, parts.port) == (host, int(port))
-
-
-@pytest.mark.docker_probe
-def test_health_probe_requests_ipv4_loopback_with_a_1s_timeout(monkeypatch):
-    calls: list[tuple] = []
-
-    def fake_get(url, *args, **kwargs):
-        calls.append((url, kwargs.get("timeout")))
-        return MagicMock(status_code=200)
-
-    monkeypatch.setattr("httpx.get", fake_get)
-
-    assert main._check_docker_status() == "ok"
-    assert calls == [("http://127.0.0.1:8888/", 1.0)]
 
 
 @pytest.fixture
@@ -92,5 +72,5 @@ def test_control_silent_listener_really_hangs(silent_listener):
     connection."""
     start = time.perf_counter()
     with pytest.raises(httpx.TimeoutException):
-        httpx.get(f"{silent_listener}/", timeout=1.5)
-    assert time.perf_counter() - start >= 1.4
+        httpx.get(f"{silent_listener}/", timeout=0.3)
+    assert time.perf_counter() - start >= 0.25

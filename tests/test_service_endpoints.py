@@ -8,6 +8,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from src.core.config import SEARXNG_BASE_URL
+
 
 class TestHealthCheckDocker:
     """GET /api/health now includes a docker field."""
@@ -45,8 +47,7 @@ class TestHealthCheckDocker:
              patch("httpx.get", return_value=MagicMock(status_code=200)) as http_get:
             resp = self._client().get("/api/health")
         assert resp.status_code == 200
-        http_get.assert_called_once()
-        assert ":8888" in http_get.call_args.args[0]
+        http_get.assert_called_once_with(f"{SEARXNG_BASE_URL}/", timeout=1.0)
 
     @pytest.mark.docker_probe
     def test_health_docker_ok_when_searxng_responds(self):

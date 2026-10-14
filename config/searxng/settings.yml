@@ -1,4 +1,18 @@
-use_default_settings: true
+# Engine privacy rule
+#
+# SearXNG sends every query to every enabled engine, so each enabled engine
+# sees every web search Ember makes, from this machine's IP address.
+#
+# Ember enables only engines that keep no IP-linked query logs and do no
+# profiling: brave, duckduckgo, startpage. keep_only turns off every other
+# engine in SearXNG's default list, google, wikipedia and wikidata included.
+# Add an engine here only if it meets the same rule.
+use_default_settings:
+  engines:
+    keep_only:
+      - brave
+      - duckduckgo
+      - startpage
 
 server:
   secret_key: "ember-searxng-secret"

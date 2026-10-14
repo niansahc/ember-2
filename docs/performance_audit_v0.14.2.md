@@ -12,6 +12,7 @@
 ### /api/health
 - **Cost:** CPU only. Reads version.json (disk, cached by OS). Pings SearXNG on localhost:8888 with 3s timeout for the docker status field.
 - **Expected latency:** <10ms when Docker is up, ~3s when Docker is down (timeout).
+- **Update (2026-10-13):** the probe now requests `127.0.0.1:8888` with a 1 s timeout. Via `localhost` it paid ~2 s on Windows for a refused `::1` connect even with Docker up.
 
 ### /v1/chat/completions (non-streaming)
 - **Pipeline:** payload validation → override detection (15 regex patterns) → context assembly → LLM generation → safety review (conditional) → grounding check (conditional) → 5-6 background threads → response

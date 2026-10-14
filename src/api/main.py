@@ -37,7 +37,12 @@ from src.api.limiter import limiter
 from src.api.openai_adapter import router as openai_adapter_router, llm_adapter
 from src.api.routes.ingest import router as ingest_router
 from src.context.service import ContextService
-from src.core.config import get_ember_api_key, get_cloud_models, get_extra_allowed_hosts
+from src.core.config import (
+    SEARXNG_BASE_URL,
+    get_ember_api_key,
+    get_cloud_models,
+    get_extra_allowed_hosts,
+)
 from src.core.jsonio import RecordExistsError
 from src.core.paths import resolve_inside
 from src.memory.service import MemoryService
@@ -491,10 +496,11 @@ def health_check():
 
 
 def _check_docker_status() -> str:
-    """Ping SearXNG on localhost:8888 to determine if Docker services are up."""
+    """Ping SearXNG to determine if Docker services are up. Bounded to 1 s
+    because every /api/health call waits on it."""
     try:
         import httpx as _httpx
-        resp = _httpx.get("http://localhost:8888/", timeout=3.0)
+        resp = _httpx.get(f"{SEARXNG_BASE_URL}/", timeout=1.0)
         return "ok" if resp.status_code < 500 else "down"
     except Exception:
         return "down"

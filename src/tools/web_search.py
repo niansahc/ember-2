@@ -4,9 +4,11 @@ from email.utils import parsedate_to_datetime
 
 import requests
 
+from src.core.config import SEARXNG_BASE_URL
+
 logger = logging.getLogger("ember.web_search")
 
-SEARXNG_URL = "http://localhost:8888/search"
+SEARXNG_URL = f"{SEARXNG_BASE_URL}/search"
 # Internal candidate pool fetched from SearXNG before re-ranking. Caller-
 # visible result count stays at MAX_RESULTS so prompt-section size and
 # every downstream consumer is unaffected.

@@ -93,7 +93,8 @@ print(json.dumps({
 
 
 def _app_job(tmp_path: Path, module: str):
-    """Returns (job, vault named in the .env file, stand-in vault)."""
+    """Returns (job, vault named in the .env file). The job's vault is the
+    stand-in."""
     env_vault = tmp_path / "vault_named_in_env_file"
     env_vault.mkdir()
     env_file = tmp_path / "synthetic.env"
@@ -103,23 +104,27 @@ def _app_job(tmp_path: Path, module: str):
     )
     stand_in = tmp_path / "stand_in_vault"
     stand_in.mkdir()
-    return (["-c", _APP_PROBE, str(env_file), module], stand_in), env_vault, stand_in
+    return (["-c", _APP_PROBE, str(env_file), module], stand_in), env_vault
 
 
 @pytest.fixture(scope="module")
 def probes(tmp_path_factory):
     """All four probes, run concurrently. Values: (CompletedProcess, the
-    vault the test expects the probe to resolve, or None)."""
-    module_job, _, module_stand_in = _app_job(tmp_path_factory.mktemp("app_module"), "src.api.main")
-    asgi_job, asgi_env_vault, _ = _app_job(tmp_path_factory.mktemp("app_entrypoint"), "src.api.asgi")
-    results = run_fresh_pythons({
+    vault the test expects the probe to resolve)."""
+    module_job, _ = _app_job(tmp_path_factory.mktemp("app_module"), "src.api.main")
+    asgi_job, asgi_env_vault = _app_job(tmp_path_factory.mktemp("app_entrypoint"), "src.api.asgi")
+    jobs = {
         "config_import": _config_job(tmp_path_factory.mktemp("config_import"), "import"),
         "config_load": _config_job(tmp_path_factory.mktemp("config_load"), "load"),
         "app_module": module_job,
         "app_entrypoint": asgi_job,
-    })
-    expected_vault = {"app_module": module_stand_in, "app_entrypoint": asgi_env_vault}
-    return {key: (out, expected_vault.get(key)) for key, out in results.items()}
+    }
+    results = run_fresh_pythons(jobs)
+    # Each probe should resolve its own vault, except the entrypoint, which
+    # loads the .env file and resolves the vault named there.
+    expected_vault = {key: job[1] for key, job in jobs.items()}
+    expected_vault["app_entrypoint"] = asgi_env_vault
+    return {key: (results[key], expected_vault[key]) for key in jobs}
 
 
 def test_config_import_does_not_load_env_file(probes):

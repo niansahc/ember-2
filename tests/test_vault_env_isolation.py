@@ -49,15 +49,17 @@ def _resolves_to_isolation_vault(env_fallback_vault: Path) -> bool:
 def app_imports(tmp_path_factory):
     """Both app-import probes, run concurrently. Values: (CompletedProcess,
     stand-in vault)."""
-    stand_ins = {}
-    for key in ("after_conftest", "without_conftest"):
-        stand_ins[key] = tmp_path_factory.mktemp(key) / "stand_in_live_vault"
-        stand_ins[key].mkdir()
-    results = run_fresh_pythons({
-        "after_conftest": (["-c", _CONFTEST_THEN_APP], stand_ins["after_conftest"]),
-        "without_conftest": (["-c", "import src.api.main"], stand_ins["without_conftest"]),
-    })
-    return {key: (results[key], stand_ins[key]) for key in results}
+    def stand_in(key):
+        vault = tmp_path_factory.mktemp(key) / "stand_in_live_vault"
+        vault.mkdir()
+        return vault
+
+    jobs = {
+        "after_conftest": (["-c", _CONFTEST_THEN_APP], stand_in("after_conftest")),
+        "without_conftest": (["-c", "import src.api.main"], stand_in("without_conftest")),
+    }
+    results = run_fresh_pythons(jobs)
+    return {key: (results[key], vault) for key, (_, vault) in jobs.items()}
 
 
 def test_app_import_after_conftest_writes_nothing_to_the_env_vault(app_imports):

@@ -11,14 +11,17 @@ scripts and tools under their __main__ guard.
 
 Every probe runs in a fresh interpreter, because this process's conftest has
 already pinned the environment, and reads a synthetic .env that holds a
-sentinel key, never the repo's .env.
+sentinel key, never the repo's .env. The four probes run at once (one
+module-scoped fixture); each is still its own interpreter.
 """
 
 import json
 import shutil
 from pathlib import Path
 
-from tests.conftest import REPO_ROOT, run_fresh_python
+import pytest
+
+from tests.conftest import REPO_ROOT, run_fresh_pythons
 
 _SENTINEL = "EMBER_TEST_ENV_FILE_SENTINEL"
 
@@ -48,11 +51,11 @@ print(json.dumps({"sentinel": os.environ.get(%r)}))
 """ % _SENTINEL
 
 
-def _run_config_probe(tmp_path: Path, mode: str):
+def _config_job(tmp_path: Path, mode: str):
     root = _config_tree(tmp_path)
     probe = tmp_path / "config_probe.py"
     probe.write_text(_CONFIG_PROBE, encoding="utf-8")
-    return run_fresh_python([str(probe), str(root), mode], tmp_path)
+    return [str(probe), str(root), mode], tmp_path
 
 
 def _config_tree(tmp_path: Path) -> Path:
@@ -63,16 +66,6 @@ def _config_tree(tmp_path: Path) -> Path:
     shutil.copy(REPO_ROOT / "src" / "core" / "config.py", root / "src" / "core")
     (root / ".env").write_text(f"{_SENTINEL}=from-env-file\n", encoding="utf-8")
     return root
-
-
-def test_config_import_does_not_load_env_file(tmp_path):
-    out = _run_config_probe(tmp_path, "import")
-    assert _probe_json(out)["sentinel"] is None
-
-
-def test_control_load_env_file_loads_the_same_env_file(tmp_path):
-    out = _run_config_probe(tmp_path, "load")
-    assert _probe_json(out)["sentinel"] == "from-env-file"
 
 
 # -- app module vs API entrypoint, in the repo, with ENV_FILE redirected -------
@@ -99,7 +92,8 @@ print(json.dumps({
 """ % _SENTINEL
 
 
-def _synthetic_env_file(tmp_path: Path) -> tuple[Path, Path]:
+def _app_job(tmp_path: Path, module: str):
+    """Returns (job, vault named in the .env file, stand-in vault)."""
     env_vault = tmp_path / "vault_named_in_env_file"
     env_vault.mkdir()
     env_file = tmp_path / "synthetic.env"
@@ -107,27 +101,47 @@ def _synthetic_env_file(tmp_path: Path) -> tuple[Path, Path]:
         f"{_SENTINEL}=from-env-file\nPRIVATE_VAULT_PATH={env_vault}\n",
         encoding="utf-8",
     )
-    return env_file, env_vault
-
-
-def test_app_module_import_does_not_load_env_file(tmp_path):
-    env_file, _ = _synthetic_env_file(tmp_path)
     stand_in = tmp_path / "stand_in_vault"
     stand_in.mkdir()
+    return (["-c", _APP_PROBE, str(env_file), module], stand_in), env_vault, stand_in
 
-    out = run_fresh_python(["-c", _APP_PROBE, str(env_file), "src.api.main"], stand_in)
+
+@pytest.fixture(scope="module")
+def probes(tmp_path_factory):
+    """All four probes, run concurrently. Values: (CompletedProcess, the
+    vault the test expects the probe to resolve, or None)."""
+    module_job, _, module_stand_in = _app_job(tmp_path_factory.mktemp("app_module"), "src.api.main")
+    asgi_job, asgi_env_vault, _ = _app_job(tmp_path_factory.mktemp("app_entrypoint"), "src.api.asgi")
+    results = run_fresh_pythons({
+        "config_import": _config_job(tmp_path_factory.mktemp("config_import"), "import"),
+        "config_load": _config_job(tmp_path_factory.mktemp("config_load"), "load"),
+        "app_module": module_job,
+        "app_entrypoint": asgi_job,
+    })
+    expected_vault = {"app_module": module_stand_in, "app_entrypoint": asgi_env_vault}
+    return {key: (out, expected_vault.get(key)) for key, out in results.items()}
+
+
+def test_config_import_does_not_load_env_file(probes):
+    out, _ = probes["config_import"]
+    assert _probe_json(out)["sentinel"] is None
+
+
+def test_control_load_env_file_loads_the_same_env_file(probes):
+    out, _ = probes["config_load"]
+    assert _probe_json(out)["sentinel"] == "from-env-file"
+
+
+def test_app_module_import_does_not_load_env_file(probes):
+    out, stand_in = probes["app_module"]
 
     probe = _probe_json(out)
     assert probe["sentinel"] is None
     assert probe["vault"] == str(stand_in.resolve())
 
 
-def test_control_api_entrypoint_loads_env_file_and_resolves_vault_from_it(tmp_path):
-    env_file, env_vault = _synthetic_env_file(tmp_path)
-    stand_in = tmp_path / "stand_in_vault"
-    stand_in.mkdir()
-
-    out = run_fresh_python(["-c", _APP_PROBE, str(env_file), "src.api.asgi"], stand_in)
+def test_control_api_entrypoint_loads_env_file_and_resolves_vault_from_it(probes):
+    out, env_vault = probes["app_entrypoint"]
 
     probe = _probe_json(out)
     assert probe["sentinel"] == "from-env-file"

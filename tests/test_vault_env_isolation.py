@@ -17,13 +17,15 @@ conftest, then import the app -- with PRIVATE_VAULT_PATH pointing at a
 stand-in "live" vault, the way .env would, and asserts nothing lands there.
 Its control imports the app without the conftest and shows the same stand-in
 does receive the write, so an empty stand-in means isolation, not a probe
-that cannot see.
+that cannot see. The two probes run at once, each in its own interpreter.
 """
 
 from pathlib import Path
 
+import pytest
+
 from src.core.config import clear_vault_path_override, get_private_vault_path
-from tests.conftest import run_fresh_python
+from tests.conftest import run_fresh_pythons
 
 _CONFTEST_THEN_APP = (
     "import runpy; runpy.run_path('tests/conftest.py'); import src.api.main"
@@ -43,21 +45,30 @@ def _resolves_to_isolation_vault(env_fallback_vault: Path) -> bool:
 # -- end to end: conftest before app import ------------------------------------
 
 
-def test_app_import_after_conftest_writes_nothing_to_the_env_vault(tmp_path):
-    stand_in = tmp_path / "stand_in_live_vault"
-    stand_in.mkdir()
+@pytest.fixture(scope="module")
+def app_imports(tmp_path_factory):
+    """Both app-import probes, run concurrently. Values: (CompletedProcess,
+    stand-in vault)."""
+    stand_ins = {}
+    for key in ("after_conftest", "without_conftest"):
+        stand_ins[key] = tmp_path_factory.mktemp(key) / "stand_in_live_vault"
+        stand_ins[key].mkdir()
+    results = run_fresh_pythons({
+        "after_conftest": (["-c", _CONFTEST_THEN_APP], stand_ins["after_conftest"]),
+        "without_conftest": (["-c", "import src.api.main"], stand_ins["without_conftest"]),
+    })
+    return {key: (results[key], stand_ins[key]) for key in results}
 
-    out = run_fresh_python(["-c", _CONFTEST_THEN_APP], stand_in)
+
+def test_app_import_after_conftest_writes_nothing_to_the_env_vault(app_imports):
+    out, stand_in = app_imports["after_conftest"]
 
     assert out.returncode == 0, out.stderr[-2000:]
     assert _files_under(stand_in) == []
 
 
-def test_control_app_import_without_conftest_writes_to_the_env_vault(tmp_path):
-    stand_in = tmp_path / "stand_in_live_vault"
-    stand_in.mkdir()
-
-    out = run_fresh_python(["-c", "import src.api.main"], stand_in)
+def test_control_app_import_without_conftest_writes_to_the_env_vault(app_imports):
+    out, stand_in = app_imports["without_conftest"]
 
     assert out.returncode == 0, out.stderr[-2000:]
     assert "system/nature_version.txt" in _files_under(stand_in)

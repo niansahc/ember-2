@@ -10,13 +10,11 @@ no-op in-process.
 """
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+from tests.conftest import REPO_ROOT, run_fresh_pythons
 
 _PROBE = r"""
 import json, logging, os
@@ -48,26 +46,37 @@ print(json.dumps({
 """
 
 
-def _run_probe(tmp_path, log_path):
-    import os
+def _probe_job(tmp_path, log_path):
+    return ["-c", _PROBE], tmp_path / "vault", {"EMBER_LOG_PATH": str(log_path)}
 
-    env = dict(os.environ)
-    env["EMBER_LOG_PATH"] = str(log_path)
-    env["PRIVATE_VAULT_PATH"] = str(tmp_path / "vault")
-    out = subprocess.run(
-        [sys.executable, "-c", _PROBE],
-        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=120,
-    )
+
+def _probe_json(out):
     assert out.returncode == 0, out.stderr[-2000:]
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
 @pytest.fixture(scope="module")
-def probe(tmp_path_factory):
-    """One fresh-interpreter import shared by the writable-path tests."""
-    tmp_path = tmp_path_factory.mktemp("app_logging")
-    log_path = tmp_path / "logs" / "ember-api.log"
-    return log_path, _run_probe(tmp_path, log_path)
+def probes(tmp_path_factory):
+    """Both fresh-interpreter imports, run concurrently: a writable log path
+    (shared by the writable-path tests) and one whose parent is a file."""
+    writable_dir = tmp_path_factory.mktemp("app_logging")
+    writable_log = writable_dir / "logs" / "ember-api.log"
+    unwritable_dir = tmp_path_factory.mktemp("app_logging_unwritable")
+    blocker = unwritable_dir / "blocker"
+    blocker.write_text("a file, not a directory", encoding="utf-8")
+    results = run_fresh_pythons({
+        "writable": _probe_job(writable_dir, writable_log),
+        "unwritable": _probe_job(unwritable_dir, blocker / "ember-api.log"),
+    })
+    return {
+        "writable": (writable_log, _probe_json(results["writable"])),
+        "unwritable": _probe_json(results["unwritable"]),
+    }
+
+
+@pytest.fixture(scope="module")
+def probe(probes):
+    return probes["writable"]
 
 
 def test_import_attaches_one_rotating_handler_at_env_path(probe):
@@ -102,10 +111,8 @@ def test_file_handler_redacts_exception_text(probe):
     # Marker-present control without the filter: tests/test_log_redaction.py.
 
 
-def test_unwritable_path_does_not_stop_import(tmp_path):
-    blocker = tmp_path / "blocker"
-    blocker.write_text("a file, not a directory", encoding="utf-8")
-    result = _run_probe(tmp_path, blocker / "ember-api.log")
+def test_unwritable_path_does_not_stop_import(probes):
+    result = probes["unwritable"]
     assert result["first"] == 0
     assert result["returned_again"] is None
 

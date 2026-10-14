@@ -160,22 +160,45 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def run_fresh_python(
-    args: list[str], vault: Path, timeout: int = 300
+    args: list[str], vault: Path, timeout: int = 300, env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """Run `python <args>` in a fresh interpreter from the repo root.
 
     PRIVATE_VAULT_PATH is set to `vault`. Importing src reads no .env, and an
     entrypoint's load_env_file() (override=False) keeps that value over
     .env, so a probe never reaches a real vault. PYTEST_ADDOPTS is dropped so
-    a child pytest is not steered by the parent's options.
+    a child pytest is not steered by the parent's options. `env` adds or
+    overrides variables for this child only.
     """
-    env = dict(os.environ)
-    env["PRIVATE_VAULT_PATH"] = str(vault)
-    env.pop("PYTEST_ADDOPTS", None)
+    child_env = dict(os.environ)
+    child_env["PRIVATE_VAULT_PATH"] = str(vault)
+    child_env.pop("PYTEST_ADDOPTS", None)
+    child_env.update(env or {})
     return subprocess.run(
         [sys.executable, *args],
-        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=timeout,
+        cwd=REPO_ROOT, env=child_env, capture_output=True, text=True, timeout=timeout,
     )
+
+
+def run_fresh_pythons(jobs: dict) -> dict[str, subprocess.CompletedProcess]:
+    """Run several run_fresh_python probes at once; return results by key.
+
+    `jobs` maps a key to (args, vault) or (args, vault, env). Each probe is
+    still its own fresh interpreter, so isolation is unchanged; only the wall
+    time is shared. A probe that imports the app attaches a rotating log
+    handler, so each job without its own EMBER_LOG_PATH gets one beside its
+    vault instead of every child writing the one default log file.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    def run(key, args, vault, env=None):
+        env = dict(env or {})
+        env.setdefault("EMBER_LOG_PATH", str(Path(vault).parent / f"probe-{key}.log"))
+        return run_fresh_python(args, vault, env=env)
+
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        futures = {key: pool.submit(run, key, *job) for key, job in jobs.items()}
+        return {key: future.result() for key, future in futures.items()}
 
 
 @pytest.fixture(scope="session", autouse=True)

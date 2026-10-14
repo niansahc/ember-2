@@ -180,8 +180,6 @@ def write_canonical_record(
     }
 
     file_path = memory_dir / f"{timestamp}.json"
-    # Exclusive create: a name another process already took raises
-    # RecordExistsError instead of replacing that record.
     storage.create_json(file_path, memory)
     return memory, file_path
 

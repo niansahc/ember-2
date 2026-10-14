@@ -1108,19 +1108,26 @@ class LLMAdapter:
             )
             return
 
+        # The summary turn replaces the popped turns before the vault write,
+        # so a failed write loses only the persisted record, never context.
+        buf.inject_summary_turn(summary)
+
         if skip_vault_write:
             logger.warning(
                 "[BUFFER] Skipped session summary write (test session)"
             )
         else:
-            write_session_summary(
-                memory_service=self.memory_service,
-                summary=summary,
-                turns_compressed=len(oldest_turns),
-                session_id=buf.current_session_id,
-            )
-
-        buf.inject_summary_turn(summary)
+            try:
+                write_session_summary(
+                    memory_service=self.memory_service,
+                    summary=summary,
+                    turns_compressed=len(oldest_turns),
+                    session_id=buf.current_session_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "[BUFFER] Session summary not written: %s", type(exc).__name__,
+                )
 
         logger.info(
             "[BUFFER] Compressed %d turns into session summary.",

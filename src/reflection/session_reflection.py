@@ -130,19 +130,31 @@ def generate_session_reflection(
     else:
         metadata["source_record_ids"] = []
 
-    # Also runs in a background thread on conversation delete, where a raise
-    # would surface only as an unhandled thread exception.
-    try:
-        write_memory(
-            text=reflection_text,
-            memory_type="reflection",
-            source="session_reflection",
-            tags=["session", "reflection"],
-            metadata=metadata,
-        )
-    except RecordExistsError:
-        logger.error("[SESSION_REFLECT] Reflection not written: record name collision")
-        return None
+    write_memory(
+        text=reflection_text,
+        memory_type="reflection",
+        source="session_reflection",
+        tags=["session", "reflection"],
+        metadata=metadata,
+    )
 
     logger.info("[SESSION_REFLECT] Written: %d chars", len(reflection_text))
     return reflection_text
+
+
+def generate_session_reflection_in_background(
+    buffer_turns: list[dict],
+    session_id: str | None = None,
+) -> None:
+    """Thread target for the reflection spawned on conversation delete.
+
+    A record name collision raises out of generate_session_reflection (the
+    synchronous /reflect/session route turns it into a 409). In a thread it
+    would surface only as an unhandled exception, so it is logged here and
+    the reflection is dropped. MemoryStorage.create_json has already logged
+    the collision at ERROR.
+    """
+    try:
+        generate_session_reflection(buffer_turns, session_id=session_id)
+    except RecordExistsError:
+        logger.warning("[SESSION_REFLECT] Reflection not written: record name collision")

@@ -608,9 +608,11 @@ def delete_conversation_endpoint(session_id: str):
     try:
         buffer = llm_adapter.prompt_builder.conversation_buffer.get_recent()
         if buffer and len(buffer) >= 3:
-            from src.reflection.session_reflection import generate_session_reflection
+            from src.reflection.session_reflection import (
+                generate_session_reflection_in_background,
+            )
             spawn_vault_bound_thread(
-                generate_session_reflection,
+                generate_session_reflection_in_background,
                 args=(buffer, session_id),
                 vault=_request_vault,
             )

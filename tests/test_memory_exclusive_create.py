@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 
 import pytest
 
@@ -27,20 +28,64 @@ import src.memory.session as session_mod
 import src.memory.write_memory as write_memory_mod
 from src.core.config import vault_binding
 from src.core.jsonio import RecordExistsError, safe_write_json
+from src.memory.service import MemoryService
 from src.memory.storage import MemoryStorage
-from tests.conftest import FixedSource, run_in_threads
+from tests.conftest import (
+    PinnedSource,
+    adapter_with_real_buffer,
+    fill_buffer_past_threshold,
+    run_in_threads,
+)
+
+# write_memory() embeds every record it indexes; no test here needs Ollama.
+pytestmark = pytest.mark.usefixtures("stub_write_embeddings")
 
 FIXED_TS = "2026-01-01T12-00-00-000000"
+OTHER_TS = "2026-01-01T12-00-01-000000"
 SESSION_ID = "sess_test_001"
 
+# Vault subdirectory -> (module, attribute) of the timestamp source that
+# names its records.
+SOURCES = {
+    "journal": (write_memory_mod, "_timestamps"),
+    "reflection": (write_memory_mod, "_timestamps"),
+    "profile": (write_memory_mod, "_timestamps"),
+    "session": (session_mod, "_ids"),
+    "project": (project_mod, "_ids"),
+    "lodestone": (lodestone_service, "_timestamps"),
+}
 
-# Each writer: (module holding its timestamp source, source attribute,
-# vault subdirectory, setup run before the source is pinned, the write).
-# setup returns whatever the write needs (an existing session, project or
-# lodestone record to update).
+# Holds the taken name. Its type matches no writer's resolver, so it never
+# changes what get_session/get_project/lodestone reads return.
+PLACEHOLDER = {"id": "placeholder", "type": "placeholder", "text": "existing synthetic record"}
 
-def _no_setup():
-    return None
+
+@pytest.fixture
+def vault(tmp_path):
+    with vault_binding(tmp_path):
+        yield tmp_path
+
+
+def _pin(monkeypatch, subdir, *values):
+    """Make the writer for `subdir` name its records `values`, in order."""
+    module, attr = SOURCES[subdir]
+    monkeypatch.setattr(module, attr, PinnedSource(*(values or (FIXED_TS,))))
+
+
+def _taken_name(vault_path, monkeypatch, subdir, *values):
+    """Pin the writer's names and occupy FIXED_TS, the first one it picks."""
+    _pin(monkeypatch, subdir, *values)
+    target = vault_path / "memory" / subdir / f"{FIXED_TS}.json"
+    safe_write_json(target, PLACEHOLDER)
+    return target
+
+
+def _in_vault(vault_path, fn):
+    """run_in_threads worker: call fn() with the vault bound in that thread."""
+    def run(_i):
+        with vault_binding(vault_path):
+            return fn()
+    return run
 
 
 def _make_session():
@@ -55,75 +100,60 @@ def _make_lodestone():
     return lodestone_service.write("synthetic value", "synthetic_category", confirmed=False)["id"]
 
 
+# Each writer: (vault subdirectory, setup run before the name is pinned, the
+# write). setup returns whatever the write needs (an existing record to
+# update or delete).
 WRITERS = [
     pytest.param(
-        write_memory_mod, "_timestamps", "journal", _no_setup,
+        "journal", lambda: None,
         lambda _: write_memory_mod.write_canonical_record(
             "synthetic journal entry for a collision test", memory_type="journal",
         ),
         id="canonical_record",
     ),
     pytest.param(
-        session_mod, "_ids", "session", _no_setup,
+        "session", lambda: None,
         lambda _: session_mod.create_session(SESSION_ID, "Synthetic conversation"),
         id="create_session",
     ),
     pytest.param(
-        session_mod, "_ids", "session", _make_session,
+        "session", _make_session,
         lambda _: session_mod.update_session(SESSION_ID, title="Renamed synthetic"),
         id="update_session",
     ),
     pytest.param(
-        session_mod, "_ids", "session", _make_session,
+        "session", _make_session,
         lambda _: session_mod.delete_session(SESSION_ID),
         id="delete_session",
     ),
     pytest.param(
-        project_mod, "_ids", "project", _no_setup,
+        "project", lambda: None,
         lambda _: project_mod.create_project("Synthetic project"),
         id="create_project",
     ),
     pytest.param(
-        project_mod, "_ids", "project", _make_project,
+        "project", _make_project,
         lambda pid: project_mod.update_project(pid, name="Renamed synthetic"),
         id="update_project",
     ),
     pytest.param(
-        project_mod, "_ids", "project", _make_project,
+        "project", _make_project,
         lambda pid: project_mod.delete_project(pid),
         id="delete_project",
     ),
     pytest.param(
-        lodestone_service, "_timestamps", "lodestone", _no_setup,
+        "lodestone", lambda: None,
         lambda _: lodestone_service.write("synthetic value", "synthetic_category", confirmed=False),
         id="lodestone_write",
     ),
     pytest.param(
-        lodestone_service, "_timestamps", "lodestone", _make_lodestone,
+        "lodestone", _make_lodestone,
         lambda rec_id: lodestone_service.update(rec_id, {"user_note": "synthetic note"}),
         id="lodestone_update",
     ),
 ]
 
-WRITER_ARGS = "module, source_attr, subdir, setup, write"
-
-# Holds the taken name. Its type matches no writer's resolver, so it never
-# changes what get_session/get_project/lodestone reads return.
-PLACEHOLDER = {"id": "placeholder", "type": "placeholder", "text": "existing synthetic record"}
-
-
-@pytest.fixture
-def vault(tmp_path):
-    with vault_binding(tmp_path):
-        yield tmp_path
-
-
-def _taken_name(vault_path, monkeypatch, module, source_attr, subdir):
-    """Pin the writer's timestamp source and occupy the name it will pick."""
-    monkeypatch.setattr(module, source_attr, FixedSource(FIXED_TS))
-    target = vault_path / "memory" / subdir / f"{FIXED_TS}.json"
-    safe_write_json(target, PLACEHOLDER)
-    return target
+WRITER_ARGS = "subdir, setup, write"
 
 
 # ---------------------------------------------------------------------------
@@ -132,16 +162,15 @@ def _taken_name(vault_path, monkeypatch, module, source_attr, subdir):
 
 @pytest.mark.parametrize(WRITER_ARGS, WRITERS)
 def test_write_to_a_taken_name_raises_and_keeps_the_existing_record(
-    vault, monkeypatch, caplog, module, source_attr, subdir, setup, write,
+    vault, monkeypatch, caplog, subdir, setup, write,
 ):
     arg = setup()
-    target = _taken_name(vault, monkeypatch, module, source_attr, subdir)
+    target = _taken_name(vault, monkeypatch, subdir)
     original = target.read_bytes()
     files_before = sorted((vault / "memory" / subdir).glob("*.json"))
 
-    with caplog.at_level(logging.ERROR):
-        with pytest.raises(RecordExistsError):
-            write(arg)
+    with caplog.at_level(logging.ERROR), pytest.raises(RecordExistsError):
+        write(arg)
 
     assert target.read_bytes() == original
     assert sorted((vault / "memory" / subdir).glob("*.json")) == files_before
@@ -157,17 +186,15 @@ def test_write_to_a_taken_name_raises_and_keeps_the_existing_record(
 
 @pytest.mark.parametrize(WRITER_ARGS, WRITERS)
 def test_concurrent_writers_to_one_name_exactly_one_succeeds(
-    vault, monkeypatch, slow_temp_files, module, source_attr, subdir, setup, write,
+    vault, monkeypatch, request, subdir, setup, write,
 ):
     arg = setup()
-    monkeypatch.setattr(module, source_attr, FixedSource(FIXED_TS))
+    _pin(monkeypatch, subdir)
     files_before = set((vault / "memory" / subdir).glob("*.json"))
+    # Slow temp files only for the race, not for setup's writes.
+    request.getfixturevalue("slow_temp_files")
 
-    def bound_write(_i):
-        with vault_binding(vault):
-            return write(arg)
-
-    results, errors = run_in_threads(bound_write, 2)
+    results, errors = run_in_threads(_in_vault(vault, lambda: write(arg)), 2)
 
     assert len(results) == 1
     assert len(errors) == 1 and isinstance(errors[0], RecordExistsError)
@@ -188,7 +215,7 @@ def old_replace_path(monkeypatch):
 def test_control_old_path_replaces_the_taken_record_without_raising(vault, monkeypatch, old_replace_path):
     """The sequential test's raises() and byte-identical checks can fail:
     under the old path the write succeeds and the existing record is gone."""
-    target = _taken_name(vault, monkeypatch, write_memory_mod, "_timestamps", "journal")
+    target = _taken_name(vault, monkeypatch, "journal")
 
     write_memory_mod.write_canonical_record(
         "synthetic journal entry for a collision test", memory_type="journal",
@@ -203,43 +230,23 @@ def test_control_old_path_never_reports_a_concurrent_collision(
     """The concurrent test's RecordExistsError check can fail: under the old
     path neither writer raises it (both replace, or Windows refuses one
     os.replace with a plain write error)."""
-    monkeypatch.setattr(project_mod, "_ids", FixedSource(FIXED_TS))
+    _pin(monkeypatch, "project")
 
-    def bound_write(_i):
-        with vault_binding(vault):
-            return project_mod.create_project("Synthetic project")
-
-    _results, errors = run_in_threads(bound_write, 2)
+    _results, errors = run_in_threads(
+        _in_vault(vault, lambda: project_mod.create_project("Synthetic project")), 2,
+    )
 
     assert not any(isinstance(e, RecordExistsError) for e in errors)
+
 
 # ---------------------------------------------------------------------------
 # Callers: a collision loses that one record, never the caller's whole job
 # ---------------------------------------------------------------------------
 
-OTHER_TS = "2026-01-01T12-00-01-000000"
-
-
-class SequenceSource:
-    """Timestamp source that returns `values` in order."""
-
-    def __init__(self, *values: str) -> None:
-        self._values = list(values)
-
-    def next(self) -> str:
-        return self._values.pop(0)
-
-
-@pytest.fixture
-def no_indexing(monkeypatch):
-    """Indexing is not under test; skip the embedding call."""
-    monkeypatch.setattr(write_memory_mod, "index_record", lambda *_a, **_k: None)
-
-
-def test_json_import_collision_skips_that_record_and_imports_the_rest(vault, monkeypatch, no_indexing):
+def test_json_import_collision_skips_that_record_and_imports_the_rest(vault, monkeypatch):
     from src.api.routes.ingest import _import_json_records
 
-    monkeypatch.setattr(write_memory_mod, "_timestamps", SequenceSource(FIXED_TS, FIXED_TS, OTHER_TS))
+    _pin(monkeypatch, "journal", FIXED_TS, FIXED_TS, OTHER_TS)
     records = [
         {"text": f"synthetic journal entry number {i} for import", "type": "journal"}
         for i in range(3)
@@ -252,6 +259,7 @@ def test_json_import_collision_skips_that_record_and_imports_the_rest(vault, mon
     names = sorted(p.name for p in (vault / "memory" / "journal").glob("*.json"))
     assert names == [f"{FIXED_TS}.json", f"{OTHER_TS}.json"]
 
+
 SYNTHETIC_TURNS = [
     {"user": f"synthetic question {i}", "assistant": f"synthetic answer {i}"}
     for i in range(3)
@@ -259,56 +267,55 @@ SYNTHETIC_TURNS = [
 SYNTHETIC_REFLECTION = "The user and Ember worked through a synthetic planning task and left one item open."
 
 
-def test_session_reflection_collision_returns_none_without_raising(vault, monkeypatch, no_indexing, caplog):
-    """Runs in a background thread on conversation delete: a collision must
-    end in a log line, not an unhandled thread exception."""
+def test_session_reflection_collision_raises_for_the_route_and_is_dropped_in_the_background(
+    vault, monkeypatch, caplog,
+):
+    """/reflect/session calls generate_session_reflection directly, so a
+    collision reaches the 409 handler. The thread spawned on conversation
+    delete uses the background entry point, which logs and drops it instead
+    of raising an unhandled thread exception."""
     import src.reflection.session_reflection as session_reflection
 
     monkeypatch.setattr(
         session_reflection.ollama, "chat",
         lambda **_k: {"message": {"content": SYNTHETIC_REFLECTION}},
     )
-    _taken_name(vault, monkeypatch, write_memory_mod, "_timestamps", "reflection")
+    monkeypatch.setattr(session_reflection, "get_ember_auxiliary_model", lambda: "synthetic-local-model")
+    _taken_name(vault, monkeypatch, "reflection")
 
-    with caplog.at_level(logging.ERROR):
-        result = session_reflection.generate_session_reflection(
-            SYNTHETIC_TURNS, session_id=SESSION_ID, model="synthetic-local-model",
-        )
+    with pytest.raises(RecordExistsError):
+        session_reflection.generate_session_reflection(SYNTHETIC_TURNS, session_id=SESSION_ID)
 
-    assert result is None
+    with caplog.at_level(logging.WARNING):
+        session_reflection.generate_session_reflection_in_background(SYNTHETIC_TURNS, SESSION_ID)
+
     assert any("[SESSION_REFLECT] Reflection not written" in r.getMessage() for r in caplog.records)
 
-def test_session_summary_collision_still_injects_the_summary_turn(vault, monkeypatch, no_indexing, caplog):
+
+def test_session_summary_collision_still_injects_the_summary_turn(vault, monkeypatch, caplog):
     """Buffer compression pops the oldest turns before the summary write. A
     collision on that write must not lose them: the summary turn still
     replaces them in the buffer."""
-    from unittest.mock import MagicMock
-
-    from src.context.conversation_buffer import ConversationBuffer
-    from src.llm.adapter import LLMAdapter
-    from src.memory.service import MemoryService
-
-    adapter = LLMAdapter.__new__(LLMAdapter)
-    adapter.model = "synthetic-local-model"
-    adapter.prompt_builder = MagicMock()
-    adapter.prompt_builder.conversation_buffer = ConversationBuffer()
+    adapter = adapter_with_real_buffer()
     adapter.memory_service = MemoryService()
     buf = adapter.prompt_builder.conversation_buffer
-    long_msg = " ".join(f"word{j}" for j in range(100))
-    for _ in range(8):
-        buf.add_turn(long_msg, long_msg)
+    fill_buffer_past_threshold(buf)
     monkeypatch.setattr(adapter, "_summarize_with_plain_prompt", lambda _p: SYNTHETIC_REFLECTION)
-    _taken_name(vault, monkeypatch, write_memory_mod, "_timestamps", "reflection")
+    _taken_name(vault, monkeypatch, "reflection")
 
-    with caplog.at_level(logging.ERROR):
+    with caplog.at_level(logging.WARNING):
         adapter._maybe_compress_buffer()
 
     first = buf.get_recent()[0]
     assert first.get("is_summary") is True
     assert first["assistant"] == SYNTHETIC_REFLECTION
-    assert any("[BUFFER] Session summary not written" in r.getMessage() for r in caplog.records)
+    assert any(
+        "[BUFFER] Session summary not written: RecordExistsError" in r.getMessage()
+        for r in caplog.records
+    )
 
-def test_onboarding_profile_collision_reasks_the_same_step(vault, monkeypatch, no_indexing, caplog):
+
+def test_onboarding_profile_collision_reasks_the_same_step(vault, monkeypatch, caplog):
     """A raise here would reach a streaming chat client as a JSON 409 (blank
     reply). The answer is lost, so the step is not advanced and its question
     is asked again."""
@@ -323,9 +330,9 @@ def test_onboarding_profile_collision_reasks_the_same_step(vault, monkeypatch, n
         service, "_format_answer",
         lambda answer, _category: f"The user said this in a synthetic onboarding answer: {answer}",
     )
-    _taken_name(vault, monkeypatch, write_memory_mod, "_timestamps", "profile")
+    _taken_name(vault, monkeypatch, "profile")
 
-    with caplog.at_level(logging.ERROR):
+    with caplog.at_level(logging.WARNING):
         reply = service.handle("synthetic answer")
 
     assert reply == ONBOARDING_STEPS[0].question
@@ -333,12 +340,11 @@ def test_onboarding_profile_collision_reasks_the_same_step(vault, monkeypatch, n
     assert len(progress) == 1 and progress[0].metadata["current_step"] == 0
     assert any("[ONBOARDING] Profile write collided" in r.getMessage() for r in caplog.records)
 
-def test_journal_cli_collision_exits_1_with_a_message(vault, monkeypatch, no_indexing, capsys):
-    import sys
 
+def test_journal_cli_collision_exits_1_with_a_message(vault, monkeypatch, capsys):
     import scripts.journal as journal
 
-    target = _taken_name(vault, monkeypatch, write_memory_mod, "_timestamps", "journal")
+    target = _taken_name(vault, monkeypatch, "journal")
     monkeypatch.setattr(
         sys, "argv", ["journal.py", "--text", "synthetic journal entry for a collision test"],
     )
@@ -350,11 +356,11 @@ def test_journal_cli_collision_exits_1_with_a_message(vault, monkeypatch, no_ind
     assert "already exists" in capsys.readouterr().err
     assert json.loads(target.read_text(encoding="utf-8")) == PLACEHOLDER
 
-def test_seed_script_collision_counts_a_failure_and_seeds_the_rest(vault, monkeypatch, no_indexing, capsys):
+
+def test_seed_script_collision_counts_a_failure_and_seeds_the_rest(vault, monkeypatch, capsys):
     import scripts.seed_identity_template as seed
 
-    _taken_name(vault, monkeypatch, write_memory_mod, "_timestamps", "profile")
-    monkeypatch.setattr(write_memory_mod, "_timestamps", SequenceSource(FIXED_TS, OTHER_TS))
+    _taken_name(vault, monkeypatch, "profile", FIXED_TS, OTHER_TS)
     monkeypatch.setattr(seed, "PROFILE_RECORDS", [
         {"text": "The user is a synthetic profile subject number one for seeding.", "tags": []},
         {"text": "The user is a synthetic profile subject number two for seeding.", "tags": []},
@@ -365,49 +371,28 @@ def test_seed_script_collision_counts_a_failure_and_seeds_the_rest(vault, monkey
     assert "1 written, 0 skipped, 1 failed" in capsys.readouterr().out
     assert (vault / "memory" / "profile" / f"{OTHER_TS}.json").exists()
 
+
 # ---------------------------------------------------------------------------
 # API routes: a collision is a retryable 409, not a 500
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def api_client(vault, monkeypatch, no_indexing):
-    from fastapi.testclient import TestClient
-
-    import src.api.main as main
-
-    monkeypatch.setattr(main, "get_ember_api_key", lambda: None)
-    return TestClient(main.app)
-
-
-def test_journal_route_collision_returns_409(api_client, vault, monkeypatch):
-    _taken_name(vault, monkeypatch, write_memory_mod, "_timestamps", "journal")
-
-    response = api_client.post("/journal", json={"text": "synthetic journal entry for a collision test"})
-
-    assert response.status_code == 409
+ROUTES = [
+    pytest.param("journal", lambda: None, "post", "/journal",
+                 {"text": "synthetic journal entry for a collision test"}, id="journal"),
+    pytest.param("session", _make_session, "patch", f"/v1/conversations/{SESSION_ID}",
+                 {"title": "Renamed synthetic"}, id="rename_conversation"),
+    pytest.param("project", lambda: None, "post", "/v1/projects",
+                 {"name": "Synthetic project"}, id="create_project"),
+    pytest.param("lodestone", _make_lodestone, "patch", "/v1/lodestone/{}",
+                 {"user_note": "synthetic note"}, id="update_lodestone"),
+]
 
 
-def test_conversation_rename_collision_returns_409(api_client, vault, monkeypatch):
-    _make_session()
-    _taken_name(vault, monkeypatch, session_mod, "_ids", "session")
+@pytest.mark.parametrize("subdir, setup, method, url, body", ROUTES)
+def test_route_collision_returns_409(keyless_client, vault, monkeypatch, subdir, setup, method, url, body):
+    arg = setup()
+    _taken_name(vault, monkeypatch, subdir)
 
-    response = api_client.patch(f"/v1/conversations/{SESSION_ID}", json={"title": "Renamed synthetic"})
-
-    assert response.status_code == 409
-
-
-def test_project_create_collision_returns_409(api_client, vault, monkeypatch):
-    _taken_name(vault, monkeypatch, project_mod, "_ids", "project")
-
-    response = api_client.post("/v1/projects", json={"name": "Synthetic project"})
-
-    assert response.status_code == 409
-
-
-def test_lodestone_update_collision_returns_409(api_client, vault, monkeypatch):
-    rec_id = _make_lodestone()
-    _taken_name(vault, monkeypatch, lodestone_service, "_timestamps", "lodestone")
-
-    response = api_client.patch(f"/v1/lodestone/{rec_id}", json={"user_note": "synthetic note"})
+    response = keyless_client.request(method, url.format(arg), json=body)
 
     assert response.status_code == 409

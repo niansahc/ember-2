@@ -124,7 +124,7 @@ class OnboardingService:
                     metadata={"category": step.category, "onboarding_step": step.key},
                 )
             except RecordExistsError:
-                logger.error(
+                logger.warning(
                     "[ONBOARDING] Profile write collided, step %d (%s) not saved; asking again",
                     current, step.key,
                 )

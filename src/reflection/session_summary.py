@@ -6,13 +6,8 @@ compression produces a summary that should be persisted as a reflection record.
 """
 from __future__ import annotations
 
-import logging
-
-from src.core.jsonio import RecordExistsError
 from src.memory.resolve_memory import find_conversation_ids_for_session
 from src.memory.service import MemoryService
-
-logger = logging.getLogger("ember.session_summary")
 
 
 def write_session_summary(
@@ -46,21 +41,14 @@ def write_session_summary(
         find_conversation_ids_for_session(session_id) if session_id else []
     )
 
-    # The caller has already popped the compressed turns from the buffer
-    # and injects the summary turn after this returns. A raise here would
-    # skip that injection and lose the turns, so a collision loses only the
-    # persisted record.
-    try:
-        memory_service.write(
-            text=summary.strip(),
-            memory_type="reflection",
-            source="session_compression",
-            tags=["session", "compression"],
-            metadata={
-                "cadence": "session",
-                "turns_compressed": turns_compressed,
-                "source_record_ids": source_record_ids,
-            },
-        )
-    except RecordExistsError:
-        logger.error("[BUFFER] Session summary not written: record name collision")
+    memory_service.write(
+        text=summary.strip(),
+        memory_type="reflection",
+        source="session_compression",
+        tags=["session", "compression"],
+        metadata={
+            "cadence": "session",
+            "turns_compressed": turns_compressed,
+            "source_record_ids": source_record_ids,
+        },
+    )

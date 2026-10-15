@@ -1,12 +1,17 @@
 """
 .claude/hooks/secret_dump_guard.py
 
-PreToolUse hook for Bash -- denies commands that dump a protected file's
-raw content (private_vault/*, .env) through a known whole-file-dump
+PreToolUse hook for Bash|PowerShell -- denies commands that dump a
+private_vault/ file's raw content through a known whole-file-dump
 utility. Reads tool_input JSON from stdin. Returns a deny decision if the
 command matches; silent pass-through otherwise.
 
-This is PREVENTION of known command shapes, not redaction, and it is not
+.env is NOT handled here. env_guard.py owns .env for every tool (Read,
+Grep, Glob, Bash, PowerShell) and denies any command that names a .env
+file, whatever the utility. This hook used to substring-match ".env",
+which both missed most readers and wrongly denied `cat .env.example`.
+
+This is PREVENTION of known command forms, not redaction, and it is not
 a guarantee (issue #188).
 
 Claude Code's hook system has no mechanism to redact or replace tool
@@ -17,29 +22,19 @@ saw, and the docs state plainly that "PostToolUse hooks can't undo
 actions since the tool has already executed." PreToolUse is the only
 stage with any leverage, and it can only pattern-match the command
 string about to run -- it has no visibility into what that command's
-output will actually be. So this hook can recognize known shapes (the
-two real incidents behind #188: `tail -c 200 .env | xxd`, and the
-general "cat/type/xxd/hexdump a protected file" family) and nothing
-else. A command written a different way -- a Python one-liner, a
-different utility, base64, a script -- is not caught. That is a real,
-permanent limitation, not an oversight: the space of "ways to print a
-file's content" in a shell is unbounded, and claiming to catch all of it
-would be worse than admitting this only raises the bar for common shapes.
+output will actually be. So this hook recognizes the "cat/type/xxd/
+hexdump a vault file" family and nothing else. A command written a
+different way -- a Python one-liner, a different utility, base64, a
+script -- is not caught. That is a real, permanent limitation, not an
+oversight: the space of "ways to print a file's content" in a shell is
+unbounded, and claiming to catch all of it would be worse than admitting
+this only raises the bar for common forms.
 
 Precision over recall, deliberately: only whole-file-dump utilities are
-blocklisted, not every command that mentions a protected path. Reading
-variable NAMES only (`grep -no "^[A-Z_]*KEY" .env`), computing lengths
-(`awk '{print length($0)}' .env`), appending (`printf ... >> .env`),
-checking existence/size (`wc -l .env`, `ls -la .env`) are all left
-alone -- all were used safely in the session that filed this issue. A
-filter broad enough to flag those trains people to ignore it, which is
-worse than not having the filter.
-
-The structural fix for the .env half of #188 is issue #189 (move
-ANTHROPIC_API_KEY to the keyring, matching EMBER_API_KEY) -- a secret
-that is never in a plaintext file can't be dumped by any command, known
-or unknown-shaped. This hook does not replace that; it reduces risk for
-the interim.
+blocklisted, not every command that mentions a vault path. Listing,
+counting and existence checks are left alone. A filter broad enough to
+flag those trains people to ignore it, which is worse than not having
+the filter.
 """
 
 import json
@@ -47,19 +42,15 @@ import re
 import shlex
 import sys
 
-# Same path check as vault_guard.py -- one definition of "protected."
-# Applied per shlex TOKEN (an argument word), not the raw command string,
-# so ".env" appearing only as a substring of unrelated prose text can't
-# match -- see _matches_dump_command.
+
 def _is_protected_path(token: str) -> bool:
-    return (
-        "private_vault/" in token
-        or "private_vault\\" in token
-        or ".env" in token
-    )
+    # Tokens arrive with backslashes already normalised to "/" (see
+    # _matches_dump_command), so one separator form covers Windows too.
+    return "private_vault/" in token
 
 
-# Whole-file-dump utilities. Deliberately narrow -- see module docstring.
+# Whole-file-dump utilities, lowercase (PowerShell and Windows executables
+# are case-insensitive). Deliberately narrow -- see module docstring.
 _DUMP_UTILITIES = frozenset({
     "cat",
     "type",
@@ -71,8 +62,13 @@ _DUMP_UTILITIES = frozenset({
     "hexdump",
     "od",
     "strings",
-    "Get-Content",
+    "get-content",
+    "gc",
 })
+
+# Windows executable suffixes stripped from the leading word, so
+# more.com / cat.exe match the bare utility name.
+_EXE_SUFFIX_RE = re.compile(r"\.(exe|com)$")
 
 # Splits a compound command into simple-command segments on shell control
 # operators (pipe, and/or, sequence). Does not attempt to parse subshells,
@@ -85,19 +81,22 @@ def _matches_dump_command(command: str) -> str | None:
     segment whose leading word is a dump utility and whose arguments
     include a protected-path-looking token, else None.
 
+    Backslashes are normalised to "/" before tokenizing: shlex's POSIX
+    mode treats a backslash as an escape and would turn
+    C:\\x\\private_vault\\a.json into C:xprivate_vaulta.json. The leading
+    word is then reduced to its basename, so an absolute-path utility
+    (C:\\Windows\\System32\\more.com, /usr/bin/cat) matches by name.
+
     Tokenizes with shlex (quote-aware) per segment so a dump-utility word
-    or ".env" substring appearing only INSIDE a quoted string (e.g. a
-    heredoc building a multi-line commit message that happens to mention
-    ".env" in prose, or "cat" inside "$(cat <<'EOF' ...)") is not treated
-    as a command name or a path argument -- it never becomes its own
-    token in the position that matters. A segment shlex cannot cleanly
-    tokenize (unmatched quotes, heredoc syntax, etc.) is skipped rather
-    than falling back to a loose substring check: an unparseable segment
-    is exactly the shape most likely to produce a false positive, and
-    precision matters more than recall here (see module docstring).
+    appearing only INSIDE a quoted string (e.g. "cat" inside a
+    "$(cat <<'EOF' ...)" commit message) is not treated as a command
+    name. A segment shlex cannot cleanly tokenize (unmatched quotes,
+    heredoc syntax, etc.) is skipped rather than falling back to a loose
+    substring check: precision matters more than recall here (see module
+    docstring).
     """
     for segment in _SEGMENT_SPLIT_RE.split(command):
-        segment = segment.strip()
+        segment = segment.strip().replace("\\", "/")
         if not segment:
             continue
         try:
@@ -106,7 +105,7 @@ def _matches_dump_command(command: str) -> str | None:
             continue
         if not tokens:
             continue
-        leading = tokens[0].rsplit("/", 1)[-1]  # strip a path prefix like /usr/bin/cat
+        leading = _EXE_SUFFIX_RE.sub("", tokens[0].rsplit("/", 1)[-1].lower())
         if leading not in _DUMP_UTILITIES:
             continue
         if any(_is_protected_path(t) for t in tokens[1:]):
@@ -132,13 +131,11 @@ def main():
                 "permissionDecision": "deny",
                 "permissionDecisionReason": (
                     f"Vault Privacy Rule (#188): '{matched_utility}' against a "
-                    "protected path (private_vault/ or .env) would dump raw "
-                    "content, including secrets, into this transcript. This is "
-                    "a known-shape prevention check, not a guarantee -- see "
-                    ".claude/hooks/secret_dump_guard.py. If this command "
-                    "genuinely needs to inspect that file, read variable "
-                    "NAMES only (e.g. grep -no \"^[A-Z_]*KEY\" .env), or "
-                    "lengths/counts, never raw values."
+                    "private_vault/ path would dump raw vault content into "
+                    "this transcript. This is a known-form prevention check, "
+                    "not a guarantee -- see .claude/hooks/secret_dump_guard.py. "
+                    "Inspect vault data in a separate terminal, or use "
+                    "counts/listings only."
                 ),
             }
         }

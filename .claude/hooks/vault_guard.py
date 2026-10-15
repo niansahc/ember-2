@@ -1,9 +1,12 @@
 """
 .claude/hooks/vault_guard.py
 
-PreToolUse hook for Edit|Write — blocks edits to private_vault/ and .env.
+PreToolUse hook for Edit|Write -- blocks edits to private_vault/.
 Reads tool_input JSON from stdin. Returns a deny decision if the file
 path matches a protected pattern; silent pass-through otherwise.
+
+.env files are guarded by env_guard.py, which covers Edit|Write as well
+as the read tools.
 """
 
 import json
@@ -20,14 +23,14 @@ def main():
     if not file_path:
         return
 
-    if "private_vault/" in file_path or "private_vault\\" in file_path or file_path.endswith(".env"):
+    if "private_vault/" in file_path or "private_vault\\" in file_path:
         result = {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": (
-                    "Vault Privacy Rule: edits to private_vault/ and .env "
-                    "files are blocked. See CLAUDE.md."
+                    "Vault Privacy Rule: edits to private_vault/ are blocked. "
+                    "See CLAUDE.md."
                 ),
             }
         }

@@ -18,6 +18,7 @@ import pytest
 
 from src.context.conversation_buffer import (
     ConversationBuffer,
+    ConversationBufferStore,
     COMPRESSION_THRESHOLD,
     _estimate_tokens,
 )
@@ -323,76 +324,139 @@ def test_needs_compression_false_after_compression():
 # ---------------------------------------------------------------------------
 
 def test_session_change_clears_buffer():
-    """A new session_id on add_turn clears the prior session's turns."""
-    buf = ConversationBuffer()
-    buf.add_turn("a", "1", session_id="sess_A")
-    buf.add_turn("b", "2", session_id="sess_A")
-    assert len(buf.get_recent()) == 2
+    """A different session gets its own buffer: none of the prior session's
+    turns, while the prior session keeps them (issue #133 replaced the
+    reset-on-add_turn with per-session buffers)."""
+    store = ConversationBufferStore()
+    a = store.get(None, "sess_A")
+    a.add_turn("a", "1")
+    a.add_turn("b", "2")
+    assert len(a.get_recent()) == 2
 
-    buf.add_turn("c", "3", session_id="sess_B")
-    turns = buf.get_recent()
+    b = store.get(None, "sess_B")
+    b.add_turn("c", "3")
+    turns = b.get_recent()
     assert len(turns) == 1
     assert turns[0]["user"] == "c"
-    assert buf.current_session_id == "sess_B"
+    assert b.session_id == "sess_B"
+    assert [t["user"] for t in store.get(None, "sess_A").get_recent()] == ["a", "b"]
 
 
 def test_session_unchanged_preserves_buffer():
-    """Same session_id across calls accumulates turns normally."""
-    buf = ConversationBuffer()
-    buf.add_turn("a", "1", session_id="sess_X")
-    buf.add_turn("b", "2", session_id="sess_X")
-    buf.add_turn("c", "3", session_id="sess_X")
-    turns = buf.get_recent()
+    """Same session across calls accumulates turns in one buffer. Positive
+    control for test_session_change_clears_buffer."""
+    store = ConversationBufferStore()
+    for user, reply in (("a", "1"), ("b", "2"), ("c", "3")):
+        store.get(None, "sess_X").add_turn(user, reply)
+    turns = store.get(None, "sess_X").get_recent()
     assert [t["user"] for t in turns] == ["a", "b", "c"]
 
 
 def test_session_id_none_preserves_legacy_behavior():
-    """add_turn called without session_id (or with None) does not clear
-    an existing buffer. Preserves the 2-arg call form for legacy callers
-    and tests."""
+    """A buffer used without a session (the prompt builder's default buffer)
+    accumulates turns with the 2-arg add_turn and never clears."""
     buf = ConversationBuffer()
     buf.add_turn("a", "1")
     buf.add_turn("b", "2")
-    buf.add_turn("c", "3", session_id=None)
+    buf.add_turn("c", "3")
     assert len(buf.get_recent()) == 3
+    assert buf.session_id is None
 
 
 def test_session_change_clears_sticky_flags():
-    """Cross-session reset must also clear session-sticky state
-    (question_suppressed, declined_topics, hedged_record_ids) so the new
-    conversation isn't constrained by the old one's behavior flags."""
-    buf = ConversationBuffer()
-    buf.add_turn("stop asking me questions", "okay", session_id="sess_A")
-    assert buf.question_suppressed is True
+    """Session-sticky state (question_suppressed, declined_topics,
+    hedged_record_ids) set in one conversation does not constrain another,
+    and stays set in its own."""
+    store = ConversationBufferStore()
+    a = store.get(None, "sess_A")
+    a.add_turn("stop asking me questions", "okay")
+    assert a.question_suppressed is True
+    a.mark_hedge_emitted(["rec_old_1", "rec_old_2"])
+    assert len(a.hedged_record_ids) == 2
 
-    buf.mark_hedge_emitted(["rec_old_1", "rec_old_2"])
-    assert len(buf.hedged_record_ids) == 2
+    b = store.get(None, "sess_B")
+    b.add_turn("hello", "hi")
+    assert b.question_suppressed is False
+    assert b.declined_topics == []
+    assert len(b.hedged_record_ids) == 0
 
-    buf.add_turn("hello", "hi", session_id="sess_B")
-    assert buf.question_suppressed is False
-    assert buf.declined_topics == []
-    assert len(buf.hedged_record_ids) == 0
+    assert store.get(None, "sess_A").question_suppressed is True
+    assert len(store.get(None, "sess_A").hedged_record_ids) == 2
 
 
 def test_session_first_assignment_no_clear_on_empty():
-    """The very first add_turn with a session_id (when buffer is empty
-    and current_session_id is None) should set current_session_id but
-    not log a clearing event for nothing."""
-    buf = ConversationBuffer()
-    assert buf.current_session_id is None
-    buf.add_turn("hi", "hello", session_id="sess_first")
-    assert buf.current_session_id == "sess_first"
+    """The first get for a session creates an empty buffer that carries the
+    session's identity."""
+    store = ConversationBufferStore()
+    assert store.find(None, "sess_first") is None
+    buf = store.get(None, "sess_first")
+    assert buf.session_id == "sess_first"
+    assert buf.get_recent() == []
+    buf.add_turn("hi", "hello")
+    assert store.find(None, "sess_first") is buf
     assert len(buf.get_recent()) == 1
 
 
 def test_session_change_logs_clearing(caplog):
-    """Cross-session clear emits a structured [BUFFER] log line so the
-    reset is visible in stdout for diagnosis if it ever fires unexpectedly."""
+    """Evicting a buffer at the store bound emits a [BUFFER] log line so a
+    lost conversation history is visible in stdout for diagnosis."""
     import logging
-    buf = ConversationBuffer()
-    buf.add_turn("a", "1", session_id="sess_A")
+    store = ConversationBufferStore(max_buffers=1)
+    store.get(None, "sess_A").add_turn("a", "1")
 
     with caplog.at_level(logging.INFO, logger="ember.conversation_buffer"):
-        buf.add_turn("b", "2", session_id="sess_B")
+        store.get(None, "sess_B")
 
-    assert any("[BUFFER] Session changed" in r.message for r in caplog.records)
+    assert any(
+        "[BUFFER] Evicted" in r.message and "sess_A" in r.message
+        for r in caplog.records
+    )
+
+
+# ---------------------------------------------------------------------------
+# ConversationBufferStore (issue #133)
+# ---------------------------------------------------------------------------
+
+def test_store_keys_by_vault_as_well_as_session(tmp_path):
+    """The same session id in two vaults is two conversations."""
+    store = ConversationBufferStore()
+    store.get(tmp_path / "vault_one", "sess_A").add_turn("a", "1")
+    assert store.get(tmp_path / "vault_two", "sess_A").get_recent() == []
+    # Positive control: the same vault, spelled differently, is one key.
+    same = store.get(str(tmp_path / "vault_one" / "."), "sess_A")
+    assert [t["user"] for t in same.get_recent()] == ["a"]
+
+
+def test_store_find_does_not_create():
+    store = ConversationBufferStore()
+    assert store.find(None, "sess_A") is None
+    assert store.find(None, "sess_A") is None
+    store.get(None, "sess_A")
+    assert store.find(None, "sess_A") is not None
+
+
+def test_store_evicts_least_recently_used():
+    store = ConversationBufferStore(max_buffers=2)
+    store.get(None, "sess_A")
+    store.get(None, "sess_B")
+    store.get(None, "sess_A")          # touch A, B is now oldest
+    store.get(None, "sess_C")
+    assert store.find(None, "sess_B") is None
+    assert store.find(None, "sess_A") is not None
+    assert store.find(None, "sess_C") is not None
+
+
+def test_store_clear_drops_every_buffer():
+    store = ConversationBufferStore()
+    store.get(None, "sess_A").add_turn("a", "1")
+    store.get(None, "sess_B").add_turn("b", "2")
+    assert store.clear() == 2
+    assert store.find(None, "sess_A") is None
+    assert store.find(None, "sess_B") is None
+
+
+def test_restore_turns_prepends_in_order():
+    buf = ConversationBuffer()
+    buf.add_turn("c", "3")
+    buf.restore_turns([{"user": "a", "assistant": "1"}, {"user": "b", "assistant": "2"}])
+    assert [t["user"] for t in buf.get_recent()] == ["a", "b", "c"]

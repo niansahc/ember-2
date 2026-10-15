@@ -610,9 +610,12 @@ def delete_conversation_endpoint(session_id: str):
     except ValueError:
         _request_vault = None
 
-    # Auto-trigger session reflection before delete (non-fatal)
+    # Auto-trigger session reflection before delete (non-fatal). Reads only
+    # the deleted conversation's own buffer (issue #133): the reflection is
+    # labelled with session_id, so it must be built from that session's
+    # turns, never from whichever conversation happens to be live.
     try:
-        buffer = llm_adapter.prompt_builder.conversation_buffer.get_recent()
+        buffer = llm_adapter.recent_turns(session_id, _request_vault)
         if buffer and len(buffer) >= 3:
             from src.reflection.session_reflection import (
                 generate_session_reflection_in_background,
@@ -1559,6 +1562,8 @@ def vault_swap_endpoint(body: VaultSwapRequest):
         clear_vault_path_override()
         from src.retrieval.vector_index import clear_index_cache
         clear_index_cache()
+        # Conversation buffers hold the previous vault's turns (issue #133).
+        llm_adapter.clear_conversation_buffers()
 
         reason = _verify_active_vault(get_private_vault_path())
         if reason:
@@ -1593,6 +1598,8 @@ def vault_swap_endpoint(body: VaultSwapRequest):
     # Clear all in-memory vector indexes — they belong to the previous vault.
     from src.retrieval.vector_index import clear_index_cache
     clear_index_cache()
+    # Conversation buffers hold the previous vault's turns (issue #133).
+    llm_adapter.clear_conversation_buffers()
 
     # The SQLite stores need no reset: they are cached by resolved db path
     # and their accessors resolve the active vault first, so the stores
@@ -1819,7 +1826,17 @@ def reflect_session_endpoint(request: Request, body: SessionReflectRequest = Ses
     """Generate a narrative session reflection from the current conversation buffer."""
     from src.reflection.session_reflection import generate_session_reflection
 
-    buffer = llm_adapter.prompt_builder.conversation_buffer.get_recent()
+    # Issue #133: a session reflection is built from one conversation's
+    # buffer, named by session_id. Without one there is no way to tell which
+    # conversation the caller means.
+    if not body.session_id:
+        return {"status": "skipped", "reason": "session_id is required."}
+    from src.core.config import get_private_vault_path
+    try:
+        _vault = get_private_vault_path()
+    except ValueError:
+        _vault = None
+    buffer = llm_adapter.recent_turns(body.session_id, _vault)
     if not buffer or len(buffer) < 3:
         return {"status": "skipped", "reason": f"Not enough turns ({len(buffer)}). Minimum 3."}
 

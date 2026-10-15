@@ -345,6 +345,10 @@ class PromptBuilder:
         prompt_path = base_dir / "prompts" / "ember_system_prompt.txt"
         self.system_prompt = prompt_path.read_text(encoding="utf-8").strip()
 
+        # Default buffer for callers with no session (direct prompt-builder
+        # use, legacy tests). Live turns never use it: the adapter resolves a
+        # per-conversation buffer and passes it to build_prompt explicitly
+        # (issue #133).
         self.conversation_buffer = ConversationBuffer()
 
         # Nature loader — singleton, loaded once at startup.
@@ -383,7 +387,17 @@ class PromptBuilder:
         ask_first_active: bool = False,
         intent_class: str | None = None,
         suppress_lodestone_living: bool = False,
+        conversation_buffer: ConversationBuffer | None = None,
     ) -> str:
+        # Issue #133: the buffer is an argument, not shared state. The
+        # PromptBuilder is one per process and turns from different
+        # conversations can build concurrently, so every buffer read below
+        # uses this turn's buffer. None falls back to the default buffer.
+        buf = (
+            conversation_buffer if conversation_buffer is not None
+            else self.conversation_buffer
+        )
+
         # Conversational check — used to conditionally omit "I don't have
         # that in my memory" framing from both AUTHORITY_RULES and the
         # memory empty-state section. Q11/Q12 regression: emotional
@@ -422,11 +436,12 @@ class PromptBuilder:
             self._build_task_section(context_packet),
             "" if bare_mode else self._build_nature_section(),              # Dual injection in context
             self._build_reflection_section(context_packet),
-            self._build_conversation_section(),
+            self._build_conversation_section(buf),
             self._build_context_section(                                    # memory in recency position
                 context_packet,
                 is_conversational=is_conversational,
                 intent_class=intent_class,
+                buffer=buf,
             ),
             "" if (bare_mode or suppress_lodestone_living) else self._build_lodestone_living_section(
                 context_packet, suppress_relational=suppress_relational_lodestone
@@ -471,7 +486,7 @@ class PromptBuilder:
             self._build_self_knowledge_boundary(),
             self._build_instruction_section(),
             self._build_identity_examples_section(),
-            self._build_user_section(context_packet),
+            self._build_user_section(context_packet, buffer=buf),
         ]
 
         all_sections = system_sections + context_sections
@@ -665,8 +680,11 @@ class PromptBuilder:
             "Do not confirm task creation unless the write actually succeeded."
         )
 
-    def _build_conversation_section(self) -> str:
-        turns = self.conversation_buffer.get_recent()
+    def _build_conversation_section(
+        self, buffer: ConversationBuffer | None = None,
+    ) -> str:
+        buffer = buffer if buffer is not None else self.conversation_buffer
+        turns = buffer.get_recent()
 
         if not turns:
             return "<conversation_history>\nNone\n</conversation_history>"
@@ -689,14 +707,14 @@ class PromptBuilder:
             lines.append(f"Ember: {turn['assistant']}")
 
         # Session-sticky system notes (BUG-008, BUG-009)
-        sticky_notes = self._build_sticky_notes()
+        sticky_notes = self._build_sticky_notes(buffer)
         if sticky_notes:
             lines.append("")
             lines.extend(sticky_notes)
 
         return "<conversation_history>\n" + "\n".join(lines) + "\n</conversation_history>"
 
-    def _build_sticky_notes(self) -> list[str]:
+    def _build_sticky_notes(self, buffer: ConversationBuffer) -> list[str]:
         """Build session-sticky system notes from conversation buffer state.
 
         BUG-008: when user has objected to questions, inject a note
@@ -705,12 +723,12 @@ class PromptBuilder:
         the model not to raise it again.
         """
         notes: list[str] = []
-        if self.conversation_buffer.question_suppressed:
+        if buffer.question_suppressed:
             notes.append(
                 "[System: user has requested no questions. "
                 "Do not end responses with questions, including parenthetical ones.]"
             )
-        for topic in self.conversation_buffer.declined_topics:
+        for topic in buffer.declined_topics:
             notes.append(
                 f"[System: user has declined the topic \"{topic}\". "
                 "Do not raise it again this session.]"
@@ -739,8 +757,10 @@ class PromptBuilder:
             "systems as your own."
         )
 
-    def _build_user_section(self, context_packet: ContextPacket) -> str:
-        turns = self.conversation_buffer.get_recent()
+    def _build_user_section(
+        self, context_packet: ContextPacket, buffer: ConversationBuffer,
+    ) -> str:
+        turns = buffer.get_recent()
         user_msg = context_packet.user_message
 
         # Nature reminder at turn 8+ (ADR-016 amendment)
@@ -947,7 +967,9 @@ class PromptBuilder:
         context_packet: ContextPacket,
         is_conversational: bool = False,
         intent_class: str | None = None,
+        buffer: ConversationBuffer | None = None,
     ) -> str:
+        buffer = buffer if buffer is not None else self.conversation_buffer
         # BUG-009: filter retrieved memory items that match declined topics.
         # The declined_topics list is populated by the conversation buffer
         # when the user explicitly rejects a topic ("I don't want to talk
@@ -967,7 +989,7 @@ class PromptBuilder:
         # and the memory record that DID reach the model was recorded as not
         # delivered. Issue #227's fix was silently defeated for every turn after
         # any topic decline, since declined_topics is sticky for the session.
-        declined = self.conversation_buffer.declined_topics
+        declined = buffer.declined_topics
         memory_items = context_packet.memory_items
         if declined and memory_items:
             declined_keywords = _extract_decline_keywords(declined)
@@ -1079,7 +1101,7 @@ class PromptBuilder:
                 all_previously_hedged = (
                     bool(record_ids)
                     and all(
-                        self.conversation_buffer.was_hedged(rid)
+                        buffer.was_hedged(rid)
                         for rid in record_ids
                     )
                 )
@@ -1090,7 +1112,7 @@ class PromptBuilder:
                         # the coaching filter finalizes the response. A failed
                         # LLM call or stripped-out hedge would otherwise leave
                         # spurious marks suppressing future confidence blocks.
-                        self.conversation_buffer.set_pending_hedge(record_ids)
+                        buffer.set_pending_hedge(record_ids)
 
         # Fix 4 (2026-04-27): explicit type inventory — surfaces what was
         # retrieved AND what came back empty. Same _is_personal_query gate

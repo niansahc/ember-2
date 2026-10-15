@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -9,6 +10,7 @@ from typing import Iterator
 import httpx
 import ollama
 
+from src.context.conversation_buffer import ConversationBuffer, ConversationBufferStore
 from src.context.models import ContextPacket
 from src.core.config import (
     get_ember_debug,
@@ -243,6 +245,17 @@ class StatusSignal:
     name: str  # "review_pending" or "review_complete"
 
 
+def _log_buffer_turn(session_id, vault_path, buf) -> None:
+    """Runtime confirmation for issue #133: which conversation's history a
+    prompt is about to be built from. Session id, vault folder name and turn
+    count only; never turn text."""
+    vault_label = os.path.basename(str(vault_path)) if vault_path else "none"
+    logger.info(
+        "[BUFFER] turn session=%s vault=%s turns=%d",
+        session_id, vault_label, len(buf.buffer),
+    )
+
+
 def _commit_delivery(context_packet) -> None:
     """Commit ADR-015 retrieval stats for the records the model received.
 
@@ -267,6 +280,8 @@ class LLMAdapter:
     ) -> None:
         self.model = model or get_ember_model()
         self.prompt_builder = prompt_builder or PromptBuilder()
+        # One buffer per (vault, session) conversation (issue #133).
+        self.conversation_buffers = ConversationBufferStore()
         self.policy_service = SafetyPolicyService()
         self.review_service = ResponseReviewService(
             llm_callable=self._call_model_with_prompt
@@ -354,23 +369,11 @@ class LLMAdapter:
             "ask_first_active": ask_first_active,
             "intent_class": intent_class,
         }
-        if self._is_cloud_model(self.model):
-            system_prompt = self.prompt_builder.build_prompt(
-                context_packet, **_build_kwargs
-            )
-        else:
-            system_prompt, context_packet, _trim_log = trim_to_fit(
-                packet=context_packet,
-                model=self.model,
-                num_ctx=self._get_num_ctx(self.model),
-                builder=self.prompt_builder,
-                build_kwargs=_build_kwargs,
-                buffer_compress_callback=self._maybe_compress_buffer,
-            )
-            if _trim_log["sections_dropped"]:
-                logger.info("[PROMPT_GUARD] %s", _trim_log)
-            if _trim_log["overflow"]:
-                logger.warning("[PROMPT_GUARD] OVERFLOW %s", _trim_log)
+        buf, system_prompt, context_packet = self._prepare_turn_prompt(
+            context_packet, _build_kwargs,
+            session_id=session_id, vault_path=vault_path,
+            skip_vault_write=skip_vault_write,
+        )
 
         # Vision pipeline: the VisionService preprocessor (called upstream
         # in openai_adapter.py) extracts a text description that's already
@@ -495,7 +498,7 @@ class LLMAdapter:
         # BUG-008: strip trailing parenthetical questions when user has
         # objected to questions. Runs after safety review so the review
         # sees the unfiltered draft, but the user sees the cleaned output.
-        if self.prompt_builder.conversation_buffer.question_suppressed:
+        if buf.question_suppressed:
             final_response = strip_trailing_parenthetical_question(final_response)
 
         # Empty response guard — if the draft collapsed to nothing after
@@ -509,22 +512,18 @@ class LLMAdapter:
                 "or let me know what you're actually trying to figure out."
             )
 
-        self.prompt_builder.conversation_buffer.add_turn(
-            context_packet.user_message,
-            final_response,
-            session_id=session_id,
-        )
+        buf.add_turn(context_packet.user_message, final_response)
         # Background compression — avoids blocking the response by 3-8 seconds
         # when the buffer exceeds 70% of context window (~every 70 turns).
-        # Note: conversation_buffer is shared state. Compression modifies it
-        # (pop_oldest_half + inject_summary_turn) so there's a theoretical race
-        # if two requests compress simultaneously. In practice this is single-user
-        # and turns are sequential, so the risk is negligible.
+        # Compression gets this turn's buffer object, so a summary can only
+        # land in the conversation it summarizes (issue #133). Two
+        # compressions of one buffer are single-flighted in
+        # _maybe_compress_buffer.
         # Bound to the caller's vault (issue #144): this spawns at the end of
         # generation, so the swap window it spans is the whole LLM call.
         spawn_vault_bound_thread(
             self._maybe_compress_buffer,
-            args=(skip_vault_write,),
+            args=(skip_vault_write, buf),
             vault=vault_path,
         )
 
@@ -567,23 +566,11 @@ class LLMAdapter:
             "ask_first_active": ask_first_active,
             "intent_class": intent_class,
         }
-        if self._is_cloud_model(self.model):
-            system_prompt = self.prompt_builder.build_prompt(
-                context_packet, **_build_kwargs
-            )
-        else:
-            system_prompt, context_packet, _trim_log = trim_to_fit(
-                packet=context_packet,
-                model=self.model,
-                num_ctx=self._get_num_ctx(self.model),
-                builder=self.prompt_builder,
-                build_kwargs=_build_kwargs,
-                buffer_compress_callback=self._maybe_compress_buffer,
-            )
-            if _trim_log["sections_dropped"]:
-                logger.info("[PROMPT_GUARD] %s", _trim_log)
-            if _trim_log["overflow"]:
-                logger.warning("[PROMPT_GUARD] OVERFLOW %s", _trim_log)
+        buf, system_prompt, context_packet = self._prepare_turn_prompt(
+            context_packet, _build_kwargs,
+            session_id=session_id, vault_path=vault_path,
+            skip_vault_write=skip_vault_write,
+        )
 
         # Assistant prefill for web-search-grounded turns (streaming path).
         _prefix = None
@@ -680,17 +667,97 @@ class LLMAdapter:
                 full_response = review_result.refusal_message or "I can't help with that."
 
         # Post-stream: update buffer and compress if needed
-        self.prompt_builder.conversation_buffer.add_turn(
-            context_packet.user_message,
-            full_response,
-            session_id=session_id,
-        )
+        buf.add_turn(context_packet.user_message, full_response)
         # Bound to the caller's vault (issue #144), same as the iter path.
         spawn_vault_bound_thread(
             self._maybe_compress_buffer,
-            args=(skip_vault_write,),
+            args=(skip_vault_write, buf),
             vault=vault_path,
         )
+
+    # ------------------------------------------------------------------
+    # Conversation buffers (issue #133)
+    # ------------------------------------------------------------------
+
+    def _prepare_turn_prompt(
+        self,
+        context_packet: ContextPacket,
+        build_kwargs: dict,
+        *,
+        session_id: str | None,
+        vault_path,
+        skip_vault_write: bool,
+    ) -> tuple[ConversationBuffer, str, ContextPacket]:
+        """Resolve this turn's conversation buffer and build the system
+        prompt from it. Shared by the iter and stream paths.
+
+        Issue #133: the buffer is resolved BEFORE the prompt is built and is
+        returned so the caller hands the same object to add_turn and
+        compression. Local models go through the prompt guardrail, which may
+        trim sections and return a reduced packet.
+        """
+        buf = self.conversation_buffer_for(session_id, vault_path)
+        build_kwargs["conversation_buffer"] = buf
+        _log_buffer_turn(session_id, vault_path, buf)
+        if self._is_cloud_model(self.model):
+            system_prompt = self.prompt_builder.build_prompt(
+                context_packet, **build_kwargs
+            )
+            return buf, system_prompt, context_packet
+        system_prompt, context_packet, trim_log = trim_to_fit(
+            packet=context_packet,
+            model=self.model,
+            num_ctx=self._get_num_ctx(self.model),
+            builder=self.prompt_builder,
+            build_kwargs=build_kwargs,
+            buffer_compress_callback=lambda: self._maybe_compress_buffer(
+                skip_vault_write, buffer=buf,
+            ),
+        )
+        if trim_log["sections_dropped"]:
+            logger.info("[PROMPT_GUARD] %s", trim_log)
+        if trim_log["overflow"]:
+            logger.warning("[PROMPT_GUARD] OVERFLOW %s", trim_log)
+        return buf, system_prompt, context_packet
+
+    def conversation_buffer_for(
+        self, session_id: str | None, vault_path=None, *, create: bool = True,
+    ) -> ConversationBuffer | None:
+        """The conversation buffer for one (vault, session) pair (issue #133).
+
+        session_id None returns the prompt builder's default buffer, for
+        callers that have no session. create=False returns None when the
+        conversation has no live buffer, for readers outside a turn (delete,
+        reflect, hedge commit) that must not conjure an empty one.
+        """
+        if session_id is None:
+            return self.prompt_builder.conversation_buffer
+        if create:
+            return self.conversation_buffers.get(vault_path, session_id)
+        return self.conversation_buffers.find(vault_path, session_id)
+
+    def recent_turns(self, session_id: str | None, vault_path=None) -> list[dict]:
+        """This conversation's turns, or [] when it has no live buffer."""
+        buf = self.conversation_buffer_for(session_id, vault_path, create=False)
+        return buf.get_recent() if buf is not None else []
+
+    def commit_pending_hedge(self, session_id: str | None, vault_path=None) -> None:
+        """Promote this conversation's staged hedge marks (B-MEM-005 / S1).
+        A buffer cleared or evicted mid-turn has nothing to commit, so this
+        never creates one."""
+        buf = self.conversation_buffer_for(session_id, vault_path, create=False)
+        if buf is not None:
+            buf.commit_pending_hedge()
+
+    def clear_conversation_buffers(self) -> None:
+        """Drop every live conversation buffer and reset the default one.
+        Called on vault swap. Keyed buffers cannot surface across the swap
+        anyway; clearing them releases the old vault's text. The default
+        buffer is not keyed by vault, so its reset is what keeps a
+        session-less caller from reading the old vault's turns."""
+        cleared = self.conversation_buffers.clear()
+        self.prompt_builder.conversation_buffer = ConversationBuffer()
+        logger.info("[BUFFER] Cleared %d conversation buffer(s) on vault swap.", cleared)
 
     # ------------------------------------------------------------------
     # Provider dispatch
@@ -1051,7 +1118,11 @@ class LLMAdapter:
                 except (json.JSONDecodeError, KeyError, IndexError):
                     continue
 
-    def _maybe_compress_buffer(self, skip_vault_write: bool = False) -> None:
+    def _maybe_compress_buffer(
+        self,
+        skip_vault_write: bool = False,
+        buffer: ConversationBuffer | None = None,
+    ) -> None:
         """Summarize and compress the oldest half of the buffer when token
         count exceeds COMPRESSION_THRESHOLD (1500 buffer-tokens, ~turn 20
         at typical density).
@@ -1070,11 +1141,28 @@ class LLMAdapter:
         parameter existed the adapter never saw the test-session flag, so a
         test turn that tripped the threshold wrote a reflection record into
         the user's real vault.
+
+        buffer is the conversation to compress, captured by the turn that
+        spawned this call (issue #133). The summary goes back into that same
+        buffer and is written under that buffer's session id, read here at
+        entry. None falls back to the default buffer for session-less callers.
+        A compression already in flight on the same buffer makes this call a
+        no-op rather than popping a second half under it.
         """
-        buf = self.prompt_builder.conversation_buffer
+        buf = buffer if buffer is not None else self.prompt_builder.conversation_buffer
+        if not buf.compression_lock.acquire(blocking=False):
+            logger.info("[BUFFER] Compression already in flight; skipped.")
+            return
+        try:
+            self._compress_buffer(buf, skip_vault_write)
+        finally:
+            buf.compression_lock.release()
+
+    def _compress_buffer(self, buf: ConversationBuffer, skip_vault_write: bool) -> None:
         if not buf.needs_compression():
             return
 
+        session_id = buf.session_id
         oldest_turns = buf.pop_oldest_half()
 
         turns_text = "\n".join(
@@ -1101,7 +1189,7 @@ class LLMAdapter:
             # Restore popped turns so context is not silently lost. Order
             # is preserved: oldest_turns came from the head of the buffer
             # and are prepended back in the same order.
-            buf.buffer = oldest_turns + buf.buffer
+            buf.restore_turns(oldest_turns)
             logger.warning(
                 "[BUFFER] Compression failed; restored %d turns. error=%s",
                 len(oldest_turns), type(exc).__name__,
@@ -1122,7 +1210,7 @@ class LLMAdapter:
                     memory_service=self.memory_service,
                     summary=summary,
                     turns_compressed=len(oldest_turns),
-                    session_id=buf.current_session_id,
+                    session_id=session_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(

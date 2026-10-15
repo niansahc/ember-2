@@ -372,6 +372,7 @@ def _spawn_deviation_detection(
     intent_class: str,
     user_message: str,
     vault,
+    session_id: str,
 ) -> None:
     """Start the one deviation-detection run for an exchange (ADR-026, #164).
 
@@ -382,7 +383,9 @@ def _spawn_deviation_detection(
     """
     prior = None
     try:
-        buffer_turns = llm_adapter.prompt_builder.conversation_buffer.get_recent()
+        # This conversation's buffer only (issue #133); its last turn is the
+        # one just stored, so the prior reply is the one before it.
+        buffer_turns = llm_adapter.recent_turns(session_id, vault)
         if buffer_turns and len(buffer_turns) >= 2:
             prior = buffer_turns[-2].get("assistant")
     except Exception as exc:  # noqa: BLE001
@@ -423,6 +426,7 @@ def _store_reply(
         intent_class=intent_class,
         user_message=user_turn_text,
         vault=exchange.vault,
+        session_id=exchange.session_id,
     )
     with vault_binding(exchange.vault):
         _write_pending_confirmation(
@@ -467,6 +471,12 @@ def _check_pending_confirmation(
         # session. Without the session filter, a pending from conversation A
         # bleeds into conversation B (the user starts a new conversation and
         # the old pending fires on the first message).
+        #
+        # Other sessions' records are skipped, never resolved (issue #133).
+        # Resolving them as "stale" let one conversation's turn tombstone
+        # another conversation's live offer whenever two were open at once,
+        # so the owner's "yes" then found nothing. The session filter alone
+        # already stops a pending firing in the wrong conversation.
         records = state_service.read_by_category("pending_confirmation")
         if not records:
             return None, []
@@ -477,27 +487,16 @@ def _check_pending_confirmation(
         _resolved = state_service.resolved_ids(records)
 
         # Latest ACTIVE pending confirmation that belongs to this session.
-        # Cross-session pendings are stale - resolve them silently so they
-        # don't fire on an unrelated conversation.
         pending = None
-        _resolved_this_call: set[str] = set()
         for r in records:
             if r.id in _resolved:
                 continue
-            r_session = (r.metadata or {}).get("session_id", "")
-            if r_session == session_id:
+            if (r.metadata or {}).get("session_id", "") == session_id:
                 pending = r
                 break
-            else:
-                # Stale cross-session pending - resolve it silently
-                _resolve_original_pending(r, reason="stale")
-                _resolved_this_call.add(r.id)
 
         if not pending:
-            # No active pending in this session, but stale cross-session
-            # records may have been resolved - filter them from the list.
-            filtered = [r for r in records if r.id not in _resolved_this_call]
-            return None, filtered
+            return None, records
 
         action = (pending.metadata or {}).get("action", "unknown")
         action_query = (pending.metadata or {}).get("query", "")
@@ -508,8 +507,7 @@ def _check_pending_confirmation(
         # Append-only: resolve_record writes a tombstone, it does not mutate
         # the original file (ADR-038).
         _resolve_original_pending(pending)
-        _resolved_this_call.add(pending.id)
-        filtered = [r for r in records if r.id not in _resolved_this_call]
+        filtered = [r for r in records if r.id != pending.id]
 
         # Deterministic keyword match for YES/NO - replaces the LLM call
         # that added ~500ms latency and could misinterpret at 8B scale.
@@ -1625,9 +1623,12 @@ async def _complete_exchange(
     # dispatch and relational suppression remain inline below - they are
     # retrieval-gating policy, not message prep; see ADR-042.)
     work = GenerationWork(message=latest_user_message)
-    _apply_confirmation(gen_ctx, work)
-    _apply_tasks(gen_ctx, work)
-    _apply_timers(gen_ctx, work)
+    # Phase B reads and writes (pending confirmation, tasks, timers) belong to
+    # the vault this turn started in, not whichever is active by then.
+    with vault_binding(_turn_vault):
+        _apply_confirmation(gen_ctx, work)
+        _apply_tasks(gen_ctx, work)
+        _apply_timers(gen_ctx, work)
     latest_user_message = work.message
     _raw_user_message = work.raw_message
     _confirmation_web_items = work.confirmation_web_items
@@ -2242,7 +2243,7 @@ async def _complete_exchange(
                 # B-MEM-005 / S1: response is now finalized - promote pending
                 # hedge marks. Done here (not at prompt-build time) so failed
                 # LLM calls or stripped-out hedges don't leave spurious marks.
-                llm_adapter.prompt_builder.conversation_buffer.commit_pending_hedge()
+                llm_adapter.commit_pending_hedge(session_id, _turn_vault)
 
                 # 3.7. Post-gen validators (source / vision / ask-first /
                 # empty-guard). Grounded streaming path - this runs before
@@ -2352,7 +2353,7 @@ async def _complete_exchange(
                 # response is finalized. In the fast path the client has
                 # already seen the raw stream, but the hedge accounting still
                 # tracks the memory copy correctly for follow-up suppression.
-                llm_adapter.prompt_builder.conversation_buffer.commit_pending_hedge()
+                llm_adapter.commit_pending_hedge(session_id, _turn_vault)
                 # Post-gen validators. In the fast path the client has
                 # already seen the raw stream; this cleans the memory
                 # copy so fabricated sources, vision refusals, and empty
@@ -2440,7 +2441,7 @@ async def _complete_exchange(
         reply = _filter_cf(reply, _intent_class, _is_conversational)
 
     # B-MEM-005 / S1: response is finalized - commit pending hedge marks now.
-    llm_adapter.prompt_builder.conversation_buffer.commit_pending_hedge()
+    llm_adapter.commit_pending_hedge(session_id, _turn_vault)
 
     # Post-gen validators (source / vision / ask-first / empty-guard).
     # Non-streaming path: runs before final JSONResponse return.

@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections import OrderedDict
+from pathlib import Path
 
 logger = logging.getLogger("ember.conversation_buffer")
+
+# Issue #133: how many conversations keep a live buffer at once. A user with
+# a handful of open conversations, plus an eval harness interleaving two or
+# three sessions, stays well inside this. Evicting the least recently used
+# buffer loses only that conversation's in-memory history, which before #133
+# was lost on every session switch anyway.
+_MAX_LIVE_BUFFERS = 16
 
 # B-MEM-005: bound the hedged_record_ids tracker so long sessions don't grow
 # the set without limit. LRU eviction keeps the most-recently hedged records.
@@ -80,11 +89,37 @@ TOPIC_DECLINE_MARKERS: tuple[str, ...] = (
 
 
 class ConversationBuffer:
-    def __init__(self, max_turns: int = 20) -> None:
+    """Turn history and session-sticky flags for ONE conversation.
+
+    A buffer belongs to exactly one (vault, session) pair, assigned by
+    ConversationBufferStore at creation and never changed afterwards (issue
+    #133). Nothing in here resets on a session change: a different session
+    gets a different buffer, so there is nothing to reset. The legacy default
+    buffer on PromptBuilder (session_id None) serves callers that have no
+    session, such as direct prompt-builder use.
+    """
+
+    def __init__(
+        self,
+        max_turns: int = 20,
+        *,
+        session_id: str | None = None,
+    ) -> None:
         self.buffer: list[dict] = []
         self.max_turns = max_turns
+        # Identity of the conversation this buffer holds. Read by the
+        # compression thread at spawn time, never at write time, so a summary
+        # is always attributed to the session whose turns it compresses.
+        self.session_id = session_id
+        # Guards list mutation. Turns from one session are sequential in
+        # practice, but compression runs on a background thread and pops and
+        # prepends while the next turn may be appending.
+        self._lock = threading.Lock()
+        # Single-flight guard for compression: a second compression of the
+        # same buffer while one is mid-LLM-call is skipped, not queued.
+        self.compression_lock = threading.Lock()
         # Session-sticky flags. Set when the user objects to a behavior.
-        # Persist for the lifetime of this buffer (= one API process).
+        # Persist for the lifetime of this buffer (= one conversation).
         self.question_suppressed: bool = False
         self.declined_topics: list[str] = []
         # B-MEM-005: track which retrieved record IDs the model has already
@@ -96,39 +131,15 @@ class ConversationBuffer:
         # finalizes the response — so failed LLM calls or stripped hedges don't
         # leave spurious marks that suppress confidence blocks on later turns.
         self.pending_hedge_record_ids: list[str] = []
-        # Session tracking: the buffer is a process-level singleton, but only
-        # one UI session at a time is "the current conversation". When the
-        # session_id changes between add_turn calls, prior turns belong to a
-        # different conversation and must not bleed into the new one.
-        self.current_session_id: str | None = None
 
-    def add_turn(
-        self, user: str, assistant: str, session_id: str | None = None,
-    ) -> None:
-        # Cross-session reset: if a non-None session_id arrives that differs
-        # from the prior one, the prior turns are not history for this
-        # conversation. Clear the buffer (and session-sticky state) to
-        # prevent cross-session pollution. session_id=None preserves the
-        # legacy 2-arg behavior so existing callers/tests are unaffected.
-        if session_id is not None and session_id != self.current_session_id:
-            if self.buffer or self.current_session_id is not None:
-                logger.info(
-                    "[BUFFER] Session changed (%s -> %s); clearing %d turns.",
-                    self.current_session_id, session_id, len(self.buffer),
-                )
-            self.buffer = []
-            self.question_suppressed = False
-            self.declined_topics = []
-            self.hedged_record_ids.clear()
-            self.pending_hedge_record_ids = []
-            self.current_session_id = session_id
-
+    def add_turn(self, user: str, assistant: str) -> None:
         user_lower = user.lower()
-        self._check_question_objection(user_lower)
-        self._check_topic_decline(user_lower)
-        self.buffer.append({"user": user, "assistant": assistant})
-        if len(self.buffer) > self.max_turns:
-            self.buffer.pop(0)
+        with self._lock:
+            self._check_question_objection(user_lower)
+            self._check_topic_decline(user_lower)
+            self.buffer.append({"user": user, "assistant": assistant})
+            if len(self.buffer) > self.max_turns:
+                self.buffer.pop(0)
 
     def _check_question_objection(self, user_lower: str) -> None:
         """Detect user objection to questions and set sticky flag."""
@@ -149,7 +160,8 @@ class ConversationBuffer:
                 break
 
     def get_recent(self) -> list[dict]:
-        return list(self.buffer)
+        with self._lock:
+            return list(self.buffer)
 
     def token_count(self) -> int:
         """Estimate total tokens across all turns in the buffer."""
@@ -165,10 +177,17 @@ class ConversationBuffer:
 
     def pop_oldest_half(self) -> list[dict]:
         """Remove and return the oldest half of turns for summarization."""
-        n = max(1, len(self.buffer) // 2)
-        oldest = self.buffer[:n]
-        self.buffer = self.buffer[n:]
-        return oldest
+        with self._lock:
+            n = max(1, len(self.buffer) // 2)
+            oldest = self.buffer[:n]
+            self.buffer = self.buffer[n:]
+            return oldest
+
+    def restore_turns(self, turns: list[dict]) -> None:
+        """Put popped turns back at the head, in their original order.
+        Used when compression fails after pop_oldest_half."""
+        with self._lock:
+            self.buffer = list(turns) + self.buffer
 
     def inject_summary_turn(self, summary: str) -> None:
         """Prepend a synthetic turn representing the compressed conversation history.
@@ -179,11 +198,12 @@ class ConversationBuffer:
         conversation to Ember, and feeding the "use the most recent
         assistant response as primary reference" instruction rule.
         """
-        self.buffer.insert(0, {
-            "user": "[Earlier conversation summary]",
-            "assistant": summary,
-            "is_summary": True,
-        })
+        with self._lock:
+            self.buffer.insert(0, {
+                "user": "[Earlier conversation summary]",
+                "assistant": summary,
+                "is_summary": True,
+            })
 
     def mark_hedge_emitted(self, record_ids: list[str]) -> None:
         """Mark these record IDs as having been hedged this session.
@@ -232,3 +252,63 @@ class ConversationBuffer:
             lines.append(f"User: {turn['user']}")
             lines.append(f"Assistant: {turn['assistant']}")
         return "\n".join(lines)
+
+
+def vault_key(vault_path) -> str | None:
+    """Normalize a vault path into a store key, resolved the same way as
+    config and store_cache. None stays None, so callers that could not
+    resolve a vault share one keyspace instead of failing."""
+    if vault_path is None:
+        return None
+    return str(Path(vault_path).resolve())
+
+
+class ConversationBufferStore:
+    """Per-conversation buffers keyed by (vault, session) (issue #133).
+
+    Before this existed the process held one ConversationBuffer and cleared it
+    when add_turn saw a new session id. add_turn runs after generation, so the
+    first prompt of every new session was built from the previous session's
+    turns, interleaved sessions each saw the other's last turn, and a vault
+    swap left the old vault's turns in the next prompt. Keying by vault as well
+    as session means a swap can never surface the old vault's conversation,
+    even under a reused session id.
+    """
+
+    def __init__(self, max_buffers: int = _MAX_LIVE_BUFFERS) -> None:
+        self._buffers: OrderedDict[tuple[str | None, str], ConversationBuffer] = OrderedDict()
+        self._max_buffers = max_buffers
+        self._lock = threading.Lock()
+
+    def get(self, vault_path, session_id: str) -> ConversationBuffer:
+        """Return the buffer for this conversation, creating it if needed."""
+        key = (vault_key(vault_path), session_id)
+        evicted: list[str] = []
+        with self._lock:
+            buf = self._buffers.get(key)
+            if buf is None:
+                buf = ConversationBuffer(session_id=session_id)
+                self._buffers[key] = buf
+                while len(self._buffers) > self._max_buffers:
+                    evicted.append(self._buffers.popitem(last=False)[0][1])
+            else:
+                self._buffers.move_to_end(key)
+        for evicted_session in evicted:
+            logger.info(
+                "[BUFFER] Evicted least recently used buffer session=%s",
+                evicted_session,
+            )
+        return buf
+
+    def find(self, vault_path, session_id: str) -> ConversationBuffer | None:
+        """Return the buffer for this conversation if one is live, without
+        creating one. Readers outside a turn (delete, reflect) use this."""
+        with self._lock:
+            return self._buffers.get((vault_key(vault_path), session_id))
+
+    def clear(self) -> int:
+        """Drop every buffer. Called on vault swap. Returns the count."""
+        with self._lock:
+            count = len(self._buffers)
+            self._buffers.clear()
+            return count

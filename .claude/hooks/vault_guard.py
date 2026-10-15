@@ -17,7 +17,7 @@ Which vaults:
     rule reaches it.
 
 PRIVATE_VAULT_PATH is resolved inside this process: the process
-environment first, then .env through hook_utils.read_env_value (the parser
+environment first, then .env through hook_utils.env_file_value (the parser
 post_commit_eval.py uses). A relative value resolves against the project
 root, as the API does. The value is never printed, deny messages
 included. Parsing .env costs a python-dotenv import (~60 ms per hook
@@ -69,7 +69,6 @@ fresh process on every tool call, and pathlib/typing imports cost ~11 ms.
 A pattern check, not a sandbox.
 """
 
-import fnmatch
 import json
 import os
 import re
@@ -78,7 +77,7 @@ from collections import namedtuple
 
 # Same directory; Python puts it on sys.path when this file runs as a
 # script. Shared with post_commit_eval.py so both hooks parse .env one way.
-from hook_utils import deny, project_dir, read_env_value
+from hook_utils import deny, env_file_value, project_dir
 
 _VAULT_DIR = "private_vault"
 _VAULT_KEY = "PRIVATE_VAULT_PATH"
@@ -100,17 +99,23 @@ def _components(path: str) -> list[str]:
     return [p for p in parts if p]
 
 
+def _matches(name: str, pattern: str) -> bool:
+    """fnmatchcase for a glob component, equality for a literal one (the
+    same result: fnmatch escapes every other character). fnmatch is
+    imported only for a pattern with a wildcard, which most calls never
+    see."""
+    if not _WILDCARDS & set(pattern):
+        return name == pattern
+    import fnmatch
+
+    return fnmatch.fnmatchcase(name, pattern)
+
+
 def _names_vault_dir(component: str) -> bool:
-    if component == _VAULT_DIR:
-        return True
-    # A glob component with at least one literal character that can match
-    # the directory name (priv*, *_vault). Bare `*`/`**` are a reach
-    # question, not naming -- see _reaches_vault().
-    return (
-        bool(_WILDCARDS & set(component))
-        and component.strip("*") != ""
-        and fnmatch.fnmatchcase(_VAULT_DIR, component)
-    )
+    # A literal match, or a glob component with at least one literal
+    # character that can match the directory name (priv*, *_vault). Bare
+    # `*`/`**` are a reach question, not naming -- see _reaches_vault().
+    return component.strip("*") != "" and _matches(_VAULT_DIR, component)
 
 
 def names_vault_path(candidate) -> bool:
@@ -165,7 +170,7 @@ def _covers(parts: list[str], target: list[str], strict: bool = False) -> bool:
             return False
         if parts[i] == "**":
             return True
-        if parts[i] != comp and not fnmatch.fnmatchcase(comp, parts[i]):
+        if not _matches(comp, parts[i]):
             return False
     return not strict or len(parts) > len(target)
 
@@ -216,7 +221,7 @@ def _configured_vault() -> str | None:
     except (OSError, ValueError, KeyError, TypeError):
         hit = False
     if not hit:
-        value = read_env_value(_VAULT_KEY, env_path)
+        value = env_file_value(_VAULT_KEY, env_path)
         _write_cache(cache, {"key": key, "value": value})
     if not value:
         _note(f"{_VAULT_KEY} is not set in .env")
@@ -296,7 +301,7 @@ def _grep_reaches(glob: str | None, roots: list[str], vault: Vault) -> bool:
             names = [entry.name.lower() for entry in os.scandir(vault.path)]
         except OSError:
             return True
-        return any(fnmatch.fnmatchcase(n, parts[0].lower()) for n in names)
+        return any(_matches(n, parts[0].lower()) for n in names)
     return _glob_reaches(rooted, roots, vault)
 
 
@@ -349,11 +354,11 @@ def evaluate(payload) -> str | None:
         return None
     cwd = payload.get("cwd")
     cwd = cwd if isinstance(cwd, str) and cwd else os.getcwd()
-    path = tool_input.get(PATH_FIELDS[tool][0])
+    if tool in ("Grep", "Glob"):
+        return _reaches_vault(tool, tool_input, cwd, vaults)  # root inside, or reach
+    path = tool_input.get("file_path")
     if isinstance(path, str) and path and inside_vault(path, cwd, vaults):
         return path
-    if tool in ("Grep", "Glob"):
-        return _reaches_vault(tool, tool_input, cwd, vaults)
     return None
 
 

@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import load_hook, run_hook
+from tests.conftest import hook_output, hook_payload, load_hook, payload_id, run_hook
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
@@ -37,19 +37,8 @@ SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 env_guard = load_hook("env_guard.py")
 
 
-def _payload(tool: str, **tool_input) -> dict:
-    return {"tool_name": tool, "tool_input": tool_input}
-
-
 def _run(payload) -> subprocess.CompletedProcess:
     return run_hook("env_guard.py", payload)
-
-
-def _decision(result: subprocess.CompletedProcess) -> str | None:
-    out = result.stdout.strip()
-    if not out:
-        return None
-    return json.loads(out)["hookSpecificOutput"]["permissionDecision"]
 
 
 # ---------------------------------------------------------------------------
@@ -58,104 +47,104 @@ def _decision(result: subprocess.CompletedProcess) -> str | None:
 
 DENY = [
     # Read -- Windows, POSIX, Git Bash, relative, case, Win32 aliases
-    _payload("Read", file_path=r"C:\dev\proj\.env"),
-    _payload("Read", file_path="C:/dev/proj/.env"),
-    _payload("Read", file_path="/c/dev/proj/.env"),
-    _payload("Read", file_path="/home/user/proj/.env"),
-    _payload("Read", file_path=".env"),
-    _payload("Read", file_path=r"C:\dev\proj\.env.local"),
-    _payload("Read", file_path="/srv/app/.env.production"),
-    _payload("Read", file_path=r"C:\dev\proj\.ENV"),
-    _payload("Read", file_path=r"C:\dev\proj\.env."),
-    _payload("Read", file_path=r"C:\dev\proj\.env::$DATA"),
-    _payload("Read", file_path="C:.env"),
+    hook_payload("Read", file_path=r"C:\dev\proj\.env"),
+    hook_payload("Read", file_path="C:/dev/proj/.env"),
+    hook_payload("Read", file_path="/c/dev/proj/.env"),
+    hook_payload("Read", file_path="/home/user/proj/.env"),
+    hook_payload("Read", file_path=".env"),
+    hook_payload("Read", file_path=r"C:\dev\proj\.env.local"),
+    hook_payload("Read", file_path="/srv/app/.env.production"),
+    hook_payload("Read", file_path=r"C:\dev\proj\.ENV"),
+    hook_payload("Read", file_path=r"C:\dev\proj\.env."),
+    hook_payload("Read", file_path=r"C:\dev\proj\.env::$DATA"),
+    hook_payload("Read", file_path="C:.env"),
     # Edit / Write
-    _payload("Write", file_path=r"C:\dev\proj\.env"),
-    _payload("Write", file_path=r"C:\dev\proj\.env.local"),
-    _payload("Write", file_path="/c/dev/proj/.env.production"),
-    _payload("Edit", file_path=r"C:\dev\proj\.ENV.local", old_string="a", new_string="b"),
-    _payload("Edit", file_path="/home/user/proj/.env", old_string="a", new_string="b"),
+    hook_payload("Write", file_path=r"C:\dev\proj\.env"),
+    hook_payload("Write", file_path=r"C:\dev\proj\.env.local"),
+    hook_payload("Write", file_path="/c/dev/proj/.env.production"),
+    hook_payload("Edit", file_path=r"C:\dev\proj\.ENV.local", old_string="a", new_string="b"),
+    hook_payload("Edit", file_path="/home/user/proj/.env", old_string="a", new_string="b"),
     # Grep -- path field, glob field (dotfile rule and ripgrep rule)
-    _payload("Grep", pattern="KEY", path=r"C:\dev\proj\.env"),
-    _payload("Grep", pattern="KEY", path="/c/dev/proj/.env.local"),
-    _payload("Grep", pattern="KEY", path=".", glob=".env*"),
-    _payload("Grep", pattern="KEY", path=".", glob="**/.env"),
-    _payload("Grep", pattern="KEY", path=".", glob=".env{,.local}"),
-    _payload("Grep", pattern="KEY", path=".", glob="*"),
-    _payload("Grep", pattern="KEY", path=".", glob="*.local"),
-    _payload("Grep", pattern="KEY", path=".", glob="*env*"),
+    hook_payload("Grep", pattern="KEY", path=r"C:\dev\proj\.env"),
+    hook_payload("Grep", pattern="KEY", path="/c/dev/proj/.env.local"),
+    hook_payload("Grep", pattern="KEY", path=".", glob=".env*"),
+    hook_payload("Grep", pattern="KEY", path=".", glob="**/.env"),
+    hook_payload("Grep", pattern="KEY", path=".", glob=".env{,.local}"),
+    hook_payload("Grep", pattern="KEY", path=".", glob="*"),
+    hook_payload("Grep", pattern="KEY", path=".", glob="*.local"),
+    hook_payload("Grep", pattern="KEY", path=".", glob="*env*"),
     # Glob -- pattern and path fields
-    _payload("Glob", pattern=".env*"),
-    _payload("Glob", pattern="**/.env"),
-    _payload("Glob", pattern=".e*"),
-    _payload("Glob", pattern=".en?"),
-    _payload("Glob", pattern=".[e]nv"),
-    _payload("Glob", pattern=r"C:\dev\proj\.env.*"),
-    _payload("Glob", pattern="*", path=r"C:\dev\proj\.env"),
+    hook_payload("Glob", pattern=".env*"),
+    hook_payload("Glob", pattern="**/.env"),
+    hook_payload("Glob", pattern=".e*"),
+    hook_payload("Glob", pattern=".en?"),
+    hook_payload("Glob", pattern=".[e]nv"),
+    hook_payload("Glob", pattern=r"C:\dev\proj\.env.*"),
+    hook_payload("Glob", pattern="*", path=r"C:\dev\proj\.env"),
     # Bash -- any reader, absolute-path utilities, Windows paths
-    _payload("Bash", command="cat .env"),
-    _payload("Bash", command="tail -c 200 .env | xxd"),
-    _payload("Bash", command=r"C:\Windows\System32\more.com C:\x\.env"),
-    _payload("Bash", command="/usr/bin/cat /home/user/proj/.env.local"),
-    _payload("Bash", command="sed -n 1,5p .env"),
-    _payload("Bash", command='grep -no "^[A-Z_]*KEY" .env'),
-    _payload("Bash", command="findstr KEY .env.local"),
-    _payload("Bash", command="awk '{print length($0)}' ./.env"),
-    _payload("Bash", command="cd /c/dev/proj && cat .env.production"),
-    _payload("Bash", command="echo $(cat .env)"),
-    _payload("Bash", command="python -c \"print(open('.env').read())\""),
-    _payload("Bash", command="node script.js --env-file=.env"),
-    _payload("Bash", command="cat .env.local; echo done"),
-    _payload("Bash", command="printf 'X=1' >> .env"),
+    hook_payload("Bash", command="cat .env"),
+    hook_payload("Bash", command="tail -c 200 .env | xxd"),
+    hook_payload("Bash", command=r"C:\Windows\System32\more.com C:\x\.env"),
+    hook_payload("Bash", command="/usr/bin/cat /home/user/proj/.env.local"),
+    hook_payload("Bash", command="sed -n 1,5p .env"),
+    hook_payload("Bash", command='grep -no "^[A-Z_]*KEY" .env'),
+    hook_payload("Bash", command="findstr KEY .env.local"),
+    hook_payload("Bash", command="awk '{print length($0)}' ./.env"),
+    hook_payload("Bash", command="cd /c/dev/proj && cat .env.production"),
+    hook_payload("Bash", command="echo $(cat .env)"),
+    hook_payload("Bash", command="python -c \"print(open('.env').read())\""),
+    hook_payload("Bash", command="node script.js --env-file=.env"),
+    hook_payload("Bash", command="cat .env.local; echo done"),
+    hook_payload("Bash", command="printf 'X=1' >> .env"),
     # Bash -- prose skip does not hide a path outside the quoted message
-    _payload("Bash", command='git commit -m "msg" .env'),
-    _payload("Bash", command='echo -m ".env"'),
+    hook_payload("Bash", command='git commit -m "msg" .env'),
+    hook_payload("Bash", command='echo -m ".env"'),
     # PowerShell
-    _payload("PowerShell", command="Get-Content .env"),
-    _payload("PowerShell", command=r"gc .\.env.local"),
-    _payload("PowerShell", command=r"Get-Content -Path C:\dev\proj\.env -Raw"),
-    _payload("PowerShell", command=r"type C:\dev\proj\.env"),
-    _payload("PowerShell", command="Select-String -Path .env -Pattern KEY"),
-    _payload("PowerShell", command=r"[IO.File]::ReadAllText('C:\dev\proj\.env')"),
+    hook_payload("PowerShell", command="Get-Content .env"),
+    hook_payload("PowerShell", command=r"gc .\.env.local"),
+    hook_payload("PowerShell", command=r"Get-Content -Path C:\dev\proj\.env -Raw"),
+    hook_payload("PowerShell", command=r"type C:\dev\proj\.env"),
+    hook_payload("PowerShell", command="Select-String -Path .env -Pattern KEY"),
+    hook_payload("PowerShell", command=r"[IO.File]::ReadAllText('C:\dev\proj\.env')"),
 ]
 
 ALLOW = [
     # .env.example everywhere
-    _payload("Read", file_path=r"C:\dev\proj\.env.example"),
-    _payload("Read", file_path="/c/dev/proj/.env.example"),
-    _payload("Grep", pattern="KEY", path=r"C:\dev\proj\.env.example"),
-    _payload("Grep", pattern="KEY", path=".", glob=".env.example"),
-    _payload("Grep", pattern="KEY", path=".", glob=".env.example*"),
-    _payload("Glob", pattern="**/.env.example"),
-    _payload("Glob", pattern=".env.example*"),
-    _payload("Write", file_path=r"C:\dev\proj\.env.example"),
-    _payload("Edit", file_path="/c/dev/proj/.env.example", old_string="a", new_string="b"),
-    _payload("Bash", command="cat .env.example"),
-    _payload("Bash", command=r"C:\Windows\System32\more.com C:\x\.env.example"),
-    _payload("PowerShell", command=r"Get-Content C:\dev\proj\.env.example"),
+    hook_payload("Read", file_path=r"C:\dev\proj\.env.example"),
+    hook_payload("Read", file_path="/c/dev/proj/.env.example"),
+    hook_payload("Grep", pattern="KEY", path=r"C:\dev\proj\.env.example"),
+    hook_payload("Grep", pattern="KEY", path=".", glob=".env.example"),
+    hook_payload("Grep", pattern="KEY", path=".", glob=".env.example*"),
+    hook_payload("Glob", pattern="**/.env.example"),
+    hook_payload("Glob", pattern=".env.example*"),
+    hook_payload("Write", file_path=r"C:\dev\proj\.env.example"),
+    hook_payload("Edit", file_path="/c/dev/proj/.env.example", old_string="a", new_string="b"),
+    hook_payload("Bash", command="cat .env.example"),
+    hook_payload("Bash", command=r"C:\Windows\System32\more.com C:\x\.env.example"),
+    hook_payload("PowerShell", command=r"Get-Content C:\dev\proj\.env.example"),
     # Unrelated names that merely contain "env"
-    _payload("Read", file_path=r"C:\dev\proj\src\core\environment.py"),
-    _payload("Read", file_path="/c/dev/proj/.envrc"),
-    _payload("Read", file_path="/c/dev/proj/tests/test_env_file_loading.py"),
-    _payload("Read", file_path="/c/dev/proj/.venv/pyvenv.cfg"),
-    _payload("Bash", command="ls src/core"),
+    hook_payload("Read", file_path=r"C:\dev\proj\src\core\environment.py"),
+    hook_payload("Read", file_path="/c/dev/proj/.envrc"),
+    hook_payload("Read", file_path="/c/dev/proj/tests/test_env_file_loading.py"),
+    hook_payload("Read", file_path="/c/dev/proj/.venv/pyvenv.cfg"),
+    hook_payload("Bash", command="ls src/core"),
     # Grep: content pattern is not a path; ordinary globs
-    _payload("Grep", pattern=r"\.env", path="src"),
-    _payload("Grep", pattern="KEY", path=".", glob="*.py"),
-    _payload("Grep", pattern="KEY", path=".", glob="**/*.md"),
-    _payload("Grep", pattern="KEY", path=".", glob="*.{ts,tsx}"),
-    _payload("Grep", pattern="KEY", path=".", glob="!*.py"),
+    hook_payload("Grep", pattern=r"\.env", path="src"),
+    hook_payload("Grep", pattern="KEY", path=".", glob="*.py"),
+    hook_payload("Grep", pattern="KEY", path=".", glob="**/*.md"),
+    hook_payload("Grep", pattern="KEY", path=".", glob="*.{ts,tsx}"),
+    hook_payload("Grep", pattern="KEY", path=".", glob="!*.py"),
     # Glob: plain `*` does not reach dotfiles; other dot-globs
-    _payload("Glob", pattern="**/*.py"),
-    _payload("Glob", pattern="*"),
-    _payload("Glob", pattern=".git*"),
+    hook_payload("Glob", pattern="**/*.py"),
+    hook_payload("Glob", pattern="*"),
+    hook_payload("Glob", pattern=".git*"),
     # Prose in git/gh message flags
-    _payload("Bash", command='git commit -m "chore(security): block agent reads of .env files"'),
-    _payload("Bash", command="git commit -am 'mentions .env.local in prose'"),
-    _payload("Bash", command='gh pr create --title "Block .env reads" --body "Denies .env and .env.* reads"'),
-    _payload("Bash", command='gh release create v1 --notes "no .env changes"'),
-    _payload("Bash", command='git commit --message=".env guard"'),
-    _payload(
+    hook_payload("Bash", command='git commit -m "chore(security): block agent reads of .env files"'),
+    hook_payload("Bash", command="git commit -am 'mentions .env.local in prose'"),
+    hook_payload("Bash", command='gh pr create --title "Block .env reads" --body "Denies .env and .env.* reads"'),
+    hook_payload("Bash", command='gh release create v1 --notes "no .env changes"'),
+    hook_payload("Bash", command='git commit --message=".env guard"'),
+    hook_payload(
         "Bash",
         command=(
             'git commit -m "$(cat <<\'EOF\'\n'
@@ -165,20 +154,16 @@ ALLOW = [
         ),
     ),
     # Tools the guard does not own
-    _payload("WebFetch", url="https://example.com/.env"),
+    hook_payload("WebFetch", url="https://example.com/.env"),
 ]
 
 
-def _id(p: dict) -> str:
-    return f"{p['tool_name']}:{json.dumps(p['tool_input'])[:70]}"
-
-
-@pytest.mark.parametrize("payload", DENY, ids=_id)
+@pytest.mark.parametrize("payload", DENY, ids=payload_id)
 def test_denies(payload):
     assert env_guard.evaluate(payload) is not None
 
 
-@pytest.mark.parametrize("payload", ALLOW, ids=_id)
+@pytest.mark.parametrize("payload", ALLOW, ids=payload_id)
 def test_allows(payload):
     assert env_guard.evaluate(payload) is None
 
@@ -197,28 +182,28 @@ def test_every_guarded_tool_has_deny_and_allow_cases():
 
 E2E = {
     "Read": (
-        _payload("Read", file_path=r"C:\dev\proj\.env.local"),
-        _payload("Read", file_path=r"C:\dev\proj\.env.example"),
+        hook_payload("Read", file_path=r"C:\dev\proj\.env.local"),
+        hook_payload("Read", file_path=r"C:\dev\proj\.env.example"),
     ),
     "Grep": (
-        _payload("Grep", pattern="KEY", path="/c/dev/proj/.env"),
-        _payload("Grep", pattern="KEY", path="/c/dev/proj/.env.example"),
+        hook_payload("Grep", pattern="KEY", path="/c/dev/proj/.env"),
+        hook_payload("Grep", pattern="KEY", path="/c/dev/proj/.env.example"),
     ),
     "Glob": (
-        _payload("Glob", pattern="**/.env*"),
-        _payload("Glob", pattern="**/.env.example"),
+        hook_payload("Glob", pattern="**/.env*"),
+        hook_payload("Glob", pattern="**/.env.example"),
     ),
     "Write": (
-        _payload("Write", file_path=r"C:\dev\proj\.env.local"),
-        _payload("Write", file_path=r"C:\dev\proj\.env.example"),
+        hook_payload("Write", file_path=r"C:\dev\proj\.env.local"),
+        hook_payload("Write", file_path=r"C:\dev\proj\.env.example"),
     ),
     "Bash": (
-        _payload("Bash", command=r"C:\Windows\System32\more.com C:\x\.env"),
-        _payload("Bash", command="cat .env.example"),
+        hook_payload("Bash", command=r"C:\Windows\System32\more.com C:\x\.env"),
+        hook_payload("Bash", command="cat .env.example"),
     ),
     "PowerShell": (
-        _payload("PowerShell", command=r"gc C:\dev\proj\.env.production"),
-        _payload("PowerShell", command=r"gc C:\dev\proj\.env.example"),
+        hook_payload("PowerShell", command=r"gc C:\dev\proj\.env.production"),
+        hook_payload("PowerShell", command=r"gc C:\dev\proj\.env.example"),
     ),
 }
 
@@ -228,8 +213,8 @@ def test_positive_control_hook_process_denies(tool):
     deny_payload, _ = E2E[tool]
     result = _run(deny_payload)
     assert result.returncode == 0
-    assert _decision(result) == "deny"
-    reason = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert hook_output(result)["permissionDecision"] == "deny"
+    reason = hook_output(result)["permissionDecisionReason"]
     assert ".env.example" in reason
 
 
@@ -238,14 +223,14 @@ def test_hook_process_allows_example(tool):
     _, allow_payload = E2E[tool]
     result = _run(allow_payload)
     assert result.returncode == 0
-    assert _decision(result) is None
+    assert hook_output(result) is None
 
 
 @pytest.mark.parametrize("raw", ["", "not json", "[]", json.dumps({"tool_name": "Read"})])
 def test_malformed_payload_allows_without_crashing(raw):
     result = _run(raw)
     assert result.returncode == 0
-    assert _decision(result) is None
+    assert hook_output(result) is None
 
 
 # ---------------------------------------------------------------------------
@@ -326,9 +311,9 @@ _VENV_PY = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
 @pytest.mark.parametrize(
     "script,payload",
     [
-        ("env_guard.py", _payload("Read", file_path=".env.local")),
-        ("vault_guard.py", _payload("Write", file_path="private_vault/x.json")),
-        ("secret_dump_guard.py", _payload("Bash", command="cat private_vault/x.json")),
+        ("env_guard.py", hook_payload("Read", file_path=".env.local")),
+        ("vault_guard.py", hook_payload("Write", file_path="private_vault/x.json")),
+        ("secret_dump_guard.py", hook_payload("Bash", command="cat private_vault/x.json")),
     ],
 )
 def test_settings_command_fires_from_another_cwd(tmp_path, script, payload):
@@ -346,4 +331,4 @@ def test_settings_command_fires_from_another_cwd(tmp_path, script, payload):
         env=env,
     )
     assert result.returncode == 0, result.stderr
-    assert _decision(result) == "deny"
+    assert hook_output(result)["permissionDecision"] == "deny"

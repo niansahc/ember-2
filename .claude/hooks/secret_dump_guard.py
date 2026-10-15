@@ -13,9 +13,9 @@ Read/Grep/Glob are vault_guard.py.
 "The vault" is vault_guard.py's definition (by name and by location). A
 path argument counts when it resolves, against the payload cwd and any
 `cd` earlier in the same command line, to a location at or under a vault.
-A recursive search
-or listing (grep -r, rg, findstr /s, gci -Recurse, find, tree, ls -R, ...)
-counts when its root is an ancestor of one, unless the utility honours
+A recursive search or listing (grep -r, rg, findstr /s, gci -Recurse,
+find, tree, ls -R, ...) counts when its root is an ancestor of one,
+unless the utility honours
 .gitignore (rg, ag) and the vault is the gitignored in-project one. A
 non-recursive listing of an ancestor shows only the vault directory's own
 name and is allowed.
@@ -59,10 +59,7 @@ import re
 import shlex
 import sys
 
-# vault_guard (same directory, on sys.path when this file runs as a script)
-# holds the one definition of "a vault path". It is imported only once a
-# command runs a read or list utility: most Bash calls never need it, and
-# its imports cost ~15 ms on every call.
+# Same directory; Python puts it on sys.path when this file runs as a script.
 from hook_utils import deny
 
 # Content-reading utilities, lowercase (PowerShell and Windows executables
@@ -167,14 +164,24 @@ def _pipelines(command: str) -> list[list[list[str]]]:
     return pipelines
 
 
+def _command_name(word: str) -> str:
+    """A command word reduced to a bare lowercase name, so an absolute-path
+    utility (C:/Windows/System32/more.com, /usr/bin/cat) matches."""
+    return _EXE_SUFFIX_RE.sub("", word.rsplit("/", 1)[-1].lower())
+
+
 def _utility(tokens: list[str]) -> str:
-    """The stage's command reduced to a bare lowercase name, so an
-    absolute-path utility (C:/Windows/System32/more.com, /usr/bin/cat)
-    matches. For `xargs [flags] cmd`, the command xargs runs."""
-    name = _EXE_SUFFIX_RE.sub("", tokens[0].rsplit("/", 1)[-1].lower())
+    """The stage's command name; for `xargs [flags] cmd`, the command xargs
+    runs."""
+    name = _command_name(tokens[0])
     if name == "xargs":
-        return next((_utility([t]) for t in tokens[1:] if not t.startswith("-")), name)
+        return next((_command_name(t) for t in tokens[1:] if not t.startswith("-")), name)
     return name
+
+
+def _operands(tokens: list[str]) -> list[str]:
+    """Positional arguments: not flags, not cmd-style switches."""
+    return [t for t in tokens[1:] if not t.startswith("-") and not _SWITCH_RE.fullmatch(t)]
 
 
 def _path_candidates(token: str) -> list[str]:
@@ -195,13 +202,14 @@ def _recursive_roots(tokens: list[str], utility: str) -> list[str] | None:
     ancestors of a vault."""
     flags = [t for t in tokens[1:] if t.startswith("-")]
     args = [t for t in tokens[1:] if not t.startswith("-")]
+    plain = _operands(tokens)
     if utility in _ALWAYS_RECURSIVE or (
         utility in _GREP and any(_GREP_RECURSE_RE.fullmatch(f) for f in flags)
     ):
         explicit_pattern = any(f in _PATTERN_FLAGS or f.startswith(("--regexp=", "--file=")) for f in flags)
         return (args if explicit_pattern else args[1:]) or ["."]
     if utility == "tree":
-        return [a for a in args if not _SWITCH_RE.fullmatch(a)] or ["."]
+        return plain or ["."]
     if utility == "find":
         roots = []
         for t in tokens[1:]:
@@ -210,7 +218,6 @@ def _recursive_roots(tokens: list[str], utility: str) -> list[str] | None:
             roots.append(t)
         return roots or ["."]
     switches = [t.lower() for t in tokens[1:] if _SWITCH_RE.fullmatch(t)]
-    plain = [t for t in args if not _SWITCH_RE.fullmatch(t)]
     if utility == "findstr":
         if not any("s" in s.split(":")[0] for s in switches):
             return None
@@ -231,32 +238,31 @@ def _lists_cwd(tokens: list[str], utility: str) -> bool:
     """A listing with no path argument lists the cwd (`cd vault && ls`)."""
     if utility not in _LIST_UTILITIES or utility == "wc":
         return False  # wc with no file counts stdin
-    return not any(not t.startswith("-") and not _SWITCH_RE.fullmatch(t) for t in tokens[1:])
+    return not _operands(tokens)
 
 
-def _ignores_gitignore(flags: list[str]) -> bool:
+def _ignores_gitignore(tokens: list[str]) -> bool:
+    """`-u` (in any short-flag cluster), `--no-ignore*` or `--unrestricted`
+    among the stage's flags."""
     return any(
         f.startswith("--no-ignore") or f == "--unrestricted" or (not f.startswith("--") and "u" in f[1:].lower())
-        for f in flags
+        for f in tokens[1:]
+        if f.startswith("-")
     )
 
 
-def _reaches_vault(direct: list[tuple[list[str], str]], base: str, vaults) -> bool:
-    """A recursive stage rooted at an ancestor of a vault."""
-    from vault_guard import above_vault, path_forms
-
+def _reaches_vault(direct: list[tuple[list[str], str]], base: str, vaults, vg) -> bool:
+    """A recursive stage rooted at an ancestor of a vault. `vg` is the
+    loaded vault_guard module."""
     for tokens, utility in direct:
         roots = _recursive_roots(tokens, utility)
         if roots is None:
             continue
-        honours_gitignore = utility in _GITIGNORE_AWARE and not _ignores_gitignore(tokens[1:])
-        for root in roots:
-            forms = path_forms(root, base)
-            for vault in vaults:
-                if vault.in_project and honours_gitignore:
-                    continue
-                if above_vault(forms, vault):
-                    return True
+        # rg/ag skip the gitignored in-project vault unless told not to.
+        honours_gitignore = utility in _GITIGNORE_AWARE and not _ignores_gitignore(tokens)
+        reachable = [v for v in vaults if not (v.in_project and honours_gitignore)]
+        if any(vg.above_vault(vg.path_forms(root, base), v) for root in roots for v in reachable):
+            return True
     return False
 
 
@@ -279,25 +285,28 @@ def _matches_dump_command(command: str, cwd: str | None = None) -> str | None:
         if not hit:
             continue
         if vg is None:
+            # vault_guard holds the one definition of "a vault path". It is
+            # imported only here: most Bash calls run no read or list
+            # utility, and its imports cost ~15 ms on every call.
             import vault_guard as vg
-
+        if any(vg.names_vault_path(t) for tokens in stages for t in tokens[1:]):
+            return hit
+        if vaults is None:
             vaults = vg.vault_dirs()  # reads .env (or its cache)
+        if not vaults:
+            continue
         for target in pending_cd:
             base = vg.absolute_path(target, base)
         pending_cd.clear()
-        if any(vg.names_vault_path(t) for tokens in stages for t in tokens[1:]):
-            return hit
-        if not vaults:
-            continue
         if any(
             vg.inside_vault(c, base, vaults) for tokens in stages for t in tokens[1:] for c in _path_candidates(t)
         ):
             return hit
         # Stages that run their own operands; an xargs stage gets them on stdin.
-        direct = [(tokens, u) for tokens, u in zip(stages, utilities) if _utility(tokens[:1]) == u]
+        direct = [(tokens, u) for tokens, u in zip(stages, utilities) if _command_name(tokens[0]) == u]
         if any(_lists_cwd(tokens, u) for tokens, u in direct) and vg.inside_vault(".", base, vaults):
             return hit
-        if _reaches_vault(direct, base, vaults):
+        if _reaches_vault(direct, base, vaults, vg):
             return hit
     return None
 

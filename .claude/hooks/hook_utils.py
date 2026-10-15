@@ -5,8 +5,8 @@ Helpers shared by the hook scripts in this directory, so each rule has one
 definition:
 
   - project_dir(): the project root every hook anchors on.
-  - read_env_value(): one .env value reader (post_commit_eval.py,
-    vault_guard.py). It never prints a value.
+  - read_env_value() / env_file_value(): one .env value reader
+    (post_commit_eval.py, vault_guard.py). It never prints a value.
   - deny(): the PreToolUse deny decision the harness reads from stdout.
 
 Deliberately pathlib- and typing-free: PreToolUse guards start a fresh
@@ -27,17 +27,18 @@ def project_dir() -> str:
 
 def read_env_value(key: str, env_path) -> str | None:
     """Return `key` from the process env, falling back to the .env file at
-    `env_path`.
+    `env_path`. Hooks run as bare subprocesses, so .env has not been loaded
+    into the environment."""
+    return (os.environ.get(key) or "").strip() or env_file_value(key, env_path)
 
-    Hooks run as bare subprocesses, so .env has not been loaded into the
-    environment. The value comes from python-dotenv (the venv has it), with
-    a minimal KEY=VALUE parser as a fallback so a hook never hard-depends on
-    an import being present.
+
+def env_file_value(key: str, env_path) -> str | None:
+    """Return `key` from the .env file at `env_path` only.
+
+    The value comes from python-dotenv (the venv has it), with a minimal
+    KEY=VALUE parser as a fallback so a hook never hard-depends on an
+    import being present.
     """
-    value = os.environ.get(key)
-    if value:
-        return value.strip() or None
-
     try:
         from dotenv import dotenv_values
 

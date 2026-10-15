@@ -20,28 +20,18 @@ pointing at a tmp vault outside it.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 from types import SimpleNamespace
 
 import pytest
 
-from tests.conftest import (
-    hermetic_hook_project,
-    load_hook,
-    make_configured_vault_project,
-    make_in_repo_vault_project,
-    run_hook,
-)
+from tests.conftest import HOOK_VAULT_NAME, hook_output, load_hook, relpath, run_hook
 
 guard = load_hook("secret_dump_guard.py")
 
-
-@pytest.fixture(autouse=True)
-def _project_without_vault(tmp_path, monkeypatch):
-    """Hermetic default: no test reads the developer's checkout or .env."""
-    return hermetic_hook_project(tmp_path, monkeypatch)
+# Hermetic default: no test reads the developer's checkout or .env.
+pytestmark = pytest.mark.usefixtures("hermetic_hook_project")
 
 
 def _run_hook(payload) -> subprocess.CompletedProcess:
@@ -157,7 +147,7 @@ def test_hook_process_denies_with_reason():
     payload = json.dumps({"tool_name": "PowerShell", "tool_input": {"command": "gc private_vault/a.json"}})
     result = _run_hook(payload)
     assert result.returncode == 0
-    output = json.loads(result.stdout)["hookSpecificOutput"]
+    output = hook_output(result)
     assert output["permissionDecision"] == "deny"
     assert "gc" in output["permissionDecisionReason"]
     assert "#188" in output["permissionDecisionReason"]
@@ -178,19 +168,13 @@ def test_malformed_input_does_not_crash(raw):
 # Vaults by location: the in-repo private_vault/ and PRIVATE_VAULT_PATH
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def in_repo(tmp_path, monkeypatch):
-    project = make_in_repo_vault_project(tmp_path)
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-    return project
-
-
 IN_REPO_DENY = [
     "cd private_vault && cat memory/rec.json",
     "Set-Location private_vault/memory; gc rec.json",
     "grep -r KEY .",           # grep ignores .gitignore
     "grep -rn KEY",            # no path: the cwd
     "rg -uu KEY .",            # .gitignore switched off
+    "rg -u build .",
     "rg --no-ignore KEY",
     "Get-ChildItem -Recurse | Select-String KEY",
     "find . -name '*.json' | xargs grep KEY",
@@ -206,6 +190,7 @@ IN_REPO_DENY = [
 IN_REPO_ALLOW = [
     "rg KEY .",                # rg honours .gitignore: the vault is skipped
     "rg KEY",
+    "rg build .",              # a `u` in a positional is not -u
     "grep -r KEY src",
     "Get-ChildItem src -Recurse | Select-String KEY",
     "cd src && cat a.py",
@@ -217,39 +202,37 @@ IN_REPO_ALLOW = [
 
 
 @pytest.mark.parametrize("command", IN_REPO_DENY)
-def test_in_repo_vault_by_location(in_repo, command):
-    assert guard._matches_dump_command(command, str(in_repo)) is not None
+def test_in_repo_vault_by_location(in_repo_vault_project, command):
+    assert guard._matches_dump_command(command, str(in_repo_vault_project)) is not None
 
 
 @pytest.mark.parametrize("command", IN_REPO_DENY)
-def test_in_repo_vault_by_location_is_off_without_the_directory(_project_without_vault, command):
+def test_in_repo_vault_by_location_is_off_without_the_directory(hermetic_hook_project, command):
     """Absence counterpart of the test above: same commands, no vault."""
-    assert guard._matches_dump_command(command, str(_project_without_vault)) is None
+    assert guard._matches_dump_command(command, str(hermetic_hook_project)) is None
 
 
 @pytest.mark.parametrize("command", IN_REPO_ALLOW)
-def test_in_repo_vault_allows(in_repo, command):
-    assert guard._matches_dump_command(command, str(in_repo)) is None
+def test_in_repo_vault_allows(in_repo_vault_project, command):
+    assert guard._matches_dump_command(command, str(in_repo_vault_project)) is None
 
 
 @pytest.fixture
-def configured(tmp_path, monkeypatch):
-    """A tmp project whose tmp .env points at a tmp vault outside it."""
-    project, outside, vault = make_configured_vault_project(tmp_path, "EmberVaultX")
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-    rel = os.path.relpath(vault, project).replace("\\", "/")
-    rel_outside = os.path.relpath(outside, project).replace("\\", "/")
+def configured(configured_vault):
+    """configured_vault, plus the command-template fields built from it."""
+    c = configured_vault
     return SimpleNamespace(
-        project=project,
-        outside=outside,
+        project=c.project,
+        outside=c.outside,
+        vault=c.vault,
         fmt=dict(
-            vault=str(vault),
-            vault_posix=vault.as_posix(),
-            rel=rel,
-            rel_bs=rel.replace("/", "\\"),
-            outside=str(outside),
-            rel_outside=rel_outside,
-            rel_outside_bs=rel_outside.replace("/", "\\"),
+            vault=str(c.vault),
+            vault_posix=c.vault.as_posix(),
+            rel=relpath(c.vault, c.project),
+            rel_bs=relpath(c.vault, c.project, "\\"),
+            outside=str(c.outside),
+            rel_outside=relpath(c.outside, c.project),
+            rel_outside_bs=relpath(c.outside, c.project, "\\"),
         ),
     )
 
@@ -326,17 +309,17 @@ def test_configured_rules_are_off_without_a_configured_vault(configured, off):
     if off == "no-env-file":
         (configured.project / ".env").unlink()
     else:
-        shutil.rmtree(configured.outside / "EmberVaultX")
+        shutil.rmtree(configured.vault)
     assert [c for c, cwd in cases if guard._matches_dump_command(c, cwd) is not None] == []
 
 
 def test_configured_vault_hook_process_uses_payload_cwd(configured):
     payload = {"tool_name": "Bash", "tool_input": {"command": "grep -r KEY"}, "cwd": str(configured.outside)}
     result = _run_hook(payload)
-    output = json.loads(result.stdout)["hookSpecificOutput"]
+    output = hook_output(result)
     assert output["permissionDecision"] == "deny"
     reason = output["permissionDecisionReason"].lower()
-    assert "embervaultx" not in reason
+    assert HOOK_VAULT_NAME.lower() not in reason
     # Same command from the project root: no reach, no output.
     payload["cwd"] = str(configured.project)
     assert _run_hook(payload).stdout.strip() == ""

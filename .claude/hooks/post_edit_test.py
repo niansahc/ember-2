@@ -2,8 +2,8 @@
 .claude/hooks/post_edit_test.py
 
 PostToolUse hook for Edit|Write - auto-runs pytest after code edits.
-Only triggers when the edited file is a Python file (*.py). Non-Python
-edits (CLAUDE.md, YAML, JSON, etc.) are skipped silently.
+Only triggers when the edited file is a Python file under src/. Other
+edits (tests, docs, CLAUDE.md, YAML, JSON, etc.) are skipped silently.
 
 Reads tool_input JSON from stdin. Runs the test suite and prints a
 one-line summary. Exit code is always 0 so the hook never blocks

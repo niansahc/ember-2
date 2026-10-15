@@ -31,8 +31,12 @@ epoch/ISO/hyphenated timestamps via the shared helper now, not only a
 date prefix: restoring the files is still the only thing that separates
 arms, since same-day ordering alone no longer fails to parse.
 
-Vault resolution is fail-closed, copied from .claude/hooks/post_commit_eval.py.
-There is no real-vault arm and no fallback path to one.
+Vault resolution is fail-closed, matching .claude/hooks/post_commit_eval.py.
+There is no real-vault arm and no fallback path to one. Values come from the
+process environment, which the entrypoint fills from the repo's env file
+through src.core.config.load_env_file(); this module has no parser of its
+own. A relative value resolves against the repo root, as the hooks resolve
+it, whatever the cwd.
 """
 
 from __future__ import annotations
@@ -49,8 +53,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-
-ENV_PATH = REPO_ROOT / ".env"
 
 # Process entrypoint: load .env before any src import (see load_env_file).
 if __name__ == "__main__":
@@ -70,23 +72,17 @@ TIERING_DATABASES = ("memory.db", "ingested.db")
 # ---------------------------------------------------------------------------
 
 def _read_env_value(key: str) -> str | None:
-    """Process env first, then .env. Returns None rather than raising."""
-    value = os.environ.get(key)
-    if value:
-        return value.strip().strip('"').strip("'")
-    if not ENV_PATH.exists():
-        return None
-    try:
-        for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            name, _, raw = line.partition("=")
-            if name.strip() == key:
-                return raw.strip().strip('"').strip("'")
-    except OSError:
-        return None
-    return None
+    """`key` from the process environment, or None. The __main__ guard above
+    has already loaded the env file through load_env_file() (python-dotenv,
+    which strips quotes), so its values are in os.environ by now."""
+    return (os.environ.get(key) or "").strip() or None
+
+
+def _configured_path(value: str) -> Path:
+    """A configured vault path, relative values against the repo root, then
+    through realpath so two spellings of one directory compare equal."""
+    path = Path(value).expanduser()
+    return (path if path.is_absolute() else REPO_ROOT / path).resolve()
 
 
 def resolve_test_vault() -> tuple[Path | None, str | None]:
@@ -100,14 +96,14 @@ def resolve_test_vault() -> tuple[Path | None, str | None]:
     if not test_vault:
         return None, "VAULT_PATH_TEST is not set"
 
-    test_path = Path(test_vault).resolve()
+    test_path = _configured_path(test_vault)
     if not test_path.is_dir():
         # A missing directory would let SqliteVectorStore.__init__ mkdir an
         # empty vault and report a meaningless run.
         return None, "VAULT_PATH_TEST does not point at an existing directory"
 
     live_vault = _read_env_value("PRIVATE_VAULT_PATH")
-    if live_vault and Path(live_vault).resolve() == test_path:
+    if live_vault and _configured_path(live_vault) == test_path:
         return None, "VAULT_PATH_TEST resolves to the same path as PRIVATE_VAULT_PATH"
 
     return test_path, None

@@ -12,7 +12,9 @@ Read/Grep/Glob are vault_guard.py.
 
 "The vault" is vault_guard.py's definition (by name and by location). A
 path argument counts when it resolves, against the payload cwd and any
-`cd` earlier in the same command line, to a location at or under a vault.
+`cd` earlier in the same command line, to a location at or under a vault,
+or names a private_vault directory. Flag values (--file=x, if=x,
+-Path:x) count as path arguments for both rules.
 A recursive search or listing (grep -r, rg, findstr /s, gci -Recurse,
 find, tree, ls -R, ...) counts when its root is an ancestor of one,
 unless the utility honours
@@ -60,7 +62,7 @@ import shlex
 import sys
 
 # Same directory; Python puts it on sys.path when this file runs as a script.
-from hook_utils import deny
+from hook_utils import absolute_path, deny
 
 # Content-reading utilities, lowercase (PowerShell and Windows executables
 # are case-insensitive): whole-file dumps, plus content searches, which
@@ -289,18 +291,23 @@ def _matches_dump_command(command: str, cwd: str | None = None) -> str | None:
             # imported only here: most Bash calls run no read or list
             # utility, and its imports cost ~15 ms on every call.
             import vault_guard as vg
-        if any(vg.names_vault_path(t) for tokens in stages for t in tokens[1:]):
+        # The parsed path candidates (operands, and the value of
+        # --flag=value, if=value and -Param:value) feed both the name rule
+        # and the location rule, so --file=private_vault/x is caught by name
+        # even on a machine with no vault directory. The name rule also
+        # keeps checking each raw token, as it did before.
+        args = [t for tokens in stages for t in tokens[1:]]
+        paths = [c for t in args for c in _path_candidates(t)]
+        if any(vg.names_vault_path(c) for c in (*args, *paths)):
             return hit
         if vaults is None:
             vaults = vg.vault_dirs()  # reads .env (or its cache)
         if not vaults:
             continue
         for target in pending_cd:
-            base = vg.absolute_path(target, base)
+            base = absolute_path(target, base)
         pending_cd.clear()
-        if any(
-            vg.inside_vault(c, base, vaults) for tokens in stages for t in tokens[1:] for c in _path_candidates(t)
-        ):
+        if any(vg.inside_vault(c, base, vaults) for c in paths):
             return hit
         # Stages that run their own operands; an xargs stage gets them on stdin.
         direct = [(tokens, u) for tokens, u in zip(stages, utilities) if _command_name(tokens[0]) == u]

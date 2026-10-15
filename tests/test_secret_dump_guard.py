@@ -133,6 +133,44 @@ def test_allows_the_same_listing_elsewhere(template):
     assert guard._matches_dump_command(template.format("src")) is None
 
 
+# A vault named only inside a flag value. The hermetic project has no vault
+# directory and no configured vault, so only the name rule can catch these.
+FLAG_VALUE_DENY = [
+    "grep --file=private_vault/x.json notes.txt",
+    "grep -r --exclude-dir=src KEY --file=private_vault/x",
+    "rg KEY --ignore-file=../private_vault/x",
+    "Get-Content -Path:private_vault/a.json",
+    r"gc -LiteralPath:C:\dev\proj\private_vault\a.json",
+    "Select-String -Pattern KEY -Path:/c/dev/proj/PRIVATE_VAULT/memory/a.json",
+    "cat --input=priv*/x.json",
+    "ls --directory=private_vault",
+]
+
+
+@pytest.mark.parametrize("command", FLAG_VALUE_DENY)
+def test_denies_vault_named_in_a_flag_value_without_a_vault_directory(hermetic_hook_project, command):
+    assert not (hermetic_hook_project / "private_vault").exists()
+    assert guard._matches_dump_command(command, str(hermetic_hook_project)) is not None
+
+
+@pytest.mark.parametrize("command", FLAG_VALUE_DENY)
+def test_allows_the_same_flag_value_elsewhere(hermetic_hook_project, command):
+    """Absence counterpart: the same flag forms naming src/ are allowed, so
+    the deny above is about the vault name, not the flag syntax."""
+    elsewhere = command.replace("private_vault", "src").replace("PRIVATE_VAULT", "src").replace("priv*", "src")
+    assert guard._matches_dump_command(elsewhere, str(hermetic_hook_project)) is None
+
+
+def test_hook_process_denies_flag_value_without_a_vault_directory(hermetic_hook_project):
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "grep --file=private_vault/x.json notes.txt"},
+        "cwd": str(hermetic_hook_project),
+    }
+    output = hook_output(_run_hook(payload))
+    assert output["permissionDecision"] == "deny"
+
+
 @pytest.mark.parametrize("command", DENY)
 def test_denies_known_dump_forms(command):
     assert guard._matches_dump_command(command) is not None

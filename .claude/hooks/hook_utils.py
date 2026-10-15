@@ -5,9 +5,15 @@ Helpers shared by the hook scripts in this directory, so each rule has one
 definition:
 
   - project_dir(): the project root every hook anchors on.
+  - absolute_path() / project_path(): one resolution of a path string.
+    project_path() is how every hook resolves a configured value
+    (PRIVATE_VAULT_PATH, VAULT_PATH_TEST), so vault_guard.py,
+    secret_dump_guard.py and post_commit_eval.py agree on which directory
+    is the live vault.
   - read_env_value() / env_file_value(): one .env value reader
     (post_commit_eval.py, vault_guard.py). It never prints a value.
-  - deny(): the PreToolUse deny decision the harness reads from stdout.
+  - deny(): the PreToolUse deny decision the harness reads from stdout
+    (env_guard.py, vault_guard.py, secret_dump_guard.py).
 
 Deliberately pathlib- and typing-free: PreToolUse guards start a fresh
 Python process on every tool call, and those imports cost ~11 ms each time.
@@ -15,6 +21,11 @@ Python process on every tool call, and those imports cost ~11 ms each time.
 
 import json
 import os
+import re
+
+# Path-form prefixes, matched after backslashes become slashes.
+_DEVICE_PREFIX_RE = re.compile(r"^//[?.]/")  # \\?\C:\x, \\.\C:\x
+_POSIX_DRIVE_RE = re.compile(r"^/(?:mnt/)?([a-z])(?=/|$)", re.IGNORECASE)  # /c/x, /mnt/c/x
 
 
 def project_dir() -> str:
@@ -23,6 +34,27 @@ def project_dir() -> str:
     return os.environ.get("CLAUDE_PROJECT_DIR") or os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
+
+
+def absolute_path(path: str, base: str) -> str:
+    """`path` as an absolute, lexically normalised path, for every form an
+    agent might write. Relative forms resolve against `base`."""
+    s = _DEVICE_PREFIX_RE.sub("", path.replace("\\", "/"))
+    s = os.path.expanduser(s)
+    m = _POSIX_DRIVE_RE.match(s) if os.name == "nt" else None
+    if m:
+        s = f"{m.group(1)}:/{s[m.end():]}"
+    # ntpath.join also resolves drive-relative C:x against `base` when it is
+    # on the same drive (the only drive whose cwd the hook knows).
+    return os.path.normpath(os.path.join(base, s))
+
+
+def project_path(value: str) -> str:
+    """A configured path (PRIVATE_VAULT_PATH, VAULT_PATH_TEST) as an
+    absolute path. A relative value resolves against the project root, as
+    the API, started from the project root, resolves it; never against the
+    hook process cwd, which follows the session's cd."""
+    return absolute_path(value, project_dir())
 
 
 def read_env_value(key: str, env_path) -> str | None:

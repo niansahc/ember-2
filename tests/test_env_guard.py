@@ -106,6 +106,29 @@ DENY = [
     hook_payload("PowerShell", command=r"type C:\dev\proj\.env"),
     hook_payload("PowerShell", command="Select-String -Path .env -Pattern KEY"),
     hook_payload("PowerShell", command=r"[IO.File]::ReadAllText('C:\dev\proj\.env')"),
+    # Globs that can reach a .env name. Pinned with the jq/regex allow cases
+    # below: the fix for those must not reopen any of these.
+    hook_payload("Bash", command="cat .*"),                       # unquoted: the shell expands it
+    hook_payload("Bash", command="cat .[e]nv"),
+    hook_payload("Bash", command="cat .?nv.local"),
+    hook_payload("Bash", command="cat .[!x]nv"),
+    hook_payload("Bash", command="head ./.e*"),
+    hook_payload("Bash", command='echo "$(cat .*)"'),             # substitution runs in the shell
+    hook_payload("Bash", command='echo "`cat .*`"'),
+    hook_payload("Bash", command="bash -c 'cat .*'"),             # a nested shell expands it
+    hook_payload("Bash", command="sh -c 'cat .[e]nv'"),
+    hook_payload("Bash", command="find . -name '.*' -exec cat {} +"),
+    hook_payload("Bash", command='find . -iname ".*" | xargs cat'),
+    hook_payload("Bash", command="rg -g '.*' KEY"),
+    hook_payload("Bash", command="rg --glob='.*' KEY"),
+    hook_payload("Bash", command="rg --glob '.e*' KEY"),
+    hook_payload("Bash", command="cat '.env'"),                   # quoting does not hide a literal name
+    hook_payload("Bash", command="cat '.env.local'"),
+    hook_payload("Bash", command="cat '.env*'"),
+    hook_payload("Bash", command='cat ".e*"'),
+    hook_payload("Bash", command="sed 's/x/y/' '.env'"),
+    hook_payload("PowerShell", command="gc '.*'"),                # cmdlets expand quoted wildcards
+    hook_payload("PowerShell", command='Get-Content ".[e]nv"'),
 ]
 
 ALLOW = [
@@ -153,6 +176,19 @@ ALLOW = [
             ')"'
         ),
     ),
+    # jq paths and regex text: dot-led, but not a .env name
+    hook_payload("Bash", command="jq '.[0]' data.json"),
+    hook_payload("Bash", command="jq .[0] data.json"),             # a glob that cannot match .env
+    hook_payload("Bash", command="jq -r '.[0].name' data.json"),
+    hook_payload("Bash", command="jq '.[] | .id' data.json"),
+    hook_payload("Bash", command="gh pr view 1 --json files --jq '.files[].path'"),
+    hook_payload("Bash", command="grep -E '.*KEY' notes.txt"),
+    hook_payload("Bash", command="grep '.*' notes.txt"),
+    hook_payload("Bash", command="sed -n 's/.*VALUE//p' notes.txt"),
+    hook_payload("Bash", command='rg ".*foo" src'),
+    hook_payload("Bash", command="python -c \"import re; print(re.sub(r'.*', '', 'x'))\""),
+    hook_payload("Bash", command="cat .e[x]"),                     # cannot match .env
+    hook_payload("PowerShell", command="Get-Content data.json | jq '.[0]'"),
     # Tools the guard does not own
     hook_payload("WebFetch", url="https://example.com/.env"),
 ]
@@ -166,6 +202,49 @@ def test_denies(payload):
 @pytest.mark.parametrize("payload", ALLOW, ids=payload_id)
 def test_allows(payload):
     assert env_guard.evaluate(payload) is None
+
+
+# ---------------------------------------------------------------------------
+# The glob rule: can a dot-led glob match a .env name?
+# ---------------------------------------------------------------------------
+
+GLOB_REACHES = [".*", ".e*", ".en?", ".env*", ".[e]nv", ".[!x]nv", ".[a-f]nv*", ".?nv.local",
+                ".env.s*", ".*.local", ".env?", ".e?v", ".*l", ".**"]
+GLOB_CANNOT = [".[0]", ".[]", ".[0].name", ".e[x]", ".git*", ".[!e]nv", ".env[!.]x", ".?", ".e[!n]*"]
+_PROBES = (".env", ".env.local", ".env.production", ".env.staging", ".env.l", ".env.test")
+
+
+@pytest.mark.parametrize("glob", GLOB_REACHES)
+def test_glob_that_can_match_a_env_name_is_detected(glob):
+    assert env_guard._glob_can_name_env(glob)
+
+
+@pytest.mark.parametrize("glob", GLOB_CANNOT)
+def test_glob_that_cannot_match_a_env_name_is_not(glob):
+    assert not env_guard._glob_can_name_env(glob)
+    # Cross-check against fnmatch: no probe name matches either.
+    import fnmatch
+
+    assert not any(fnmatch.fnmatchcase(p, glob) for p in _PROBES)
+
+
+def _old_literal_prefix_rule(glob: str) -> bool:
+    """The rule this replaced: the literal text before the first wildcard is
+    compatible with `.env`."""
+    literal = glob[: env_guard._WILDCARD.search(glob).start()]
+    return literal.startswith(".env") or ".env".startswith(literal)
+
+
+@pytest.mark.parametrize("glob", GLOB_REACHES + GLOB_CANNOT)
+def test_glob_rule_only_narrows_the_old_rule(glob):
+    """Nothing the old literal-prefix rule allowed is denied now, and every
+    glob that fnmatch shows reaching a probe .env name is still denied."""
+    import fnmatch
+
+    if env_guard._glob_can_name_env(glob):
+        assert _old_literal_prefix_rule(glob)
+    if any(fnmatch.fnmatchcase(p, glob) for p in _PROBES):
+        assert env_guard._glob_can_name_env(glob)
 
 
 def test_every_guarded_tool_has_deny_and_allow_cases():

@@ -28,6 +28,13 @@ Fails closed: if the test vault cannot be resolved, is not a directory,
 or resolves to the same path as the live vault, the eval is skipped with
 a printed reason rather than falling back to the live vault.
 
+A relative VAULT_PATH_TEST or PRIVATE_VAULT_PATH resolves against the
+project root (hook_utils.project_path), the root vault_guard.py resolves
+PRIVATE_VAULT_PATH against, never against this process's cwd. Otherwise,
+from a session cwd'd elsewhere, a relative live vault and an absolute
+test vault naming the same directory compare unequal, and the eval runs
+against the live vault.
+
 Exit code is always 0 - a failing eval is reported but does not block.
 """
 
@@ -38,8 +45,9 @@ import sys
 from pathlib import Path
 
 # Same directory; Python puts it on sys.path when this file runs as a
-# script. Shared with vault_guard.py so both hooks parse .env one way.
-from hook_utils import project_dir, read_env_value
+# script. Shared with vault_guard.py so both hooks parse .env one way and
+# resolve a relative vault path against the same root.
+from hook_utils import project_dir, project_path, read_env_value
 
 
 TRIGGER_PATHS = ("src/context/", "src/retrieval/", "src/llm/")
@@ -48,6 +56,12 @@ TRIGGER_PATHS = ("src/context/", "src/retrieval/", "src/llm/")
 # same whichever directory the session has cd'd into.
 REPO_ROOT = Path(project_dir())
 ENV_PATH = REPO_ROOT / ".env"
+
+
+def _configured_path(value: str) -> Path:
+    """A configured vault path, relative values against the project root,
+    then through realpath so two spellings of one directory compare equal."""
+    return Path(project_path(value)).resolve()
 
 
 def _resolve_test_vault() -> tuple[Path | None, str | None]:
@@ -60,14 +74,14 @@ def _resolve_test_vault() -> tuple[Path | None, str | None]:
     if not test_vault:
         return None, "VAULT_PATH_TEST is not set"
 
-    test_path = Path(test_vault).resolve()
+    test_path = _configured_path(test_vault)
     if not test_path.is_dir():
         # A missing directory would let SqliteVectorStore.__init__ mkdir a
         # new empty vault and report a meaningless all-FAIL eval.
         return None, "VAULT_PATH_TEST does not point at an existing directory"
 
     live_vault = read_env_value("PRIVATE_VAULT_PATH", ENV_PATH)
-    if live_vault and Path(live_vault).resolve() == test_path:
+    if live_vault and _configured_path(live_vault) == test_path:
         return None, "VAULT_PATH_TEST resolves to the same path as PRIVATE_VAULT_PATH"
 
     return test_path, None

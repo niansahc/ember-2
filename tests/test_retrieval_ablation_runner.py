@@ -86,6 +86,57 @@ class TestFailsClosedOnVaultResolution:
         assert "REFUSING" in capsys.readouterr().err
 
 
+class TestEnvValuesComeFromTheAppLoader:
+    """The runner keeps no env-file parser of its own: its entrypoint loads
+    the env file through src.core.config.load_env_file(), and values are read
+    from the process environment only. Relative values resolve against the
+    repo root, as the hooks resolve them, whatever the cwd."""
+
+    def test_reads_the_process_environment(self, monkeypatch):
+        """Positive control for the test below."""
+        monkeypatch.setenv("VAULT_PATH_TEST", "  synthetic/test_vault  ")
+        assert runner._read_env_value("VAULT_PATH_TEST") == "synthetic/test_vault"
+
+    def test_does_not_parse_an_env_file_itself(self, monkeypatch, tmp_path):
+        """A synthetic env file beside a patched ENV_PATH is never read. The
+        old in-module parser returned this value."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("VAULT_PATH_TEST=synthetic/from_file\n", encoding="utf-8")
+        monkeypatch.setattr(runner, "ENV_PATH", env_file, raising=False)
+        monkeypatch.delenv("VAULT_PATH_TEST", raising=False)
+        if runner._read_env_value("VAULT_PATH_TEST") is not None:
+            pytest.fail("runner read a value from outside the process environment")
+
+    def test_relative_values_resolve_against_repo_root(self, monkeypatch, tmp_path):
+        repo = tmp_path / "repo"
+        cwd = tmp_path / "elsewhere"
+        for root in (repo, cwd):
+            (root / "vaults" / "test").mkdir(parents=True)
+            (root / "vaults" / "live").mkdir(parents=True)
+        monkeypatch.setattr(runner, "REPO_ROOT", repo)
+        monkeypatch.chdir(cwd)
+        values = {"VAULT_PATH_TEST": "vaults/test", "PRIVATE_VAULT_PATH": "vaults/live"}
+        monkeypatch.setattr(runner, "_read_env_value", values.get)
+        vault, reason = runner.resolve_test_vault()
+        assert reason is None
+        assert vault == (repo / "vaults" / "test").resolve()
+
+    def test_relative_live_vault_equal_to_test_vault_is_refused(self, monkeypatch, tmp_path):
+        """Positive control: the live vault relative, the test vault absolute,
+        one directory under the repo root; the cwd holds a same-named one."""
+        repo = tmp_path / "repo"
+        cwd = tmp_path / "elsewhere"
+        for root in (repo, cwd):
+            (root / "vaults" / "live").mkdir(parents=True)
+        monkeypatch.setattr(runner, "REPO_ROOT", repo)
+        monkeypatch.chdir(cwd)
+        values = {"VAULT_PATH_TEST": str(repo / "vaults" / "live"), "PRIVATE_VAULT_PATH": "vaults/live"}
+        monkeypatch.setattr(runner, "_read_env_value", values.get)
+        vault, reason = runner.resolve_test_vault()
+        assert vault is None
+        assert "same path as PRIVATE_VAULT_PATH" in reason
+
+
 class TestTieringDatabasesAreRestored:
     """`_update_retrieval_stats` fires unconditionally on the read path inside a
     bare except and writes last_retrieved_at / retrieval_count -- the tiering

@@ -16,12 +16,14 @@ directory the session has cd'd into.
 """
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
+# Same directory; Python puts it on sys.path when this file runs as a script.
+from hook_utils import project_dir
+
+REPO_ROOT = Path(project_dir())
 
 
 def main():

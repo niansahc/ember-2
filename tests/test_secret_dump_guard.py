@@ -19,56 +19,34 @@ pointing at a tmp vault outside it.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import shutil
 import subprocess
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-HOOKS_DIR = Path(__file__).resolve().parents[1] / ".claude" / "hooks"
-HOOK_PATH = HOOKS_DIR / "secret_dump_guard.py"
+from tests.conftest import (
+    hermetic_hook_project,
+    load_hook,
+    make_configured_vault_project,
+    make_in_repo_vault_project,
+    run_hook,
+)
 
-
-def _load_hook():
-    # The hook imports names_vault_path from its sibling vault_guard.py, the
-    # way it resolves when the harness runs it as a script.
-    if str(HOOKS_DIR) not in sys.path:
-        sys.path.insert(0, str(HOOKS_DIR))
-    spec = importlib.util.spec_from_file_location("secret_dump_guard_under_test", HOOK_PATH)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-guard = _load_hook()
+guard = load_hook("secret_dump_guard.py")
 
 
 @pytest.fixture(autouse=True)
 def _project_without_vault(tmp_path, monkeypatch):
-    """Hermetic default: an empty tmp project and no inherited
-    PRIVATE_VAULT_PATH, so no test reads the developer's checkout or .env."""
-    project = tmp_path / "empty_project"
-    project.mkdir()
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-    monkeypatch.delenv("PRIVATE_VAULT_PATH", raising=False)
-    return project
+    """Hermetic default: no test reads the developer's checkout or .env."""
+    return hermetic_hook_project(tmp_path, monkeypatch)
 
 
-def _run_hook(raw: str) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items() if k != "PRIVATE_VAULT_PATH"}
-    return subprocess.run(
-        [sys.executable, str(HOOK_PATH)],
-        input=raw,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        env=env,
-    )
+def _run_hook(payload) -> subprocess.CompletedProcess:
+    """The real hook process, with the environment the fixtures set up."""
+    return run_hook("secret_dump_guard.py", payload)
 
 
 DENY = [
@@ -202,10 +180,7 @@ def test_malformed_input_does_not_crash(raw):
 
 @pytest.fixture
 def in_repo(tmp_path, monkeypatch):
-    project = tmp_path / "proj"
-    (project / "private_vault" / "memory").mkdir(parents=True)
-    (project / "private_vault" / "memory" / "rec.json").write_text("{}", encoding="utf-8")
-    (project / "src").mkdir()
+    project = make_in_repo_vault_project(tmp_path)
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
     return project
 
@@ -260,15 +235,7 @@ def test_in_repo_vault_allows(in_repo, command):
 @pytest.fixture
 def configured(tmp_path, monkeypatch):
     """A tmp project whose tmp .env points at a tmp vault outside it."""
-    project = tmp_path / "proj"
-    (project / ".claude").mkdir(parents=True)
-    (project / "src").mkdir()
-    outside = tmp_path / "outside"
-    vault = outside / "EmberVaultX"
-    (vault / "memory").mkdir(parents=True)
-    (vault / "memory" / "rec.json").write_text("{}", encoding="utf-8")
-    (outside / "notes.txt").write_text("", encoding="utf-8")
-    (project / ".env").write_text(f"PRIVATE_VAULT_PATH={vault}\n", encoding="utf-8")
+    project, outside, vault = make_configured_vault_project(tmp_path, "EmberVaultX")
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
     rel = os.path.relpath(vault, project).replace("\\", "/")
     rel_outside = os.path.relpath(outside, project).replace("\\", "/")
@@ -352,40 +319,24 @@ def test_configured_vault_allows(configured, case):
 
 
 @pytest.mark.parametrize("off", ["no-env-file", "vault-missing"])
-@pytest.mark.parametrize("case", CONFIG_DENY, ids=lambda case: case[0])
-def test_configured_rules_are_off_without_a_configured_vault(configured, case, off):
-    """Absence counterpart of test_configured_vault_denies: same commands."""
-    command, cwd = _config_case(case, configured)
+def test_configured_rules_are_off_without_a_configured_vault(configured, off):
+    """Absence counterpart of test_configured_vault_denies: every deny
+    command, against the same tree with the configuration taken away."""
+    cases = [_config_case(case, configured) for case in CONFIG_DENY]
     if off == "no-env-file":
         (configured.project / ".env").unlink()
     else:
         shutil.rmtree(configured.outside / "EmberVaultX")
-    assert guard._matches_dump_command(command, cwd) is None
+    assert [c for c, cwd in cases if guard._matches_dump_command(c, cwd) is not None] == []
 
 
 def test_configured_vault_hook_process_uses_payload_cwd(configured):
     payload = {"tool_name": "Bash", "tool_input": {"command": "grep -r KEY"}, "cwd": str(configured.outside)}
-    env = {k: v for k, v in os.environ.items() if k != "PRIVATE_VAULT_PATH"}
-    result = subprocess.run(
-        [sys.executable, str(HOOK_PATH)],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        timeout=10,
-        env={**env, "CLAUDE_PROJECT_DIR": str(configured.project)},
-    )
+    result = _run_hook(payload)
     output = json.loads(result.stdout)["hookSpecificOutput"]
     assert output["permissionDecision"] == "deny"
     reason = output["permissionDecisionReason"].lower()
     assert "embervaultx" not in reason
     # Same command from the project root: no reach, no output.
     payload["cwd"] = str(configured.project)
-    result = subprocess.run(
-        [sys.executable, str(HOOK_PATH)],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        timeout=10,
-        env={**env, "CLAUDE_PROJECT_DIR": str(configured.project)},
-    )
-    assert result.stdout.strip() == ""
+    assert _run_hook(payload).stdout.strip() == ""

@@ -20,45 +20,29 @@ means "the hook ran and passed this," not "the hook never ran."
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
+from tests.conftest import load_hook, run_hook
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
-HOOKS_DIR = REPO_ROOT / ".claude" / "hooks"
-ENV_GUARD = HOOKS_DIR / "env_guard.py"
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 
 
-def _load_env_guard():
-    spec = importlib.util.spec_from_file_location("env_guard_under_test", ENV_GUARD)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-env_guard = _load_env_guard()
+env_guard = load_hook("env_guard.py")
 
 
 def _payload(tool: str, **tool_input) -> dict:
     return {"tool_name": tool, "tool_input": tool_input}
 
 
-def _run(script: Path, payload) -> subprocess.CompletedProcess:
-    raw = payload if isinstance(payload, str) else json.dumps(payload)
-    return subprocess.run(
-        [sys.executable, str(script)],
-        input=raw,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
+def _run(payload) -> subprocess.CompletedProcess:
+    return run_hook("env_guard.py", payload)
 
 
 def _decision(result: subprocess.CompletedProcess) -> str | None:
@@ -242,7 +226,7 @@ E2E = {
 @pytest.mark.parametrize("tool", sorted(E2E))
 def test_positive_control_hook_process_denies(tool):
     deny_payload, _ = E2E[tool]
-    result = _run(ENV_GUARD, deny_payload)
+    result = _run(deny_payload)
     assert result.returncode == 0
     assert _decision(result) == "deny"
     reason = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
@@ -252,14 +236,14 @@ def test_positive_control_hook_process_denies(tool):
 @pytest.mark.parametrize("tool", sorted(E2E))
 def test_hook_process_allows_example(tool):
     _, allow_payload = E2E[tool]
-    result = _run(ENV_GUARD, allow_payload)
+    result = _run(allow_payload)
     assert result.returncode == 0
     assert _decision(result) is None
 
 
 @pytest.mark.parametrize("raw", ["", "not json", "[]", json.dumps({"tool_name": "Read"})])
 def test_malformed_payload_allows_without_crashing(raw):
-    result = _run(ENV_GUARD, raw)
+    result = _run(raw)
     assert result.returncode == 0
     assert _decision(result) is None
 

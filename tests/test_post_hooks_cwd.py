@@ -14,32 +14,17 @@ tools/eval_retrieval.py, and empty tmp vault directories.
 
 from __future__ import annotations
 
-import importlib.util
-import json
-import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
+from tests.conftest import HOOKS_DIR, load_hook, run_hook
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
-HOOKS_DIR = REPO_ROOT / ".claude" / "hooks"
 POST_EDIT = HOOKS_DIR / "post_edit_test.py"
 POST_COMMIT = HOOKS_DIR / "post_commit_eval.py"
-
-
-def _run_hook(hook: Path, payload: dict, cwd: Path, env: dict) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, str(hook)],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        timeout=120,
-        cwd=cwd,
-        env={**os.environ, **env},
-    )
 
 
 @pytest.fixture
@@ -56,7 +41,7 @@ def test_post_edit_runs_project_tests_from_another_cwd(tmp_path, elsewhere):
         "def test_marker():\n    pass\n", encoding="utf-8"
     )
     payload = {"tool_name": "Edit", "tool_input": {"file_path": str(project / "src" / "x.py")}}
-    result = _run_hook(POST_EDIT, payload, elsewhere, {"CLAUDE_PROJECT_DIR": str(project)})
+    result = run_hook(POST_EDIT.name, payload, cwd=elsewhere, env={"CLAUDE_PROJECT_DIR": str(project)})
     assert result.returncode == 0
     assert "1 passed" in result.stdout, result.stdout
 
@@ -85,7 +70,7 @@ def test_post_commit_runs_eval_in_project_from_another_cwd(tmp_path, elsewhere):
         "PRIVATE_VAULT_PATH": str(tmp_path / "live_vault_placeholder"),
     }
     payload = {"tool_name": "Bash", "tool_input": {"command": 'git commit -m "x"'}}
-    result = _run_hook(POST_COMMIT, payload, elsewhere, env)
+    result = run_hook(POST_COMMIT.name, payload, cwd=elsewhere, env=env)
     assert result.returncode == 0
     assert f"EVAL STUB cwd={project}" in result.stdout, result.stdout
 
@@ -95,7 +80,4 @@ def test_repo_root_falls_back_to_hook_location(hook, monkeypatch):
     """Without CLAUDE_PROJECT_DIR (a manual run), the anchor is the
     checkout the hook file lives in, not the cwd."""
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-    spec = importlib.util.spec_from_file_location(f"{hook.stem}_under_test", hook)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    assert module.REPO_ROOT == REPO_ROOT
+    assert load_hook(hook.name).REPO_ROOT == REPO_ROOT

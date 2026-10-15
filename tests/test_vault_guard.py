@@ -20,9 +20,9 @@ end-to-end deny through the real hook process.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -31,22 +31,15 @@ from types import SimpleNamespace
 
 import pytest
 
-HOOKS_DIR = Path(__file__).resolve().parents[1] / ".claude" / "hooks"
-HOOK = HOOKS_DIR / "vault_guard.py"
+from tests.conftest import (
+    hermetic_hook_project,
+    load_hook,
+    make_configured_vault_project,
+    make_in_repo_vault_project,
+    run_hook,
+)
 
-
-def _load_hook():
-    # The hook imports env_file from its own directory, the way it resolves
-    # when the harness runs it as a script.
-    if str(HOOKS_DIR) not in sys.path:
-        sys.path.insert(0, str(HOOKS_DIR))
-    spec = importlib.util.spec_from_file_location("vault_guard_under_test", HOOK)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-guard = _load_hook()
+guard = load_hook("vault_guard.py")
 
 
 def _payload(tool: str, cwd: str | None = None, **tool_input) -> dict:
@@ -62,15 +55,9 @@ def _id(p: dict) -> str:
 
 @pytest.fixture(autouse=True)
 def _project_without_vault(tmp_path, monkeypatch):
-    """Hermetic default: the project dir is an empty tmp dir, so the reach
-    rule never sees the developer's checkout, and no inherited
-    PRIVATE_VAULT_PATH, so the configured vault comes only from a test's
-    own tmp .env."""
-    project = tmp_path / "empty_project"
-    project.mkdir()
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-    monkeypatch.delenv("PRIVATE_VAULT_PATH", raising=False)
-    return project
+    """Hermetic default: the reach rule never sees the developer's checkout,
+    and the configured vault comes only from a test's own tmp .env."""
+    return hermetic_hook_project(tmp_path, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
@@ -141,11 +128,7 @@ def test_every_guarded_tool_has_deny_and_allow_cases():
 
 @pytest.fixture
 def project_with_vault(tmp_path, monkeypatch):
-    project = tmp_path / "proj"
-    (project / "private_vault" / "memory").mkdir(parents=True)
-    (project / "private_vault" / "top.json").write_text("{}", encoding="utf-8")
-    (project / "private_vault" / "memory" / "rec.json").write_text("{}", encoding="utf-8")
-    (project / "src").mkdir()
+    project = make_in_repo_vault_project(tmp_path)
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
     return project
 
@@ -240,37 +223,27 @@ E2E = {
 }
 
 
-_ENV_WITHOUT_VAULT = {k: v for k, v in os.environ.items() if k != "PRIVATE_VAULT_PATH"}
-
-
-def _run(payload, project: Path) -> subprocess.CompletedProcess:
-    raw = payload if isinstance(payload, str) else json.dumps(payload)
-    return subprocess.run(
-        [sys.executable, str(HOOK)],
-        input=raw,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        env={**_ENV_WITHOUT_VAULT, "CLAUDE_PROJECT_DIR": str(project)},
-    )
+def _run(payload) -> subprocess.CompletedProcess:
+    """The real hook process, with the environment the fixtures set up."""
+    return run_hook("vault_guard.py", payload)
 
 
 @pytest.mark.parametrize("tool", sorted(E2E))
-def test_positive_control_hook_process(tool, _project_without_vault):
+def test_positive_control_hook_process(tool):
     deny_input, allow_input = E2E[tool]
-    denied = _run({"tool_name": tool, "tool_input": deny_input}, _project_without_vault)
+    denied = _run({"tool_name": tool, "tool_input": deny_input})
     assert denied.returncode == 0
     output = json.loads(denied.stdout)["hookSpecificOutput"]
     assert output["permissionDecision"] == "deny"
     assert "Vault Privacy Rule" in output["permissionDecisionReason"]
-    allowed = _run({"tool_name": tool, "tool_input": allow_input}, _project_without_vault)
+    allowed = _run({"tool_name": tool, "tool_input": allow_input})
     assert allowed.returncode == 0
     assert allowed.stdout.strip() == ""
 
 
 @pytest.mark.parametrize("raw", ["", "not json", "[]", json.dumps({"tool_name": "Read"})])
-def test_malformed_payload_allows_without_crashing(raw, _project_without_vault):
-    result = _run(raw, _project_without_vault)
+def test_malformed_payload_allows_without_crashing(raw):
+    result = _run(raw)
     assert result.returncode == 0
     assert result.stdout.strip() == ""
 
@@ -286,16 +259,7 @@ VAULT_NAME = "EmberVaultLongName"  # long enough to get an 8.3 short name
 @pytest.fixture
 def configured(tmp_path, monkeypatch):
     """A tmp project whose tmp .env points at a tmp vault outside it."""
-    project = tmp_path / "proj"
-    (project / ".claude").mkdir(parents=True)
-    (project / "src").mkdir()
-    outside = tmp_path / "outside"
-    vault = outside / VAULT_NAME
-    (vault / "memory").mkdir(parents=True)
-    (vault / "memory" / "rec.json").write_text("{}", encoding="utf-8")
-    (outside / f"{VAULT_NAME}_other").mkdir()
-    (outside / "notes.txt").write_text("", encoding="utf-8")
-    (project / ".env").write_text(f"PRIVATE_VAULT_PATH={vault}\n", encoding="utf-8")
+    project, outside, vault = make_configured_vault_project(tmp_path, VAULT_NAME)
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
     return SimpleNamespace(project=project, outside=outside, vault=vault)
 
@@ -382,10 +346,10 @@ def test_every_guarded_tool_has_configured_deny_and_allow_cases():
 
 
 @pytest.mark.parametrize("off", ["no-env-file", "no-key", "vault-missing"])
-@pytest.mark.parametrize("name", sorted(CONFIG_DENY))
-def test_configured_rules_are_off_without_a_configured_vault(name, off, configured):
-    """Absence counterpart of test_configured_vault_denies: same payloads."""
-    payload = _config_payload(CONFIG_DENY[name], configured)
+def test_configured_rules_are_off_without_a_configured_vault(off, configured):
+    """Absence counterpart of test_configured_vault_denies: every deny
+    payload, built before the configuration is taken away."""
+    payloads = {name: _config_payload(case, configured) for name, case in CONFIG_DENY.items()}
     env = configured.project / ".env"
     if off == "no-env-file":
         env.unlink()
@@ -393,7 +357,7 @@ def test_configured_rules_are_off_without_a_configured_vault(name, off, configur
         env.write_text("OTHER_KEY=1\n", encoding="utf-8")
     else:
         shutil.rmtree(configured.vault)
-    assert guard.evaluate(payload) is None
+    assert [name for name, p in payloads.items() if guard.evaluate(p) is not None] == []
 
 
 def test_process_environment_wins_over_the_env_file(configured, monkeypatch):
@@ -479,9 +443,7 @@ def test_cache_skips_the_parse_until_the_env_file_changes(configured, monkeypatc
 
 
 def test_cache_file_is_covered_by_env_guard():
-    spec = importlib.util.spec_from_file_location("env_guard_for_cache", HOOKS_DIR / "env_guard.py")
-    env_guard = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(env_guard)
+    env_guard = load_hook("env_guard.py")
     assert env_guard.names_env_file(f".claude/{guard._CACHE_NAME}")
     assert env_guard.names_env_file(f".claude/{guard._CACHE_NAME}.1234.tmp")
 
@@ -522,32 +484,24 @@ CONFIG_E2E = {
 }
 
 
-def _run_configured(case, c) -> subprocess.CompletedProcess:
-    return _run(_config_payload(case, c), c.project)
-
-
 def _leaks_vault_path(result: subprocess.CompletedProcess, c) -> bool:
-    """The vault path appears in what the hook printed. The deny reason is
-    checked decoded too: JSON escapes Windows backslashes in raw stdout."""
-    text = result.stdout + result.stderr
-    try:
-        text += json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
-    except (ValueError, KeyError, TypeError):
-        pass
-    lowered = text.lower()
-    return any(form.lower() in lowered for form in (str(c.vault), c.vault.as_posix()))
+    """The vault path appears in what the hook printed, in any escaping:
+    native, JSON (`\\\\` in raw stdout) or repr. Every run of backslashes is
+    folded to `/` before comparing against the forward-slash form."""
+    text = re.sub(r"\\+", "/", result.stdout + result.stderr).lower()
+    return c.vault.as_posix().lower() in text
 
 
 @pytest.mark.parametrize("tool", sorted(CONFIG_E2E))
 def test_configured_vault_hook_process(tool, configured):
     deny_name, allow_name = CONFIG_E2E[tool]
-    denied = _run_configured(CONFIG_DENY[deny_name], configured)
+    denied = _run(_config_payload(CONFIG_DENY[deny_name], configured))
     assert denied.returncode == 0
     output = json.loads(denied.stdout)["hookSpecificOutput"]
     assert output["permissionDecision"] == "deny"
     assert "PRIVATE_VAULT_PATH" in output["permissionDecisionReason"]
     assert not _leaks_vault_path(denied, configured)
-    allowed = _run_configured(CONFIG_ALLOW[allow_name], configured)
+    allowed = _run(_config_payload(CONFIG_ALLOW[allow_name], configured))
     assert allowed.returncode == 0
     assert allowed.stdout.strip() == ""
     assert not _leaks_vault_path(allowed, configured)
@@ -555,5 +509,5 @@ def test_configured_vault_hook_process(tool, configured):
 
 def test_leak_check_positive_control(configured):
     """_leaks_vault_path sees the path when the payload itself carries it."""
-    denied = _run_configured(CONFIG_DENY["read-native"], configured)
+    denied = _run(_config_payload(CONFIG_DENY["read-native"], configured))
     assert _leaks_vault_path(denied, configured)

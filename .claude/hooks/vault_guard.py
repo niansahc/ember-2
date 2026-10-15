@@ -17,7 +17,7 @@ Which vaults:
     rule reaches it.
 
 PRIVATE_VAULT_PATH is resolved inside this process: the process
-environment first, then .env through env_file.read_env_value (the parser
+environment first, then .env through hook_utils.read_env_value (the parser
 post_commit_eval.py uses). A relative value resolves against the project
 root, as the API does. The value is never printed, deny messages
 included. Parsing .env costs a python-dotenv import (~60 ms per hook
@@ -62,7 +62,9 @@ Rules:
    (src/**/*.py).
 
 Shared with secret_dump_guard.py: names_vault_path(), vault_dirs(),
-inside_vault(), above_vault() (one definition of "a vault path").
+inside_vault(), above_vault(), absolute_path(), path_forms() (one
+definition of "a vault path"). Paths are plain strings: this runs as a
+fresh process on every tool call, and pathlib/typing imports cost ~11 ms.
 
 A pattern check, not a sandbox.
 """
@@ -72,12 +74,11 @@ import json
 import os
 import re
 import sys
-from pathlib import Path
-from typing import NamedTuple
+from collections import namedtuple
 
 # Same directory; Python puts it on sys.path when this file runs as a
 # script. Shared with post_commit_eval.py so both hooks parse .env one way.
-from env_file import read_env_value
+from hook_utils import deny, project_dir, read_env_value
 
 _VAULT_DIR = "private_vault"
 _VAULT_KEY = "PRIVATE_VAULT_PATH"
@@ -88,10 +89,6 @@ _WILDCARDS = frozenset("*?[")
 # Path-form prefixes, matched after backslashes become slashes.
 _DEVICE_PREFIX_RE = re.compile(r"^//[?.]/")  # \\?\C:\x, \\.\C:\x
 _POSIX_DRIVE_RE = re.compile(r"^/(?:mnt/)?([a-z])(?=/|$)", re.IGNORECASE)  # /c/x, /mnt/c/x
-
-
-def _project_dir() -> Path:
-    return Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
 
 
 def _components(path: str) -> list[str]:
@@ -128,7 +125,7 @@ def names_vault_path(candidate) -> bool:
 # Vault locations
 # ---------------------------------------------------------------------------
 
-def absolute_path(path: str, base: Path) -> str:
+def absolute_path(path: str, base: str) -> str:
     """`path` as an absolute, lexically normalised path, for every form an
     agent might write. Relative forms resolve against `base`."""
     s = _DEVICE_PREFIX_RE.sub("", path.replace("\\", "/"))
@@ -138,10 +135,10 @@ def absolute_path(path: str, base: Path) -> str:
         s = f"{m.group(1)}:/{s[m.end():]}"
     # ntpath.join also resolves drive-relative C:x against `base` when it is
     # on the same drive (the only drive whose cwd the hook knows).
-    return os.path.normpath(os.path.join(str(base), s))
+    return os.path.normpath(os.path.join(base, s))
 
 
-def _resolutions(path: str, base: Path) -> list[str]:
+def _resolutions(path: str, base: str) -> list[str]:
     """Absolute forms of `path`: lexical, plus the real path (8.3 short
     names, junctions, symlinks) when it has no wildcard."""
     lexical = absolute_path(path, base)
@@ -156,7 +153,7 @@ def _resolutions(path: str, base: Path) -> list[str]:
     return forms
 
 
-def path_forms(path: str, base: Path) -> list[list[str]]:
+def path_forms(path: str, base: str) -> list[list[str]]:
     return [_components(r) for r in _resolutions(path, base)]
 
 
@@ -173,27 +170,26 @@ def _covers(parts: list[str], target: list[str], strict: bool = False) -> bool:
     return not strict or len(parts) > len(target)
 
 
-class Vault(NamedTuple):
-    path: Path
-    forms: list[list[str]]
-    # Inside the project, so gitignored: ripgrep skips it unless a glob
-    # whitelists its entries.
-    in_project: bool
+# path: the directory; forms: path_forms() of it; in_project: inside the
+# project, so gitignored, and ripgrep skips it unless a glob whitelists its
+# entries.
+Vault = namedtuple("Vault", "path forms in_project")
 
 
 def _note(message: str) -> None:
     print(f"[vault_guard] {message}; only the in-repo private_vault/ rules apply.", file=sys.stderr)
 
 
-def _write_cache(cache: Path, data: dict) -> None:
+def _write_cache(cache: str, data: dict) -> None:
     """Atomic, best effort: a failed write only costs the next call a parse."""
-    tmp = cache.with_name(f"{cache.name}.{os.getpid()}.tmp")
+    tmp = f"{cache}.{os.getpid()}.tmp"
     try:
-        tmp.write_text(json.dumps(data), encoding="utf-8")
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
         os.replace(tmp, cache)
     except OSError:
         try:
-            tmp.unlink()
+            os.unlink(tmp)
         except OSError:
             pass
 
@@ -203,17 +199,18 @@ def _configured_vault() -> str | None:
     value = (os.environ.get(_VAULT_KEY) or "").strip()
     if value:
         return value
-    project = _project_dir()
-    env_path = project / ".env"
+    project = project_dir()
+    env_path = os.path.join(project, ".env")
     try:
-        stat = env_path.stat()
+        stat = os.stat(env_path)
     except OSError:
         _note(".env not found")
         return None
     key = [stat.st_mtime_ns, stat.st_size]
-    cache = project / ".claude" / _CACHE_NAME
+    cache = os.path.join(project, ".claude", _CACHE_NAME)
     try:
-        cached = json.loads(cache.read_text(encoding="utf-8"))
+        with open(cache, encoding="utf-8") as handle:
+            cached = json.load(handle)
         hit = cached["key"] == key and isinstance(cached["value"], (str, type(None)))
         value = cached["value"] if hit else None
     except (OSError, ValueError, KeyError, TypeError):
@@ -229,26 +226,28 @@ def _configured_vault() -> str | None:
 def vault_dirs() -> list[Vault]:
     """Existing vault directories: <project>/private_vault and the
     configured vault, deduplicated."""
-    project = _project_dir()
-    project_forms = path_forms(str(project), project)
-    candidates = [str(project / _VAULT_DIR)]
+    project = project_dir()
+    candidates = [os.path.join(project, _VAULT_DIR)]
     configured = _configured_vault()
     if configured:
         candidates.append(configured)
+    project_forms = None  # resolved only once a vault directory exists
     vaults: list[Vault] = []
     for raw in candidates:
-        path = Path(absolute_path(raw, project))
-        if not path.is_dir():
+        path = absolute_path(raw, project)
+        if not os.path.isdir(path):
             continue
-        forms = path_forms(str(path), project)
+        forms = path_forms(path, project)
         if any(f in v.forms for v in vaults for f in forms):
             continue
+        if project_forms is None:
+            project_forms = path_forms(project, project)
         in_project = any(_covers(f, p) for f in forms for p in project_forms)
         vaults.append(Vault(path, forms, in_project))
     return vaults
 
 
-def inside_vault(candidate: str, base: Path, vaults: list[Vault]) -> bool:
+def inside_vault(candidate: str, base: str, vaults: list[Vault]) -> bool:
     """True when `candidate` (a path or glob, relative to `base`) can name
     a location at or under one of `vaults`."""
     forms = path_forms(candidate, base)
@@ -258,7 +257,7 @@ def inside_vault(candidate: str, base: Path, vaults: list[Vault]) -> bool:
 def above_vault(forms: list[list[str]], vault: Vault) -> bool:
     """True when a directory (as `path_forms` components) is a strict ancestor
     of `vault`."""
-    return any(len(f) < len(v) and v[: len(f)] == f for f in forms for v in vault.forms)
+    return any(_covers(v, f, strict=True) for f in forms for v in vault.forms)
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +267,7 @@ def above_vault(forms: list[list[str]], vault: Vault) -> bool:
 def _glob_reaches(pattern: str, roots: list[str], vault: Vault) -> bool:
     """A glob, joined to its search root, can match something below `vault`."""
     return any(
-        _covers(_components(absolute_path(pattern, Path(root))), v, strict=True)
+        _covers(_components(absolute_path(pattern, root)), v, strict=True)
         for root in roots
         for v in vault.forms
     )
@@ -301,7 +300,7 @@ def _grep_reaches(glob: str | None, roots: list[str], vault: Vault) -> bool:
     return _glob_reaches(rooted, roots, vault)
 
 
-def _reaches_vault(tool: str, tool_input: dict, cwd: Path, vaults: list[Vault]) -> str | None:
+def _reaches_vault(tool: str, tool_input: dict, cwd: str, vaults: list[Vault]) -> str | None:
     """Return the field value that would surface vault content from a
     search rooted at or above a vault, else None."""
     path = tool_input.get("path")
@@ -348,7 +347,8 @@ def evaluate(payload) -> str | None:
     vaults = vault_dirs()
     if not vaults:
         return None
-    cwd = Path(payload.get("cwd") or os.getcwd())
+    cwd = payload.get("cwd")
+    cwd = cwd if isinstance(cwd, str) and cwd else os.getcwd()
     path = tool_input.get(PATH_FIELDS[tool][0])
     if isinstance(path, str) and path and inside_vault(path, cwd, vaults):
         return path
@@ -364,21 +364,14 @@ def main():
         return
     target = evaluate(payload)
     if target:
-        result = {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    f"Vault Privacy Rule: vault content (private_vault/ or the "
-                    f"configured PRIVATE_VAULT_PATH) may not be read, listed, "
-                    f"or edited (matched '{target}'). If this is a search, "
-                    f"scope `path` to a subdirectory or anchor the pattern "
-                    f"(e.g. src/**/*.py). See CLAUDE.md and "
-                    f".claude/hooks/vault_guard.py."
-                ),
-            }
-        }
-        print(json.dumps(result))
+        deny(
+            f"Vault Privacy Rule: vault content (private_vault/ or the "
+            f"configured PRIVATE_VAULT_PATH) may not be read, listed, "
+            f"or edited (matched '{target}'). If this is a search, "
+            f"scope `path` to a subdirectory or anchor the pattern "
+            f"(e.g. src/**/*.py). See CLAUDE.md and "
+            f".claude/hooks/vault_guard.py."
+        )
 
 
 if __name__ == "__main__":

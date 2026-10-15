@@ -39,19 +39,15 @@ from pathlib import Path
 
 # Same directory; Python puts it on sys.path when this file runs as a
 # script. Shared with vault_guard.py so both hooks parse .env one way.
-from env_file import read_env_value
+from hook_utils import project_dir, read_env_value
 
 
 TRIGGER_PATHS = ("src/context/", "src/retrieval/", "src/llm/")
 
 # Anchor for every path and subprocess cwd below, so the hook behaves the
 # same whichever directory the session has cd'd into.
-REPO_ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
+REPO_ROOT = Path(project_dir())
 ENV_PATH = REPO_ROOT / ".env"
-
-
-def _read_env_value(key: str) -> str | None:
-    return read_env_value(key, ENV_PATH)
 
 
 def _resolve_test_vault() -> tuple[Path | None, str | None]:
@@ -60,7 +56,7 @@ def _resolve_test_vault() -> tuple[Path | None, str | None]:
     Returns (path, None) on success and (None, reason) on failure. Every
     failure path is a refusal, never a fallback to the live vault.
     """
-    test_vault = _read_env_value("VAULT_PATH_TEST")
+    test_vault = read_env_value("VAULT_PATH_TEST", ENV_PATH)
     if not test_vault:
         return None, "VAULT_PATH_TEST is not set"
 
@@ -70,7 +66,7 @@ def _resolve_test_vault() -> tuple[Path | None, str | None]:
         # new empty vault and report a meaningless all-FAIL eval.
         return None, "VAULT_PATH_TEST does not point at an existing directory"
 
-    live_vault = _read_env_value("PRIVATE_VAULT_PATH")
+    live_vault = read_env_value("PRIVATE_VAULT_PATH", ENV_PATH)
     if live_vault and Path(live_vault).resolve() == test_path:
         return None, "VAULT_PATH_TEST resolves to the same path as PRIVATE_VAULT_PATH"
 

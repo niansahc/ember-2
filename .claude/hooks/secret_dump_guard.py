@@ -10,11 +10,10 @@ record IDs, so a listing is a read. Reads hook JSON from stdin. Returns a
 deny decision if the command matches; silent pass-through otherwise.
 Read/Grep/Glob are vault_guard.py.
 
-"The vault" is vault_guard.py's definition: any private_vault directory
-by name, plus the existing <project>/private_vault and configured
-PRIVATE_VAULT_PATH directories by location. A path argument counts when
-it resolves, against the payload cwd and any `cd` earlier in the same
-command line, to a location at or under one of those. A recursive search
+"The vault" is vault_guard.py's definition (by name and by location). A
+path argument counts when it resolves, against the payload cwd and any
+`cd` earlier in the same command line, to a location at or under a vault.
+A recursive search
 or listing (grep -r, rg, findstr /s, gci -Recurse, find, tree, ls -R, ...)
 counts when its root is an ancestor of one, unless the utility honours
 .gitignore (rg, ag) and the vault is the gitignored in-project one. A
@@ -38,8 +37,8 @@ actions since the tool has already executed." PreToolUse is the only
 stage with any leverage, and it can only pattern-match the command
 string about to run -- it has no visibility into what that command's
 output will actually be. So this hook recognizes the "dump, search, or
-list a vault path" family and nothing else. A command written a different way
--- a Python one-liner, a different utility, base64, a script, a path
+list a vault path" family and nothing else. A command written a
+different way -- a Python one-liner, a different utility, base64, a script, a path
 built at runtime ($VAR, %VAR%), a flag value taken for a path or missed
 as one -- is not caught. That is a real, permanent limitation, not an
 oversight: the space of "ways to print a file's content" in a shell is
@@ -59,18 +58,12 @@ import os
 import re
 import shlex
 import sys
-from pathlib import Path
 
-# Same directory; Python puts it on sys.path when this file runs as a
-# script. One definition of "a vault path" for every vault hook.
-from vault_guard import (
-    above_vault,
-    absolute_path,
-    inside_vault,
-    names_vault_path,
-    path_forms,
-    vault_dirs,
-)
+# vault_guard (same directory, on sys.path when this file runs as a script)
+# holds the one definition of "a vault path". It is imported only once a
+# command runs a read or list utility: most Bash calls never need it, and
+# its imports cost ~15 ms on every call.
+from hook_utils import deny
 
 # Content-reading utilities, lowercase (PowerShell and Windows executables
 # are case-insensitive): whole-file dumps, plus content searches, which
@@ -195,19 +188,11 @@ def _path_candidates(token: str) -> list[str]:
     return [c for c in candidates if c]
 
 
-def _names_vault(token: str, base: Path, vaults) -> bool:
-    return names_vault_path(token) or (
-        bool(vaults) and any(inside_vault(c, base, vaults) for c in _path_candidates(token))
-    )
-
-
 def _recursive_roots(tokens: list[str], utility: str) -> list[str] | None:
     """Directories a recursive content search or listing in this stage
     walks, or None when the stage does not recurse. Flag values are taken
     for positionals (`-g '*.py'`); that only adds roots that are rarely
     ancestors of a vault."""
-    if _utility(tokens[:1]) != utility:
-        return None  # run by xargs: its inputs arrive on stdin
     flags = [t for t in tokens[1:] if t.startswith("-")]
     args = [t for t in tokens[1:] if not t.startswith("-")]
     if utility in _ALWAYS_RECURSIVE or (
@@ -244,8 +229,8 @@ def _recursive_roots(tokens: list[str], utility: str) -> list[str] | None:
 
 def _lists_cwd(tokens: list[str], utility: str) -> bool:
     """A listing with no path argument lists the cwd (`cd vault && ls`)."""
-    if utility not in _LIST_UTILITIES or utility == "wc" or _utility(tokens[:1]) != utility:
-        return False  # wc with no file counts stdin; xargs supplies paths
+    if utility not in _LIST_UTILITIES or utility == "wc":
+        return False  # wc with no file counts stdin
     return not any(not t.startswith("-") and not _SWITCH_RE.fullmatch(t) for t in tokens[1:])
 
 
@@ -256,9 +241,11 @@ def _ignores_gitignore(flags: list[str]) -> bool:
     )
 
 
-def _reaches_vault(stages: list[list[str]], utilities: list[str], base: Path, vaults) -> bool:
+def _reaches_vault(direct: list[tuple[list[str], str]], base: str, vaults) -> bool:
     """A recursive stage rooted at an ancestor of a vault."""
-    for tokens, utility in zip(stages, utilities):
+    from vault_guard import above_vault, path_forms
+
+    for tokens, utility in direct:
         roots = _recursive_roots(tokens, utility)
         if roots is None:
             continue
@@ -277,29 +264,40 @@ def _matches_dump_command(command: str, cwd: str | None = None) -> str | None:
     """Return the matched utility name if a pipeline in `command` both runs
     a content-reading, listing or counting utility and names a vault path
     or recurses from an ancestor of one, else None."""
-    base = Path(cwd or os.getcwd())
-    vaults = None  # resolved on first need: it reads .env (or its cache)
+    base = cwd or os.getcwd()
+    pending_cd: list[str] = []  # resolved once vault_guard is loaded
+    vg = vaults = None
     for pipeline in _pipelines(command):
         stages = [tokens for tokens in pipeline if tokens]
         if not stages:
             continue
         utilities = [_utility(tokens) for tokens in stages]
         if len(stages) == 1 and utilities[0] in _CD:
-            target = stages[0][-1] if len(stages[0]) > 1 else "~"
-            base = Path(absolute_path(target, base))
+            pending_cd.append(stages[0][-1] if len(stages[0]) > 1 else "~")
             continue
         hit = next((u for u in utilities if u in _READ_UTILITIES or u in _LIST_UTILITIES), None)
         if not hit:
             continue
-        if vaults is None:
-            vaults = vault_dirs()
-        if any(_names_vault(t, base, vaults) for tokens in stages for t in tokens[1:]):
+        if vg is None:
+            import vault_guard as vg
+
+            vaults = vg.vault_dirs()  # reads .env (or its cache)
+        for target in pending_cd:
+            base = vg.absolute_path(target, base)
+        pending_cd.clear()
+        if any(vg.names_vault_path(t) for tokens in stages for t in tokens[1:]):
             return hit
-        if vaults and any(_lists_cwd(tokens, u) for tokens, u in zip(stages, utilities)) and inside_vault(
-            ".", base, vaults
+        if not vaults:
+            continue
+        if any(
+            vg.inside_vault(c, base, vaults) for tokens in stages for t in tokens[1:] for c in _path_candidates(t)
         ):
             return hit
-        if vaults and _reaches_vault(stages, utilities, base, vaults):
+        # Stages that run their own operands; an xargs stage gets them on stdin.
+        direct = [(tokens, u) for tokens, u in zip(stages, utilities) if _utility(tokens[:1]) == u]
+        if any(_lists_cwd(tokens, u) for tokens, u in direct) and vg.inside_vault(".", base, vaults):
+            return hit
+        if _reaches_vault(direct, base, vaults):
             return hit
     return None
 
@@ -314,26 +312,20 @@ def main():
     if not command:
         return
 
-    matched_utility = _matches_dump_command(command, data.get("cwd"))
+    cwd = data.get("cwd")
+    matched_utility = _matches_dump_command(command, cwd if isinstance(cwd, str) else None)
     if matched_utility:
-        result = {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    f"Vault Privacy Rule (#188): '{matched_utility}' against a "
-                    "vault path (private_vault/ or the configured "
-                    "PRIVATE_VAULT_PATH, named or reached by a recursive "
-                    "search or listing from an ancestor) would put vault "
-                    "content or entry names (record IDs) into this "
-                    "transcript. This is a known-form prevention check, "
-                    "not a guarantee -- see .claude/hooks/secret_dump_guard.py. "
-                    "Inspect vault data in a separate terminal; existence "
-                    "checks (Test-Path, test -d) are allowed."
-                ),
-            }
-        }
-        print(json.dumps(result))
+        deny(
+            f"Vault Privacy Rule (#188): '{matched_utility}' against a "
+            "vault path (private_vault/ or the configured "
+            "PRIVATE_VAULT_PATH, named or reached by a recursive "
+            "search or listing from an ancestor) would put vault "
+            "content or entry names (record IDs) into this "
+            "transcript. This is a known-form prevention check, "
+            "not a guarantee -- see .claude/hooks/secret_dump_guard.py. "
+            "Inspect vault data in a separate terminal; existence "
+            "checks (Test-Path, test -d) are allowed."
+        )
 
 
 if __name__ == "__main__":

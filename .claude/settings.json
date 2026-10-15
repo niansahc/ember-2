@@ -12,7 +12,7 @@
         ]
       },
       {
-        "matcher": "Read|Grep|Glob|Bash|PowerShell",
+        "matcher": "Read|Grep|Glob|Edit|Write|Bash|PowerShell",
         "hooks": [
           {
             "type": "command",

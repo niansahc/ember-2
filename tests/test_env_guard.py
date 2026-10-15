@@ -2,8 +2,8 @@
 tests/test_env_guard.py
 
 Tests for the .env protection hooks:
-  - .claude/hooks/env_guard.py   (Read|Grep|Glob|Bash|PowerShell)
-  - .claude/hooks/vault_guard.py (Edit|Write; .env half plus private_vault/)
+  - .claude/hooks/env_guard.py   (Read|Grep|Glob|Edit|Write|Bash|PowerShell)
+  - .claude/hooks/vault_guard.py (Edit|Write on private_vault/; rule unchanged)
   - .claude/settings.json        (matcher coverage, cwd-independent commands)
 
 Every payload is synthetic hook JSON. No test opens, reads, or names the
@@ -84,6 +84,12 @@ DENY = [
     _payload("Read", file_path=r"C:\dev\proj\.env."),
     _payload("Read", file_path=r"C:\dev\proj\.env::$DATA"),
     _payload("Read", file_path="C:.env"),
+    # Edit / Write
+    _payload("Write", file_path=r"C:\dev\proj\.env"),
+    _payload("Write", file_path=r"C:\dev\proj\.env.local"),
+    _payload("Write", file_path="/c/dev/proj/.env.production"),
+    _payload("Edit", file_path=r"C:\dev\proj\.ENV.local", old_string="a", new_string="b"),
+    _payload("Edit", file_path="/home/user/proj/.env", old_string="a", new_string="b"),
     # Grep -- path field, glob field (dotfile rule and ripgrep rule)
     _payload("Grep", pattern="KEY", path=r"C:\dev\proj\.env"),
     _payload("Grep", pattern="KEY", path="/c/dev/proj/.env.local"),
@@ -137,6 +143,8 @@ ALLOW = [
     _payload("Grep", pattern="KEY", path=".", glob=".env.example*"),
     _payload("Glob", pattern="**/.env.example"),
     _payload("Glob", pattern=".env.example*"),
+    _payload("Write", file_path=r"C:\dev\proj\.env.example"),
+    _payload("Edit", file_path="/c/dev/proj/.env.example", old_string="a", new_string="b"),
     _payload("Bash", command="cat .env.example"),
     _payload("Bash", command=r"C:\Windows\System32\more.com C:\x\.env.example"),
     _payload("PowerShell", command=r"Get-Content C:\dev\proj\.env.example"),
@@ -193,7 +201,7 @@ def test_allows(payload):
 def test_every_guarded_tool_has_deny_and_allow_cases():
     """The tables themselves stay balanced: a tool with allow cases but no
     deny case would make its allow cases vacuous."""
-    guarded = {"Read", "Grep", "Glob", "Bash", "PowerShell"}
+    guarded = {"Read", "Grep", "Glob", "Edit", "Write", "Bash", "PowerShell"}
     assert guarded <= {p["tool_name"] for p in DENY}
     assert guarded <= {p["tool_name"] for p in ALLOW}
 
@@ -214,6 +222,10 @@ E2E = {
     "Glob": (
         _payload("Glob", pattern="**/.env*"),
         _payload("Glob", pattern="**/.env.example"),
+    ),
+    "Write": (
+        _payload("Write", file_path=r"C:\dev\proj\.env.local"),
+        _payload("Write", file_path=r"C:\dev\proj\.env.example"),
     ),
     "Bash": (
         _payload("Bash", command=r"C:\Windows\System32\more.com C:\x\.env"),
@@ -241,29 +253,23 @@ def test_hook_process_allows_example(tool):
     _, allow_payload = E2E[tool]
     result = _run(ENV_GUARD, allow_payload)
     assert result.returncode == 0
-    assert result.stdout.strip() == ""
+    assert _decision(result) is None
 
 
 @pytest.mark.parametrize("raw", ["", "not json", "[]", json.dumps({"tool_name": "Read"})])
 def test_malformed_payload_allows_without_crashing(raw):
     result = _run(ENV_GUARD, raw)
     assert result.returncode == 0
-    assert result.stdout.strip() == ""
+    assert _decision(result) is None
 
 
 # ---------------------------------------------------------------------------
-# vault_guard.py: Edit/Write
+# vault_guard.py: private_vault/ protection unchanged
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
     "payload",
     [
-        _payload("Write", file_path=r"C:\dev\proj\.env"),
-        _payload("Write", file_path=r"C:\dev\proj\.env.local"),
-        _payload("Write", file_path="/c/dev/proj/.env.production"),
-        _payload("Edit", file_path=r"C:\dev\proj\.ENV.local", old_string="a", new_string="b"),
-        _payload("Edit", file_path="/home/user/proj/.env", old_string="a", new_string="b"),
-        # The private_vault/ protection is unchanged.
         _payload("Write", file_path=r"C:\dev\proj\private_vault\memory\x.json"),
         _payload("Edit", file_path="/c/dev/proj/private_vault/memory/x.json", old_string="a", new_string="b"),
     ],
@@ -276,8 +282,6 @@ def test_vault_guard_denies(payload):
 @pytest.mark.parametrize(
     "payload",
     [
-        _payload("Write", file_path=r"C:\dev\proj\.env.example"),
-        _payload("Edit", file_path="/c/dev/proj/.env.example", old_string="a", new_string="b"),
         _payload("Write", file_path=r"C:\dev\proj\src\core\environment.py"),
     ],
     ids=_id,
@@ -285,7 +289,7 @@ def test_vault_guard_denies(payload):
 def test_vault_guard_allows(payload):
     result = _run(VAULT_GUARD, payload)
     assert result.returncode == 0
-    assert result.stdout.strip() == ""
+    assert _decision(result) is None
 
 
 # ---------------------------------------------------------------------------
@@ -317,16 +321,16 @@ def _is_cwd_independent(command: str) -> bool:
     )
 
 
-def test_settings_env_guard_covers_read_tools():
-    assert {"Read", "Grep", "Glob", "Bash", "PowerShell"} <= _matcher_for("env_guard.py")
-
-
-def test_settings_vault_guard_covers_edit_tools():
-    assert {"Edit", "Write"} <= _matcher_for("vault_guard.py")
-
-
-def test_settings_secret_dump_guard_covers_shell_tools():
-    assert {"Bash", "PowerShell"} <= _matcher_for("secret_dump_guard.py")
+@pytest.mark.parametrize(
+    "script,tools",
+    [
+        ("env_guard.py", {"Read", "Grep", "Glob", "Edit", "Write", "Bash", "PowerShell"}),
+        ("vault_guard.py", {"Edit", "Write"}),
+        ("secret_dump_guard.py", {"Bash", "PowerShell"}),
+    ],
+)
+def test_settings_matcher_covers_tools(script, tools):
+    assert tools <= _matcher_for(script)
 
 
 def test_settings_every_hook_command_is_cwd_independent():
@@ -367,7 +371,7 @@ _VENV_PY = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
     "script,payload",
     [
         ("env_guard.py", _payload("Read", file_path=".env.local")),
-        ("vault_guard.py", _payload("Write", file_path=".env.local")),
+        ("vault_guard.py", _payload("Write", file_path="private_vault/x.json")),
         ("secret_dump_guard.py", _payload("Bash", command="cat private_vault/x.json")),
     ],
 )

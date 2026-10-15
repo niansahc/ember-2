@@ -22,10 +22,15 @@ from pathlib import Path
 
 import pytest
 
-HOOK_PATH = Path(__file__).resolve().parents[1] / ".claude" / "hooks" / "secret_dump_guard.py"
+HOOKS_DIR = Path(__file__).resolve().parents[1] / ".claude" / "hooks"
+HOOK_PATH = HOOKS_DIR / "secret_dump_guard.py"
 
 
 def _load_hook():
+    # The hook imports names_vault_path from its sibling vault_guard.py, the
+    # way it resolves when the harness runs it as a script.
+    if str(HOOKS_DIR) not in sys.path:
+        sys.path.insert(0, str(HOOKS_DIR))
     spec = importlib.util.spec_from_file_location("secret_dump_guard_under_test", HOOK_PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -61,6 +66,22 @@ DENY = [
     "CAT.EXE private_vault/a.json",
     "GET-CONTENT private_vault/a.json",
     r"gc C:\dev\proj\private_vault\a.json",
+    # Vault named without a trailing slash (the old substring check missed it).
+    "cat ../private_vault",
+    # Recursive content searches that name the vault.
+    "grep -r KEY private_vault/",
+    "grep -rn KEY ./private_vault",
+    "egrep -R 'a|b' private_vault/memory",
+    "rg KEY private_vault",
+    "rg -uu KEY /c/dev/proj/private_vault",
+    r"findstr /s /i KEY C:\dev\proj\private_vault\*.json",
+    r"Select-String -Path C:\dev\proj\private_vault\*\*.json -Pattern KEY",
+    # Named in one pipe stage, read in another.
+    r"Get-ChildItem -Recurse C:\dev\proj\private_vault | Select-String KEY",
+    "gci private_vault -r | sls KEY",
+    "find private_vault -name '*.json' | xargs grep KEY",
+    "ls private_vault | head",
+    "printf KEY | grep -rf - private_vault/",
 ]
 
 # Over-blocking guard. Each is an absence check; DENY above is the
@@ -78,8 +99,19 @@ ALLOW = [
         "EOF\n"
         ')"'
     ),
-    # Utility and path in different segments must not cross-contaminate.
+    # Utility and path in different commands must not cross-contaminate.
     "cat README.md && echo done private_vault/x",
+    "rg KEY src; ls private_vault",
+    "cat README.md\nls private_vault",
+    # A quoted pipe is part of a word, not a pipeline boundary.
+    "echo 'cat | x' private_vault/x",
+    # Counting a listing is not reading content.
+    "ls private_vault | wc -l",
+    # Searches that do not name the vault.
+    "rg KEY src",
+    "grep -rn PRIVATE_VAULT_PATH src/core",
+    # A name that merely contains the directory name.
+    "cat docs/private_vault.md",
     # .env moved to env_guard.py; the old substring match denied the example.
     "cat .env.example",
 ]

@@ -9,11 +9,19 @@ Reads tool_input JSON from stdin. Runs the test suite and prints a
 one-line summary. Exit code is always 0 so the hook never blocks
 Claude Code's flow — a failing test is reported but does not prevent
 the next edit.
+
+pytest runs with cwd = the project root (CLAUDE_PROJECT_DIR, falling
+back to this file's location), so `tests/` resolves the same whichever
+directory the session has cd'd into.
 """
 
 import json
+import os
 import subprocess
 import sys
+from pathlib import Path
+
+REPO_ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
 
 
 def main():
@@ -35,6 +43,7 @@ def main():
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "tests/", "--tb=line", "-q"],
+            cwd=REPO_ROOT,
             capture_output=True,
             text=True,
             timeout=180,

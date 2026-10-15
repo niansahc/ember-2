@@ -40,7 +40,9 @@ from pathlib import Path
 
 TRIGGER_PATHS = ("src/context/", "src/retrieval/", "src/llm/")
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# Anchor for every path and subprocess cwd below, so the hook behaves the
+# same whichever directory the session has cd'd into.
+REPO_ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
 ENV_PATH = REPO_ROOT / ".env"
 
 
@@ -112,6 +114,7 @@ def main():
     try:
         result = subprocess.run(
             ["git", "diff", "HEAD~1", "--name-only"],
+            cwd=REPO_ROOT,
             capture_output=True,
             text=True,
             timeout=10,
@@ -141,7 +144,8 @@ def main():
 
     try:
         eval_result = subprocess.run(
-            [sys.executable, "tools/eval_retrieval.py"],
+            [sys.executable, str(REPO_ROOT / "tools" / "eval_retrieval.py")],
+            cwd=REPO_ROOT,
             capture_output=True,
             text=True,
             timeout=120,

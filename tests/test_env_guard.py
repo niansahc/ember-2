@@ -3,8 +3,10 @@ tests/test_env_guard.py
 
 Tests for the .env protection hooks:
   - .claude/hooks/env_guard.py   (Read|Grep|Glob|Edit|Write|Bash|PowerShell)
-  - .claude/hooks/vault_guard.py (Edit|Write on private_vault/; rule unchanged)
-  - .claude/settings.json        (matcher coverage, cwd-independent commands)
+  - .claude/settings.json        (matcher coverage for every guard,
+                                  cwd-independent commands)
+
+vault_guard.py has its own file, tests/test_vault_guard.py.
 
 Every payload is synthetic hook JSON. No test opens, reads, or names the
 repo's real .env through a file API; .env names below are only strings
@@ -31,7 +33,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HOOKS_DIR = REPO_ROOT / ".claude" / "hooks"
 ENV_GUARD = HOOKS_DIR / "env_guard.py"
-VAULT_GUARD = HOOKS_DIR / "vault_guard.py"
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 
 
@@ -264,35 +265,6 @@ def test_malformed_payload_allows_without_crashing(raw):
 
 
 # ---------------------------------------------------------------------------
-# vault_guard.py: private_vault/ protection unchanged
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        _payload("Write", file_path=r"C:\dev\proj\private_vault\memory\x.json"),
-        _payload("Edit", file_path="/c/dev/proj/private_vault/memory/x.json", old_string="a", new_string="b"),
-    ],
-    ids=_id,
-)
-def test_vault_guard_denies(payload):
-    assert _decision(_run(VAULT_GUARD, payload)) == "deny"
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        _payload("Write", file_path=r"C:\dev\proj\src\core\environment.py"),
-    ],
-    ids=_id,
-)
-def test_vault_guard_allows(payload):
-    result = _run(VAULT_GUARD, payload)
-    assert result.returncode == 0
-    assert _decision(result) is None
-
-
-# ---------------------------------------------------------------------------
 # settings.json: matcher coverage and cwd-independent hook commands
 # ---------------------------------------------------------------------------
 
@@ -325,7 +297,7 @@ def _is_cwd_independent(command: str) -> bool:
     "script,tools",
     [
         ("env_guard.py", {"Read", "Grep", "Glob", "Edit", "Write", "Bash", "PowerShell"}),
-        ("vault_guard.py", {"Edit", "Write"}),
+        ("vault_guard.py", {"Read", "Grep", "Glob", "Edit", "Write"}),
         ("secret_dump_guard.py", {"Bash", "PowerShell"}),
     ],
 )

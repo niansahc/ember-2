@@ -205,3 +205,32 @@ def test_results_win_over_status_notice():
     section = builder._build_web_search_section(packet)
     assert section.startswith("<web_search_results>\n")
     assert "status=" not in section
+
+
+def test_unavailable_notice_forbids_claiming_ember_cannot_search():
+    """qwen3:32b answered an unavailable turn with "I can't perform live web
+    searches". Search exists and is only down, so the notice names that
+    claim as forbidden."""
+    builder = _bare_builder()
+    packet = ContextPacket(user_message="q", web_items=[],
+                           web_search_status="unavailable")
+    section = builder._build_web_search_section(packet)
+    assert "temporarily down" in section
+    assert "do not say that you cannot search" in section
+    assert "lack web or internet access" in section
+    assert "cannot get real-time or current information" in section
+
+
+def test_empty_notice_text_is_unchanged():
+    """Positive control for the test above: only the unavailable notice
+    changed."""
+    builder = _bare_builder()
+    packet = ContextPacket(user_message="q", web_items=[],
+                           web_search_status="empty")
+    assert builder._build_web_search_section(packet) == (
+        '<web_search_results status="empty">\n'
+        "[You searched the web for this and the search found nothing. Tell "
+        "the user the search found nothing, then answer from what you already "
+        "know if you can. Do not cite or describe search results.]\n"
+        "</web_search_results>"
+    )

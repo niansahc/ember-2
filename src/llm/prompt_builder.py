@@ -262,12 +262,18 @@ AUTHORITY_RULES = _render_authority_rules(is_conversational=False)
 # searched. For "unavailable" the reply already gets a fixed disclosure line
 # in post_gen_pipeline, so the model is told not to repeat it.
 _WEB_SEARCH_STATUS_NOTICES = {
+    # The capability sentence exists because qwen3:32b, told only "do not
+    # repeat it", answered "I can't perform live web searches": a false
+    # claim that also contradicts the disclosure line.
     "unavailable": (
-        "[You tried to search the web for this, but web search is unavailable "
-        "right now. You have no search results. Answer from what you already "
-        "know. Do not say or imply that you searched, and do not cite or "
-        "describe search results. A note telling the user that search was "
-        "unavailable is added to your reply automatically; do not repeat it.]"
+        "[You tried to search the web for this, but web search is temporarily "
+        "down. You have no search results. Answer from what you already know. "
+        "You do have web search; it is only down for this turn. So do not say "
+        "that you cannot search, that you lack web or internet access, or that "
+        "you cannot get real-time or current information. Do not say or imply "
+        "that you searched, and do not cite or describe search results. A note "
+        "telling the user that search is down is added to your reply "
+        "automatically; do not repeat it.]"
     ),
     "empty": (
         "[You searched the web for this and the search found nothing. Tell "

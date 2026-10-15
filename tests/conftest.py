@@ -738,3 +738,121 @@ def loopback_keyed_client(ui_tree: Path, monkeypatch):
     monkeypatch.delenv("EMBER_ALLOWED_HOSTS", raising=False)
     with ui_client(ui_tree, api_key=UI_FIXTURE_API_KEY, base_url=LOOPBACK_BASE_URL) as c:
         yield c
+
+
+# ---------------------------------------------------------------------------
+# Claude Code hook tests (.claude/hooks/): one loader, one runner, and the
+# synthetic projects the vault guards are tested against. Synthetic data
+# only: no hook test touches the real vault or the developer's .env.
+# ---------------------------------------------------------------------------
+
+HOOKS_DIR = Path(__file__).resolve().parents[1] / ".claude" / "hooks"
+HOOK_VAULT_NAME = "EmberVaultLongName"  # long enough to get an 8.3 short name
+
+
+def load_hook(filename: str):
+    """Import a hook script in-process. Its directory goes on sys.path
+    first, as when the harness runs it, so sibling imports (hook_utils,
+    vault_guard) resolve whatever order the tests run in."""
+    import importlib.util
+
+    if str(HOOKS_DIR) not in sys.path:
+        sys.path.insert(0, str(HOOKS_DIR))
+    spec = importlib.util.spec_from_file_location(
+        f"{Path(filename).stem}_under_test", HOOKS_DIR / filename
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_hook(filename: str, payload, *, cwd=None, env=None, timeout=120):
+    """Run a hook script the way the harness does: JSON on stdin, the
+    current environment (overlaid with `env`)."""
+    import json
+
+    raw = payload if isinstance(payload, str) else json.dumps(payload)
+    return subprocess.run(
+        [sys.executable, str(HOOKS_DIR / filename)],
+        input=raw,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=cwd,
+        env={**os.environ, **(env or {})},
+    )
+
+
+def hook_payload(tool: str, cwd: str | None = None, **tool_input) -> dict:
+    """A synthetic hook payload; `cwd` is included only when given."""
+    payload = {"tool_name": tool, "tool_input": tool_input}
+    if cwd is not None:
+        payload["cwd"] = cwd
+    return payload
+
+
+def payload_id(payload: dict) -> str:
+    """A short pytest id for a hook payload."""
+    import json
+
+    return f"{payload['tool_name']}:{json.dumps(payload['tool_input'])[:70]}"
+
+
+def hook_output(result: subprocess.CompletedProcess) -> dict | None:
+    """The hookSpecificOutput a hook process printed, or None when it
+    printed nothing (an allow)."""
+    import json
+
+    out = result.stdout.strip()
+    return json.loads(out)["hookSpecificOutput"] if out else None
+
+
+def relpath(target: Path, start: Path, sep: str = "/") -> str:
+    """`target` relative to `start`, with `sep` as the separator."""
+    return os.path.relpath(target, start).replace("\\", "/").replace("/", sep)
+
+
+@pytest.fixture
+def hermetic_hook_project(tmp_path: Path, monkeypatch) -> Path:
+    """An empty tmp project as CLAUDE_PROJECT_DIR and no inherited
+    PRIVATE_VAULT_PATH (pinned above to a throwaway vault), so a vault guard
+    sees only what the test builds."""
+    project = tmp_path / "empty_project"
+    project.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    monkeypatch.delenv("PRIVATE_VAULT_PATH", raising=False)
+    return project
+
+
+@pytest.fixture
+def in_repo_vault_project(hermetic_hook_project, tmp_path: Path, monkeypatch) -> Path:
+    """A tmp project, as CLAUDE_PROJECT_DIR, with a private_vault/ of
+    placeholder files."""
+    project = tmp_path / "proj"
+    (project / "private_vault" / "memory").mkdir(parents=True)
+    (project / "private_vault" / "top.json").write_text("{}", encoding="utf-8")
+    (project / "private_vault" / "memory" / "rec.json").write_text("{}", encoding="utf-8")
+    (project / "src").mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    return project
+
+
+@pytest.fixture
+def configured_vault(hermetic_hook_project, tmp_path: Path, monkeypatch):
+    """A tmp project, as CLAUDE_PROJECT_DIR, whose tmp .env points
+    PRIVATE_VAULT_PATH at a tmp vault outside it. Beside the vault: a
+    sibling sharing its name as a prefix, and a plain file."""
+    from types import SimpleNamespace
+
+    project = tmp_path / "proj"
+    (project / ".claude").mkdir(parents=True)
+    (project / "src").mkdir()
+    outside = tmp_path / "outside"
+    vault = outside / HOOK_VAULT_NAME
+    (vault / "memory").mkdir(parents=True)
+    (vault / "memory" / "rec.json").write_text("{}", encoding="utf-8")
+    (outside / f"{HOOK_VAULT_NAME}_other").mkdir()
+    (outside / "notes.txt").write_text("", encoding="utf-8")
+    (project / ".env").write_text(f"PRIVATE_VAULT_PATH={vault}\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    return SimpleNamespace(project=project, outside=outside, vault=vault)

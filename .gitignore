@@ -26,6 +26,8 @@ uat_results/
 # Environment files
 .env
 .env.local
+# vault_guard.py's resolved PRIVATE_VAULT_PATH cache (and its atomic-write temp files)
+.claude/.env.vault_cache.json*
 
 # Watchdog signal files (runtime only, never committed)
 ember_restart.signal

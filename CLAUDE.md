@@ -622,14 +622,24 @@ Hook handles EST/EDT automatically via Python's `zoneinfo` and `America/New_York
 
 Hook scripts live in `.claude/hooks/` and are configured in `.claude/settings.json` (committed, project-level). Machine-local permissions remain in `.claude/settings.local.json` (not committed).
 
-**PreToolUse: Vault Protection** — `.claude/hooks/vault_guard.py`
-Matcher: `Edit|Write`. Blocks any attempted edit to files containing `private_vault/` in the path or ending in `.env`. Returns a deny decision with a clear error message referencing the Vault Privacy Rule. Runs before the edit is applied — the file is never modified.
+All hooks run with `$CLAUDE_PROJECT_DIR` paths, so they work from any session cwd. Shared helpers (project root, `.env` value reader, deny output) live in `.claude/hooks/hook_utils.py`. The PreToolUse guards are pattern checks on the tool call, not a sandbox: a path built at runtime, a script, or a utility not on a list is not caught. Each guard returns a deny decision before the call runs; an unparseable payload is allowed through.
 
-**PostToolUse: Auto Test** — `.claude/hooks/post_edit_test.py`
-Matcher: `Edit|Write`. Runs `pytest tests/ --tb=line -q` after any Python file edit. Non-Python edits are skipped silently. Prints a concise summary (last 3 lines of pytest output). Exit code is always 0 — failing tests are reported but do not block the next edit. Timeout: 180s.
+**PreToolUse: .env Protection** - `.claude/hooks/env_guard.py`
+Matcher: `Read|Grep|Glob|Edit|Write|Bash|PowerShell`. Sole owner of `.env` for every tool. Denies any call that names a `.env` file (`.env`, `.env.local`, `.env.production`, ...): Read/Edit/Write paths, Grep path and glob (ripgrep glob semantics), Glob path and pattern, and any Bash/PowerShell command naming one, whatever the utility. Matching is on the basename after backslash normalisation, case-insensitive, with Win32 aliases (`.env.`) and globs that can reach a `.env` name (`.e*`, `.env{,.local}`). `.env.example` is allowed everywhere. Text inside `git commit -m` / `gh ... --body` messages is skipped as prose.
 
-**PostToolUse: Retrieval Eval** — `.claude/hooks/post_commit_eval.py`
-Matcher: `Bash`. Fires only when the Bash command contains `git commit`. Checks `git diff HEAD~1 --name-only` for files in `src/context/`, `src/retrieval/`, or `src/llm/`. If any match, runs `python tools/eval_retrieval.py` and prints the summary. Silent no-op for commits that don't touch those paths. Timeout: 180s.
+**PreToolUse: Vault Protection** - `.claude/hooks/vault_guard.py`
+Matcher: `Read|Grep|Glob|Edit|Write`. Denies reading, listing, or editing vault content. "Vault" means: any directory named `private_vault` (by name, in any path form or glob such as `priv*`), plus, by location when the directory exists, `<project>/private_vault` and the configured vault `PRIVATE_VAULT_PATH`. `PRIVATE_VAULT_PATH` is resolved inside the hook (process env, then `.env` via `.claude/hooks/hook_utils.py`, shared with post_commit_eval), never printed, and cached in `.claude/.env.vault_cache.json` keyed by the `.env` mtime and size (gitignored; covered by env_guard). With no `.env` or no key, only the in-repo rules apply and a note goes to stderr.
+- Paths are resolved against the session cwd: relative and `../`, `~`, Git Bash `/c/`, WSL `/mnt/c/`, drive-relative, `\\?\`, case, trailing dot, and junctions/symlinks/8.3 names via realpath.
+- Reach: a Grep or Glob rooted inside a vault is denied. A Glob whose pattern can enumerate vault entries is denied. A Grep rooted above the gitignored in-project vault is denied only when its glob whitelists vault entries; above an out-of-project vault (no .gitignore) it is denied unless an anchored glob keeps it out.
+
+**PreToolUse: Vault Dump/List Protection** - `.claude/hooks/secret_dump_guard.py`
+Matcher: `Bash|PowerShell`. Denies commands that dump, search, list, or count vault content (same vault definition as vault_guard): whole-file dumps (`cat`, `type`, `gc`, `head`, `tail`, `xxd`, ...), content searches (`grep`, `rg`, `ag`, `ack`, `findstr`, `Select-String`), and listings/counts (`ls`, `dir`, `gci`, `tree`, `find`, `wc`). A command counts when any pipe stage names a vault path, resolved against the session cwd and any `cd` earlier in the command line, or lists the cwd while inside a vault. A recursive search or listing rooted at an ancestor of a vault also counts (`grep -r`, `find`, `gci -Recurse`, `ls -R`, `dir /s`, `tree`); `rg`/`ag` skip the gitignored in-project vault unless given `-u`/`--no-ignore`. Existence checks (`Test-Path`, `test -d`) are allowed. Issue #188.
+
+**PostToolUse: Auto Test** - `.claude/hooks/post_edit_test.py`
+Matcher: `Edit|Write`. Runs `pytest tests/ --tb=line -q` from the project root after an edit to a Python file under `src/`. Other edits are skipped silently. Prints a concise summary (last 3 lines of pytest output). Exit code is always 0 - failing tests are reported but do not block the next edit. Timeout: 180s.
+
+**PostToolUse: Retrieval Eval** - `.claude/hooks/post_commit_eval.py`
+Matcher: `Bash`. Fires only when the Bash command contains `git commit`. Checks `git diff HEAD~1 --name-only` for files in `src/context/`, `src/retrieval/`, or `src/llm/`. If any match, runs `tools/eval_retrieval.py` from the project root against the test vault only (`PRIVATE_VAULT_PATH` forced to `VAULT_PATH_TEST` for the child process; skipped with a printed reason if the test vault is unset, missing, or the same as the live vault). Silent no-op for commits that don't touch those paths. Timeout: 180s.
 
 Review or disable hooks via `/hooks` in Claude Code.
 

@@ -37,43 +37,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Same directory; Python puts it on sys.path when this file runs as a
+# script. Shared with vault_guard.py so both hooks parse .env one way.
+from hook_utils import project_dir, read_env_value
+
 
 TRIGGER_PATHS = ("src/context/", "src/retrieval/", "src/llm/")
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# Anchor for every path and subprocess cwd below, so the hook behaves the
+# same whichever directory the session has cd'd into.
+REPO_ROOT = Path(project_dir())
 ENV_PATH = REPO_ROOT / ".env"
-
-
-def _read_env_value(key: str) -> str | None:
-    """Return a value from the process env, falling back to a .env lookup.
-
-    The hook runs as a bare subprocess, so .env has not been loaded. Try
-    python-dotenv first (the venv has it) and fall back to a minimal
-    parser so this hook never hard-depends on an import being present.
-    """
-    value = os.environ.get(key)
-    if value:
-        return value.strip() or None
-
-    try:
-        from dotenv import dotenv_values
-
-        return (dotenv_values(ENV_PATH).get(key) or "").strip() or None
-    except Exception:
-        pass
-
-    try:
-        for raw in ENV_PATH.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            name, _, val = line.partition("=")
-            if name.strip() == key:
-                return val.strip().strip('"').strip("'") or None
-    except Exception:
-        pass
-
-    return None
 
 
 def _resolve_test_vault() -> tuple[Path | None, str | None]:
@@ -82,7 +56,7 @@ def _resolve_test_vault() -> tuple[Path | None, str | None]:
     Returns (path, None) on success and (None, reason) on failure. Every
     failure path is a refusal, never a fallback to the live vault.
     """
-    test_vault = _read_env_value("VAULT_PATH_TEST")
+    test_vault = read_env_value("VAULT_PATH_TEST", ENV_PATH)
     if not test_vault:
         return None, "VAULT_PATH_TEST is not set"
 
@@ -92,7 +66,7 @@ def _resolve_test_vault() -> tuple[Path | None, str | None]:
         # new empty vault and report a meaningless all-FAIL eval.
         return None, "VAULT_PATH_TEST does not point at an existing directory"
 
-    live_vault = _read_env_value("PRIVATE_VAULT_PATH")
+    live_vault = read_env_value("PRIVATE_VAULT_PATH", ENV_PATH)
     if live_vault and Path(live_vault).resolve() == test_path:
         return None, "VAULT_PATH_TEST resolves to the same path as PRIVATE_VAULT_PATH"
 
@@ -112,6 +86,7 @@ def main():
     try:
         result = subprocess.run(
             ["git", "diff", "HEAD~1", "--name-only"],
+            cwd=REPO_ROOT,
             capture_output=True,
             text=True,
             timeout=10,
@@ -141,7 +116,8 @@ def main():
 
     try:
         eval_result = subprocess.run(
-            [sys.executable, "tools/eval_retrieval.py"],
+            [sys.executable, str(REPO_ROOT / "tools" / "eval_retrieval.py")],
+            cwd=REPO_ROOT,
             capture_output=True,
             text=True,
             timeout=120,

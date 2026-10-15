@@ -1,19 +1,29 @@
 """
 .claude/hooks/post_edit_test.py
 
-PostToolUse hook for Edit|Write — auto-runs pytest after code edits.
-Only triggers when the edited file is a Python file (*.py). Non-Python
-edits (CLAUDE.md, YAML, JSON, etc.) are skipped silently.
+PostToolUse hook for Edit|Write - auto-runs pytest after code edits.
+Only triggers when the edited file is a Python file under src/. Other
+edits (tests, docs, CLAUDE.md, YAML, JSON, etc.) are skipped silently.
 
 Reads tool_input JSON from stdin. Runs the test suite and prints a
 one-line summary. Exit code is always 0 so the hook never blocks
-Claude Code's flow — a failing test is reported but does not prevent
+Claude Code's flow - a failing test is reported but does not prevent
 the next edit.
+
+pytest runs with cwd = the project root (CLAUDE_PROJECT_DIR, falling
+back to this file's location), so `tests/` resolves the same whichever
+directory the session has cd'd into.
 """
 
 import json
 import subprocess
 import sys
+from pathlib import Path
+
+# Same directory; Python puts it on sys.path when this file runs as a script.
+from hook_utils import project_dir
+
+REPO_ROOT = Path(project_dir())
 
 
 def main():
@@ -26,7 +36,7 @@ def main():
     if not file_path or not file_path.endswith(".py"):
         return
 
-    # Only run tests when src/ files change — not tests, docs, scripts, or tools.
+    # Only run tests when src/ files change - not tests, docs, scripts, or tools.
     # Normalise path separators for cross-platform matching.
     normalized = file_path.replace("\\", "/")
     if "/src/" not in normalized:
@@ -35,6 +45,7 @@ def main():
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "tests/", "--tb=line", "-q"],
+            cwd=REPO_ROOT,
             capture_output=True,
             text=True,
             timeout=180,
@@ -44,7 +55,7 @@ def main():
         for line in lines[-3:]:
             print(line)
         if result.returncode != 0:
-            print("[HOOK] Tests failed — review before committing.")
+            print("[HOOK] Tests failed - review before committing.")
     except subprocess.TimeoutExpired:
         print("[HOOK] pytest timed out after 180s.")
     except Exception as exc:

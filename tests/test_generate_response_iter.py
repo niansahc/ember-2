@@ -168,7 +168,7 @@ def test_generate_response_threads_session_id_to_buffer_reset() -> None:
 
     adapter = _bare_adapter()
     store = ConversationBufferStore()
-    adapter.prompt_builder.conversation_buffers = store
+    adapter.conversation_buffers = store
     adapter.policy_service.evaluate_trigger.return_value = SafetyTriggerResult(
         triggered=False
     )

@@ -23,7 +23,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.context.conversation_buffer import ConversationBuffer, ConversationBufferStore
+from src.context.conversation_buffer import ConversationBufferStore
 from src.context.models import ContextPacket
 from src.llm.adapter import LLMAdapter
 from src.safety.models import SafetyTriggerResult
@@ -43,17 +43,13 @@ MARKER_B = "SYNTHETIC-MARKER-BRAVO reply"
 # ---------------------------------------------------------------------------
 
 def _capturing_adapter(replies: list[str]) -> tuple[LLMAdapter, list[dict]]:
-    """Bare LLMAdapter with REAL conversation buffers.
+    """adapter_with_real_buffer() plus a capturing build_prompt.
 
     build_prompt is a side effect that snapshots the buffer it is handed at
     prompt-build time: the history turns and the session-sticky flags. That
     snapshot is what reaches the model.
     """
-    adapter = LLMAdapter.__new__(LLMAdapter)
-    adapter.model = "test-model"
-    adapter.prompt_builder = MagicMock()
-    adapter.prompt_builder.conversation_buffer = ConversationBuffer()
-    adapter.prompt_builder.conversation_buffers = ConversationBufferStore()
+    adapter = adapter_with_real_buffer()
     snapshots: list[dict] = []
 
     def _build_prompt(packet, **kwargs):
@@ -73,7 +69,6 @@ def _capturing_adapter(replies: list[str]) -> tuple[LLMAdapter, list[dict]]:
     )
     adapter.review_service = MagicMock()
     adapter.review_logger = MagicMock()
-    adapter.memory_service = MagicMock()
     adapter._chat = MagicMock(side_effect=list(replies))
     adapter._chat_stream = MagicMock(side_effect=[iter([r]) for r in replies])
     adapter._maybe_compress_buffer = MagicMock()
@@ -238,7 +233,6 @@ class TestCompressionDoesNotCrossSessions:
         (seconds in production) is where session B's first turn lands, through
         the same entry point a live turn uses."""
         adapter = adapter_with_real_buffer()
-        adapter.prompt_builder.conversation_buffers = ConversationBufferStore()
         buf_a = adapter.conversation_buffer_for(SESSION_A)
         fill_buffer_past_threshold(buf_a)
 
@@ -271,7 +265,6 @@ class TestCompressionDoesNotCrossSessions:
 
     def test_positive_control_summary_injected_without_session_switch(self):
         adapter = adapter_with_real_buffer()
-        adapter.prompt_builder.conversation_buffers = ConversationBufferStore()
         buf = adapter.conversation_buffer_for(SESSION_A)
         fill_buffer_past_threshold(buf)
         adapter._summarize_with_plain_prompt = lambda _p: MARKER_A
@@ -299,7 +292,7 @@ class TestDeleteReflectionIsSessionScoped:
         buf = store.get(get_private_vault_path(), buffer_session)
         for i in range(3):
             buf.add_turn(f"u{i}", f"{MARKER_B} {i}")
-        monkeypatch.setattr(main.llm_adapter.prompt_builder, "conversation_buffers", store)
+        monkeypatch.setattr(main.llm_adapter, "conversation_buffers", store)
         monkeypatch.setattr(main, "delete_session", lambda sid: {"id": sid, "deleted": True})
 
         spawned: list[tuple] = []

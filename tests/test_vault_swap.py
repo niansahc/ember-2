@@ -194,7 +194,7 @@ class TestVaultSwapEndpoint:
 
         store = ConversationBufferStore()
         store.get(None, "sess_test_001").add_turn("synthetic user", "synthetic reply")
-        monkeypatch.setattr(llm_adapter.prompt_builder, "conversation_buffers", store)
+        monkeypatch.setattr(llm_adapter, "conversation_buffers", store)
         return store
 
     def test_swap_clears_conversation_buffers(self, tmp_path, monkeypatch):

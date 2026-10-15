@@ -615,10 +615,7 @@ def delete_conversation_endpoint(session_id: str):
     # labelled with session_id, so it must be built from that session's
     # turns, never from whichever conversation happens to be live.
     try:
-        _buf = llm_adapter.conversation_buffer_for(
-            session_id, _request_vault, create=False,
-        )
-        buffer = _buf.get_recent() if _buf is not None else []
+        buffer = llm_adapter.recent_turns(session_id, _request_vault)
         if buffer and len(buffer) >= 3:
             from src.reflection.session_reflection import (
                 generate_session_reflection_in_background,
@@ -1839,8 +1836,7 @@ def reflect_session_endpoint(request: Request, body: SessionReflectRequest = Ses
         _vault = get_private_vault_path()
     except ValueError:
         _vault = None
-    _buf = llm_adapter.conversation_buffer_for(body.session_id, _vault, create=False)
-    buffer = _buf.get_recent() if _buf is not None else []
+    buffer = llm_adapter.recent_turns(body.session_id, _vault)
     if not buffer or len(buffer) < 3:
         return {"status": "skipped", "reason": f"Not enough turns ({len(buffer)}). Minimum 3."}
 

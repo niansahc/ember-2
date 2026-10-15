@@ -665,13 +665,17 @@ def adapter_with_real_buffer():
     """A bare LLMAdapter wired to a real ConversationBuffer plus mocks for
     everything _maybe_compress_buffer touches. Bypasses __init__ to avoid
     loading the full service graph."""
-    from src.context.conversation_buffer import ConversationBuffer
+    from src.context.conversation_buffer import (
+        ConversationBuffer,
+        ConversationBufferStore,
+    )
     from src.llm.adapter import LLMAdapter
 
     adapter = LLMAdapter.__new__(LLMAdapter)
     adapter.model = "test-model"
     adapter.prompt_builder = MagicMock()
     adapter.prompt_builder.conversation_buffer = ConversationBuffer()
+    adapter.conversation_buffers = ConversationBufferStore()
     adapter.memory_service = MagicMock()
     return adapter
 

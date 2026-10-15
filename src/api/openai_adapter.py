@@ -385,8 +385,7 @@ def _spawn_deviation_detection(
     try:
         # This conversation's buffer only (issue #133); its last turn is the
         # one just stored, so the prior reply is the one before it.
-        _buf = llm_adapter.conversation_buffer_for(session_id, vault, create=False)
-        buffer_turns = _buf.get_recent() if _buf is not None else []
+        buffer_turns = llm_adapter.recent_turns(session_id, vault)
         if buffer_turns and len(buffer_turns) >= 2:
             prior = buffer_turns[-2].get("assistant")
     except Exception as exc:  # noqa: BLE001
@@ -489,7 +488,6 @@ def _check_pending_confirmation(
 
         # Latest ACTIVE pending confirmation that belongs to this session.
         pending = None
-        _resolved_this_call: set[str] = set()
         for r in records:
             if r.id in _resolved:
                 continue
@@ -509,8 +507,7 @@ def _check_pending_confirmation(
         # Append-only: resolve_record writes a tombstone, it does not mutate
         # the original file (ADR-038).
         _resolve_original_pending(pending)
-        _resolved_this_call.add(pending.id)
-        filtered = [r for r in records if r.id not in _resolved_this_call]
+        filtered = [r for r in records if r.id != pending.id]
 
         # Deterministic keyword match for YES/NO - replaces the LLM call
         # that added ~500ms latency and could misinterpret at 8B scale.
@@ -1626,12 +1623,12 @@ async def _complete_exchange(
     # dispatch and relational suppression remain inline below - they are
     # retrieval-gating policy, not message prep; see ADR-042.)
     work = GenerationWork(message=latest_user_message)
-    # The pending-confirmation read and its resolution tombstone belong to
+    # Phase B reads and writes (pending confirmation, tasks, timers) belong to
     # the vault this turn started in, not whichever is active by then.
     with vault_binding(_turn_vault):
         _apply_confirmation(gen_ctx, work)
-    _apply_tasks(gen_ctx, work)
-    _apply_timers(gen_ctx, work)
+        _apply_tasks(gen_ctx, work)
+        _apply_timers(gen_ctx, work)
     latest_user_message = work.message
     _raw_user_message = work.raw_message
     _confirmation_web_items = work.confirmation_web_items
@@ -2246,9 +2243,7 @@ async def _complete_exchange(
                 # B-MEM-005 / S1: response is now finalized - promote pending
                 # hedge marks. Done here (not at prompt-build time) so failed
                 # LLM calls or stripped-out hedges don't leave spurious marks.
-                llm_adapter.conversation_buffer_for(
-                    session_id, _turn_vault,
-                ).commit_pending_hedge()
+                llm_adapter.commit_pending_hedge(session_id, _turn_vault)
 
                 # 3.7. Post-gen validators (source / vision / ask-first /
                 # empty-guard). Grounded streaming path - this runs before
@@ -2358,9 +2353,7 @@ async def _complete_exchange(
                 # response is finalized. In the fast path the client has
                 # already seen the raw stream, but the hedge accounting still
                 # tracks the memory copy correctly for follow-up suppression.
-                llm_adapter.conversation_buffer_for(
-                    session_id, _turn_vault,
-                ).commit_pending_hedge()
+                llm_adapter.commit_pending_hedge(session_id, _turn_vault)
                 # Post-gen validators. In the fast path the client has
                 # already seen the raw stream; this cleans the memory
                 # copy so fabricated sources, vision refusals, and empty
@@ -2448,7 +2441,7 @@ async def _complete_exchange(
         reply = _filter_cf(reply, _intent_class, _is_conversational)
 
     # B-MEM-005 / S1: response is finalized - commit pending hedge marks now.
-    llm_adapter.conversation_buffer_for(session_id, _turn_vault).commit_pending_hedge()
+    llm_adapter.commit_pending_hedge(session_id, _turn_vault)
 
     # Post-gen validators (source / vision / ask-first / empty-guard).
     # Non-streaming path: runs before final JSONResponse return.

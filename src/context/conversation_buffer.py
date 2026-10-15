@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from collections import OrderedDict
+from pathlib import Path
 
 logger = logging.getLogger("ember.conversation_buffer")
 
@@ -104,7 +104,6 @@ class ConversationBuffer:
         max_turns: int = 20,
         *,
         session_id: str | None = None,
-        vault_key: str | None = None,
     ) -> None:
         self.buffer: list[dict] = []
         self.max_turns = max_turns
@@ -112,11 +111,10 @@ class ConversationBuffer:
         # compression thread at spawn time, never at write time, so a summary
         # is always attributed to the session whose turns it compresses.
         self.session_id = session_id
-        self.vault_key = vault_key
         # Guards list mutation. Turns from one session are sequential in
         # practice, but compression runs on a background thread and pops and
         # prepends while the next turn may be appending.
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
         # Single-flight guard for compression: a second compression of the
         # same buffer while one is mid-LLM-call is skipped, not queued.
         self.compression_lock = threading.Lock()
@@ -257,11 +255,12 @@ class ConversationBuffer:
 
 
 def vault_key(vault_path) -> str | None:
-    """Normalize a vault path into a store key. None stays None, so callers
-    that could not resolve a vault share one keyspace instead of failing."""
+    """Normalize a vault path into a store key, resolved the same way as
+    config and store_cache. None stays None, so callers that could not
+    resolve a vault share one keyspace instead of failing."""
     if vault_path is None:
         return None
-    return os.path.normcase(os.path.abspath(str(vault_path)))
+    return str(Path(vault_path).resolve())
 
 
 class ConversationBufferStore:
@@ -284,20 +283,22 @@ class ConversationBufferStore:
     def get(self, vault_path, session_id: str) -> ConversationBuffer:
         """Return the buffer for this conversation, creating it if needed."""
         key = (vault_key(vault_path), session_id)
+        evicted: list[str] = []
         with self._lock:
             buf = self._buffers.get(key)
             if buf is None:
-                buf = ConversationBuffer(session_id=session_id, vault_key=key[0])
+                buf = ConversationBuffer(session_id=session_id)
                 self._buffers[key] = buf
                 while len(self._buffers) > self._max_buffers:
-                    evicted_key, _ = self._buffers.popitem(last=False)
-                    logger.info(
-                        "[BUFFER] Evicted least recently used buffer session=%s",
-                        evicted_key[1],
-                    )
+                    evicted.append(self._buffers.popitem(last=False)[0][1])
             else:
                 self._buffers.move_to_end(key)
-            return buf
+        for evicted_session in evicted:
+            logger.info(
+                "[BUFFER] Evicted least recently used buffer session=%s",
+                evicted_session,
+            )
+        return buf
 
     def find(self, vault_path, session_id: str) -> ConversationBuffer | None:
         """Return the buffer for this conversation if one is live, without

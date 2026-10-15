@@ -20,10 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.context.models import ContextPacket
-from src.context.conversation_buffer import (
-    ConversationBuffer,
-    ConversationBufferStore,
-)
+from src.context.conversation_buffer import ConversationBuffer
 from src.context.render_window import (
     rendered_memory_window,
     rendered_reflection_window,
@@ -350,10 +347,9 @@ class PromptBuilder:
 
         # Default buffer for callers with no session (direct prompt-builder
         # use, legacy tests). Live turns never use it: the adapter resolves a
-        # per-conversation buffer from conversation_buffers and passes it to
-        # build_prompt explicitly (issue #133).
+        # per-conversation buffer and passes it to build_prompt explicitly
+        # (issue #133).
         self.conversation_buffer = ConversationBuffer()
-        self.conversation_buffers = ConversationBufferStore()
 
         # Nature loader — singleton, loaded once at startup.
         try:
@@ -718,9 +714,7 @@ class PromptBuilder:
 
         return "<conversation_history>\n" + "\n".join(lines) + "\n</conversation_history>"
 
-    def _build_sticky_notes(
-        self, buffer: ConversationBuffer | None = None,
-    ) -> list[str]:
+    def _build_sticky_notes(self, buffer: ConversationBuffer) -> list[str]:
         """Build session-sticky system notes from conversation buffer state.
 
         BUG-008: when user has objected to questions, inject a note
@@ -728,7 +722,6 @@ class PromptBuilder:
         BUG-009: when user has declined a topic, inject a note telling
         the model not to raise it again.
         """
-        buffer = buffer if buffer is not None else self.conversation_buffer
         notes: list[str] = []
         if buffer.question_suppressed:
             notes.append(
@@ -765,11 +758,8 @@ class PromptBuilder:
         )
 
     def _build_user_section(
-        self,
-        context_packet: ContextPacket,
-        buffer: ConversationBuffer | None = None,
+        self, context_packet: ContextPacket, buffer: ConversationBuffer,
     ) -> str:
-        buffer = buffer if buffer is not None else self.conversation_buffer
         turns = buffer.get_recent()
         user_msg = context_packet.user_message
 

@@ -10,15 +10,23 @@ docstring for why. .env is owned by env_guard.py (tests/test_env_guard.py).
 Matching is tested in-process through _matches_dump_command(); a few
 end-to-end cases run the hook the way the harness does (JSON on stdin,
 a deny decision or silence on stdout).
+
+No test touches the real vault or the developer's .env: CLAUDE_PROJECT_DIR
+points at a tmp project and PRIVATE_VAULT_PATH is removed from the
+environment. The configured-vault tests give the tmp project a tmp .env
+pointing at a tmp vault outside it.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -40,13 +48,26 @@ def _load_hook():
 guard = _load_hook()
 
 
+@pytest.fixture(autouse=True)
+def _project_without_vault(tmp_path, monkeypatch):
+    """Hermetic default: an empty tmp project and no inherited
+    PRIVATE_VAULT_PATH, so no test reads the developer's checkout or .env."""
+    project = tmp_path / "empty_project"
+    project.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    monkeypatch.delenv("PRIVATE_VAULT_PATH", raising=False)
+    return project
+
+
 def _run_hook(raw: str) -> subprocess.CompletedProcess:
+    env = {k: v for k, v in os.environ.items() if k != "PRIVATE_VAULT_PATH"}
     return subprocess.run(
         [sys.executable, str(HOOK_PATH)],
         input=raw,
         capture_output=True,
         text=True,
         timeout=10,
+        env=env,
     )
 
 
@@ -145,4 +166,172 @@ def test_hook_process_denies_with_reason():
 def test_malformed_input_does_not_crash(raw):
     result = _run_hook(raw)
     assert result.returncode == 0
+    assert result.stdout.strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# Vaults by location: the in-repo private_vault/ and PRIVATE_VAULT_PATH
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def in_repo(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    (project / "private_vault" / "memory").mkdir(parents=True)
+    (project / "private_vault" / "memory" / "rec.json").write_text("{}", encoding="utf-8")
+    (project / "src").mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    return project
+
+
+IN_REPO_DENY = [
+    "cd private_vault && cat memory/rec.json",
+    "Set-Location private_vault/memory; gc rec.json",
+    "grep -r KEY .",           # grep ignores .gitignore
+    "grep -rn KEY",            # no path: the cwd
+    "rg -uu KEY .",            # .gitignore switched off
+    "rg --no-ignore KEY",
+    "Get-ChildItem -Recurse | Select-String KEY",
+    "find . -name '*.json' | xargs grep KEY",
+]
+
+IN_REPO_ALLOW = [
+    "rg KEY .",                # rg honours .gitignore: the vault is skipped
+    "rg KEY",
+    "grep -r KEY src",
+    "Get-ChildItem src -Recurse | Select-String KEY",
+    "cd src && cat a.py",
+]
+
+
+@pytest.mark.parametrize("command", IN_REPO_DENY)
+def test_in_repo_vault_by_location(in_repo, command):
+    assert guard._matches_dump_command(command, str(in_repo)) is not None
+
+
+@pytest.mark.parametrize("command", IN_REPO_DENY)
+def test_in_repo_vault_by_location_is_off_without_the_directory(_project_without_vault, command):
+    """Absence counterpart of the test above: same commands, no vault."""
+    assert guard._matches_dump_command(command, str(_project_without_vault)) is None
+
+
+@pytest.mark.parametrize("command", IN_REPO_ALLOW)
+def test_in_repo_vault_allows(in_repo, command):
+    assert guard._matches_dump_command(command, str(in_repo)) is None
+
+
+@pytest.fixture
+def configured(tmp_path, monkeypatch):
+    """A tmp project whose tmp .env points at a tmp vault outside it."""
+    project = tmp_path / "proj"
+    (project / ".claude").mkdir(parents=True)
+    (project / "src").mkdir()
+    outside = tmp_path / "outside"
+    vault = outside / "EmberVaultX"
+    (vault / "memory").mkdir(parents=True)
+    (vault / "memory" / "rec.json").write_text("{}", encoding="utf-8")
+    (outside / "notes.txt").write_text("", encoding="utf-8")
+    (project / ".env").write_text(f"PRIVATE_VAULT_PATH={vault}\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    rel = os.path.relpath(vault, project).replace("\\", "/")
+    rel_outside = os.path.relpath(outside, project).replace("\\", "/")
+    return SimpleNamespace(
+        project=project,
+        outside=outside,
+        fmt=dict(
+            vault=str(vault),
+            vault_posix=vault.as_posix(),
+            rel=rel,
+            rel_bs=rel.replace("/", "\\"),
+            outside=str(outside),
+            rel_outside=rel_outside,
+            rel_outside_bs=rel_outside.replace("/", "\\"),
+        ),
+    )
+
+
+# (command template, cwd: "project" or "outside")
+CONFIG_DENY = [
+    ("cat {vault}/memory/rec.json", "project"),
+    ("cat {vault_posix}/zz_probe/none.json", "project"),
+    ("Get-Content {rel}/memory/rec.json", "project"),
+    (r"type {rel_bs}\memory\rec.json", "project"),
+    ("cat {rel_outside}/Ember*/memory/rec.json", "project"),
+    ("sls KEY -Path:{rel}/memory/rec.json", "project"),
+    ("Select-String -Path {vault}/*/*.json -Pattern KEY", "project"),
+    ("cd {rel} && cat memory/rec.json", "project"),
+    ("Set-Location {vault}; gc memory/rec.json", "project"),
+    ("grep -r KEY {rel_outside}", "project"),
+    ("rg KEY {outside}", "project"),
+    (r"findstr /s KEY {rel_outside_bs}\*.json", "project"),
+    (r"Get-ChildItem -Recurse {rel_outside_bs} | Select-String KEY", "project"),
+    ("find {rel_outside} -name '*.json' | xargs grep KEY", "project"),
+    ("grep -r KEY", "outside"),
+    ("rg KEY", "outside"),
+]
+
+CONFIG_ALLOW = [
+    ("cat src/a.py", "project"),
+    ("grep -r KEY src", "project"),
+    ("rg KEY", "project"),
+    ("ls {rel}", "project"),                        # listing, as for private_vault/
+    ("wc -l {rel}/memory/rec.json", "project"),
+    ("cat {rel_outside}/notes.txt", "project"),
+    ("grep KEY {rel_outside}/*.txt", "project"),    # not recursive
+    ("Get-ChildItem {rel_outside} | Select-String KEY", "project"),
+    ("cd {rel_outside} && cat notes.txt", "project"),
+]
+
+
+def _config_case(case, c) -> tuple[str, str]:
+    template, cwd = case
+    return template.format(**c.fmt), str(c.project if cwd == "project" else c.outside)
+
+
+@pytest.mark.parametrize("case", CONFIG_DENY, ids=lambda case: case[0])
+def test_configured_vault_denies(configured, case):
+    assert guard._matches_dump_command(*_config_case(case, configured)) is not None
+
+
+@pytest.mark.parametrize("case", CONFIG_ALLOW, ids=lambda case: case[0])
+def test_configured_vault_allows(configured, case):
+    assert guard._matches_dump_command(*_config_case(case, configured)) is None
+
+
+@pytest.mark.parametrize("off", ["no-env-file", "vault-missing"])
+@pytest.mark.parametrize("case", CONFIG_DENY, ids=lambda case: case[0])
+def test_configured_rules_are_off_without_a_configured_vault(configured, case, off):
+    """Absence counterpart of test_configured_vault_denies: same commands."""
+    command, cwd = _config_case(case, configured)
+    if off == "no-env-file":
+        (configured.project / ".env").unlink()
+    else:
+        shutil.rmtree(configured.outside / "EmberVaultX")
+    assert guard._matches_dump_command(command, cwd) is None
+
+
+def test_configured_vault_hook_process_uses_payload_cwd(configured):
+    payload = {"tool_name": "Bash", "tool_input": {"command": "grep -r KEY"}, "cwd": str(configured.outside)}
+    env = {k: v for k, v in os.environ.items() if k != "PRIVATE_VAULT_PATH"}
+    result = subprocess.run(
+        [sys.executable, str(HOOK_PATH)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env={**env, "CLAUDE_PROJECT_DIR": str(configured.project)},
+    )
+    output = json.loads(result.stdout)["hookSpecificOutput"]
+    assert output["permissionDecision"] == "deny"
+    reason = output["permissionDecisionReason"].lower()
+    assert "embervaultx" not in reason
+    # Same command from the project root: no reach, no output.
+    payload["cwd"] = str(configured.project)
+    result = subprocess.run(
+        [sys.executable, str(HOOK_PATH)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env={**env, "CLAUDE_PROJECT_DIR": str(configured.project)},
+    )
     assert result.stdout.strip() == ""

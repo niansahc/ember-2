@@ -37,6 +37,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Same directory; Python puts it on sys.path when this file runs as a
+# script. Shared with vault_guard.py so both hooks parse .env one way.
+from env_file import read_env_value
+
 
 TRIGGER_PATHS = ("src/context/", "src/retrieval/", "src/llm/")
 
@@ -47,35 +51,7 @@ ENV_PATH = REPO_ROOT / ".env"
 
 
 def _read_env_value(key: str) -> str | None:
-    """Return a value from the process env, falling back to a .env lookup.
-
-    The hook runs as a bare subprocess, so .env has not been loaded. Try
-    python-dotenv first (the venv has it) and fall back to a minimal
-    parser so this hook never hard-depends on an import being present.
-    """
-    value = os.environ.get(key)
-    if value:
-        return value.strip() or None
-
-    try:
-        from dotenv import dotenv_values
-
-        return (dotenv_values(ENV_PATH).get(key) or "").strip() or None
-    except Exception:
-        pass
-
-    try:
-        for raw in ENV_PATH.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            name, _, val = line.partition("=")
-            if name.strip() == key:
-                return val.strip().strip('"').strip("'") or None
-    except Exception:
-        pass
-
-    return None
+    return read_env_value(key, ENV_PATH)
 
 
 def _resolve_test_vault() -> tuple[Path | None, str | None]:

@@ -2,12 +2,15 @@
 tests/test_vault_guard.py
 
 Tests for .claude/hooks/vault_guard.py (Read|Grep|Glob|Edit|Write on
-private_vault/).
+private_vault/ and the configured PRIVATE_VAULT_PATH).
 
-Every payload is synthetic hook JSON. No test touches the real vault: the
-naming tests are string-only with CLAUDE_PROJECT_DIR pointed at an empty
-tmp project, and the reach tests build a synthetic tmp project whose
-private_vault/ holds placeholder files.
+Every payload is synthetic hook JSON. No test touches the real vault or
+the developer's .env: CLAUDE_PROJECT_DIR points at a tmp project and
+PRIVATE_VAULT_PATH is removed from the environment (conftest pins it to a
+throwaway vault). The naming tests are string-only; the reach tests build
+a synthetic tmp project whose private_vault/ holds placeholder files; the
+configured-vault tests give the tmp project a tmp .env pointing at a tmp
+vault outside it.
 
 Absence tests (allow cases) are paired with positive controls: the same
 payload denies once the condition it depends on is made true (a vault
@@ -20,16 +23,23 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-HOOK = Path(__file__).resolve().parents[1] / ".claude" / "hooks" / "vault_guard.py"
+HOOKS_DIR = Path(__file__).resolve().parents[1] / ".claude" / "hooks"
+HOOK = HOOKS_DIR / "vault_guard.py"
 
 
 def _load_hook():
+    # The hook imports env_file from its own directory, the way it resolves
+    # when the harness runs it as a script.
+    if str(HOOKS_DIR) not in sys.path:
+        sys.path.insert(0, str(HOOKS_DIR))
     spec = importlib.util.spec_from_file_location("vault_guard_under_test", HOOK)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -53,10 +63,13 @@ def _id(p: dict) -> str:
 @pytest.fixture(autouse=True)
 def _project_without_vault(tmp_path, monkeypatch):
     """Hermetic default: the project dir is an empty tmp dir, so the reach
-    rule never sees the developer's checkout."""
+    rule never sees the developer's checkout, and no inherited
+    PRIVATE_VAULT_PATH, so the configured vault comes only from a test's
+    own tmp .env."""
     project = tmp_path / "empty_project"
     project.mkdir()
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    monkeypatch.delenv("PRIVATE_VAULT_PATH", raising=False)
     return project
 
 
@@ -190,6 +203,27 @@ def test_grep_glob_positive_control_matching_vault_file(project_with_vault):
     assert guard.evaluate(payload) == "*.py"
 
 
+# The in-repo vault by location: a cwd inside it, where no field names it.
+IN_VAULT_CWD = [
+    ("Read", {"file_path": "rec.json"}),
+    ("Grep", {"pattern": "x"}),
+    ("Glob", {"pattern": "*"}),
+]
+
+
+@pytest.mark.parametrize("tool,tool_input", IN_VAULT_CWD)
+def test_in_repo_vault_by_location_from_a_cwd_inside_it(project_with_vault, tool, tool_input):
+    cwd = project_with_vault / "private_vault" / "memory"
+    assert guard.evaluate(_payload(tool, cwd=str(cwd), **tool_input)) is not None
+
+
+@pytest.mark.parametrize("tool,tool_input", IN_VAULT_CWD)
+def test_in_repo_vault_by_location_is_off_without_the_directory(_project_without_vault, tool, tool_input):
+    """Absence counterpart of the test above: same payloads, no vault."""
+    cwd = _project_without_vault / "private_vault" / "memory"
+    assert guard.evaluate(_payload(tool, cwd=str(cwd), **tool_input)) is None
+
+
 # ---------------------------------------------------------------------------
 # End-to-end through the real hook process, one positive control per tool
 # ---------------------------------------------------------------------------
@@ -206,6 +240,9 @@ E2E = {
 }
 
 
+_ENV_WITHOUT_VAULT = {k: v for k, v in os.environ.items() if k != "PRIVATE_VAULT_PATH"}
+
+
 def _run(payload, project: Path) -> subprocess.CompletedProcess:
     raw = payload if isinstance(payload, str) else json.dumps(payload)
     return subprocess.run(
@@ -214,7 +251,7 @@ def _run(payload, project: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=10,
-        env={**os.environ, "CLAUDE_PROJECT_DIR": str(project)},
+        env={**_ENV_WITHOUT_VAULT, "CLAUDE_PROJECT_DIR": str(project)},
     )
 
 
@@ -236,3 +273,286 @@ def test_malformed_payload_allows_without_crashing(raw, _project_without_vault):
     result = _run(raw, _project_without_vault)
     assert result.returncode == 0
     assert result.stdout.strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# Configured vault: PRIVATE_VAULT_PATH from a tmp .env, outside the project
+# ---------------------------------------------------------------------------
+
+WINDOWS = sys.platform == "win32"
+VAULT_NAME = "EmberVaultLongName"  # long enough to get an 8.3 short name
+
+
+@pytest.fixture
+def configured(tmp_path, monkeypatch):
+    """A tmp project whose tmp .env points at a tmp vault outside it."""
+    project = tmp_path / "proj"
+    (project / ".claude").mkdir(parents=True)
+    (project / "src").mkdir()
+    outside = tmp_path / "outside"
+    vault = outside / VAULT_NAME
+    (vault / "memory").mkdir(parents=True)
+    (vault / "memory" / "rec.json").write_text("{}", encoding="utf-8")
+    (outside / f"{VAULT_NAME}_other").mkdir()
+    (outside / "notes.txt").write_text("", encoding="utf-8")
+    (project / ".env").write_text(f"PRIVATE_VAULT_PATH={vault}\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    return SimpleNamespace(project=project, outside=outside, vault=vault)
+
+
+def _rel(target: Path, start: Path, sep: str = "/") -> str:
+    return os.path.relpath(target, start).replace("\\", "/").replace("/", sep)
+
+
+# name -> (tool, cwd, tool_input) built from the `configured` paths.
+CONFIG_DENY = {
+    "read-native": lambda c: ("Read", c.project, {"file_path": str(c.vault / "zz_probe" / "none.json")}),
+    "read-forward-slash": lambda c: ("Read", c.project, {"file_path": (c.vault / "zz_probe" / "none.json").as_posix()}),
+    "read-upper-case": lambda c: ("Read", c.project, {"file_path": str(c.vault / "zz_probe" / "none.json").upper()}),
+    "read-trailing-dot": lambda c: ("Read", c.project, {"file_path": f"{c.vault}.{os.sep}none.json"}),
+    "read-relative": lambda c: ("Read", c.project, {"file_path": _rel(c.vault / "zz_probe" / "none.json", c.project)}),
+    "read-relative-backslash": lambda c: ("Read", c.project, {"file_path": _rel(c.vault / "zz_probe" / "none.json", c.project, "\\")}),
+    "read-relative-from-subdir": lambda c: ("Read", c.project / "src", {"file_path": _rel(c.vault / "memory" / "rec.json", c.project / "src")}),
+    "read-cwd-inside-vault": lambda c: ("Read", c.vault / "memory", {"file_path": "rec.json"}),
+    "edit": lambda c: ("Edit", c.project, {"file_path": str(c.vault / "memory" / "rec.json"), "old_string": "a", "new_string": "b"}),
+    "edit-relative": lambda c: ("Edit", c.project, {"file_path": _rel(c.vault / "memory" / "rec.json", c.project), "old_string": "a", "new_string": "b"}),
+    "write": lambda c: ("Write", c.project, {"file_path": _rel(c.vault / "zz_probe" / "new.json", c.project)}),
+    "grep-path-vault": lambda c: ("Grep", c.project, {"pattern": "x", "path": str(c.vault)}),
+    "grep-path-relative": lambda c: ("Grep", c.project, {"pattern": "x", "path": _rel(c.vault / "memory", c.project)}),
+    "grep-cwd-inside-vault": lambda c: ("Grep", c.vault, {"pattern": "x"}),
+    "grep-reach-no-glob": lambda c: ("Grep", c.project, {"pattern": "x", "path": str(c.outside)}),
+    "grep-reach-unanchored-glob": lambda c: ("Grep", c.project, {"pattern": "x", "path": str(c.outside), "glob": "*.json"}),
+    "grep-reach-negated-glob": lambda c: ("Grep", c.project, {"pattern": "x", "path": str(c.outside), "glob": "!*.md"}),
+    "grep-reach-negated-anchored-glob": lambda c: ("Grep", c.project, {"pattern": "x", "path": str(c.outside), "glob": "!docs/**"}),
+    "grep-reach-anchored-glob": lambda c: ("Grep", c.project, {"pattern": "x", "path": str(c.outside), "glob": "**/*.json"}),
+    "glob-path-vault": lambda c: ("Glob", c.project, {"pattern": "*", "path": str(c.vault / "memory")}),
+    "glob-absolute-pattern": lambda c: ("Glob", c.project, {"pattern": c.vault.as_posix() + "/**/*.json"}),
+    "glob-relative-wildcard-pattern": lambda c: ("Glob", c.project, {"pattern": _rel(c.outside, c.project) + "/Ember*/**"}),
+    "glob-reach": lambda c: ("Glob", c.project, {"pattern": "**/*.json", "path": str(c.outside)}),
+    "glob-reach-wildcard-dir": lambda c: ("Glob", c.project, {"pattern": "*/memory/*", "path": str(c.outside)}),
+}
+
+WINDOWS_DENY = {
+    "read-git-bash": lambda c: ("Read", c.project, {"file_path": "/" + c.vault.drive[0].lower() + c.vault.as_posix()[2:] + "/zz_probe/none.json"}),
+    "read-wsl-mount": lambda c: ("Read", c.project, {"file_path": "/mnt/" + c.vault.drive[0].lower() + c.vault.as_posix()[2:] + "/zz_probe/none.json"}),
+    "read-device-prefix": lambda c: ("Read", c.project, {"file_path": "\\\\?\\" + str(c.vault / "zz_probe" / "none.json")}),
+    "read-drive-relative": lambda c: ("Read", c.project, {"file_path": c.vault.drive + _rel(c.vault / "zz_probe" / "none.json", c.project, "\\")}),
+}
+
+CONFIG_ALLOW = {
+    "read-src": lambda c: ("Read", c.project, {"file_path": str(c.project / "src" / "a.py")}),
+    "read-sibling-sharing-the-vault-prefix": lambda c: ("Read", c.project, {"file_path": str(c.outside / f"{VAULT_NAME}_other" / "x.json")}),
+    "read-beside-the-vault": lambda c: ("Read", c.project, {"file_path": str(c.outside / "notes.txt")}),
+    "edit-src": lambda c: ("Edit", c.project, {"file_path": "src/a.py", "old_string": "a", "new_string": "b"}),
+    "write-src": lambda c: ("Write", c.project, {"file_path": "src/new.py"}),
+    "grep-project-root": lambda c: ("Grep", c.project, {"pattern": "x"}),
+    "grep-anchored-glob-beside-the-vault": lambda c: ("Grep", c.project, {"pattern": "x", "path": str(c.outside), "glob": f"{VAULT_NAME}_other/**"}),
+    "glob-top-level-of-an-ancestor": lambda c: ("Glob", c.project, {"pattern": "*", "path": str(c.outside)}),
+    "glob-src": lambda c: ("Glob", c.project, {"pattern": "src/**/*.py"}),
+}
+
+
+def _config_payload(case, c) -> dict:
+    tool, cwd, tool_input = case(c)
+    return _payload(tool, cwd=str(cwd), **tool_input)
+
+
+@pytest.mark.parametrize("name", sorted(CONFIG_DENY))
+def test_configured_vault_denies(name, configured):
+    assert guard.evaluate(_config_payload(CONFIG_DENY[name], configured)) is not None
+
+
+@pytest.mark.skipif(not WINDOWS, reason="Windows path forms")
+@pytest.mark.parametrize("name", sorted(WINDOWS_DENY))
+def test_configured_vault_denies_windows_forms(name, configured):
+    assert guard.evaluate(_config_payload(WINDOWS_DENY[name], configured)) is not None
+
+
+@pytest.mark.parametrize("name", sorted(CONFIG_ALLOW))
+def test_configured_vault_allows(name, configured):
+    assert guard.evaluate(_config_payload(CONFIG_ALLOW[name], configured)) is None
+
+
+def test_every_guarded_tool_has_configured_deny_and_allow_cases():
+    stub = SimpleNamespace(project=Path("p"), outside=Path("o"), vault=Path("o") / VAULT_NAME)
+    guarded = {"Read", "Grep", "Glob", "Edit", "Write"}
+    assert guarded <= {case(stub)[0] for case in CONFIG_DENY.values()}
+    assert guarded <= {case(stub)[0] for case in CONFIG_ALLOW.values()}
+
+
+@pytest.mark.parametrize("off", ["no-env-file", "no-key", "vault-missing"])
+@pytest.mark.parametrize("name", sorted(CONFIG_DENY))
+def test_configured_rules_are_off_without_a_configured_vault(name, off, configured):
+    """Absence counterpart of test_configured_vault_denies: same payloads."""
+    payload = _config_payload(CONFIG_DENY[name], configured)
+    env = configured.project / ".env"
+    if off == "no-env-file":
+        env.unlink()
+    elif off == "no-key":
+        env.write_text("OTHER_KEY=1\n", encoding="utf-8")
+    else:
+        shutil.rmtree(configured.vault)
+    assert guard.evaluate(payload) is None
+
+
+def test_process_environment_wins_over_the_env_file(configured, monkeypatch):
+    payload = _config_payload(CONFIG_DENY["read-relative"], configured)
+    other = configured.outside / f"{VAULT_NAME}_other"
+    (configured.project / ".env").write_text(f"PRIVATE_VAULT_PATH={other}\n", encoding="utf-8")
+    assert guard.evaluate(payload) is None
+    monkeypatch.setenv("PRIVATE_VAULT_PATH", str(configured.vault))
+    assert guard.evaluate(payload) is not None
+
+
+def test_relative_value_resolves_against_the_project(configured, monkeypatch, tmp_path):
+    (configured.project / ".env").write_text(
+        f"PRIVATE_VAULT_PATH=../outside/{VAULT_NAME}\n", encoding="utf-8"
+    )
+    elsewhere = tmp_path / "a" / "b"
+    elsewhere.mkdir(parents=True)
+    monkeypatch.chdir(elsewhere)
+    assert guard.evaluate(_config_payload(CONFIG_DENY["read-native"], configured)) is not None
+
+
+def test_configured_vault_inside_the_project_keeps_gitignore_rules(project_with_vault):
+    (project_with_vault / ".env").write_text("PRIVATE_VAULT_PATH=private_vault\n", encoding="utf-8")
+    root = str(project_with_vault)
+    assert len(guard.vault_dirs()) == 1  # the same directory twice
+    assert guard.evaluate(_payload("Grep", cwd=root, pattern="x")) is None
+    assert guard.evaluate(_payload("Grep", cwd=root, pattern="x", glob="*.json")) is not None
+
+
+def test_configured_vault_through_a_link(configured, tmp_path):
+    link = tmp_path / "link_to_vault"
+    try:
+        if WINDOWS:
+            import _winapi
+
+            _winapi.CreateJunction(str(configured.vault), str(link))
+        else:
+            os.symlink(configured.vault, link, target_is_directory=True)
+    except (OSError, AttributeError) as exc:
+        pytest.skip(f"cannot create a directory link here: {exc}")
+    payload = _payload("Read", cwd=str(configured.project), file_path=str(link / "memory" / "rec.json"))
+    assert guard.evaluate(payload) is not None
+
+
+@pytest.mark.skipif(not WINDOWS, reason="8.3 short names are a Windows feature")
+def test_configured_vault_by_short_name(configured):
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(1024)
+    ctypes.windll.kernel32.GetShortPathNameW(str(configured.vault), buf, 1024)
+    if not buf.value or buf.value.lower() == str(configured.vault).lower():
+        pytest.skip("8.3 short names are disabled on this volume")
+    payload = _payload("Read", cwd=str(configured.project), file_path=buf.value + "\\zz_probe\\none.json")
+    assert guard.evaluate(payload) is not None
+
+
+def test_configured_vault_by_home_relative_path(configured):
+    try:
+        rel = configured.vault.relative_to(Path.home())
+    except ValueError:
+        pytest.skip("the tmp vault is not under the home directory here")
+    payload = _payload("Read", cwd=str(configured.project), file_path=f"~/{rel.as_posix()}/zz_probe/none.json")
+    assert guard.evaluate(payload) is not None
+
+
+# --- the .env mtime cache --------------------------------------------------
+
+def test_cache_skips_the_parse_until_the_env_file_changes(configured, monkeypatch):
+    calls = []
+    real = guard.read_env_value
+    monkeypatch.setattr(guard, "read_env_value", lambda key, path: calls.append(key) or real(key, path))
+    payload = _config_payload(CONFIG_DENY["read-native"], configured)
+    assert guard.evaluate(payload) is not None
+    assert guard.evaluate(payload) is not None
+    assert len(calls) == 1
+    assert (configured.project / ".claude" / guard._CACHE_NAME).is_file()
+
+    other = configured.outside / f"{VAULT_NAME}_other"
+    (configured.project / ".env").write_text(f"PRIVATE_VAULT_PATH={other}\n", encoding="utf-8")
+    assert guard.evaluate(payload) is None
+    assert guard.evaluate(_payload("Read", cwd=str(configured.project), file_path=str(other / "x.json"))) is not None
+    assert len(calls) == 2
+
+
+def test_cache_file_is_covered_by_env_guard():
+    spec = importlib.util.spec_from_file_location("env_guard_for_cache", HOOKS_DIR / "env_guard.py")
+    env_guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(env_guard)
+    assert env_guard.names_env_file(f".claude/{guard._CACHE_NAME}")
+    assert env_guard.names_env_file(f".claude/{guard._CACHE_NAME}.1234.tmp")
+
+
+@pytest.mark.parametrize(
+    "env_text,message",
+    [(None, ".env not found"), ("OTHER_KEY=1\n", "PRIVATE_VAULT_PATH is not set")],
+    ids=["no-env-file", "no-key"],
+)
+def test_missing_configuration_is_noted_on_stderr(configured, capsys, env_text, message):
+    env = configured.project / ".env"
+    if env_text is None:
+        env.unlink()
+    else:
+        env.write_text(env_text, encoding="utf-8")
+    guard.evaluate(_payload("Read", cwd=str(configured.project), file_path="src/a.py"))
+    err = capsys.readouterr().err
+    assert message in err
+    assert "only the in-repo private_vault/ rules apply" in err
+
+
+def test_no_stderr_note_when_configured(configured, capsys):
+    """Absence counterpart of the test above."""
+    guard.evaluate(_payload("Read", cwd=str(configured.project), file_path="src/a.py"))
+    assert capsys.readouterr().err == ""
+
+
+# --- end to end: one positive control per tool, and the path never printed --
+
+# Deny cases use relative or reach forms: the deny reason echoes the
+# agent's own input, so an absolute input would carry the path in itself.
+CONFIG_E2E = {
+    "Read": ("read-relative", "read-src"),
+    "Grep": ("grep-reach-no-glob", "grep-project-root"),
+    "Glob": ("glob-reach", "glob-src"),
+    "Edit": ("edit-relative", "edit-src"),
+    "Write": ("write", "write-src"),
+}
+
+
+def _run_configured(case, c) -> subprocess.CompletedProcess:
+    return _run(_config_payload(case, c), c.project)
+
+
+def _leaks_vault_path(result: subprocess.CompletedProcess, c) -> bool:
+    """The vault path appears in what the hook printed. The deny reason is
+    checked decoded too: JSON escapes Windows backslashes in raw stdout."""
+    text = result.stdout + result.stderr
+    try:
+        text += json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    except (ValueError, KeyError, TypeError):
+        pass
+    lowered = text.lower()
+    return any(form.lower() in lowered for form in (str(c.vault), c.vault.as_posix()))
+
+
+@pytest.mark.parametrize("tool", sorted(CONFIG_E2E))
+def test_configured_vault_hook_process(tool, configured):
+    deny_name, allow_name = CONFIG_E2E[tool]
+    denied = _run_configured(CONFIG_DENY[deny_name], configured)
+    assert denied.returncode == 0
+    output = json.loads(denied.stdout)["hookSpecificOutput"]
+    assert output["permissionDecision"] == "deny"
+    assert "PRIVATE_VAULT_PATH" in output["permissionDecisionReason"]
+    assert not _leaks_vault_path(denied, configured)
+    allowed = _run_configured(CONFIG_ALLOW[allow_name], configured)
+    assert allowed.returncode == 0
+    assert allowed.stdout.strip() == ""
+    assert not _leaks_vault_path(allowed, configured)
+
+
+def test_leak_check_positive_control(configured):
+    """_leaks_vault_path sees the path when the payload itself carries it."""
+    denied = _run_configured(CONFIG_DENY["read-native"], configured)
+    assert _leaks_vault_path(denied, configured)

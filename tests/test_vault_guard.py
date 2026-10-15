@@ -328,6 +328,7 @@ CONFIG_DENY = {
     "glob-path-vault": lambda c: ("Glob", c.project, {"pattern": "*", "path": str(c.vault / "memory")}),
     "glob-absolute-pattern": lambda c: ("Glob", c.project, {"pattern": c.vault.as_posix() + "/**/*.json"}),
     "glob-relative-wildcard-pattern": lambda c: ("Glob", c.project, {"pattern": _rel(c.outside, c.project) + "/Ember*/**"}),
+    "glob-vault-top-level": lambda c: ("Glob", c.project, {"pattern": _rel(c.vault, c.project) + "/*"}),
     "glob-reach": lambda c: ("Glob", c.project, {"pattern": "**/*.json", "path": str(c.outside)}),
     "glob-reach-wildcard-dir": lambda c: ("Glob", c.project, {"pattern": "*/memory/*", "path": str(c.outside)}),
 }

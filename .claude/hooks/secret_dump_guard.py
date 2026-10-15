@@ -3,19 +3,23 @@
 
 PreToolUse hook for Bash|PowerShell -- denies commands that print vault
 content through a known whole-file-dump or content-search utility (cat,
-gc, grep -r, rg, findstr /s, Select-String -Recurse, ...), including when
-the vault is named in one pipe stage and read in another. Reads hook JSON
-from stdin. Returns a deny decision if the command matches; silent
-pass-through otherwise. Read/Grep/Glob are vault_guard.py.
+gc, grep -r, rg, findstr /s, Select-String -Recurse, ...), or that list or
+count vault entries (ls, dir, gci, tree, find, wc), including when the
+vault is named in one pipe stage and read in another. Entry names are
+record IDs, so a listing is a read. Reads hook JSON from stdin. Returns a
+deny decision if the command matches; silent pass-through otherwise.
+Read/Grep/Glob are vault_guard.py.
 
 "The vault" is vault_guard.py's definition: any private_vault directory
 by name, plus the existing <project>/private_vault and configured
 PRIVATE_VAULT_PATH directories by location. A path argument counts when
 it resolves, against the payload cwd and any `cd` earlier in the same
 command line, to a location at or under one of those. A recursive search
-or listing (grep -r, rg, findstr /s, gci -Recurse, find, ...) counts when
-its root is an ancestor of one, unless the utility honours .gitignore
-(rg, ag) and the vault is the gitignored in-project one.
+or listing (grep -r, rg, findstr /s, gci -Recurse, find, tree, ls -R, ...)
+counts when its root is an ancestor of one, unless the utility honours
+.gitignore (rg, ag) and the vault is the gitignored in-project one. A
+non-recursive listing of an ancestor shows only the vault directory's own
+name and is allowed.
 
 .env is NOT handled here. env_guard.py owns .env for every tool (Read,
 Grep, Glob, Bash, PowerShell) and denies any command that names a .env
@@ -33,8 +37,8 @@ saw, and the docs state plainly that "PostToolUse hooks can't undo
 actions since the tool has already executed." PreToolUse is the only
 stage with any leverage, and it can only pattern-match the command
 string about to run -- it has no visibility into what that command's
-output will actually be. So this hook recognizes the "dump or search a
-vault path" family and nothing else. A command written a different way
+output will actually be. So this hook recognizes the "dump, search, or
+list a vault path" family and nothing else. A command written a different way
 -- a Python one-liner, a different utility, base64, a script, a path
 built at runtime ($VAR, %VAR%), a flag value taken for a path or missed
 as one -- is not caught. That is a real, permanent limitation, not an
@@ -42,9 +46,10 @@ oversight: the space of "ways to print a file's content" in a shell is
 unbounded, and claiming to catch all of it would be worse than admitting
 this only raises the bar for common forms.
 
-Precision over recall, deliberately: only content-reading utilities are
-blocklisted, not every command that mentions a vault path. Listing,
-counting and existence checks are left alone. A filter broad enough to
+Precision over recall, deliberately: only content-reading, listing and
+counting utilities are blocklisted, not every command that mentions a
+vault path. Existence checks (Test-Path, test -d) and other commands that
+merely name a vault (echo, mkdir) are left alone. A filter broad enough to
 flag those trains people to ignore it, which is worse than not having
 the filter.
 """
@@ -95,6 +100,19 @@ _READ_UTILITIES = frozenset({
     "findstr",
     "select-string",
     "sls",
+})
+
+# Listing and counting utilities: their output is vault entry names (record
+# IDs) or a count of them. Denied when they name a vault, or when they
+# recurse from an ancestor of one (see _recursive_roots).
+_LIST_UTILITIES = frozenset({
+    "ls",
+    "dir",
+    "gci",
+    "get-childitem",
+    "tree",
+    "find",
+    "wc",
 })
 
 # Windows executable suffixes stripped from the leading word, so
@@ -197,6 +215,8 @@ def _recursive_roots(tokens: list[str], utility: str) -> list[str] | None:
     ):
         explicit_pattern = any(f in _PATTERN_FLAGS or f.startswith(("--regexp=", "--file=")) for f in flags)
         return (args if explicit_pattern else args[1:]) or ["."]
+    if utility == "tree":
+        return [a for a in args if not _SWITCH_RE.fullmatch(a)] or ["."]
     if utility == "find":
         roots = []
         for t in tokens[1:]:
@@ -220,6 +240,13 @@ def _recursive_roots(tokens: list[str], utility: str) -> list[str] | None:
             return None
         return [(os.path.dirname(a) if set("*?[") & set(a) else a) or "." for a in plain] or ["."]
     return None
+
+
+def _lists_cwd(tokens: list[str], utility: str) -> bool:
+    """A listing with no path argument lists the cwd (`cd vault && ls`)."""
+    if utility not in _LIST_UTILITIES or utility == "wc" or _utility(tokens[:1]) != utility:
+        return False  # wc with no file counts stdin; xargs supplies paths
+    return not any(not t.startswith("-") and not _SWITCH_RE.fullmatch(t) for t in tokens[1:])
 
 
 def _ignores_gitignore(flags: list[str]) -> bool:
@@ -248,8 +275,8 @@ def _reaches_vault(stages: list[list[str]], utilities: list[str], base: Path, va
 
 def _matches_dump_command(command: str, cwd: str | None = None) -> str | None:
     """Return the matched utility name if a pipeline in `command` both runs
-    a content-reading utility and names a vault path or recurses from an
-    ancestor of one, else None."""
+    a content-reading, listing or counting utility and names a vault path
+    or recurses from an ancestor of one, else None."""
     base = Path(cwd or os.getcwd())
     vaults = None  # resolved on first need: it reads .env (or its cache)
     for pipeline in _pipelines(command):
@@ -261,12 +288,16 @@ def _matches_dump_command(command: str, cwd: str | None = None) -> str | None:
             target = stages[0][-1] if len(stages[0]) > 1 else "~"
             base = Path(absolute_path(target, base))
             continue
-        hit = next((u for u in utilities if u in _READ_UTILITIES), None)
+        hit = next((u for u in utilities if u in _READ_UTILITIES or u in _LIST_UTILITIES), None)
         if not hit:
             continue
         if vaults is None:
             vaults = vault_dirs()
         if any(_names_vault(t, base, vaults) for tokens in stages for t in tokens[1:]):
+            return hit
+        if vaults and any(_lists_cwd(tokens, u) for tokens, u in zip(stages, utilities)) and inside_vault(
+            ".", base, vaults
+        ):
             return hit
         if vaults and _reaches_vault(stages, utilities, base, vaults):
             return hit
@@ -293,11 +324,12 @@ def main():
                     f"Vault Privacy Rule (#188): '{matched_utility}' against a "
                     "vault path (private_vault/ or the configured "
                     "PRIVATE_VAULT_PATH, named or reached by a recursive "
-                    "search from an ancestor) would dump raw vault content "
-                    "into this transcript. This is a known-form prevention check, "
+                    "search or listing from an ancestor) would put vault "
+                    "content or entry names (record IDs) into this "
+                    "transcript. This is a known-form prevention check, "
                     "not a guarantee -- see .claude/hooks/secret_dump_guard.py. "
-                    "Inspect vault data in a separate terminal, or use "
-                    "counts/listings only."
+                    "Inspect vault data in a separate terminal; existence "
+                    "checks (Test-Path, test -d) are allowed."
                 ),
             }
         }

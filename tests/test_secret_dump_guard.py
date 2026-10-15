@@ -108,8 +108,6 @@ DENY = [
 # Over-blocking guard. Each is an absence check; DENY above is the
 # positive control (same function, same vault path, dump utility instead).
 ALLOW = [
-    "wc -l private_vault/memory/x.json",
-    "ls -la private_vault/memory/",
     "cat README.md",
     # 'category'/'heading' must not match the 'cat'/'head' blocklist.
     "echo 'category heading' private_vault/x",
@@ -122,12 +120,13 @@ ALLOW = [
     ),
     # Utility and path in different commands must not cross-contaminate.
     "cat README.md && echo done private_vault/x",
-    "rg KEY src; ls private_vault",
-    "cat README.md\nls private_vault",
+    "rg KEY src; Test-Path private_vault",
+    "cat README.md\ntest -d private_vault",
     # A quoted pipe is part of a word, not a pipeline boundary.
     "echo 'cat | x' private_vault/x",
-    # Counting a listing is not reading content.
-    "ls private_vault | wc -l",
+    # Existence checks are not listings.
+    "Test-Path private_vault/memory",
+    "test -d private_vault && echo present",
     # Searches that do not name the vault.
     "rg KEY src",
     "grep -rn PRIVATE_VAULT_PATH src/core",
@@ -136,6 +135,34 @@ ALLOW = [
     # .env moved to env_guard.py; the old substring match denied the example.
     "cat .env.example",
 ]
+
+
+# Listing and counting a vault: entry names are record IDs. Each template
+# runs once against a vault path (deny) and once against src/ (allow, the
+# absence counterpart), so the rule is about the path, not the utility.
+LISTING = [
+    "ls {}",
+    "ls -la {}/memory/",
+    "dir {}",
+    "gci {}",
+    "Get-ChildItem -Path {} -Name",
+    "tree {}",
+    "find {} -name '*.json'",
+    "wc -l {}/memory/x.json",
+    "ls {} | wc -l",
+    "ls {} | head",
+]
+
+
+@pytest.mark.parametrize("template", LISTING)
+def test_denies_listing_a_vault(template):
+    assert guard._matches_dump_command(template.format("private_vault")) is not None
+
+
+@pytest.mark.parametrize("template", LISTING)
+def test_allows_the_same_listing_elsewhere(template):
+    """Absence counterpart of test_denies_listing_a_vault."""
+    assert guard._matches_dump_command(template.format("src")) is None
 
 
 @pytest.mark.parametrize("command", DENY)
@@ -192,6 +219,13 @@ IN_REPO_DENY = [
     "rg --no-ignore KEY",
     "Get-ChildItem -Recurse | Select-String KEY",
     "find . -name '*.json' | xargs grep KEY",
+    # Recursive listings from the project root enumerate vault entries.
+    "find . -name '*.json'",
+    "ls -R",
+    "Get-ChildItem -Recurse",
+    "tree",
+    "dir /s /b",
+    "cd private_vault && ls",
 ]
 
 IN_REPO_ALLOW = [
@@ -200,6 +234,10 @@ IN_REPO_ALLOW = [
     "grep -r KEY src",
     "Get-ChildItem src -Recurse | Select-String KEY",
     "cd src && cat a.py",
+    "ls",                      # top level: only the vault directory's own name
+    "find src -name '*.py'",
+    "gci src -Recurse",
+    "cd src && ls",
 ]
 
 
@@ -267,14 +305,30 @@ CONFIG_DENY = [
     ("find {rel_outside} -name '*.json' | xargs grep KEY", "project"),
     ("grep -r KEY", "outside"),
     ("rg KEY", "outside"),
+    # Listings and counts.
+    ("ls {rel}", "project"),
+    (r"dir {vault}", "project"),
+    (r"gci {rel_bs}\memory", "project"),
+    ("tree {rel}", "project"),
+    ("wc -l {rel}/memory/rec.json", "project"),
+    ("find {rel_outside}", "project"),
+    ("ls -R {rel_outside}", "project"),
+    (r"Get-ChildItem -Recurse {rel_outside_bs}", "project"),
+    (r"dir /s {rel_outside_bs}", "project"),
+    ("tree {rel_outside}", "project"),
+    ("find .", "outside"),
+    ("cd {rel} && ls", "project"),
+    ("Set-Location {vault}; Get-ChildItem", "project"),
 ]
 
 CONFIG_ALLOW = [
     ("cat src/a.py", "project"),
     ("grep -r KEY src", "project"),
     ("rg KEY", "project"),
-    ("ls {rel}", "project"),                        # listing, as for private_vault/
-    ("wc -l {rel}/memory/rec.json", "project"),
+    ("ls {rel_outside}", "project"),                # top level: only the vault's own name
+    ("gci {rel_outside}", "project"),
+    ("Test-Path {rel}", "project"),
+    ("wc -l {rel_outside}/notes.txt", "project"),
     ("cat {rel_outside}/notes.txt", "project"),
     ("grep KEY {rel_outside}/*.txt", "project"),    # not recursive
     ("Get-ChildItem {rel_outside} | Select-String KEY", "project"),

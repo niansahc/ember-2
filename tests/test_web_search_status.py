@@ -9,7 +9,6 @@ engine is blocked upstream; the only signal is `unresponsive_engines`.
 
 from __future__ import annotations
 
-import json
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,6 +19,7 @@ from fastapi.testclient import TestClient
 import src.tools.web_search as web_search_mod
 from src.llm.post_gen_pipeline import WEB_SEARCH_UNAVAILABLE_DISCLOSURE
 from src.tools.web_search import WebSearchResult, run_web_search, web_search
+from tests.conftest import sse_events
 
 
 def _searxng(payload):
@@ -45,7 +45,7 @@ def test_results_are_ok():
 def test_no_results_with_every_engine_answering_is_empty():
     with _searxng({"results": [], "unresponsive_engines": []}):
         result = run_web_search("synthetic query")
-    assert (result.status, result.items, result.unresponsive) == ("empty", [], [])
+    assert (result.status, result.items) == ("empty", [])
 
 
 def test_no_results_with_blocked_engines_is_unavailable(caplog):
@@ -60,7 +60,6 @@ def test_no_results_with_blocked_engines_is_unavailable(caplog):
         result = run_web_search("synthetic query")
     assert result.status == "unavailable"
     assert result.items == []
-    assert result.unresponsive == ["brave", "duckduckgo"]
     assert "brave" in caplog.text and "duckduckgo" in caplog.text
 
 
@@ -69,7 +68,6 @@ def test_results_with_some_blocked_engines_are_still_ok():
     with _searxng(payload):
         result = run_web_search("synthetic query")
     assert result.status == "ok"
-    assert result.unresponsive == ["startpage"]
 
 
 def test_request_failure_is_unavailable():
@@ -106,8 +104,7 @@ def _build_packet(search_result, *, skip_web_search=False):
 
 
 def test_packet_records_unavailable_search():
-    packet, search = _build_packet(WebSearchResult(status="unavailable",
-                                                   unresponsive=["brave"]))
+    packet, search = _build_packet(WebSearchResult(status="unavailable"))
     search.assert_called_once()
     assert packet.web_items == []
     assert packet.web_search_status == "unavailable"
@@ -156,12 +153,8 @@ def _chat(client, searxng_payload, *, stream, model_reply=_MODEL_REPLY):
     stubbed."""
     import src.api.openai_adapter as adapter
 
-    response = MagicMock(status_code=200)
-    response.json.return_value = searxng_payload
-    response.raise_for_status.return_value = None
     with ExitStack() as stack:
-        get = stack.enter_context(
-            patch.object(web_search_mod.requests, "get", return_value=response))
+        get = stack.enter_context(_searxng(searxng_payload))
         stack.enter_context(patch.object(adapter.context_service.retriever, "retrieve",
                                          return_value=([], [], [], [], None)))
         llm = stack.enter_context(patch("src.api.openai_adapter.llm_adapter"))
@@ -193,9 +186,9 @@ def _chat(client, searxng_payload, *, stream, model_reply=_MODEL_REPLY):
     assert resp.status_code == 200
     if stream:
         text = "".join(
-            json.loads(line[6:])["choices"][0]["delta"].get("content") or ""
-            for line in resp.text.splitlines()
-            if line.startswith("data: {") and '"choices"' in line
+            e["choices"][0]["delta"].get("content") or ""
+            for e in sse_events(resp.text)
+            if isinstance(e, dict) and e.get("choices")
         )
     else:
         text = resp.json()["choices"][0]["message"]["content"]
@@ -262,7 +255,7 @@ def _confirm(search_result):
 def test_confirmed_search_unavailable_routes_to_retry_offer():
     from src.llm.post_gen_pipeline import run_post_gen_pipeline
 
-    work = _confirm(WebSearchResult(status="unavailable", unresponsive=["brave"]))
+    work = _confirm(WebSearchResult(status="unavailable"))
     assert work.confirmation_search_failed is True
     assert work.confirmation_search_status == "unavailable"
 
@@ -274,7 +267,6 @@ def test_confirmed_search_unavailable_routes_to_retry_offer():
     )
     # The retry offer replaces the reply; no disclosure line on top of it.
     assert result.reply == "I tried searching but hit an error. Want me to try again?"
-    assert result.search_unavailable_disclosed is False
 
 
 def test_confirmed_search_with_results_is_not_a_failure():
@@ -305,6 +297,7 @@ def test_postgen_discloses_only_when_unavailable():
 
 
 def test_postgen_skips_disclosure_on_refusal_and_empty_fallback():
-    assert _postgen("No.", "unavailable", is_refusal=True).reply == "No."
+    refusal = "I can't help with that."
+    assert _postgen(refusal, "unavailable").reply == refusal
     fallback = _postgen("", "unavailable")
     assert fallback.empty_fallback_fired and _DISCLOSURE not in fallback.reply

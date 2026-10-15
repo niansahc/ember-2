@@ -812,12 +812,10 @@ class PromptBuilder:
 
     def _build_web_search_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.web_items:
-            notice = _WEB_SEARCH_STATUS_NOTICES.get(
-                getattr(context_packet, "web_search_status", None)
-            )
+            status = context_packet.web_search_status
+            notice = _WEB_SEARCH_STATUS_NOTICES.get(status)
             if notice is None:
                 return ""
-            status = context_packet.web_search_status
             return (
                 f'<web_search_results status="{status}">\n'
                 f"{notice}\n"

@@ -46,6 +46,7 @@ import logging
 from dataclasses import dataclass, field
 
 from src.llm.ask_first_validator import validate_ask_first_response
+from src.llm.refusal import is_refusal_response
 from src.llm.source_validator import (
     extract_web_domains,
     validate_and_strip_sources,
@@ -82,7 +83,6 @@ class PostGenResult:
     empty_fallback_fired: bool
     stripped_urls: list[dict] = field(default_factory=list)
     kept_urls: list[str] = field(default_factory=list)
-    search_unavailable_disclosed: bool = False
 
 
 def run_post_gen_pipeline(
@@ -103,7 +103,6 @@ def run_post_gen_pipeline(
     memory_items: list | None = None,
     state_items: list | None = None,
     web_search_status: str | None = None,
-    is_refusal: bool = False,
 ) -> PostGenResult:
     """Run source → vision → ask-first → empty-guard against a full reply.
 
@@ -112,6 +111,8 @@ def run_post_gen_pipeline(
     function applies the routing rule.
     """
 
+    # Judged on the reply as generated, before any substitution below.
+    is_refusal = is_refusal_response(reply)
     stripped_sources: list[str] = []
     web_refusal_substituted = False
     vision_substituted = False
@@ -179,7 +180,6 @@ def run_post_gen_pipeline(
         empty_fallback_fired = True
         logger.warning("[POSTGEN] empty-response guard fired")
 
-    search_unavailable_disclosed = False
     if (
         web_search_status == "unavailable"
         and not is_refusal
@@ -187,7 +187,6 @@ def run_post_gen_pipeline(
         and not empty_fallback_fired
     ):
         reply = f"{WEB_SEARCH_UNAVAILABLE_DISCLOSURE}\n\n{reply}"
-        search_unavailable_disclosed = True
         logger.info("[POSTGEN] web search unavailable - disclosure line prepended")
 
     stripped_urls: list[dict] = []
@@ -225,5 +224,4 @@ def run_post_gen_pipeline(
         empty_fallback_fired=empty_fallback_fired,
         stripped_urls=stripped_urls,
         kept_urls=kept_urls,
-        search_unavailable_disclosed=search_unavailable_disclosed,
     )

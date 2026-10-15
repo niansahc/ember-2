@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Literal
 from email.utils import parsedate_to_datetime
 
 import requests
@@ -82,6 +83,9 @@ def _freshness_multiplier(
     return max(floor, decay)
 
 
+WebSearchStatus = Literal["ok", "empty", "unavailable"]
+
+
 @dataclass
 class WebSearchResult:
     """Outcome of one SearXNG query.
@@ -93,12 +97,10 @@ class WebSearchResult:
                        more engines were unresponsive (rate limit, CAPTCHA,
                        timeout). SearXNG still answers HTTP 200 in that case,
                        so `unresponsive_engines` is the only signal.
-    unresponsive: engine names SearXNG reported as unresponsive.
     """
 
     items: list[dict] = field(default_factory=list)
-    status: str = "ok"
-    unresponsive: list[str] = field(default_factory=list)
+    status: WebSearchStatus = "ok"
 
 
 def run_web_search(query) -> WebSearchResult:
@@ -161,7 +163,7 @@ def run_web_search(query) -> WebSearchResult:
                 "[WEB_SEARCH] %d results (%s), unresponsive engines: %s",
                 len(results), status, ", ".join(unresponsive) or "none",
             )
-        return WebSearchResult(items=results, status=status, unresponsive=unresponsive)
+        return WebSearchResult(items=results, status=status)
 
     except Exception as exc:
         logger.warning("[WEB_SEARCH] Failed: %s", type(exc).__name__)

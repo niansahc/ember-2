@@ -42,6 +42,9 @@ from src.memory.exchange import ExchangeRecorder, ExchangeStorageError, OUTCOME_
 from src.memory.session import get_session, list_sessions
 from src.context.service import ContextService
 from src.llm.adapter import LLMAdapter, StatusSignal
+# Shared with the post-gen pipeline, which skips the search-unavailable
+# disclosure on refusals.
+from src.llm.refusal import is_refusal_response as _is_refusal_response
 from src.onboarding.service import OnboardingService
 from src.state.state_extractor import StateExtractor
 from src.state.state_service import StateService
@@ -58,23 +61,20 @@ _STREAM_ALWAYS_GROUNDED = True
 SUPPORTED_MODELS = [EMBER_MODEL_ID]
 
 
-# Refusal markers used by both streaming and non-streaming paths to skip
-# the coaching filter on responses that intentionally end short. Keeping
-# both paths' lists in sync is the whole point of centralising this.
-_REFUSAL_PATTERNS: tuple[str, ...] = (
-    "i can't help with that",
-    "i'm not going to do that",
-    "that's not something i'm going to do",
-    "i had trouble generating a response",
-)
+def _web_search_header(
+    used_web_search: bool, suppressed: bool, status: str | None
+) -> str | None:
+    """X-Ember-Web-Search value for a turn, or None for no header.
 
-
-def _is_refusal_response(text: str) -> bool:
-    """True if `text` looks like a refusal."""
-    if not text:
-        return False
-    lowered = text.lower()
-    return any(m in lowered for m in _REFUSAL_PATTERNS)
+    "true" when web results were used and not suppressed by a substitution.
+    "empty" / "unavailable" when a search ran and nothing was used (ADR-040
+    note); the UI only badges on "true".
+    """
+    if used_web_search:
+        return None if suppressed else "true"
+    if status in ("empty", "unavailable"):
+        return status
+    return None
 
 
 def early_return_response(
@@ -1277,22 +1277,15 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
             _original_query = _confirmation_result["query"]
             work.message = _original_query
             work.raw_message = _original_query
-            try:
-                from src.tools.web_search import run_web_search
-                _search = run_web_search(_original_query)
-                work.confirmation_web_items = _search.items
-                work.confirmation_search_status = _search.status
-                logger.info("[CONFIRM] Executing deferred web search (%d chars), status=%s",
-                            len(_original_query), _search.status)
-                # run_web_search never raises, so a blocked or failed search
-                # arrives here as a status. "unavailable" routes to the
-                # post-gen retry offer, same as an exception.
-                if _search.status == "unavailable":
-                    work.confirmation_search_failed = True
-            except Exception as exc:
-                logger.warning("[CONFIRM] Deferred web search failed: %s", type(exc).__name__)
-                work.confirmation_search_failed = True
-                work.confirmation_search_status = "unavailable"
+            from src.tools.web_search import run_web_search
+            _search = run_web_search(_original_query)
+            work.confirmation_web_items = _search.items
+            work.confirmation_search_status = _search.status
+            # run_web_search never raises; a failed or blocked search arrives
+            # as "unavailable" and routes to the post-gen retry offer.
+            work.confirmation_search_failed = _search.status == "unavailable"
+            logger.info("[CONFIRM] Executing deferred web search (%d chars), status=%s",
+                        len(_original_query), _search.status)
         elif not _confirmation_result["confirmed"]:
             pass
 
@@ -1989,16 +1982,12 @@ async def _complete_exchange(
                 )
 
         if _should_search:
-            try:
-                from src.tools.web_search import run_web_search
-                _auto_search = run_web_search(_raw_user_message)
-                context_packet.web_search_status = _auto_search.status
-                if _auto_search.items:
-                    context_packet.web_items = _auto_search.items
-                    logger.info("[WEB_SEARCH] Autonomous execution: %d results", len(_auto_search.items))
-            except Exception as exc:
-                logger.warning("[WEB_SEARCH] Autonomous execution failed: %s", type(exc).__name__)
-                context_packet.web_search_status = "unavailable"
+            from src.tools.web_search import run_web_search
+            _auto_search = run_web_search(_raw_user_message)
+            context_packet.web_search_status = _auto_search.status
+            if _auto_search.items:
+                context_packet.web_items = _auto_search.items
+                logger.info("[WEB_SEARCH] Autonomous execution: %d results", len(_auto_search.items))
 
     # Web search transparency: track whether web search results were used
     # in context assembly. Communicated to the UI via X-Ember-Web-Search response
@@ -2006,15 +1995,6 @@ async def _complete_exchange(
     # Uses a header rather than a response body field to avoid breaking
     # OpenAI-compatible response schema.
     used_web_search = bool(context_packet.web_items)
-    # "empty" / "unavailable" when a search ran and found nothing usable;
-    # None otherwise. Sent as the X-Ember-Web-Search value in place of
-    # "true" (ADR-040 note). The UI only badges on "true".
-    _web_search_miss = (
-        context_packet.web_search_status
-        if not used_web_search
-        and context_packet.web_search_status in ("empty", "unavailable")
-        else None
-    )
 
     # Vault citation: track whether non-profile vault records were retrieved.
     # Communicated to M via X-Ember-Vault-Used header + vault_sources SSE event.
@@ -2286,7 +2266,6 @@ async def _complete_exchange(
                     memory_items=getattr(context_packet, "memory_items", None),
                     state_items=getattr(context_packet, "state_items", None),
                     web_search_status=context_packet.web_search_status,
-                    is_refusal=_is_refusal_response(full_reply),
                 )
                 full_reply = _postgen.reply
                 # When the post-gen pipeline substituted the response
@@ -2396,7 +2375,6 @@ async def _complete_exchange(
                     memory_items=getattr(context_packet, "memory_items", None),
                     state_items=getattr(context_packet, "state_items", None),
                     web_search_status=context_packet.web_search_status,
-                    is_refusal=_is_refusal_response(full_reply),
                 )
                 full_reply = _postgen.reply
 
@@ -2418,10 +2396,11 @@ async def _complete_exchange(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         }
-        if used_web_search and not _suppress_source_badges:
-            response_headers["X-Ember-Web-Search"] = "true"
-        elif _web_search_miss:
-            response_headers["X-Ember-Web-Search"] = _web_search_miss
+        _web_header = _web_search_header(
+            used_web_search, _suppress_source_badges, context_packet.web_search_status,
+        )
+        if _web_header:
+            response_headers["X-Ember-Web-Search"] = _web_header
         # No X-Ember-Vault-Used here (ADR-040 v3): headers flush before the
         # body runs, so the value cannot reflect a failed or substituted
         # turn. The vault badge derives from the vault_sources frame, which
@@ -2482,7 +2461,6 @@ async def _complete_exchange(
         memory_items=getattr(context_packet, "memory_items", None),
         state_items=getattr(context_packet, "state_items", None),
         web_search_status=context_packet.web_search_status,
-        is_refusal=_is_refusal_response(reply),
     )
     reply = _postgen_ns.reply
     if _postgen_ns.ask_first_substituted or _postgen_ns.web_refusal_substituted:
@@ -2539,10 +2517,13 @@ async def _complete_exchange(
         ],
     )
     non_stream_headers = {}
-    if used_web_search and not (_postgen_ns.ask_first_substituted or _postgen_ns.web_refusal_substituted):
-        non_stream_headers["X-Ember-Web-Search"] = "true"
-    elif _web_search_miss:
-        non_stream_headers["X-Ember-Web-Search"] = _web_search_miss
+    _web_header = _web_search_header(
+        used_web_search,
+        _postgen_ns.ask_first_substituted or _postgen_ns.web_refusal_substituted,
+        context_packet.web_search_status,
+    )
+    if _web_header:
+        non_stream_headers["X-Ember-Web-Search"] = _web_header
     if used_vault:
         non_stream_headers["X-Ember-Vault-Used"] = "true"
     if used_vision:

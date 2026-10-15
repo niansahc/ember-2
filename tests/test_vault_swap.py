@@ -188,6 +188,46 @@ class TestVaultSwapEndpoint:
             )
         mock_clear.assert_called_once_with()
 
+    def _store_with_a_live_conversation(self, monkeypatch):
+        from src.api.main import llm_adapter
+        from src.context.conversation_buffer import ConversationBufferStore
+
+        store = ConversationBufferStore()
+        store.get(None, "sess_test_001").add_turn("synthetic user", "synthetic reply")
+        monkeypatch.setattr(llm_adapter.prompt_builder, "conversation_buffers", store)
+        return store
+
+    def test_swap_clears_conversation_buffers(self, tmp_path, monkeypatch):
+        """Issue #133: conversation buffers hold the previous vault's turns
+        and must not outlive the swap."""
+        store = self._store_with_a_live_conversation(monkeypatch)
+        vault_dir = tmp_path / "test_vault"
+        vault_dir.mkdir()
+        with patch("src.core.config.is_dev_mode", return_value=True), \
+             patch("src.core.config.get_known_vault_paths", return_value={"test": str(vault_dir)}), \
+             patch("src.api.main.get_ember_api_key", return_value=None), \
+             patch("src.retrieval.vector_index.clear_index_cache"):
+            resp = self._client().post(
+                "/v1/developer/vault/swap",
+                json={"vault_label": "test"},
+            )
+        assert resp.status_code == 200
+        assert store.find(None, "sess_test_001") is None
+
+    def test_rejected_swap_keeps_conversation_buffers(self, monkeypatch):
+        """Positive control: a swap that never happens leaves the buffer, so
+        the clearing test above can fail."""
+        store = self._store_with_a_live_conversation(monkeypatch)
+        with patch("src.core.config.is_dev_mode", return_value=True), \
+             patch("src.core.config.get_known_vault_paths", return_value={"live": "/v/live"}), \
+             patch("src.api.main.get_ember_api_key", return_value=None):
+            resp = self._client().post(
+                "/v1/developer/vault/swap",
+                json={"vault_label": "staging"},
+            )
+        assert resp.status_code == 400
+        assert store.find(None, "sess_test_001") is not None
+
     def test_swap_updates_config_override(self, tmp_path):
         vault_dir = tmp_path / "live_vault"
         vault_dir.mkdir()

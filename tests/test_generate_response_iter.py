@@ -158,18 +158,17 @@ def test_generate_response_wrapper_drains_iterator_returns_final_string() -> Non
 def test_generate_response_threads_session_id_to_buffer_reset() -> None:
     """Regression: generate_response() (non-streaming) had no session_id
     parameter, so it always called generate_response_iter() with
-    session_id=None. add_turn() only resets the buffer on a non-None
-    session_id change (ConversationBuffer.add_turn), so two back-to-back
-    sessions on the non-streaming path never triggered the cross-session
-    reset and turns silently accumulated across sessions.
+    session_id=None, and two back-to-back sessions on the non-streaming path
+    shared one history.
 
-    Uses a real ConversationBuffer (not a mock) so the actual reset
-    logic in conversation_buffer.py runs and is what's being verified."""
-    from src.context.conversation_buffer import ConversationBuffer
+    Since issue #133 each session has its own buffer, resolved before the
+    prompt is built. Uses a real ConversationBufferStore (not a mock) so the
+    actual per-session lookup is what's being verified."""
+    from src.context.conversation_buffer import ConversationBufferStore
 
     adapter = _bare_adapter()
-    real_buffer = ConversationBuffer()
-    adapter.prompt_builder.conversation_buffer = real_buffer
+    store = ConversationBufferStore()
+    adapter.prompt_builder.conversation_buffers = store
     adapter.policy_service.evaluate_trigger.return_value = SafetyTriggerResult(
         triggered=False
     )
@@ -178,19 +177,24 @@ def test_generate_response_threads_session_id_to_buffer_reset() -> None:
         ContextPacket(user_message="session one message"),
         session_id="session-1",
     )
-    assert real_buffer.current_session_id == "session-1"
-    assert len(real_buffer.buffer) == 1
+    one = store.find(None, "session-1")
+    assert one is not None and one.session_id == "session-1"
+    assert len(one.get_recent()) == 1
 
     adapter.generate_response(
         ContextPacket(user_message="session two message"),
         session_id="session-2",
     )
 
-    # The session change must have reset the buffer -- only session
-    # two's turn should be present, not both.
-    assert real_buffer.current_session_id == "session-2"
-    assert len(real_buffer.buffer) == 1
-    assert real_buffer.buffer[0]["user"] == "session two message"
+    # Session two's buffer holds only session two's turn, not both.
+    two = store.find(None, "session-2")
+    assert len(two.get_recent()) == 1
+    assert two.get_recent()[0]["user"] == "session two message"
+    # And session two's prompt was built from session two's buffer.
+    assert (
+        adapter.prompt_builder.build_prompt.call_args.kwargs["conversation_buffer"]
+        is two
+    )
 
 
 def test_status_signal_is_frozen_dataclass() -> None:

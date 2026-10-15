@@ -107,7 +107,7 @@ from src.context import role_predicate
 from src.context.ranker import ContextRanker
 from src.context.retriever import ContextRetriever
 from src.context import prior as _prior
-from src.tools.web_search import web_search
+from src.tools.web_search import run_web_search
 
 
 @dataclass(frozen=True)
@@ -257,13 +257,15 @@ class ContextService:
         """Assembly proper. Split out so the counter scope wraps all of it."""
 
         web_items: list[dict] = []
+        web_search_status: str | None = None
         # skip_web_search=True when ask-first mode is active — the search
         # should not execute until the user confirms. Without this gate,
         # the context service fetches results during assembly and the SSE
         # stream shows sources alongside the "want me to search?" question.
         if policy.use_web_search and not skip_web_search:
-            raw_web = web_search(user_message)
-            web_items, quarantined = _quarantine_ai_docs(raw_web, user_message)
+            search = run_web_search(user_message)
+            web_search_status = search.status
+            web_items, quarantined = _quarantine_ai_docs(search.items, user_message)
             if quarantined:
                 logger.info(
                     "[CONTEXT] Quarantined %d AI-doc web result(s)", len(quarantined)
@@ -432,6 +434,7 @@ class ContextService:
         # Attach pre-computed query embedding for downstream use (lodestone
         # resolver in prompt builder). Avoids a redundant embed_text() call.
         packet.query_embedding = query_embedding
+        packet.web_search_status = web_search_status
 
         # ADR-015 retrieval stats, issue #227. The write is armed here and
         # fired by the adapter once the prompt is final, against the records

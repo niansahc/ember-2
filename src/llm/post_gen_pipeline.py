@@ -16,6 +16,12 @@ Followed by an empty-response guard that fills zero-byte replies with a
 fallback so the streaming path never emits a blank message to the client
 .
 
+Then, when this turn's web search was unavailable (every engine blocked or
+the request failed), a fixed disclosure line is prepended so the user knows
+the answer did not come from a search. Skipped for refusals, for substituted
+replies (the confirm-path retry offer already says search failed), and for
+the empty-guard fallback.
+
 The ordering is deliberate:
   - Source stripping first so downstream validators see the cleaned text.
   - Web search refusal before vision/ask-first: if the model had web
@@ -40,6 +46,7 @@ import logging
 from dataclasses import dataclass, field
 
 from src.llm.ask_first_validator import validate_ask_first_response
+from src.llm.refusal import is_refusal_response
 from src.llm.source_validator import (
     extract_web_domains,
     validate_and_strip_sources,
@@ -52,6 +59,13 @@ from src.safety.url_validator import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Deterministic, not left to the model: an 8B model told "search was
+# unavailable" still sometimes answers as if it had searched.
+WEB_SEARCH_UNAVAILABLE_DISCLOSURE = (
+    "Web search isn't working right now, so this answer is from what I "
+    "already know and may be out of date."
+)
 
 _EMPTY_FALLBACK = (
     "I had trouble generating a response to that. Try rephrasing, or let me "
@@ -88,6 +102,7 @@ def run_post_gen_pipeline(
     user_message: str | None = None,
     memory_items: list | None = None,
     state_items: list | None = None,
+    web_search_status: str | None = None,
 ) -> PostGenResult:
     """Run source → vision → ask-first → empty-guard against a full reply.
 
@@ -96,6 +111,8 @@ def run_post_gen_pipeline(
     function applies the routing rule.
     """
 
+    # Judged on the reply as generated, before any substitution below.
+    is_refusal = is_refusal_response(reply)
     stripped_sources: list[str] = []
     web_refusal_substituted = False
     vision_substituted = False
@@ -162,6 +179,15 @@ def run_post_gen_pipeline(
         reply = _EMPTY_FALLBACK
         empty_fallback_fired = True
         logger.warning("[POSTGEN] empty-response guard fired")
+
+    if (
+        web_search_status == "unavailable"
+        and not is_refusal
+        and not ask_first_substituted
+        and not empty_fallback_fired
+    ):
+        reply = f"{WEB_SEARCH_UNAVAILABLE_DISCLOSURE}\n\n{reply}"
+        logger.info("[POSTGEN] web search unavailable - disclosure line prepended")
 
     stripped_urls: list[dict] = []
     kept_urls: list[str] = []

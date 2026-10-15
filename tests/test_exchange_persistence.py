@@ -19,8 +19,10 @@ from __future__ import annotations
 from contextlib import ExitStack
 from unittest.mock import patch
 
+
 import pytest
 from fastapi.testclient import TestClient
+from src.tools.web_search import WebSearchResult
 
 from tests.conftest import (
     memory_db_ids as _row_ids,
@@ -266,7 +268,8 @@ def test_confirmed_yes_turn_stores_yes(client, vault, casual_policy):
     pending = ({"confirmed": True, "action": "web_search", "query": "the original question"}, [])
     _chat(client, "yes", policy=casual_policy, extra=(
         patch("src.api.openai_adapter._check_pending_confirmation", return_value=pending),
-        patch("src.tools.web_search.web_search", return_value=[]),
+        patch("src.tools.web_search.run_web_search",
+              return_value=WebSearchResult(status="empty")),
     ))
     assert [t["text"] for t in _turns(vault, "user")] == ["yes"]
 

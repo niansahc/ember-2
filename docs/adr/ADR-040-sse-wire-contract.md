@@ -130,6 +130,13 @@ unchanged on the non-streaming path, where the response is only sent after
 generation completes. `X-Ember-Web-Search` and `X-Ember-Vision-Used` are
 unchanged.
 
+Note (2026-10-14): `X-Ember-Web-Search` can also carry `empty` (a search ran
+and found nothing) or `unavailable` (the search request failed, or SearXNG
+returned nothing while engines were unresponsive). Both appear only when no
+web results were used; `true` keeps its meaning. The UI badges only on
+`true`, so clients that ignore the new values are unaffected. SSE frames are
+unchanged; this note does not bump the contract version.
+
 Because retrieval stats are credited only for records the model received, the
 delivery commit now runs after generation succeeds (ADR-015); a failed or
 partially streamed turn does not commit.

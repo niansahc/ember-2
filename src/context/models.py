@@ -62,6 +62,11 @@ class ContextPacket:
     # Injected into prompt after state, before reflections.
     task_items: list[TaskItem] = field(default_factory=list)
     web_items: list[dict] = field(default_factory=list)
+    # Outcome of this turn's web search: "ok", "empty" or "unavailable"
+    # (src/tools/web_search.py WebSearchResult). None when no search was
+    # attempted. Lets the prompt and the reply say search was unavailable
+    # instead of answering as if it had searched.
+    web_search_status: str | None = None
     # Raw base64 image strings (data URL prefix stripped) for vision requests.
     # Populated by openai_adapter when the user uploads an image.
     image_data: list[str] = field(default_factory=list)

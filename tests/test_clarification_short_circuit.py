@@ -47,7 +47,7 @@ def test_bare_marker_returns_scripted_clarification(client):
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
          patch("src.api.openai_adapter._background_topic_decline_resolution"), \
-         patch("src.tools.web_search.web_search") as _web:
+         patch("src.tools.web_search.run_web_search") as _web:
         _onb.is_active.return_value = False
 
         resp = client.post("/v1/chat/completions", json=_bare_marker_payload())
@@ -76,7 +76,7 @@ def test_bare_marker_writes_both_conversation_records_with_metadata(client):
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
          patch("src.api.openai_adapter._background_topic_decline_resolution"), \
-         patch("src.tools.web_search.web_search"):
+         patch("src.tools.web_search.run_web_search"):
         _onb.is_active.return_value = False
 
         resp = client.post("/v1/chat/completions", json=_bare_marker_payload())
@@ -108,7 +108,7 @@ def test_bare_marker_streaming_emits_clarification_sse(client):
          patch("src.api.openai_adapter._detect_task_in_response"), \
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
          patch("src.api.openai_adapter._background_topic_decline_resolution"), \
-         patch("src.tools.web_search.web_search"):
+         patch("src.tools.web_search.run_web_search"):
         _onb.is_active.return_value = False
 
         resp = client.post("/v1/chat/completions", json=payload)

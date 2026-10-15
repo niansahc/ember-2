@@ -91,7 +91,7 @@ def test_vision_turn_skips_primary_web_search(client):
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
          patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.core.preferences.get", side_effect=_prefs_get(web_search_autonomous=True)), \
-         patch("src.tools.web_search.web_search") as _web:
+         patch("src.tools.web_search.run_web_search") as _web:
         _onb.is_active.return_value = False
         _ctx.build_context.return_value = empty_packet
         _vision.analyze.return_value = "A test image of a cat."
@@ -132,7 +132,7 @@ def test_vision_turn_skips_autonomous_backstop(client, caplog):
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
          patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.core.preferences.get", side_effect=_prefs_get(web_search_autonomous=True)), \
-         patch("src.tools.web_search.web_search") as _web:
+         patch("src.tools.web_search.run_web_search") as _web:
         _onb.is_active.return_value = False
         _ctx.build_context.return_value = empty_packet
         _vision.analyze.return_value = "A test image of a cat."
@@ -175,7 +175,7 @@ def test_vision_turn_disables_ask_first(client):
          patch("src.api.openai_adapter.onboarding_service") as _onb, \
          patch("src.api.openai_adapter._background_topic_decline_resolution"), \
          patch("src.core.preferences.get", side_effect=_prefs_get(web_search_autonomous=False)), \
-         patch("src.tools.web_search.web_search") as _web:
+         patch("src.tools.web_search.run_web_search") as _web:
         _onb.is_active.return_value = False
         _ctx.build_context.return_value = empty_packet
         _vision.analyze.return_value = "A test image of a cat."

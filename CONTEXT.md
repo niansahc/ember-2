@@ -29,6 +29,20 @@ _Avoid_: regenerate
 A conversation's turns as the user sees them on reload.
 _Avoid_: transcript
 
+### Web search
+
+**Search failure**:
+A turn where a web search was triggered and gave the model no usable result: the request failed, every engine was blocked, nothing came back, or every hit was rejected as irrelevant or filtered out.
+_Avoid_: search error, search outage
+
+**Search note**:
+Ember's fixed note to the model when a search failure leaves it with no retrieved content. It states the status and a reason category. The user never sees it.
+_Avoid_: status block, search notice, error message
+
+**Search disclosure**:
+The fixed line Ember prepends to the reply when the search was unavailable, so the user knows the answer did not come from a search. The user sees it; the model does not write it.
+_Avoid_: search warning, search banner
+
 ## Relationships
 
 - A **Conversation** has many **Exchanges**, in order. It is created with its first user **Turn**, so Ember never creates an empty one.

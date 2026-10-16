@@ -17,6 +17,7 @@ from src.core.config import (
     get_ember_generation_ollama_host,
     get_ember_model,
     get_ember_vision_model,
+    get_search_failure_think_off,
     spawn_vault_bound_thread,
 )
 
@@ -44,11 +45,7 @@ def search_failure_think(context_packet) -> bool | None:
     not pass `think` at all, so generation is unchanged. Ollama only; cloud
     providers ignore it.
     """
-    from src.core.config import get_search_failure_think_off
-
     if not get_search_failure_think_off():
-        return None
-    if context_packet.web_items:
         return None
     if context_packet.web_search_status not in ("unavailable", "empty"):
         return None
@@ -813,9 +810,7 @@ class LLMAdapter:
             return self._chat_anthropic(system_prompt, user_message, temperature=temp)
         if model.startswith("gpt-"):
             return self._chat_openai(system_prompt, user_message, temperature=temp)
-        # think is passed only when set, so the default call is unchanged.
-        extra = {} if think is None else {"think": think}
-        return self._chat_ollama(system_prompt, user_message, image_data, model, temperature=temp, assistant_prefix=assistant_prefix, **extra)
+        return self._chat_ollama(system_prompt, user_message, image_data, model, temperature=temp, assistant_prefix=assistant_prefix, think=think)
 
     def _chat_stream(
         self,
@@ -835,8 +830,7 @@ class LLMAdapter:
         elif model.startswith("gpt-"):
             yield from self._chat_openai_stream(system_prompt, user_message, temperature=temp)
         else:
-            extra = {} if think is None else {"think": think}
-            yield from self._chat_ollama_stream(system_prompt, user_message, image_data, model, temperature=temp, assistant_prefix=assistant_prefix, **extra)
+            yield from self._chat_ollama_stream(system_prompt, user_message, image_data, model, temperature=temp, assistant_prefix=assistant_prefix, think=think)
 
     # ------------------------------------------------------------------
     # Ollama (local)

@@ -100,8 +100,6 @@ def _quarantine_ai_docs(
             safe.append(item)
 
     return safe, quarantined
-
-
 from src.context.low_value import is_low_value_content
 from src.context.models import ContextPacket
 from src.context.policies import classify_query

@@ -272,23 +272,13 @@ _SEARCH_NOTE_COMMON = (
     "you could not verify it. Do not say or imply that you searched, and do "
     "not cite or describe search results or sources."
 )
-_SEARCH_NOTE_UNAVAILABLE_TAIL = (
-    " A note about search being down is added to your reply automatically; "
-    "do not repeat it. You do have web search; it failed for this turn, so "
-    "do not say that you cannot search."
-)
-_SEARCH_NOTE_EMPTY_TAIL = (
-    " The search ran and found nothing. Say that nothing was found."
-)
 _SEARCH_NOTE_TAILS = {
-    "unavailable": _SEARCH_NOTE_UNAVAILABLE_TAIL,
-    "empty": _SEARCH_NOTE_EMPTY_TAIL,
-}
-# Used only if a caller sets a status without a reason (all current callers
-# set one).
-_SEARCH_NOTE_DEFAULT_REASON = {
-    "unavailable": "request_error",
-    "empty": "no_results",
+    "unavailable": (
+        " A note about search being down is added to your reply automatically; "
+        "do not repeat it. You do have web search; it failed for this turn, so "
+        "do not say that you cannot search."
+    ),
+    "empty": " The search ran and found nothing. Say that nothing was found.",
 }
 
 
@@ -297,7 +287,7 @@ def render_search_note(status: str | None, reason: str | None) -> str:
     tail = _SEARCH_NOTE_TAILS.get(status)
     if tail is None:
         return ""
-    reason = reason or _SEARCH_NOTE_DEFAULT_REASON[status]
+    reason = reason or "unspecified"
     return (
         "<web_search_status>\n"
         f"status: {status}\n"
@@ -857,15 +847,13 @@ class PromptBuilder:
 
     def _build_web_search_section(self, context_packet: ContextPacket) -> str:
         if not context_packet.web_items:
-            note = render_search_note(
-                context_packet.web_search_status,
-                getattr(context_packet, "web_search_reason", None),
-            )
+            status = context_packet.web_search_status
+            reason = context_packet.web_search_reason
+            note = render_search_note(status, reason)
             if note:
                 logger.info(
                     "[SEARCH_FAIL] search note injected status=%s reason=%s",
-                    context_packet.web_search_status,
-                    getattr(context_packet, "web_search_reason", None),
+                    status, reason,
                 )
             return note
 

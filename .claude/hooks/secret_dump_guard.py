@@ -159,6 +159,7 @@ _PS_SHELL_VALUE = frozenset({
     "executionpolicy", "ep", "windowstyle", "w", "outputformat", "o", "inputformat", "in",
     "configurationname", "config", "workingdirectory", "wd", "settingsfile", "version", "v",
 })
+_SHELL_C_FLAG = re.compile(r"-[a-zA-Z]*c[a-zA-Z]*")
 _MAX_DEPTH = 8
 
 # Recursion, per utility family. Content searches that always recurse:
@@ -244,6 +245,8 @@ def _extract(text: str) -> tuple[str, list[str]]:
     the substitution bodies. Active outside quotes and inside double quotes:
     `$(...)` and backticks; outside quotes only: `<(...)` and `>(...)`.
     Literal inside single quotes."""
+    if "$(" not in text and "`" not in text and "<(" not in text and ">(" not in text:
+        return text, []
     out: list[str] = []
     bodies: list[str] = []
     quote = ""
@@ -251,7 +254,8 @@ def _extract(text: str) -> tuple[str, list[str]]:
     while i < n:
         ch = text[i]
         if quote == "'":
-            quote = "" if ch == "'" else quote
+            if ch == "'":
+                quote = ""
         elif ch == "'" and not quote:
             quote = "'"
         elif ch == '"':
@@ -289,7 +293,7 @@ def _strip_heredocs(text: str) -> tuple[str, list[str]]:
             live.extend(_extract(match["body"])[1])
         return "cat << HERE" + match["rest"]
 
-    return _HEREDOC.sub(drop, text), live
+    return (_HEREDOC.sub(drop, text) if "<<" in text else text), live
 
 
 def _tokenize(text: str) -> list[list[list[str]]]:
@@ -353,7 +357,7 @@ def _nested(core: list[str]) -> str | None:
     name, rest = command_name(core[0]), core[1:]
     if name in _POSIX_SHELLS:
         for k, word in enumerate(rest):
-            if re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", word):
+            if _SHELL_C_FLAG.fullmatch(word):
                 return rest[k + 1] if k + 1 < len(rest) else None
     elif name == "eval":
         return " ".join(rest) or None

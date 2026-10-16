@@ -259,7 +259,8 @@ _GLOB_FLAGS = frozenset({
 
 
 def _without_prose(command: str) -> str:
-    command = _QUOTED_HEREDOC.sub(lambda m: "cat << HERE" + m["rest"], command.replace("\r\n", "\n"))
+    if "<<" in command:
+        command = _QUOTED_HEREDOC.sub(lambda m: "cat << HERE" + m["rest"], command.replace("\r\n", "\n"))
     return "".join(
         _PROSE_FLAG_VALUE.sub(" ", seg) if _GIT_OR_GH.match(seg) else seg
         for seg in _SEGMENT_SPLIT.split(command)

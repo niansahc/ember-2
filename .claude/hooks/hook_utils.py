@@ -29,12 +29,15 @@ import re
 import sys
 
 
+# The checkout this file lives in (.claude/hooks/hook_utils.py -> root).
+# Its src/ holds the shared vault-path resolver.
+CHECKOUT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 def project_dir() -> str:
-    """CLAUDE_PROJECT_DIR, falling back to the checkout this file lives in
-    (a manual run), so a hook behaves the same from any session cwd."""
-    return os.environ.get("CLAUDE_PROJECT_DIR") or os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    )
+    """CLAUDE_PROJECT_DIR, falling back to this checkout (a manual run), so
+    a hook behaves the same from any session cwd."""
+    return os.environ.get("CLAUDE_PROJECT_DIR") or CHECKOUT_ROOT
 
 
 def absolute_path(path: str, base: str) -> str:
@@ -64,28 +67,15 @@ def command_name(word: str) -> str:
     return name[:-4] if name.endswith((".exe", ".com")) else name
 
 
-def _checkout_root() -> str:
-    """The checkout this file lives in (.claude/hooks/hook_utils.py ->
-    root), whose src/ holds the shared resolver. Not project_dir(): tests
-    point CLAUDE_PROJECT_DIR at a tmp project that has no src/."""
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-
 def project_path(value: str) -> str:
-    """A configured path (PRIVATE_VAULT_PATH, VAULT_PATH_TEST) as an
-    absolute path, through src/core/vault_path.resolve_configured_path, the
-    one rule the app uses. A relative value resolves against the project
-    root, never against the hook process cwd, which follows the session's
-    cd.
+    """A configured path (PRIVATE_VAULT_PATH, VAULT_PATH_TEST) by the app's
+    rule, src/core/vault_path.resolve_configured_path, anchored on the
+    project root rather than the hook process cwd.
 
-    The import is deferred to here so the hooks that import this module
-    and never resolve a configured value (env_guard.py, and
-    secret_dump_guard.py on commands that name no path) do not load it.
-    src/__init__.py and src/core/__init__.py are empty and vault_path.py
-    imports only os, so no app code loads."""
-    root = _checkout_root()
-    if root not in sys.path:
-        sys.path.append(root)
+    The import comes from this checkout (CLAUDE_PROJECT_DIR may be a tmp
+    project without src/) and is deferred so env_guard never loads it."""
+    if CHECKOUT_ROOT not in sys.path:
+        sys.path.append(CHECKOUT_ROOT)
     from src.core.vault_path import resolve_configured_path
 
     return resolve_configured_path(value, project_dir())

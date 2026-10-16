@@ -38,7 +38,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from src.core.vault_path import resolve_configured_path
+from src.core.config import resolve_vault_path
 
 # Marks a record as belonging to an eval corpus rather than to the user.
 # `source` is the primary signal; the metadata flag is a secondary one that
@@ -55,18 +55,12 @@ def is_eval_fixture(source: str | None, metadata: dict | None = None) -> bool:
 
 
 def _resolved(path: str | os.PathLike | None) -> Path | None:
-    """Resolve a vault path via src/core/vault_path.py, or None.
-
-    A relative value resolves against the project root (never the cwd), so
-    this agrees with the app and the hooks on which directory it names.
-    """
     if not path:
         return None
     try:
-        resolved = resolve_configured_path(os.fspath(path))
-    except (OSError, RuntimeError, ValueError):
+        return resolve_vault_path(os.fspath(path))
+    except (OSError, ValueError):
         return None
-    return Path(resolved) if resolved is not None else None
 
 
 def is_test_vault(vault_path: str | os.PathLike | None) -> bool:

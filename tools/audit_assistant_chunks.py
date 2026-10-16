@@ -13,8 +13,6 @@ if __name__ == "__main__":
 
     load_env_file()
 
-# The vault resolves through config only, so a relative PRIVATE_VAULT_PATH
-# names the same directory here as in the app (project root, not cwd).
 from src.core.config import get_private_vault_path
 
 db_path = os.path.join(str(get_private_vault_path()), "embeddings", "ingested.db")

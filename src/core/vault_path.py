@@ -4,13 +4,12 @@ src/core/vault_path.py
 The one resolution rule for a configured vault path (PRIVATE_VAULT_PATH,
 VAULT_PATH_TEST, VAULT_PATH_LIVE, VAULT_PATH_DEMO).
 
-Every reader of those values goes through resolve_configured_path():
-src/core/config.py for the app, .claude/hooks/hook_utils.py for the hooks,
-tools/retrieval_ablation/runner.py, the vault-swap endpoint, and the eval
-helpers. Before this module existed the app resolved a relative value
-against the process cwd while the hooks resolved it against the project
-root, so one value could name two directories and the vault guard could
-protect a directory the app was not using.
+Every reader of those values goes through resolve_configured_path(): the
+app via config.resolve_vault_path(), the hooks via hook_utils.project_path().
+Before this module existed the app resolved a relative value against the
+process cwd while the hooks resolved it against the project root, so one
+value could name two directories and the vault guard could protect a
+directory the app was not using.
 
 The rule:
   - unset, empty or whitespace-only: None (not configured);

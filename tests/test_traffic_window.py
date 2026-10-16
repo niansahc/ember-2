@@ -343,18 +343,22 @@ class TestRunRefusesThePersonalVault:
         from_env = tmp_path / "from_environment"
         in_file = tmp_path / "from_file"
         env_file = tmp_path / ".env"
-        env_file.write_text(f'OTHER=1\nPRIVATE_VAULT_PATH="{in_file}"\n', encoding="utf-8")
+        # Forward slashes, as .env.example writes paths: python-dotenv (the
+        # API's parser too) expands backslash escapes inside double quotes.
+        env_file.write_text(
+            f'OTHER=1\nPRIVATE_VAULT_PATH="{in_file.as_posix()}"\n', encoding="utf-8"
+        )
         monkeypatch.setenv("PRIVATE_VAULT_PATH", str(from_env))
         assert window._personal_vault_from_env_file(env_file) == in_file.resolve()
 
-    def test_missing_env_file_identifies_no_personal_vault(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("PRIVATE_VAULT_PATH", str(tmp_path / "from_environment"))
-        assert window._personal_vault_from_env_file(tmp_path / "absent.env") is None
-
-    def test_env_file_without_the_key_identifies_no_personal_vault(self, monkeypatch, tmp_path):
+    @pytest.mark.parametrize("contents", [None, "OTHER=1\n"], ids=["no-file", "no-key"])
+    def test_env_file_without_the_key_identifies_no_personal_vault(
+        self, monkeypatch, tmp_path, contents
+    ):
         """The environment value is not a fallback. Positive control: the
-        test above that reads the key from the same kind of file."""
+        test above, which reads the key from the same kind of file."""
         env_file = tmp_path / ".env"
-        env_file.write_text("OTHER=1\n", encoding="utf-8")
+        if contents is not None:
+            env_file.write_text(contents, encoding="utf-8")
         monkeypatch.setenv("PRIVATE_VAULT_PATH", str(tmp_path / "from_environment"))
         assert window._personal_vault_from_env_file(env_file) is None

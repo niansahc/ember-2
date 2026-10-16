@@ -543,19 +543,15 @@ def _vault_path_for_test_label() -> Path | None:
     """Resolve the test vault filesystem path so sub-check 2 can locate
     today's session_summary record. Reads VAULT_PATH_TEST from .env in
     the repo root — does NOT inspect arbitrary vault content."""
+    from dotenv import dotenv_values
+
+    from src.core.config import resolve_vault_path
+
     env_file = REPO_ROOT / ".env"
     if not env_file.exists():
         return None
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        if line.startswith("VAULT_PATH_TEST="):
-            raw = line.split("=", 1)[1].strip()
-            # Shared resolution rule: relative against the project root,
-            # never the cwd, matching the directory the API swaps to.
-            from src.core.vault_path import resolve_configured_path
-
-            resolved = resolve_configured_path(raw)
-            return Path(resolved) if resolved is not None else None
-    return None
+    # Parsed and resolved as the API does, so it names the vault it swaps to.
+    return resolve_vault_path(dotenv_values(env_file).get("VAULT_PATH_TEST"))
 
 
 def _check_compression_fired(vault_path: Path, run_started_at: float) -> tuple[bool, dict]:

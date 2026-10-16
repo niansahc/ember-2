@@ -256,24 +256,18 @@ def _personal_vault_from_env_file(env_file: Path | None = None) -> Path | None:
     process may itself have been started with PRIVATE_VAULT_PATH pointed
     somewhere else, and then the environment would agree with whatever it
     was overridden to. The file is the stable statement of which vault is
-    the real one. The value resolves by the app's rule
-    (src/core/vault_path.py), so it compares equal to the path the API
-    reports for the same configuration.
+    the real one. It is parsed by python-dotenv and resolved by the app's
+    rule, as the API does, so the two compare equal for one configuration.
     """
-    from src.core.vault_path import resolve_configured_path
+    from dotenv import dotenv_values
+
+    from src.core.config import resolve_vault_path
 
     if env_file is None:
         env_file = REPO_ROOT / ".env"
     if not env_file.exists():
         return None
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line.startswith("PRIVATE_VAULT_PATH="):
-            continue
-        value = line.split("=", 1)[1].strip().strip('"').strip("'")
-        resolved = resolve_configured_path(value)
-        return Path(resolved) if resolved else None
-    return None
+    return resolve_vault_path(dotenv_values(env_file).get("PRIVATE_VAULT_PATH"))
 
 
 # ---------------------------------------------------------------------------

@@ -42,10 +42,10 @@ from src.core.config import (
     get_ember_api_key,
     get_cloud_models,
     get_extra_allowed_hosts,
+    resolve_vault_path,
 )
 from src.core.jsonio import RecordExistsError
 from src.core.paths import resolve_inside
-from src.core.vault_path import resolve_configured_path
 from src.memory.service import MemoryService
 from src.memory.session import (
     list_sessions,
@@ -1585,11 +1585,7 @@ def vault_swap_endpoint(body: VaultSwapRequest):
             detail=f"Unknown vault label '{label}'. Available: {available}.",
         )
 
-    vault_path = known[label]
-    # Shared rule (src/core/vault_path.py): relative against the project
-    # root, never the API's cwd. None only for a whitespace-only value.
-    resolved_str = resolve_configured_path(vault_path)
-    resolved = Path(resolved_str) if resolved_str is not None else None
+    resolved = resolve_vault_path(known[label])
     if resolved is None or not resolved.is_dir():
         raise HTTPException(
             status_code=400,

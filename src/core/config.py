@@ -70,21 +70,20 @@ _vault_binding: ContextVar[str | None] = ContextVar(
 )
 
 
-def _resolve(value: str) -> Path:
-    """A configured or bound vault value as a Path, through the shared rule
-    in src/core/vault_path.py: relative values against the project root,
-    never the cwd, so the app, the hooks and the ablation runner name the
-    same directory for the same value."""
-    return Path(resolve_configured_path(value))
+def resolve_vault_path(value) -> Path | None:
+    """A configured vault value as a Path by the shared rule
+    (src/core/vault_path.py), or None when unset. The Path form for app,
+    tool and test callers; the hooks use the str form directly."""
+    resolved = resolve_configured_path(value)
+    return Path(resolved) if resolved is not None else None
 
 
 def get_private_vault_path():
     """
     Returns the absolute path to the active vault.
 
-    Every branch resolves through resolve_configured_path()
-    (src/core/vault_path.py): a relative value resolves against the project
-    root, not the cwd; `~` expands; absolute values pass through.
+    Every branch resolves through resolve_vault_path() (the rule lives in
+    src/core/vault_path.py).
 
     Resolution order:
       1. Deferred-work binding, set by vault_binding() or
@@ -101,18 +100,16 @@ def get_private_vault_path():
     """
     bound = _vault_binding.get()
     if bound is not None:
-        return _resolve(bound)
+        return resolve_vault_path(bound)
 
     if _vault_path_override is not None:
-        return _resolve(_vault_path_override)
+        return resolve_vault_path(_vault_path_override)
 
-    vault_path = os.getenv("PRIVATE_VAULT_PATH")
-
-    # Whitespace-only counts as unset, as it does in the hooks and runner.
-    if not (vault_path or "").strip():
+    vault_path = resolve_vault_path(os.getenv("PRIVATE_VAULT_PATH"))
+    if vault_path is None:
         raise ValueError("PRIVATE_VAULT_PATH not set in environment")
 
-    return _resolve(vault_path)
+    return vault_path
 
 
 def get_bound_vault() -> str | None:
@@ -175,7 +172,7 @@ def spawn_vault_bound_thread(target, args=(), vault=None, name=None) -> threadin
             # turn, so it is signal rather than noise, and it is the runtime
             # confirmation that the bound path executed (issue #144).
             if bound is not None and _vault_path_override is not None:
-                if _resolve(_vault_path_override) != _resolve(bound):
+                if resolve_vault_path(_vault_path_override) != resolve_vault_path(bound):
                     logger.warning(
                         "[VAULT_BIND] vault swapped mid-flight; holding deferred "
                         "write to its queue-time vault %s (active is now %s)",

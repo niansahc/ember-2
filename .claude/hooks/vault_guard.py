@@ -225,15 +225,17 @@ def vault_dirs() -> list[Vault]:
     project_forms = None  # resolved only once a vault directory exists
     vaults: list[Vault] = []
     for raw in candidates:
-        # The directory, by the rule the app uses (realpath-resolved).
+        # The directory by the app's rule (already realpath), plus the
+        # spelling as configured: a glob through a junction or symlink name
+        # gets no realpath (it has wildcards), so only the lexical form
+        # matches it.
         path = project_path(raw)
         if not os.path.isdir(path):
             continue
-        # Plus the spelling as configured: a glob written through a junction
-        # or symlink name gets no realpath (it has wildcards), so it can
-        # only match the lexical form.
-        forms = path_forms(path, project)
-        forms += [f for f in path_forms(raw, project) if f not in forms]
+        forms = [_components(path)]
+        lexical = _components(absolute_path(raw, project))
+        if lexical not in forms:
+            forms.append(lexical)
         if any(f in v.forms for v in vaults for f in forms):
             continue
         if project_forms is None:

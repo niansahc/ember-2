@@ -32,9 +32,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = REPO_ROOT / ".env"
 REQUIREMENTS_PATH = REPO_ROOT / "requirements.txt"
 
-# Run as a file, sys.path[0] is scripts/; src lives at the repo root.
-# src.core.vault_path is dependency-free, so this import works before step 7
-# installs the Python requirements.
+# src.core.vault_path is os-only, so it imports before step 7 installs the
+# Python requirements.
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -112,9 +111,8 @@ def step_vault() -> str:
     print("  and reflections. Choose a local drive — not OneDrive or Dropbox.")
     print()
     vault = ask("Vault path", DEFAULT_VAULT)
-    # Create the directory the app will resolve this answer to (relative
-    # against the project root, `~` expanded), not one relative to the cwd.
-    # The answer itself is written to .env unchanged.
+    # Create the directory the app will resolve the answer to; the answer
+    # itself goes to .env unchanged.
     vault_path = Path(resolve_configured_path(vault))
 
     if vault_path.exists():

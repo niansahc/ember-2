@@ -18,9 +18,10 @@ Which vaults:
 
 PRIVATE_VAULT_PATH is resolved inside this process: the process
 environment first, then .env through hook_utils.env_file_value (the parser
-post_commit_eval.py uses). A relative value resolves against the project
-root through hook_utils.project_path, as the API does and as
-post_commit_eval.py does. The value is never printed, deny messages
+post_commit_eval.py uses). It resolves through hook_utils.project_path,
+which delegates to src/core/vault_path.py, the rule the app's
+get_private_vault_path() and post_commit_eval.py use: a relative value
+against the project root, never the cwd. The value is never printed, deny messages
 included. Parsing .env costs a python-dotenv import (~60 ms per hook
 process), so the value is cached in .claude/.env.vault_cache.json, keyed
 by the .env mtime and size. The cache file's .env.* name puts it under
@@ -78,8 +79,8 @@ from collections import namedtuple
 
 # Same directory; Python puts it on sys.path when this file runs as a
 # script. Shared with post_commit_eval.py so both hooks parse .env one way
-# and resolve a relative PRIVATE_VAULT_PATH against the same root.
-from hook_utils import absolute_path, deny, env_file_value, project_dir, project_path
+# and resolve PRIVATE_VAULT_PATH by the app's rule (src/core/vault_path.py).
+from hook_utils import absolute_path, deny, deny_on_error, env_file_value, project_dir, project_path
 
 _VAULT_DIR = "private_vault"
 _VAULT_KEY = "PRIVATE_VAULT_PATH"
@@ -160,9 +161,9 @@ def _covers(parts: list[str], target: list[str], strict: bool = False) -> bool:
     return not strict or len(parts) > len(target)
 
 
-# path: the directory; forms: path_forms() of it; in_project: inside the
-# project, so gitignored, and ripgrep skips it unless a glob whitelists its
-# entries.
+# path: the directory; forms: its realpath and lexical configured forms, as
+# components; in_project: inside the project, so gitignored, and ripgrep
+# skips it unless a glob whitelists its entries.
 Vault = namedtuple("Vault", "path forms in_project")
 
 
@@ -224,10 +225,17 @@ def vault_dirs() -> list[Vault]:
     project_forms = None  # resolved only once a vault directory exists
     vaults: list[Vault] = []
     for raw in candidates:
+        # The directory by the app's rule (already realpath), plus the
+        # spelling as configured: a glob through a junction or symlink name
+        # gets no realpath (it has wildcards), so only the lexical form
+        # matches it.
         path = project_path(raw)
         if not os.path.isdir(path):
             continue
-        forms = path_forms(path, project)
+        forms = [_components(path)]
+        lexical = _components(absolute_path(raw, project))
+        if lexical not in forms:
+            forms.append(lexical)
         if any(f in v.forms for v in vaults for f in forms):
             continue
         if project_forms is None:
@@ -352,7 +360,12 @@ def main():
         payload = json.load(sys.stdin)
     except Exception:
         return
-    target = evaluate(payload)
+    try:
+        target = evaluate(payload)
+    except Exception as exc:
+        # Fail closed: a crash exits non-zero and the harness runs the call.
+        deny_on_error("vault_guard", exc)
+        return
     if target:
         deny(
             f"Vault Privacy Rule: vault content (private_vault/ or the "

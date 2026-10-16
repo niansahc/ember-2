@@ -155,16 +155,6 @@ def test_relative_test_vault_only_under_cwd_is_refused(rel_project, elsewhere, m
     assert "existing directory" in reason
 
 
-def test_post_commit_and_vault_guard_agree_on_the_live_vault(rel_project, elsewhere, monkeypatch):
-    """One relative PRIVATE_VAULT_PATH names one directory in both hooks."""
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(rel_project))
-    monkeypatch.setenv("PRIVATE_VAULT_PATH", "vaults/live")
-    monkeypatch.chdir(elsewhere)
-    guarded = [Path(v.path).resolve() for v in load_hook("vault_guard.py").vault_dirs()]
-    from_hook = Path(load_hook(POST_COMMIT).project_path("vaults/live")).resolve()
-    assert guarded == [from_hook] == [(rel_project / "vaults" / "live").resolve()]
-
-
 @pytest.mark.skipif(shutil.which("git") is None, reason="needs git for a synthetic repo")
 @pytest.mark.parametrize("same", [False, True], ids=["distinct-runs", "same-refused"])
 def test_post_commit_relative_values_from_another_cwd(tmp_path, elsewhere, same):

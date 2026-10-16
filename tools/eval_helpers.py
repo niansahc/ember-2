@@ -35,6 +35,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.core.config import resolve_vault_path  # noqa: E402
+
 
 _DEFAULT_API_BASE = "http://localhost:8000"
 _VAULT_SWAP_PATH = "/v1/developer/vault/swap"
@@ -71,8 +73,9 @@ def swap_to_test_vault() -> str:
     runs against the live vault by accident; any None return from this
     helper would re-open that hole.
     """
-    test_path = os.getenv("VAULT_PATH_TEST")
-    if not test_path:
+    # The rule the API swaps by; unset, empty and whitespace fail closed.
+    resolved = resolve_vault_path(os.getenv("VAULT_PATH_TEST"))
+    if resolved is None:
         print(
             "FATAL: VAULT_PATH_TEST is not set. Eval tools require an "
             "explicit test vault to fail closed against the live vault. "
@@ -81,7 +84,6 @@ def swap_to_test_vault() -> str:
         )
         sys.exit(1)
 
-    resolved = Path(test_path).resolve()
     if not resolved.is_dir():
         print(
             f"FATAL: VAULT_PATH_TEST ({resolved}) does not exist or is "

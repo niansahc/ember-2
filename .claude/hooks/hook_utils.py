@@ -5,17 +5,21 @@ Helpers shared by the hook scripts in this directory, so each rule has one
 definition:
 
   - project_dir(): the project root every hook anchors on.
-  - absolute_path() / project_path(): one resolution of a path string.
-    project_path() is how every hook resolves a configured value
-    (PRIVATE_VAULT_PATH, VAULT_PATH_TEST), so vault_guard.py,
-    secret_dump_guard.py and post_commit_eval.py agree on which directory
-    is the live vault.
+  - absolute_path(): one resolution of a path string an agent wrote in a
+    tool call (Git Bash, WSL, device-prefix and drive-relative forms).
+  - project_path(): how every hook resolves a configured value
+    (PRIVATE_VAULT_PATH, VAULT_PATH_TEST). It delegates to
+    src/core/vault_path.py, the rule the app's get_private_vault_path()
+    uses, so vault_guard.py, secret_dump_guard.py, post_commit_eval.py and
+    the app agree on which directory is the live vault.
   - command_name(): one "bare command name" rule (env_guard.py,
     secret_dump_guard.py).
   - read_env_value() / env_file_value(): one .env value reader
     (post_commit_eval.py, vault_guard.py). It never prints a value.
   - deny(): the PreToolUse deny decision the harness reads from stdout
     (env_guard.py, vault_guard.py, secret_dump_guard.py).
+  - deny_on_error(): the fail-closed deny the vault guards emit when their
+    own check raises.
 
 Deliberately pathlib- and typing-free: PreToolUse guards start a fresh
 Python process on every tool call, and those imports cost ~11 ms each time.
@@ -26,12 +30,15 @@ import os
 import re
 
 
+# The checkout this file lives in (.claude/hooks/hook_utils.py -> root).
+# Its src/ holds the shared vault-path resolver.
+CHECKOUT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 def project_dir() -> str:
-    """CLAUDE_PROJECT_DIR, falling back to the checkout this file lives in
-    (a manual run), so a hook behaves the same from any session cwd."""
-    return os.environ.get("CLAUDE_PROJECT_DIR") or os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    )
+    """CLAUDE_PROJECT_DIR, falling back to this checkout (a manual run), so
+    a hook behaves the same from any session cwd."""
+    return os.environ.get("CLAUDE_PROJECT_DIR") or CHECKOUT_ROOT
 
 
 def absolute_path(path: str, base: str) -> str:
@@ -61,12 +68,36 @@ def command_name(word: str) -> str:
     return name[:-4] if name.endswith((".exe", ".com")) else name
 
 
-def project_path(value: str) -> str:
-    """A configured path (PRIVATE_VAULT_PATH, VAULT_PATH_TEST) as an
-    absolute path. A relative value resolves against the project root, as
-    the API, started from the project root, resolves it; never against the
-    hook process cwd, which follows the session's cd."""
-    return absolute_path(value, project_dir())
+_resolve_configured_path = None
+
+
+def _vault_resolver():
+    """resolve_configured_path from this checkout's src/core/vault_path.py,
+    loaded by file path under a private module name and cached.
+
+    Not `import src.core.vault_path`: any other top-level `src` package on
+    sys.path (PYTHONPATH, a .pth file) would shadow it, the import would
+    raise, and a guard that crashes lets the tool call through. Loaded on
+    first use so env_guard never pays for it."""
+    global _resolve_configured_path
+    if _resolve_configured_path is None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_ember_hook_vault_path",
+            os.path.join(CHECKOUT_ROOT, "src", "core", "vault_path.py"),
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _resolve_configured_path = module.resolve_configured_path
+    return _resolve_configured_path
+
+
+def project_path(value: str) -> str | None:
+    """A configured path (PRIVATE_VAULT_PATH, VAULT_PATH_TEST) by the app's
+    rule, src/core/vault_path.resolve_configured_path, anchored on the
+    project root rather than the hook process cwd. None for a blank value."""
+    return _vault_resolver()(value, project_dir())
 
 
 def read_env_value(key: str, env_path) -> str | None:
@@ -103,6 +134,18 @@ def env_file_value(key: str, env_path) -> str | None:
         pass
 
     return None
+
+
+def deny_on_error(guard: str, exc: BaseException) -> None:
+    """Fail closed: deny when a guard cannot finish its check. A crashed
+    hook exits non-zero, which the harness treats as a non-blocking error
+    and lets the tool call run. Only the exception type is printed; its
+    message can carry the configured vault path."""
+    deny(
+        f"{guard} could not complete its vault check "
+        f"({type(exc).__name__}); denying rather than allowing an "
+        f"unchecked call. See .claude/hooks/{guard}.py."
+    )
 
 
 def deny(reason: str) -> None:

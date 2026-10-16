@@ -51,10 +51,6 @@ def _resolve_vault() -> Path:
         return get_private_vault_path()
     except Exception:
         pass
-    import os
-    env_path = os.getenv("PRIVATE_VAULT_PATH")
-    if env_path:
-        return Path(env_path)
     print("[ERROR] Cannot resolve vault path. Set PRIVATE_VAULT_PATH or run from the repo root.")
     sys.exit(1)
 

@@ -42,6 +42,7 @@ from src.core.config import (
     get_ember_api_key,
     get_cloud_models,
     get_extra_allowed_hosts,
+    resolve_vault_path,
 )
 from src.core.jsonio import RecordExistsError
 from src.core.paths import resolve_inside
@@ -1584,9 +1585,8 @@ def vault_swap_endpoint(body: VaultSwapRequest):
             detail=f"Unknown vault label '{label}'. Available: {available}.",
         )
 
-    vault_path = known[label]
-    resolved = Path(vault_path).resolve()
-    if not resolved.is_dir():
+    resolved = resolve_vault_path(known[label])
+    if resolved is None or not resolved.is_dir():
         raise HTTPException(
             status_code=400,
             detail=f"Vault path does not exist or is not a directory: {resolved}",

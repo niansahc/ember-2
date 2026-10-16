@@ -35,9 +35,8 @@ Vault resolution is fail-closed, matching .claude/hooks/post_commit_eval.py.
 There is no real-vault arm and no fallback path to one. Values come from the
 process environment, which the entrypoint fills from the repo's env file
 through src.core.config.load_env_file(); this module has no parser of its
-own. A relative value resolves against the repo root, whatever the cwd, as
-in the hooks. Unlike hook_utils.absolute_path, Git Bash (/c/x) and device
-(\\\\?\\C:\\x) forms are not translated; give an absolute Windows path.
+own. Values resolve through src/core/vault_path.py, the rule the app and
+the hooks use: a relative value against the repo root, whatever the cwd.
 """
 
 from __future__ import annotations
@@ -64,6 +63,9 @@ if __name__ == "__main__":
 # Imported rather than spelled out so the flag has exactly one definition.
 from src.retrieval.retrieval_stats import ENV_FLAG as ENV_STATS_READ_ONLY  # noqa: E402
 
+# The app's vault-path rule, so the runner and the app name one directory.
+from src.core.vault_path import resolve_configured_path  # noqa: E402
+
 # The tiering inputs an arm can mutate through the read path.
 TIERING_DATABASES = ("memory.db", "ingested.db")
 
@@ -80,10 +82,11 @@ def _read_env_value(key: str) -> str | None:
 
 
 def _configured_path(value: str) -> Path:
-    """A configured vault path, relative values against the repo root, then
-    through realpath so two spellings of one directory compare equal."""
-    path = Path(value).expanduser()
-    return (path if path.is_absolute() else REPO_ROOT / path).resolve()
+    """A configured vault path by the app's rule (src/core/vault_path.py):
+    relative values against the repo root, then realpath, so two spellings
+    of one directory compare equal. REPO_ROOT is passed at call time so
+    tests can point it at a tmp repo."""
+    return Path(resolve_configured_path(value, str(REPO_ROOT)))
 
 
 def resolve_test_vault() -> tuple[Path | None, str | None]:

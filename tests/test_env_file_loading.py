@@ -64,6 +64,8 @@ def _config_tree(tmp_path: Path) -> Path:
     (root / "src" / "__init__.py").touch()
     (root / "src" / "core" / "__init__.py").touch()
     shutil.copy(REPO_ROOT / "src" / "core" / "config.py", root / "src" / "core")
+    # config.py imports the shared vault-path resolver.
+    shutil.copy(REPO_ROOT / "src" / "core" / "vault_path.py", root / "src" / "core")
     (root / ".env").write_text(f"{_SENTINEL}=from-env-file\n", encoding="utf-8")
     return root
 

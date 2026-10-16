@@ -331,16 +331,34 @@ class TestRunRefusesThePersonalVault:
         assert self._run_against(monkeypatch, str(tmp_path / "somewhere"), None) == 2
 
     def test_reads_the_personal_path_from_the_env_file_not_the_environment(
-        self, monkeypatch
+        self, monkeypatch, tmp_path
     ):
         """The driver may itself be run with PRIVATE_VAULT_PATH overridden.
 
-        The sentinel comes from tmp_path rather than a literal, so the
-        assertion tests the source of the value and not path syntax: a
-        Windows-style literal is a relative path on POSIX and resolves
-        somewhere neither side meant.
+        A synthetic env file under tmp_path, passed explicitly, so no test
+        reads the repo's .env. Both paths come from tmp_path rather than
+        literals, so the assertion tests the source of the value and not
+        path syntax.
         """
-        sentinel = Path(self.__class__.__name__).resolve() / "nowhere"
-        monkeypatch.setenv("PRIVATE_VAULT_PATH", str(sentinel))
-        from_file = window._personal_vault_from_env_file()
-        assert from_file is None or from_file != sentinel
+        from_env = tmp_path / "from_environment"
+        in_file = tmp_path / "from_file"
+        env_file = tmp_path / ".env"
+        # Forward slashes, as .env.example writes paths: python-dotenv (the
+        # API's parser too) expands backslash escapes inside double quotes.
+        env_file.write_text(
+            f'OTHER=1\nPRIVATE_VAULT_PATH="{in_file.as_posix()}"\n', encoding="utf-8"
+        )
+        monkeypatch.setenv("PRIVATE_VAULT_PATH", str(from_env))
+        assert window._personal_vault_from_env_file(env_file) == in_file.resolve()
+
+    @pytest.mark.parametrize("contents", [None, "OTHER=1\n"], ids=["no-file", "no-key"])
+    def test_env_file_without_the_key_identifies_no_personal_vault(
+        self, monkeypatch, tmp_path, contents
+    ):
+        """The environment value is not a fallback. Positive control: the
+        test above, which reads the key from the same kind of file."""
+        env_file = tmp_path / ".env"
+        if contents is not None:
+            env_file.write_text(contents, encoding="utf-8")
+        monkeypatch.setenv("PRIVATE_VAULT_PATH", str(tmp_path / "from_environment"))
+        assert window._personal_vault_from_env_file(env_file) is None

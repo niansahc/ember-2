@@ -247,25 +247,27 @@ def _get(url: str, api_key: str | None, timeout: float = 15.0) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _personal_vault_from_env_file() -> Path | None:
-    """The personal vault path as .env declares it.
+def _personal_vault_from_env_file(env_file: Path | None = None) -> Path | None:
+    """The personal vault path as the env file declares it. `env_file`
+    defaults to the repo's .env; tests pass a tmp file so no test reads
+    the real one.
 
     Read from the file rather than from os.environ on purpose: this
     process may itself have been started with PRIVATE_VAULT_PATH pointed
     somewhere else, and then the environment would agree with whatever it
     was overridden to. The file is the stable statement of which vault is
-    the real one.
+    the real one. It is parsed by python-dotenv and resolved by the app's
+    rule, as the API does, so the two compare equal for one configuration.
     """
-    env_file = REPO_ROOT / ".env"
+    from dotenv import dotenv_values
+
+    from src.core.config import resolve_vault_path
+
+    if env_file is None:
+        env_file = REPO_ROOT / ".env"
     if not env_file.exists():
         return None
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line.startswith("PRIVATE_VAULT_PATH="):
-            continue
-        value = line.split("=", 1)[1].strip().strip('"').strip("'")
-        return Path(value).resolve() if value else None
-    return None
+    return resolve_vault_path(dotenv_values(env_file).get("PRIVATE_VAULT_PATH"))
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ means "the hook ran and passed this," not "the hook never ran."
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import shutil
@@ -211,7 +212,7 @@ def test_allows(payload):
 GLOB_REACHES = [".*", ".e*", ".en?", ".env*", ".[e]nv", ".[!x]nv", ".[a-f]nv*", ".?nv.local",
                 ".env.s*", ".*.local", ".env?", ".e?v", ".*l", ".**"]
 GLOB_CANNOT = [".[0]", ".[]", ".[0].name", ".e[x]", ".git*", ".[!e]nv", ".env[!.]x", ".?", ".e[!n]*"]
-_PROBES = (".env", ".env.local", ".env.production", ".env.staging", ".env.l", ".env.test")
+_PROBES = (*env_guard._GREP_GLOB_PROBES, ".env.staging", ".env.l")
 
 
 @pytest.mark.parametrize("glob", GLOB_REACHES)
@@ -222,10 +223,6 @@ def test_glob_that_can_match_a_env_name_is_detected(glob):
 @pytest.mark.parametrize("glob", GLOB_CANNOT)
 def test_glob_that_cannot_match_a_env_name_is_not(glob):
     assert not env_guard._glob_can_name_env(glob)
-    # Cross-check against fnmatch: no probe name matches either.
-    import fnmatch
-
-    assert not any(fnmatch.fnmatchcase(p, glob) for p in _PROBES)
 
 
 def _old_literal_prefix_rule(glob: str) -> bool:
@@ -239,8 +236,6 @@ def _old_literal_prefix_rule(glob: str) -> bool:
 def test_glob_rule_only_narrows_the_old_rule(glob):
     """Nothing the old literal-prefix rule allowed is denied now, and every
     glob that fnmatch shows reaching a probe .env name is still denied."""
-    import fnmatch
-
     if env_guard._glob_can_name_env(glob):
         assert _old_literal_prefix_rule(glob)
     if any(fnmatch.fnmatchcase(p, glob) for p in _PROBES):

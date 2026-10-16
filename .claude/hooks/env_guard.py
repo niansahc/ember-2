@@ -49,7 +49,7 @@ import re
 import sys
 
 # Same directory; Python puts it on sys.path when this file runs as a script.
-from hook_utils import deny
+from hook_utils import command_name, deny
 
 # `.env`, `.env.local`, `.env.production`, ... (case-insensitive: Windows).
 _ENV_NAME = re.compile(r"^\.env(\..+)?$", re.IGNORECASE)
@@ -87,12 +87,11 @@ def _expand_braces(pattern: str) -> list[str]:
 def _glob_units(pattern: str) -> list[str]:
     """A glob split into units: "*", or a one-character fnmatch pattern (a
     literal, `?`, or a `[...]` set). An unclosed `[` is a literal, as in
-    fnmatch; consecutive stars collapse."""
+    fnmatch."""
     units: list[str] = []
     i, n = 0, len(pattern)
     while i < n:
-        unit = pattern[i]
-        if unit == "[":
+        if pattern[i] == "[":
             j = i + 1
             if j < n and pattern[j] == "!":
                 j += 1
@@ -103,11 +102,7 @@ def _glob_units(pattern: str) -> list[str]:
                 units.append(pattern[i : end + 1])
                 i = end + 1
                 continue
-            unit = "[[]"
-        elif unit == "*" and units and units[-1] == "*":
-            i += 1
-            continue
-        units.append(unit)
+        units.append(pattern[i])
         i += 1
     return units
 
@@ -131,9 +126,11 @@ def _step(states: set[int], units: list[str], ch: str) -> set[int]:
     for state in states:
         if state >= len(units):
             continue
-        if units[state] == "*":
+        unit = units[state]
+        if unit == "*":
             nxt.add(state)
-        elif fnmatch.fnmatchcase(ch, units[state]):
+        # A literal or `?` is a string compare; only a `[...]` set needs fnmatch.
+        elif unit in ("?", ch) or (len(unit) > 1 and fnmatch.fnmatchcase(ch, unit)):
             nxt.add(state + 1)
     return _closure(nxt, units)
 
@@ -172,12 +169,18 @@ def _base_names_env(base: str) -> bool:
     return len(alternatives) > 1 and any(_base_names_env(alt) for alt in alternatives)
 
 
-def names_env_file(candidate) -> bool:
+def names_env_file(candidate, as_text: bool = False) -> bool:
     """True when `candidate` (a path, filename, or glob) names a protected
-    .env file. .env.example and globs that can only reach it are allowed."""
+    .env file. .env.example and globs that can only reach it are allowed.
+    With `as_text`, a dot followed straight by a wildcard (`.*`, `.[0]`) is
+    text, not a file name (see module docstring, Quoting)."""
     if not isinstance(candidate, str):
         return False
-    return any(_base_names_env(name) for name in _canonical_names(candidate))
+    return any(
+        _base_names_env(name)
+        for name in _canonical_names(candidate)
+        if not (as_text and name[:1] == "." and name[1:2] in ("*", "?", "["))
+    )
 
 
 # Grep's `glob` is a ripgrep glob, and ripgrep differs from the dotfile rule
@@ -248,40 +251,22 @@ def _without_prose(command: str) -> str:
     )
 
 
-def _command_name(word: str) -> str:
-    """A word reduced to a bare lowercase command name (/bin/bash, bash.exe)."""
-    return re.sub(r"\.exe$", "", _basename(word).lower())
-
-
 def _words(command: str, bash: bool) -> list[tuple[str, bool]]:
     """The command's words, each with `quoted`: True when, in a Bash
-    command, the shell passes the word's wildcards through as text."""
-    pairs: list[tuple[str, bool]] = []
-    for span in _SPAN.findall(_without_prose(command)):
-        quoted = (
-            bash
-            and len(span) > 1
-            and span[0] in "\"'"
-            and not (span[0] == '"' and ("$(" in span or "`" in span))
-        )
-        pairs.extend((word, quoted) for word in _TOKEN_SPLIT.split(span) if word)
-    if any(_command_name(word) in _SHELLS for word, _ in pairs):
-        return [(word, False) for word, _ in pairs]
-    return pairs
-
-
-def _dot_only_glob(name: str) -> bool:
-    """A dot followed straight by a wildcard: `.*`, `.[0]`, `.?x`."""
-    wild = _WILDCARD.search(name)
-    return wild is not None and wild.start() == 1 and name.startswith(".")
-
-
-def _word_names_env(word: str, as_text: bool) -> bool:
-    """names_env_file(word); with `as_text`, a dot-only glob is text, not a
-    file name (see module docstring, Quoting)."""
-    if not as_text:
-        return names_env_file(word)
-    return any(_base_names_env(name) for name in _canonical_names(word) if not _dot_only_glob(name))
+    command that runs no nested shell, the shell passes the word's
+    wildcards through as text."""
+    spans = [
+        (span, [word for word in _TOKEN_SPLIT.split(span) if word])
+        for span in _SPAN.findall(_without_prose(command))
+    ]
+    if bash and any(command_name(word) in _SHELLS for _, words in spans for word in words):
+        bash = False
+    return [
+        (word, bash and len(span) > 1 and span[0] in "\"'"
+         and not (span[0] == '"' and ("$(" in span or "`" in span)))
+        for span, words in spans
+        for word in words
+    ]
 
 
 def command_names_env_file(command, bash: bool = False) -> str | None:
@@ -291,7 +276,7 @@ def command_names_env_file(command, bash: bool = False) -> str | None:
         return None
     previous = ""
     for word, quoted in _words(command, bash):
-        if _word_names_env(word, quoted and previous not in _GLOB_FLAGS):
+        if names_env_file(word, as_text=quoted and previous not in _GLOB_FLAGS):
             return word
         previous = word
     return None

@@ -10,6 +10,8 @@ definition:
     (PRIVATE_VAULT_PATH, VAULT_PATH_TEST), so vault_guard.py,
     secret_dump_guard.py and post_commit_eval.py agree on which directory
     is the live vault.
+  - command_name(): one "bare command name" rule (env_guard.py,
+    secret_dump_guard.py).
   - read_env_value() / env_file_value(): one .env value reader
     (post_commit_eval.py, vault_guard.py). It never prints a value.
   - deny(): the PreToolUse deny decision the harness reads from stdout
@@ -23,10 +25,6 @@ import json
 import os
 import re
 
-# Path-form prefixes, matched after backslashes become slashes.
-_DEVICE_PREFIX_RE = re.compile(r"^//[?.]/")  # \\?\C:\x, \\.\C:\x
-_POSIX_DRIVE_RE = re.compile(r"^/(?:mnt/)?([a-z])(?=/|$)", re.IGNORECASE)  # /c/x, /mnt/c/x
-
 
 def project_dir() -> str:
     """CLAUDE_PROJECT_DIR, falling back to the checkout this file lives in
@@ -38,15 +36,29 @@ def project_dir() -> str:
 
 def absolute_path(path: str, base: str) -> str:
     """`path` as an absolute, lexically normalised path, for every form an
-    agent might write. Relative forms resolve against `base`."""
-    s = _DEVICE_PREFIX_RE.sub("", path.replace("\\", "/"))
+    agent might write. Relative forms resolve against `base`.
+
+    The path-form patterns are literal strings, compiled through re's cache
+    on first use: env_guard and post_commit_eval import this module on
+    every call and never resolve a path."""
+    # \\?\C:\x and \\.\C:\x, matched after backslashes become slashes.
+    s = re.sub(r"^//[?.]/", "", path.replace("\\", "/"))
     s = os.path.expanduser(s)
-    m = _POSIX_DRIVE_RE.match(s) if os.name == "nt" else None
+    # Git Bash /c/x and WSL /mnt/c/x.
+    m = re.match(r"^/(?:mnt/)?([a-zA-Z])(?=/|$)", s) if os.name == "nt" else None
     if m:
         s = f"{m.group(1)}:/{s[m.end():]}"
     # ntpath.join also resolves drive-relative C:x against `base` when it is
     # on the same drive (the only drive whose cwd the hook knows).
     return os.path.normpath(os.path.join(base, s))
+
+
+def command_name(word: str) -> str:
+    """A command word reduced to a bare lowercase name, so an absolute-path
+    or Windows-suffixed utility (C:\\Windows\\System32\\more.com,
+    /usr/bin/cat, bash.exe) matches its plain name."""
+    name = word.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return name[:-4] if name.endswith((".exe", ".com")) else name
 
 
 def project_path(value: str) -> str:

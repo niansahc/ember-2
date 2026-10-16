@@ -35,8 +35,9 @@ Vault resolution is fail-closed, matching .claude/hooks/post_commit_eval.py.
 There is no real-vault arm and no fallback path to one. Values come from the
 process environment, which the entrypoint fills from the repo's env file
 through src.core.config.load_env_file(); this module has no parser of its
-own. A relative value resolves against the repo root, as the hooks resolve
-it, whatever the cwd.
+own. A relative value resolves against the repo root, whatever the cwd, as
+in the hooks. Unlike hook_utils.absolute_path, Git Bash (/c/x) and device
+(\\\\?\\C:\\x) forms are not translated; give an absolute Windows path.
 """
 
 from __future__ import annotations

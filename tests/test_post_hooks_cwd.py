@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import load_hook, run_hook
+from tests.conftest import load_hook, make_vault_dirs, run_hook
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POST_EDIT = "post_edit_test.py"
@@ -46,21 +46,25 @@ def test_post_edit_runs_project_tests_from_another_cwd(tmp_path, elsewhere):
     assert "1 passed" in result.stdout, result.stdout
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="needs git for a synthetic repo")
-def test_post_commit_runs_eval_in_project_from_another_cwd(tmp_path, elsewhere):
+def _synthetic_commit_project(tmp_path: Path, stub_source: str) -> Path:
+    """A tmp git project whose last commit touches src/context/, with
+    `stub_source` as its tools/eval_retrieval.py."""
     project = tmp_path / "proj"
     (project / "src" / "context").mkdir(parents=True)
     (project / "tools").mkdir()
-    (project / "tools" / "eval_retrieval.py").write_text(
-        "import os\nprint('EVAL STUB cwd=' + os.getcwd())\n", encoding="utf-8"
-    )
+    (project / "tools" / "eval_retrieval.py").write_text(stub_source, encoding="utf-8")
     git = ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false"]
     subprocess.run(["git", "init", "-q"], cwd=project, check=True)
     subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "base"], cwd=project, check=True)
     (project / "src" / "context" / "a.py").write_text("x = 1\n", encoding="utf-8")
     subprocess.run([*git, "add", "-A"], cwd=project, check=True)
     subprocess.run([*git, "commit", "-q", "-m", "touch context"], cwd=project, check=True)
+    return project
 
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git for a synthetic repo")
+def test_post_commit_runs_eval_in_project_from_another_cwd(tmp_path, elsewhere):
+    project = _synthetic_commit_project(tmp_path, "import os\nprint('EVAL STUB cwd=' + os.getcwd())\n")
     test_vault = tmp_path / "test_vault"
     test_vault.mkdir()
     env = {
@@ -84,15 +88,8 @@ def test_repo_root_falls_back_to_hook_location(hook, monkeypatch):
 
 # ---------------------------------------------------------------------------
 # Relative vault paths resolve against the project root (as vault_guard.py
-# resolves them), never against the process cwd. The unrelated cwd holds
-# same-named directories, so a cwd-relative resolution finds a real (wrong)
-# directory instead of failing on a missing one.
+# resolves them), never against the process cwd (see make_vault_dirs).
 # ---------------------------------------------------------------------------
-
-def _make_vault_dirs(*roots: Path) -> None:
-    for root in roots:
-        (root / "vaults" / "test").mkdir(parents=True)
-        (root / "vaults" / "live").mkdir(parents=True)
 
 
 def _resolve_in(project: Path, cwd: Path, monkeypatch, **values: str):
@@ -114,7 +111,7 @@ def _resolve_in(project: Path, cwd: Path, monkeypatch, **values: str):
 @pytest.fixture
 def rel_project(tmp_path, elsewhere) -> Path:
     project = tmp_path / "proj_rel"
-    _make_vault_dirs(project, elsewhere)
+    make_vault_dirs(project, elsewhere)
     return project
 
 
@@ -168,30 +165,14 @@ def test_post_commit_and_vault_guard_agree_on_the_live_vault(rel_project, elsewh
     assert guarded == [from_hook] == [(rel_project / "vaults" / "live").resolve()]
 
 
-def _synthetic_commit_project(tmp_path: Path) -> Path:
-    """A tmp git project whose last commit touches src/context/, with a stub
-    tools/eval_retrieval.py."""
-    project = tmp_path / "proj"
-    (project / "src" / "context").mkdir(parents=True)
-    (project / "tools").mkdir()
-    (project / "tools" / "eval_retrieval.py").write_text("print('EVAL STUB ran')\n", encoding="utf-8")
-    git = ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false"]
-    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
-    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "base"], cwd=project, check=True)
-    (project / "src" / "context" / "a.py").write_text("x = 1\n", encoding="utf-8")
-    subprocess.run([*git, "add", "-A"], cwd=project, check=True)
-    subprocess.run([*git, "commit", "-q", "-m", "touch context"], cwd=project, check=True)
-    return project
-
-
 @pytest.mark.skipif(shutil.which("git") is None, reason="needs git for a synthetic repo")
 @pytest.mark.parametrize("same", [False, True], ids=["distinct-runs", "same-refused"])
 def test_post_commit_relative_values_from_another_cwd(tmp_path, elsewhere, same):
     """End to end through the real hook process from an unrelated cwd.
     Distinct relative vaults run the eval; a relative live vault naming the
     test vault is refused (positive control: the stub must not run)."""
-    project = _synthetic_commit_project(tmp_path)
-    _make_vault_dirs(project, elsewhere)
+    project = _synthetic_commit_project(tmp_path, "print('EVAL STUB ran')\n")
+    make_vault_dirs(project, elsewhere)
     env = {
         "CLAUDE_PROJECT_DIR": str(project),
         "VAULT_PATH_TEST": str(project / "vaults" / "live") if same else "vaults/test",

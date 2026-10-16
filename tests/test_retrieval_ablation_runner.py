@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import make_vault_dirs
 from tools.retrieval_ablation import runner
 
 
@@ -98,38 +99,34 @@ class TestEnvValuesComeFromTheAppLoader:
         assert runner._read_env_value("VAULT_PATH_TEST") == "synthetic/test_vault"
 
     def test_does_not_parse_an_env_file_itself(self, monkeypatch, tmp_path):
-        """A synthetic env file beside a patched ENV_PATH is never read. The
-        old in-module parser returned this value."""
+        """A synthetic env file at a patched ENV_PATH (the old parser's
+        source) is never read."""
         env_file = tmp_path / ".env"
         env_file.write_text("VAULT_PATH_TEST=synthetic/from_file\n", encoding="utf-8")
         monkeypatch.setattr(runner, "ENV_PATH", env_file, raising=False)
         monkeypatch.delenv("VAULT_PATH_TEST", raising=False)
-        if runner._read_env_value("VAULT_PATH_TEST") is not None:
-            pytest.fail("runner read a value from outside the process environment")
+        assert runner._read_env_value("VAULT_PATH_TEST") is None
 
-    def test_relative_values_resolve_against_repo_root(self, monkeypatch, tmp_path):
-        repo = tmp_path / "repo"
-        cwd = tmp_path / "elsewhere"
-        for root in (repo, cwd):
-            (root / "vaults" / "test").mkdir(parents=True)
-            (root / "vaults" / "live").mkdir(parents=True)
+    @pytest.fixture
+    def repo(self, monkeypatch, tmp_path):
+        """REPO_ROOT patched to a tmp repo; the cwd an unrelated directory
+        with the same vault layout (see make_vault_dirs)."""
+        repo, cwd = tmp_path / "repo", tmp_path / "elsewhere"
+        make_vault_dirs(repo, cwd)
         monkeypatch.setattr(runner, "REPO_ROOT", repo)
         monkeypatch.chdir(cwd)
+        return repo
+
+    def test_relative_values_resolve_against_repo_root(self, monkeypatch, repo):
         values = {"VAULT_PATH_TEST": "vaults/test", "PRIVATE_VAULT_PATH": "vaults/live"}
         monkeypatch.setattr(runner, "_read_env_value", values.get)
         vault, reason = runner.resolve_test_vault()
         assert reason is None
         assert vault == (repo / "vaults" / "test").resolve()
 
-    def test_relative_live_vault_equal_to_test_vault_is_refused(self, monkeypatch, tmp_path):
+    def test_relative_live_vault_equal_to_test_vault_is_refused(self, monkeypatch, repo):
         """Positive control: the live vault relative, the test vault absolute,
-        one directory under the repo root; the cwd holds a same-named one."""
-        repo = tmp_path / "repo"
-        cwd = tmp_path / "elsewhere"
-        for root in (repo, cwd):
-            (root / "vaults" / "live").mkdir(parents=True)
-        monkeypatch.setattr(runner, "REPO_ROOT", repo)
-        monkeypatch.chdir(cwd)
+        one directory under the repo root."""
         values = {"VAULT_PATH_TEST": str(repo / "vaults" / "live"), "PRIVATE_VAULT_PATH": "vaults/live"}
         monkeypatch.setattr(runner, "_read_env_value", values.get)
         vault, reason = runner.resolve_test_vault()

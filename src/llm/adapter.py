@@ -35,6 +35,27 @@ def _client_for_host(host: str) -> ollama.Client:
     return ollama.Client(host=host)
 
 
+def search_failure_think(context_packet) -> bool | None:
+    """think=False for the answer turn after a search failure, else None.
+
+    Only when EMBER_SEARCH_FAIL_THINK_OFF is on, the packet carries no web
+    items, and its search status is unavailable or empty: exactly the turns
+    that receive the search note (CONTEXT.md, "Web search"). None means do
+    not pass `think` at all, so generation is unchanged. Ollama only; cloud
+    providers ignore it.
+    """
+    from src.core.config import get_search_failure_think_off
+
+    if not get_search_failure_think_off():
+        return None
+    if context_packet.web_items:
+        return None
+    if context_packet.web_search_status not in ("unavailable", "empty"):
+        return None
+    logger.info("[SEARCH_FAIL] think disabled for answer turn")
+    return False
+
+
 def _generation_client():
     """Return the client that RESPONSE GENERATION should call.
 
@@ -397,6 +418,7 @@ class LLMAdapter:
             model_override=None,
             temperature=temperature,
             assistant_prefix=_prefix,
+            think=search_failure_think(context_packet),
         )
         draft_response = strip_think_blocks(draft_response)
 
@@ -586,6 +608,7 @@ class LLMAdapter:
             model_override=None,
             temperature=temperature,
             assistant_prefix=_prefix,
+            think=search_failure_think(context_packet),
         ):
             accumulated.append(chunk)
             yield chunk
@@ -782,6 +805,7 @@ class LLMAdapter:
         model_override: str | None = None,
         temperature: float | None = None,
         assistant_prefix: str | None = None,
+        think: bool | None = None,
     ) -> str:
         temp = temperature if temperature is not None else 0.7
         model = model_override or self.model
@@ -789,7 +813,9 @@ class LLMAdapter:
             return self._chat_anthropic(system_prompt, user_message, temperature=temp)
         if model.startswith("gpt-"):
             return self._chat_openai(system_prompt, user_message, temperature=temp)
-        return self._chat_ollama(system_prompt, user_message, image_data, model, temperature=temp, assistant_prefix=assistant_prefix)
+        # think is passed only when set, so the default call is unchanged.
+        extra = {} if think is None else {"think": think}
+        return self._chat_ollama(system_prompt, user_message, image_data, model, temperature=temp, assistant_prefix=assistant_prefix, **extra)
 
     def _chat_stream(
         self,
@@ -799,6 +825,7 @@ class LLMAdapter:
         model_override: str | None = None,
         temperature: float | None = None,
         assistant_prefix: str | None = None,
+        think: bool | None = None,
     ):
         """Stream chat response. Dispatches to Ollama, Anthropic, or OpenAI."""
         temp = temperature if temperature is not None else 0.7
@@ -808,7 +835,8 @@ class LLMAdapter:
         elif model.startswith("gpt-"):
             yield from self._chat_openai_stream(system_prompt, user_message, temperature=temp)
         else:
-            yield from self._chat_ollama_stream(system_prompt, user_message, image_data, model, temperature=temp, assistant_prefix=assistant_prefix)
+            extra = {} if think is None else {"think": think}
+            yield from self._chat_ollama_stream(system_prompt, user_message, image_data, model, temperature=temp, assistant_prefix=assistant_prefix, **extra)
 
     # ------------------------------------------------------------------
     # Ollama (local)
@@ -870,6 +898,7 @@ class LLMAdapter:
         image_data: list[str] | None = None, model: str | None = None,
         temperature: float = 0.7,
         assistant_prefix: str | None = None,
+        think: bool | None = None,
     ) -> str:
         model = model or self.model
         user_msg: dict = {"role": "user", "content": user_message}
@@ -888,6 +917,9 @@ class LLMAdapter:
         if assistant_prefix:
             messages.append({"role": "assistant", "content": assistant_prefix})
 
+        # think is added only when set (search-failure arm), so the default
+        # call is identical to before.
+        think_kwargs = {} if think is None else {"think": think}
         response = _generation_client().chat(
             model=model,
             messages=messages,
@@ -901,6 +933,7 @@ class LLMAdapter:
                 # the budget arithmetic stays in sync.
                 "num_predict": OLLAMA_NUM_PREDICT,
             },
+            **think_kwargs,
         )
         generated = response["message"]["content"]
         if assistant_prefix:
@@ -912,6 +945,7 @@ class LLMAdapter:
         image_data: list[str] | None = None, model: str | None = None,
         temperature: float = 0.7,
         assistant_prefix: str | None = None,
+        think: bool | None = None,
     ):
         """Stream from Ollama. Yields string chunks."""
         model = model or self.model
@@ -927,6 +961,7 @@ class LLMAdapter:
             messages.append({"role": "assistant", "content": assistant_prefix})
             yield assistant_prefix
 
+        think_kwargs = {} if think is None else {"think": think}
         stream = _generation_client().chat(
             model=model,
             messages=messages,
@@ -938,6 +973,7 @@ class LLMAdapter:
                 "num_predict": OLLAMA_NUM_PREDICT,
             },
             stream=True,
+            **think_kwargs,
         )
         for chunk in stream:
             content = chunk.get("message", {}).get("content", "")

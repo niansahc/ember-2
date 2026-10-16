@@ -357,6 +357,31 @@ def get_retrieval_min_raw_score() -> float:
     return float(os.getenv("RETRIEVAL_MIN_RAW_SCORE", "0.5"))
 
 
+def get_web_search_min_term_hits() -> int:
+    """Minimum distinct query terms a web hit must contain to count as relevant.
+
+    0 (default) turns the junk-hit filter off. When positive and EVERY hit
+    returned by a search falls below it, the search is treated as a search
+    failure (reason low_relevance) and the hits never reach the model. Read
+    at call time. The real default is set by a later calibration run; the
+    SearXNG engines were blocked upstream when this shipped.
+    """
+    try:
+        return max(0, int(os.getenv("WEB_SEARCH_MIN_TERM_HITS", "0")))
+    except ValueError:
+        return 0
+
+
+def get_search_failure_think_off() -> bool:
+    """True when EMBER_SEARCH_FAIL_THINK_OFF disables thinking after a search failure.
+
+    Default False: generation is unchanged. When True, the answer turn runs
+    with thinking off on turns that carry a search note (status unavailable
+    or empty), so the manual battery can compare both arms. Read at call time.
+    """
+    return os.getenv("EMBER_SEARCH_FAIL_THINK_OFF", "").lower() in ("1", "true", "yes")
+
+
 def get_intent_classifier_timeout_ms() -> int:
     """Hard timeout for Stage 3 of the ADR-034 intent classifier.
 

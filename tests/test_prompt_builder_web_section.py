@@ -170,19 +170,23 @@ def test_section_renders_mixed_dated_and_undated():
 def test_section_renders_unavailable_notice():
     builder = _bare_builder()
     packet = ContextPacket(user_message="q", web_items=[],
-                           web_search_status="unavailable")
+                           web_search_status="unavailable",
+                           web_search_reason="engines_blocked")
     section = builder._build_web_search_section(packet)
-    assert section.startswith('<web_search_results status="unavailable">')
-    assert "unavailable" in section and "no search results" in section
-    assert section.endswith("</web_search_results>")
+    assert section.startswith("<web_search_status>\n")
+    assert "status: unavailable" in section
+    assert "No content was retrieved from the web for this turn." in section
+    assert section.endswith("</web_search_status>")
 
 
 def test_section_renders_empty_notice():
     builder = _bare_builder()
     packet = ContextPacket(user_message="q", web_items=[],
-                           web_search_status="empty")
+                           web_search_status="empty",
+                           web_search_reason="no_results")
     section = builder._build_web_search_section(packet)
-    assert section.startswith('<web_search_results status="empty">')
+    assert section.startswith("<web_search_status>\n")
+    assert "status: empty" in section
     assert "found nothing" in section
 
 
@@ -213,24 +217,21 @@ def test_unavailable_notice_forbids_claiming_ember_cannot_search():
     claim as forbidden."""
     builder = _bare_builder()
     packet = ContextPacket(user_message="q", web_items=[],
-                           web_search_status="unavailable")
+                           web_search_status="unavailable",
+                           web_search_reason="timeout")
     section = builder._build_web_search_section(packet)
-    assert "temporarily down" in section
+    assert "failed for this turn" in section
     assert "do not say that you cannot search" in section
-    assert "lack web or internet access" in section
-    assert "cannot get real-time or current information" in section
 
 
-def test_empty_notice_text_is_unchanged():
-    """Positive control for the test above: only the unavailable notice
-    changed."""
+def test_notice_does_not_invite_answering_from_memory():
+    """The old notices said "answer from what you already know", which
+    invited fabricated recent specifics. Positive control is the
+    "Do not state specific recent facts" sentence in the same text."""
     builder = _bare_builder()
-    packet = ContextPacket(user_message="q", web_items=[],
-                           web_search_status="empty")
-    assert builder._build_web_search_section(packet) == (
-        '<web_search_results status="empty">\n'
-        "[You searched the web for this and the search found nothing. Tell "
-        "the user the search found nothing, then answer from what you already "
-        "know if you can. Do not cite or describe search results.]\n"
-        "</web_search_results>"
-    )
+    for status in ("unavailable", "empty"):
+        packet = ContextPacket(user_message="q", web_items=[],
+                               web_search_status=status)
+        section = builder._build_web_search_section(packet)
+        assert "Do not state specific recent facts." in section
+        assert "answer from what you already know" not in section.lower()

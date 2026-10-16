@@ -1279,6 +1279,7 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
             _search = run_web_search(_original_query)
             work.confirmation_web_items = _search.items
             work.confirmation_search_status = _search.status
+            work.confirmation_search_reason = _search.reason
             # run_web_search never raises; a failed or blocked search arrives
             # as "unavailable" and routes to the post-gen retry offer.
             work.confirmation_search_failed = _search.status == "unavailable"
@@ -1635,6 +1636,7 @@ async def _complete_exchange(
     _confirmation_confirmed = work.confirmation_confirmed
     _confirmation_search_failed = work.confirmation_search_failed
     _confirmation_search_status = work.confirmation_search_status
+    _confirmation_search_reason = work.confirmation_search_reason
     _pending_records = work.pending_records
 
     # --- RELATIONAL INTENSITY AMPLIFICATION GATE ---
@@ -1754,6 +1756,7 @@ async def _complete_exchange(
         context_packet.web_items = _confirmation_web_items
     if _confirmation_search_status is not None:
         context_packet.web_search_status = _confirmation_search_status
+        context_packet.web_search_reason = _confirmation_search_reason
 
     # ADR-021 T2 detection. Non-fatal: detection failure falls through to
     # no signal so the chat path always completes.
@@ -1986,6 +1989,7 @@ async def _complete_exchange(
             from src.tools.web_search import run_web_search
             _auto_search = run_web_search(_raw_user_message)
             context_packet.web_search_status = _auto_search.status
+            context_packet.web_search_reason = _auto_search.reason
             if _auto_search.items:
                 context_packet.web_items = _auto_search.items
                 logger.info("[WEB_SEARCH] Autonomous execution: %d results", len(_auto_search.items))

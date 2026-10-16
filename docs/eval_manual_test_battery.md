@@ -59,6 +59,7 @@ Measures fabricated "recent" specifics when a search failure leaves the model wi
 - Search down: stop the SearXNG container (`docker compose stop`) so port 8888 refuses connections, or run when the upstream engines are blocked. Restart it afterward for the controls.
 - Arm A (thinking on, default): `EMBER_SEARCH_FAIL_THINK_OFF` unset.
 - Arm B (thinking off after a search failure): `EMBER_SEARCH_FAIL_THINK_OFF=true`.
+- Both variables are listed (commented out) in `.env.example`. Leave `WEB_SEARCH_MIN_TERM_HITS` unset (0, filter off) for this battery; it only matters when search returns hits.
 - Run each arm twice before calling a difference real.
 
 Search down:

@@ -47,9 +47,10 @@ def search_failure_think(context_packet) -> bool | None:
     """
     if not get_search_failure_think_off():
         return None
+    if context_packet.web_items:
+        return None
     if context_packet.web_search_status not in ("unavailable", "empty"):
         return None
-    logger.info("[SEARCH_FAIL] think disabled for answer turn")
     return False
 
 
@@ -914,6 +915,8 @@ class LLMAdapter:
         # think is added only when set (search-failure arm), so the default
         # call is identical to before.
         think_kwargs = {} if think is None else {"think": think}
+        if think is not None:
+            logger.info("[SEARCH_FAIL] think=%s passed to ollama answer turn", think)
         response = _generation_client().chat(
             model=model,
             messages=messages,
@@ -956,6 +959,8 @@ class LLMAdapter:
             yield assistant_prefix
 
         think_kwargs = {} if think is None else {"think": think}
+        if think is not None:
+            logger.info("[SEARCH_FAIL] think=%s passed to ollama answer turn", think)
         stream = _generation_client().chat(
             model=model,
             messages=messages,

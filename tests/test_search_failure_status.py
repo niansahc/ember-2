@@ -423,3 +423,162 @@ def test_generation_paths_pass_no_think_when_flag_off(monkeypatch, runner):
     monkeypatch.delenv("EMBER_SEARCH_FAIL_THINK_OFF", raising=False)
     seen = runner(_bare_adapter(), _packet("unavailable"))
     assert seen.get("think") is None
+
+
+# ---------------------------------------------------------------------------
+# 6. Lean-review fixes (PR #298)
+# ---------------------------------------------------------------------------
+
+from src.api.openai_adapter import _merge_confirmation_search  # noqa: E402
+from src.core import config as config_mod  # noqa: E402
+
+_HIT = {"title": "T", "url": "https://example.com/a", "snippet": "s"}
+
+
+def test_think_guard_returns_none_when_packet_has_items(monkeypatch):
+    """Finding 1: status unavailable with items present must not disable
+    thinking. Positive control: test_flag_on_disables_thinking_after_failure
+    (same status, no items) returns False."""
+    monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "true")
+    assert search_failure_think(_packet("unavailable", [_HIT])) is None
+    assert search_failure_think(_packet("empty", [_HIT])) is None
+
+
+def test_merge_failed_confirm_does_not_override_packet_with_items():
+    packet = ContextPacket(user_message="q", web_items=[_HIT],
+                           web_search_status="ok")
+    _merge_confirmation_search(packet, [], "unavailable", "engines_blocked")
+    assert (packet.web_search_status, packet.web_search_reason) == ("ok", None)
+    assert packet.web_items == [_HIT]
+
+
+def test_merge_failed_confirm_applies_when_packet_has_no_items():
+    """Positive control for the test above."""
+    packet = ContextPacket(user_message="q")
+    _merge_confirmation_search(packet, [], "unavailable", "engines_blocked")
+    assert packet.web_search_status == "unavailable"
+    assert packet.web_search_reason == "engines_blocked"
+
+
+def test_merge_confirm_items_win():
+    packet = ContextPacket(user_message="q", web_items=[{"title": "old"}],
+                           web_search_status="ok")
+    _merge_confirmation_search(packet, [_HIT], "ok", None)
+    assert packet.web_items == [_HIT]
+    assert packet.web_search_status == "ok"
+
+
+def test_merge_without_confirm_status_changes_nothing():
+    packet = ContextPacket(user_message="q", web_search_status="empty",
+                           web_search_reason="no_results")
+    _merge_confirmation_search(packet, [], None, None)
+    assert (packet.web_search_status, packet.web_search_reason) == (
+        "empty", "no_results")
+
+
+def test_low_relevance_logs_fetched_count_and_reason(monkeypatch, caplog):
+    """Finding 3."""
+    monkeypatch.setenv("WEB_SEARCH_MIN_TERM_HITS", "2")
+    with _searxng({"results": _JUNK, "unresponsive_engines": []}), \
+            caplog.at_level("INFO", logger="ember.web_search"):
+        run_web_search(_QUERY)
+    assert "2 results fetched, all suppressed (low_relevance)" in caplog.text
+    assert "0 results (unavailable)" not in caplog.text
+
+
+def test_plain_empty_search_still_logs_result_count(monkeypatch, caplog):
+    """Positive control: the generic line is still used outside low_relevance."""
+    with _searxng({"results": [], "unresponsive_engines": []}), \
+            caplog.at_level("INFO", logger="ember.web_search"):
+        run_web_search(_QUERY)
+    assert "0 results (empty)" in caplog.text
+    assert "all suppressed" not in caplog.text
+
+
+@pytest.fixture
+def fresh_env_warnings():
+    config_mod._INVALID_ENV_WARNED.clear()
+    yield
+    config_mod._INVALID_ENV_WARNED.clear()
+
+
+@pytest.mark.parametrize("raw, expected, warns", [
+    ("2", 2, False),
+    (" 2 ", 2, False),
+    ("0", 0, False),
+    ("", 0, False),
+    ("2.0", 0, True),
+    ("abc", 0, True),
+    ("-3", 0, True),
+])
+def test_min_term_hits_parsing(monkeypatch, caplog, fresh_env_warnings,
+                               raw, expected, warns):
+    monkeypatch.setenv("WEB_SEARCH_MIN_TERM_HITS", raw)
+    with caplog.at_level("WARNING", logger="ember.config"):
+        assert config_mod.get_web_search_min_term_hits() == expected
+    assert ("WEB_SEARCH_MIN_TERM_HITS" in caplog.text) is warns
+
+
+@pytest.mark.parametrize("raw, expected, warns", [
+    ("true", True, False),
+    (" true", True, False),
+    ("true ", True, False),
+    ("TRUE", True, False),
+    ("on", True, False),
+    ("1", True, False),
+    ("yes", True, False),
+    ("false", False, False),
+    ("off", False, False),
+    ("", False, False),
+    ("maybe", False, True),
+])
+def test_think_off_flag_parsing(monkeypatch, caplog, fresh_env_warnings,
+                                raw, expected, warns):
+    monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", raw)
+    with caplog.at_level("WARNING", logger="ember.config"):
+        assert config_mod.get_search_failure_think_off() is expected
+    assert ("EMBER_SEARCH_FAIL_THINK_OFF" in caplog.text) is warns
+
+
+def test_invalid_env_value_warns_only_once(monkeypatch, caplog,
+                                           fresh_env_warnings):
+    monkeypatch.setenv("WEB_SEARCH_MIN_TERM_HITS", "abc")
+    with caplog.at_level("WARNING", logger="ember.config"):
+        config_mod.get_web_search_min_term_hits()
+        config_mod.get_web_search_min_term_hits()
+    assert caplog.text.count("WEB_SEARCH_MIN_TERM_HITS") == 1
+
+
+def test_think_log_emitted_by_ollama_call_when_think_set(caplog):
+    """Finding 5: the runtime log lives where think reaches the client."""
+    adapter = _bare_adapter()
+    _, fake_chat = _client_capture()
+    with patch("ollama.chat", side_effect=fake_chat), \
+            patch.object(adapter, "_get_num_ctx", return_value=8192), \
+            caplog.at_level("INFO", logger="ember.llm"):
+        adapter._chat_ollama("system", "user", model="qwen3:8b", think=False)
+    assert "[SEARCH_FAIL] think=False passed to ollama answer turn" in caplog.text
+
+
+def test_think_log_not_emitted_when_think_unset(caplog):
+    """Absence check; the test above is its positive control."""
+    adapter = _bare_adapter()
+    _, fake_chat = _client_capture()
+    with patch("ollama.chat", side_effect=fake_chat), \
+            patch.object(adapter, "_get_num_ctx", return_value=8192), \
+            caplog.at_level("INFO", logger="ember.llm"):
+        adapter._chat_ollama("system", "user", model="qwen3:8b")
+    assert "[SEARCH_FAIL]" not in caplog.text
+
+
+def test_cloud_model_path_logs_no_think_line(monkeypatch, caplog):
+    monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "true")
+    adapter = _bare_adapter()
+    adapter.model = "claude-test"
+    assert search_failure_think(_packet("unavailable")) is False
+    with patch.object(adapter, "_chat_anthropic", return_value="ok") as cloud, \
+            caplog.at_level("INFO", logger="ember.llm"):
+        adapter._chat("system", "user", think=False)
+    cloud.assert_called_once()
+    assert "think" not in cloud.call_args.kwargs
+    assert "[SEARCH_FAIL]" not in caplog.text

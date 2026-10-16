@@ -143,11 +143,11 @@ class WebSearchResult:
     status:
       "ok"          -- at least one result.
       "empty"       -- the search ran and every engine answered, with nothing.
-      "unavailable" -- the request failed, or nothing came back while one or
+      "unavailable" -- the request failed; or nothing came back while one or
                        more engines were unresponsive (rate limit, CAPTCHA,
-                       timeout), or every hit was rejected as irrelevant.
-                       SearXNG still answers HTTP 200 in that case, so
-                       `unresponsive_engines` is the only signal.
+                       timeout) -- SearXNG still answers HTTP 200 then, so
+                       `unresponsive_engines` is the only signal; or every
+                       hit was rejected as irrelevant.
     reason: why a non-"ok" search yielded nothing (REASON_* above); None
       when the search succeeded.
     """
@@ -203,6 +203,7 @@ def run_web_search(query) -> WebSearchResult:
             if entry
         ]
         reason = None
+        fetched = len(results)
         if results:
             status = "ok"
             min_hits = get_web_search_min_term_hits()
@@ -225,6 +226,12 @@ def run_web_search(query) -> WebSearchResult:
             logger.warning(
                 "[WEB_SEARCH] unavailable: 0 results, unresponsive engines: %s",
                 ", ".join(unresponsive),
+            )
+        elif reason == REASON_LOW_RELEVANCE:
+            logger.info(
+                "[WEB_SEARCH] %d results fetched, all suppressed (%s), "
+                "unresponsive engines: %s",
+                fetched, reason, ", ".join(unresponsive) or "none",
             )
         else:
             logger.info(

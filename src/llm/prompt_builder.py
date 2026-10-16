@@ -261,9 +261,6 @@ AUTHORITY_RULES = _render_authority_rules(is_conversational=False)
 # with no retrieved content (ContextPacket.web_search_status). Without it the
 # model sees no search section at all and can answer as if it had searched.
 # It never carries engine names, URLs or error text, only a reason category.
-# The capability sentence exists because qwen3:32b, told only "do not repeat
-# it", answered "I can't perform live web searches": a false claim that also
-# contradicts the search disclosure line added in post_gen_pipeline.
 _SEARCH_NOTE_COMMON = (
     "No content was retrieved from the web for this turn. You did not see any "
     "search results. You have no verified information about events, dates, "
@@ -273,6 +270,9 @@ _SEARCH_NOTE_COMMON = (
     "not cite or describe search results or sources."
 )
 _SEARCH_NOTE_TAILS = {
+    # The capability sentence exists because qwen3:32b, told only "do not
+    # repeat it", answered "I can't perform live web searches": a false claim
+    # that also contradicts the search disclosure line in post_gen_pipeline.
     "unavailable": (
         " A note about search being down is added to your reply automatically; "
         "do not repeat it. You do have web search; it failed for this turn, so "

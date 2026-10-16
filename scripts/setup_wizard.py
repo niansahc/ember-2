@@ -32,6 +32,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = REPO_ROOT / ".env"
 REQUIREMENTS_PATH = REPO_ROOT / "requirements.txt"
 
+# Run as a file, sys.path[0] is scripts/; src lives at the repo root.
+# src.core.vault_path is dependency-free, so this import works before step 7
+# installs the Python requirements.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.core.vault_path import resolve_configured_path  # noqa: E402
+
 DEFAULT_VAULT = r"C:\EmberVault"
 DEFAULT_MODEL = "qwen2.5:14b"
 # Issue #130: llama3.2-vision:11b uses the mllama architecture, which
@@ -104,7 +112,10 @@ def step_vault() -> str:
     print("  and reflections. Choose a local drive — not OneDrive or Dropbox.")
     print()
     vault = ask("Vault path", DEFAULT_VAULT)
-    vault_path = Path(vault)
+    # Create the directory the app will resolve this answer to (relative
+    # against the project root, `~` expanded), not one relative to the cwd.
+    # The answer itself is written to .env unchanged.
+    vault_path = Path(resolve_configured_path(vault))
 
     if vault_path.exists():
         success(f"Folder already exists: {vault_path}")

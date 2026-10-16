@@ -46,15 +46,13 @@ TARGET_FOLDERS = (
 
 
 def _resolve_vault() -> Path:
+    # Config is the only resolution point, so a relative PRIVATE_VAULT_PATH
+    # names the same directory here as in the app (project root, not cwd).
     try:
         from src.core.config import get_private_vault_path
         return get_private_vault_path()
     except Exception:
         pass
-    import os
-    env_path = os.getenv("PRIVATE_VAULT_PATH")
-    if env_path:
-        return Path(env_path)
     print("[ERROR] Cannot resolve vault path. Set PRIVATE_VAULT_PATH or run from the repo root.")
     sys.exit(1)
 

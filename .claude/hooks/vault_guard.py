@@ -18,9 +18,10 @@ Which vaults:
 
 PRIVATE_VAULT_PATH is resolved inside this process: the process
 environment first, then .env through hook_utils.env_file_value (the parser
-post_commit_eval.py uses). A relative value resolves against the project
-root through hook_utils.project_path, as the API does and as
-post_commit_eval.py does. The value is never printed, deny messages
+post_commit_eval.py uses). It resolves through hook_utils.project_path,
+which delegates to src/core/vault_path.py, the rule the app's
+get_private_vault_path() and post_commit_eval.py use: a relative value
+against the project root, never the cwd. The value is never printed, deny messages
 included. Parsing .env costs a python-dotenv import (~60 ms per hook
 process), so the value is cached in .claude/.env.vault_cache.json, keyed
 by the .env mtime and size. The cache file's .env.* name puts it under
@@ -78,7 +79,7 @@ from collections import namedtuple
 
 # Same directory; Python puts it on sys.path when this file runs as a
 # script. Shared with post_commit_eval.py so both hooks parse .env one way
-# and resolve a relative PRIVATE_VAULT_PATH against the same root.
+# and resolve PRIVATE_VAULT_PATH by the app's rule (src/core/vault_path.py).
 from hook_utils import absolute_path, deny, env_file_value, project_dir, project_path
 
 _VAULT_DIR = "private_vault"
@@ -224,10 +225,15 @@ def vault_dirs() -> list[Vault]:
     project_forms = None  # resolved only once a vault directory exists
     vaults: list[Vault] = []
     for raw in candidates:
+        # The directory, by the rule the app uses (realpath-resolved).
         path = project_path(raw)
         if not os.path.isdir(path):
             continue
+        # Plus the spelling as configured: a glob written through a junction
+        # or symlink name gets no realpath (it has wildcards), so it can
+        # only match the lexical form.
         forms = path_forms(path, project)
+        forms += [f for f in path_forms(raw, project) if f not in forms]
         if any(f in v.forms for v in vaults for f in forms):
             continue
         if project_forms is None:

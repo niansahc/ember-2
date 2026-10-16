@@ -5,11 +5,13 @@ Helpers shared by the hook scripts in this directory, so each rule has one
 definition:
 
   - project_dir(): the project root every hook anchors on.
-  - absolute_path() / project_path(): one resolution of a path string.
-    project_path() is how every hook resolves a configured value
-    (PRIVATE_VAULT_PATH, VAULT_PATH_TEST), so vault_guard.py,
-    secret_dump_guard.py and post_commit_eval.py agree on which directory
-    is the live vault.
+  - absolute_path(): one resolution of a path string an agent wrote in a
+    tool call (Git Bash, WSL, device-prefix and drive-relative forms).
+  - project_path(): how every hook resolves a configured value
+    (PRIVATE_VAULT_PATH, VAULT_PATH_TEST). It delegates to
+    src/core/vault_path.py, the rule the app's get_private_vault_path()
+    uses, so vault_guard.py, secret_dump_guard.py, post_commit_eval.py and
+    the app agree on which directory is the live vault.
   - command_name(): one "bare command name" rule (env_guard.py,
     secret_dump_guard.py).
   - read_env_value() / env_file_value(): one .env value reader
@@ -24,6 +26,7 @@ Python process on every tool call, and those imports cost ~11 ms each time.
 import json
 import os
 import re
+import sys
 
 
 def project_dir() -> str:
@@ -61,12 +64,31 @@ def command_name(word: str) -> str:
     return name[:-4] if name.endswith((".exe", ".com")) else name
 
 
+def _checkout_root() -> str:
+    """The checkout this file lives in (.claude/hooks/hook_utils.py ->
+    root), whose src/ holds the shared resolver. Not project_dir(): tests
+    point CLAUDE_PROJECT_DIR at a tmp project that has no src/."""
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 def project_path(value: str) -> str:
     """A configured path (PRIVATE_VAULT_PATH, VAULT_PATH_TEST) as an
-    absolute path. A relative value resolves against the project root, as
-    the API, started from the project root, resolves it; never against the
-    hook process cwd, which follows the session's cd."""
-    return absolute_path(value, project_dir())
+    absolute path, through src/core/vault_path.resolve_configured_path, the
+    one rule the app uses. A relative value resolves against the project
+    root, never against the hook process cwd, which follows the session's
+    cd.
+
+    The import is deferred to here so the hooks that import this module
+    and never resolve a configured value (env_guard.py, and
+    secret_dump_guard.py on commands that name no path) do not load it.
+    src/__init__.py and src/core/__init__.py are empty and vault_path.py
+    imports only os, so no app code loads."""
+    root = _checkout_root()
+    if root not in sys.path:
+        sys.path.append(root)
+    from src.core.vault_path import resolve_configured_path
+
+    return resolve_configured_path(value, project_dir())
 
 
 def read_env_value(key: str, env_path) -> str | None:

@@ -29,8 +29,8 @@ or resolves to the same path as the live vault, the eval is skipped with
 a printed reason rather than falling back to the live vault.
 
 A relative VAULT_PATH_TEST or PRIVATE_VAULT_PATH resolves against the
-project root (hook_utils.project_path), the root vault_guard.py resolves
-PRIVATE_VAULT_PATH against, never against this process's cwd. Otherwise,
+project root (hook_utils.project_path -> src/core/vault_path.py, the rule
+the app and vault_guard.py use), never against this process's cwd. Otherwise,
 from a session cwd'd elsewhere, a relative live vault and an absolute
 test vault naming the same directory compare unequal, and the eval runs
 against the live vault.
@@ -59,9 +59,10 @@ ENV_PATH = REPO_ROOT / ".env"
 
 
 def _configured_path(value: str) -> Path:
-    """A configured vault path, relative values against the project root,
-    then through realpath so two spellings of one directory compare equal."""
-    return Path(project_path(value)).resolve()
+    """A configured vault path by the app's rule (hook_utils.project_path ->
+    src/core/vault_path.py): relative values against the project root, then
+    realpath, so two spellings of one directory compare equal."""
+    return Path(project_path(value))
 
 
 def _resolve_test_vault() -> tuple[Path | None, str | None]:

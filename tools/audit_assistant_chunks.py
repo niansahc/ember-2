@@ -13,16 +13,11 @@ if __name__ == "__main__":
 
     load_env_file()
 
-db_path = os.path.join(
-    os.environ.get("PRIVATE_VAULT_PATH", ""),
-    "embeddings",
-    "ingested.db",
-)
+# The vault resolves through config only, so a relative PRIVATE_VAULT_PATH
+# names the same directory here as in the app (project root, not cwd).
+from src.core.config import get_private_vault_path
 
-if not os.path.exists(db_path):
-    # fallback: load from config
-    from src.core.config import get_private_vault_path
-    db_path = os.path.join(str(get_private_vault_path()), "embeddings", "ingested.db")
+db_path = os.path.join(str(get_private_vault_path()), "embeddings", "ingested.db")
 
 conn = sqlite3.connect(db_path)
 cur = conn.cursor()

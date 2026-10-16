@@ -45,6 +45,7 @@ from src.core.config import (
 )
 from src.core.jsonio import RecordExistsError
 from src.core.paths import resolve_inside
+from src.core.vault_path import resolve_configured_path
 from src.memory.service import MemoryService
 from src.memory.session import (
     list_sessions,
@@ -1585,8 +1586,11 @@ def vault_swap_endpoint(body: VaultSwapRequest):
         )
 
     vault_path = known[label]
-    resolved = Path(vault_path).resolve()
-    if not resolved.is_dir():
+    # Shared rule (src/core/vault_path.py): relative against the project
+    # root, never the API's cwd. None only for a whitespace-only value.
+    resolved_str = resolve_configured_path(vault_path)
+    resolved = Path(resolved_str) if resolved_str is not None else None
+    if resolved is None or not resolved.is_dir():
         raise HTTPException(
             status_code=400,
             detail=f"Vault path does not exist or is not a directory: {resolved}",

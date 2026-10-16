@@ -549,7 +549,12 @@ def _vault_path_for_test_label() -> Path | None:
     for line in env_file.read_text(encoding="utf-8").splitlines():
         if line.startswith("VAULT_PATH_TEST="):
             raw = line.split("=", 1)[1].strip()
-            return Path(raw)
+            # Shared resolution rule: relative against the project root,
+            # never the cwd, matching the directory the API swaps to.
+            from src.core.vault_path import resolve_configured_path
+
+            resolved = resolve_configured_path(raw)
+            return Path(resolved) if resolved is not None else None
     return None
 
 

@@ -7,6 +7,8 @@ import threading
 
 from dotenv import load_dotenv
 
+from src.core.vault_path import resolve_configured_path
+
 
 logger = logging.getLogger("ember.config")
 
@@ -68,9 +70,21 @@ _vault_binding: ContextVar[str | None] = ContextVar(
 )
 
 
+def _resolve(value: str) -> Path:
+    """A configured or bound vault value as a Path, through the shared rule
+    in src/core/vault_path.py: relative values against the project root,
+    never the cwd, so the app, the hooks and the ablation runner name the
+    same directory for the same value."""
+    return Path(resolve_configured_path(value))
+
+
 def get_private_vault_path():
     """
     Returns the absolute path to the active vault.
+
+    Every branch resolves through resolve_configured_path()
+    (src/core/vault_path.py): a relative value resolves against the project
+    root, not the cwd; `~` expands; absolute values pass through.
 
     Resolution order:
       1. Deferred-work binding, set by vault_binding() or
@@ -87,17 +101,18 @@ def get_private_vault_path():
     """
     bound = _vault_binding.get()
     if bound is not None:
-        return Path(bound).resolve()
+        return _resolve(bound)
 
     if _vault_path_override is not None:
-        return Path(_vault_path_override).resolve()
+        return _resolve(_vault_path_override)
 
     vault_path = os.getenv("PRIVATE_VAULT_PATH")
 
-    if not vault_path:
+    # Whitespace-only counts as unset, as it does in the hooks and runner.
+    if not (vault_path or "").strip():
         raise ValueError("PRIVATE_VAULT_PATH not set in environment")
 
-    return Path(vault_path).resolve()
+    return _resolve(vault_path)
 
 
 def get_bound_vault() -> str | None:
@@ -160,7 +175,7 @@ def spawn_vault_bound_thread(target, args=(), vault=None, name=None) -> threadin
             # turn, so it is signal rather than noise, and it is the runtime
             # confirmation that the bound path executed (issue #144).
             if bound is not None and _vault_path_override is not None:
-                if Path(_vault_path_override).resolve() != Path(bound).resolve():
+                if _resolve(_vault_path_override) != _resolve(bound):
                     logger.warning(
                         "[VAULT_BIND] vault swapped mid-flight; holding deferred "
                         "write to its queue-time vault %s (active is now %s)",

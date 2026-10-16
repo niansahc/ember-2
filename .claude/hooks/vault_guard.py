@@ -125,6 +125,20 @@ def names_vault_path(candidate) -> bool:
     return any(_names_vault_dir(c) for c in _components(candidate))
 
 
+def names_vault_operand(candidate) -> bool:
+    """names_vault_path for a command operand (secret_dump_guard). A glob
+    component names the vault only when it carries the literal text
+    "vault" (`*vault*`, `p*vault`): `p*` and `*t` are ordinary wildcards,
+    and a glob that really reaches a vault directory is caught by location
+    (inside_vault)."""
+    if not isinstance(candidate, str):
+        return False
+    return any(
+        _names_vault_dir(c) and (not _WILDCARDS & set(c) or "vault" in c)
+        for c in _components(candidate)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Vault locations
 # ---------------------------------------------------------------------------

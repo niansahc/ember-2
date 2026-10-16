@@ -138,9 +138,7 @@ ALLOW = [
     hook_payload("Read", file_path="/c/dev/proj/.env.example"),
     hook_payload("Grep", pattern="KEY", path=r"C:\dev\proj\.env.example"),
     hook_payload("Grep", pattern="KEY", path=".", glob=".env.example"),
-    hook_payload("Grep", pattern="KEY", path=".", glob=".env.example*"),
     hook_payload("Glob", pattern="**/.env.example"),
-    hook_payload("Glob", pattern=".env.example*"),
     hook_payload("Write", file_path=r"C:\dev\proj\.env.example"),
     hook_payload("Edit", file_path="/c/dev/proj/.env.example", old_string="a", new_string="b"),
     hook_payload("Bash", command="cat .env.example"),
@@ -305,6 +303,89 @@ def test_malformed_payload_allows_without_crashing(raw):
     result = _run(raw)
     assert result.returncode == 0
     assert hook_output(result) is None
+
+
+# ---------------------------------------------------------------------------
+# Prose skip only for literal message values; exact .env.example only
+# ---------------------------------------------------------------------------
+
+# A message value the shell expands is a command, not prose.
+SUBSTITUTION_DENY = [
+    'gh pr create --body "$(cat .env)"',
+    'git commit -m "$(cat .env)"',
+    'git commit -m "`cat .env`"',
+    'git commit -am "x $(head -1 .env.local) y"',
+    'gh pr create --title "t" --body "see $(cat .env.production)"',
+    # A heredoc fed to anything but cat is a script; a bare delimiter is expanded.
+    "bash <<'EOF'\ncat .env\nEOF\n",
+    'git commit -m "$(cat <<EOF\n$(cat .env)\nEOF\n)"',
+    "cat <<'EOF' > .env\nX=1\nEOF\n",
+]
+
+# Absence counterparts: the same templates with the name only as prose or
+# literal text, or no name at all.
+SUBSTITUTION_ALLOW = [
+    'git commit -m "feat: block .env reads"',
+    "git commit -m 'feat: block .env reads'",
+    "git commit -m 'literal $(cat .env) in single quotes'",
+    "git commit -m 'literal `cat .env` in single quotes'",
+    'gh pr create --body "costs $5 and mentions .env"',
+    'git commit -m "$(cat <<\'EOF\'\nmentions .env and $(cat .env) as literal text\nEOF\n)"',
+    'git commit -m "$(cat <<\'EOF\'\nit\'s \\"quoted\\" .env text\nEOF\n)"',
+    'git commit -am "x $(date) y"',
+    'gh pr create --title "t" --body "see $(git rev-parse HEAD)"',
+]
+
+
+@pytest.mark.parametrize("command", SUBSTITUTION_DENY)
+def test_denies_substitution_in_message_values(command):
+    assert env_guard.command_names_env_file(command, bash=True) is not None
+
+
+@pytest.mark.parametrize("command", SUBSTITUTION_ALLOW)
+def test_allows_literal_message_values(command):
+    assert env_guard.command_names_env_file(command, bash=True) is None
+
+
+def test_hook_process_denies_substitution_in_message_value():
+    result = _run(hook_payload("Bash", command='gh pr create --body "$(cat .env)"'))
+    assert result.returncode == 0
+    assert hook_output(result)["permissionDecision"] == "deny"
+    allowed = _run(hook_payload("Bash", command='git commit -m "feat: block .env reads"'))
+    assert allowed.stdout.strip() == ""
+
+
+EXAMPLE_DENY = [
+    hook_payload("Bash", command="cat .env.example*"),
+    hook_payload("Bash", command="cat .env.example?"),
+    hook_payload("Bash", command="cat .env.exam*"),
+    hook_payload("Bash", command="cat .env.example.local"),
+    hook_payload("Bash", command="cat .ENV.EXAMPLE.BAK"),
+    hook_payload("PowerShell", command="Get-Content .env.example*"),
+    hook_payload("Glob", pattern=".env.example*"),
+    hook_payload("Glob", pattern="**/.env.example.*"),
+    hook_payload("Grep", pattern="KEY", path=".", glob=".env.example*"),
+]
+
+EXAMPLE_ALLOW = [
+    hook_payload("Bash", command="cat .env.example"),
+    hook_payload("Bash", command="cat .ENV.EXAMPLE"),
+    hook_payload("Bash", command="cat .env.example."),            # Win32 alias of the example itself
+    hook_payload("PowerShell", command="Get-Content .env.example"),
+    hook_payload("Glob", pattern="**/.env.example"),
+    hook_payload("Grep", pattern="KEY", path=".", glob=".env.example"),
+    hook_payload("Read", file_path="/c/dev/proj/.env.example"),
+]
+
+
+@pytest.mark.parametrize("payload", EXAMPLE_DENY, ids=payload_id)
+def test_denies_globs_that_reach_more_than_the_example(payload):
+    assert env_guard.evaluate(payload) is not None
+
+
+@pytest.mark.parametrize("payload", EXAMPLE_ALLOW, ids=payload_id)
+def test_allows_only_the_exact_example_name(payload):
+    assert env_guard.evaluate(payload) is None
 
 
 # ---------------------------------------------------------------------------

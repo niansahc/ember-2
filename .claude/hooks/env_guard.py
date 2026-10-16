@@ -3,7 +3,8 @@
 
 PreToolUse hook for Read|Grep|Glob|Edit|Write|Bash|PowerShell -- denies
 agent tool calls that name a .env file (.env, .env.local,
-.env.production, ...). .env.example is allowed everywhere.
+.env.production, ...). The exact name .env.example is allowed everywhere;
+a glob that can also match .env.example.<x> (.env.example*) is not.
 
 Why: .env holds live credentials, and anything a tool reads lands in the
 session transcript. A transcript is not a secret store. This hook refuses
@@ -152,8 +153,9 @@ def _base_names_env(base: str) -> bool:
     """True when a single basename (no separators) names a .env file."""
     lower = base.lower()
     wild = _WILDCARD.search(base)
-    # The example file itself, or a glob that can only reach it.
-    if lower == _EXAMPLE or (wild and lower.startswith(_EXAMPLE)):
+    # Only the example file itself. A glob starting with it (`.env.example*`)
+    # also matches `.env.example.local`, so it goes through the glob rule.
+    if lower == _EXAMPLE:
         return False
     if _ENV_NAME.match(base):
         return True
@@ -171,7 +173,7 @@ def _base_names_env(base: str) -> bool:
 
 def names_env_file(candidate, as_text: bool = False) -> bool:
     """True when `candidate` (a path, filename, or glob) names a protected
-    .env file. .env.example and globs that can only reach it are allowed.
+    .env file. The exact name .env.example is allowed.
     With `as_text`, a dot followed straight by a wildcard (`.*`, `.[0]`) is
     text, not a file name (see module docstring, Quoting)."""
     if not isinstance(candidate, str):
@@ -223,9 +225,21 @@ SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
 
 # The quoted value of a message flag on a git or gh command is prose, not a
 # path. Scoped to git/gh segments so `cmd -m ".env"` elsewhere is still
-# scanned, and only the quoted value right after the flag is dropped.
+# scanned, and only the quoted value right after the flag is dropped. A
+# single-quoted value is literal. A double-quoted value is prose only when
+# it holds no `$(` and no backtick: the shell runs those, so
+# `--body "$(cat .env)"` is scanned like any other command.
 _PROSE_FLAG_VALUE = re.compile(
-    r"""(?:^|\s)(?:-a?m|--message|--body|--title|--notes)(?:\s+|=)(?:"(?:[^"\\]|\\.)*"|'[^']*')"""
+    r"""(?:^|\s)(?:-a?m|--message|--body|--title|--notes)(?:\s+|=)"""
+    r"""(?:"(?:[^"\\$`]|\\.|\$(?!\())*"|'[^']*')"""
+)
+# The body of `cat <<'EOF'` (a quoted delimiter) is literal text: the usual
+# commit-message idiom. A bare delimiter is not (the shell expands `$(...)`
+# in it), and a heredoc fed to anything but cat (`bash <<'EOF'`, `python -`)
+# is a script, so both stay scanned.
+_QUOTED_HEREDOC = re.compile(
+    r"""(?<![\w./-])cat[ \t]+<<-?[ \t]*(?P<q>['"])(?P<tag>[A-Za-z_]\w*)(?P=q)(?P<rest>[^\n]*)\n.*?^[ \t]*(?P=tag)[ \t]*$""",
+    re.DOTALL | re.MULTILINE,
 )
 _SEGMENT_SPLIT = re.compile(r"([;&|]+)")
 _GIT_OR_GH = re.compile(r"^\s*(?:git|gh)\s")
@@ -245,6 +259,7 @@ _GLOB_FLAGS = frozenset({
 
 
 def _without_prose(command: str) -> str:
+    command = _QUOTED_HEREDOC.sub(lambda m: "cat << HERE" + m["rest"], command.replace("\r\n", "\n"))
     return "".join(
         _PROSE_FLAG_VALUE.sub(" ", seg) if _GIT_OR_GH.match(seg) else seg
         for seg in _SEGMENT_SPLIT.split(command)

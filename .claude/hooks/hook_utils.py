@@ -122,18 +122,62 @@ def env_file_value(key: str, env_path) -> str | None:
         pass
 
     try:
-        with open(env_path, encoding="utf-8") as handle:
-            for raw in handle.read().splitlines():
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                name, _, val = line.partition("=")
-                if name.strip() == key:
-                    return val.strip().strip('"').strip("'") or None
-    except Exception:
-        pass
+        with open(env_path, encoding="utf-8-sig") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return None
+    return _fallback_value(key, lines)
 
-    return None
+
+# One `[export] KEY = value` line, and python-dotenv's `${NAME}` /
+# `${NAME:-default}` reference.
+_ENV_LINE = re.compile(r"(?:export[ \t]+)?([^=#\s]+)[ \t]*=[ \t]*(.*)")
+_ENV_REFERENCE = re.compile(r"\$\{([^}:]*)(?::-([^}]*))?\}")
+
+
+def _fallback_value(key: str, lines: list) -> str | None:
+    """`key` from .env `lines`, read as python-dotenv's dotenv_values reads
+    them (a BOM, `export`, quoted values with escapes, an unquoted value's
+    ` # comment`, `${VAR}` and `${VAR:-default}` resolved from the keys
+    above it, then the process environment). The fallback must agree with
+    dotenv: a different PRIVATE_VAULT_PATH points the vault guards at the
+    wrong directory. A line this parser cannot read the way dotenv does (an
+    unclosed quote, a quoted value followed by text, a reference left
+    unresolved, such as a nested default) raises ValueError; the vault
+    guards deny when a check raises, so no guess is made."""
+    values: dict = {}
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _ENV_LINE.fullmatch(line)
+        if not match:
+            continue
+        name, text = match.groups()
+        value = _fallback_literal(text)
+        if "${" in value:
+            env = {**os.environ, **values}
+            value = _ENV_REFERENCE.sub(lambda m: env[m[1]] if m[1] in env else (m[2] or ""), value)
+            if "${" in value:
+                raise ValueError("unresolved reference in .env value")
+        values[name] = value
+    return (values.get(key) or "").strip() or None
+
+
+def _fallback_literal(text: str) -> str:
+    """One value as dotenv reads it, before `${}` references are resolved."""
+    if text[:1] in ("'", '"'):
+        quote = text[0]
+        match = re.match(quote + r"((?:\\.|[^" + quote + r"\\])*)" + quote + r"[ \t]*(?:#.*)?", text)
+        if not match or match.end() != len(text):
+            raise ValueError("unreadable quoted .env value")
+        body = match[1]
+        if quote == "'":
+            return re.sub(r"\\([\\'])", r"\1", body)
+        return re.sub(
+            r"\\[\\'\"abfnrtv]", lambda m: m[0].encode("ascii").decode("unicode-escape"), body
+        )
+    return re.sub(r"\s+#.*", "", text).rstrip()
 
 
 def deny_on_error(guard: str, exc: BaseException) -> None:

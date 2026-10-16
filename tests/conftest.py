@@ -812,6 +812,16 @@ def relpath(target: Path, start: Path, sep: str = "/") -> str:
     return os.path.relpath(target, start).replace("\\", "/").replace("/", sep)
 
 
+def make_vault_dirs(*roots: Path) -> None:
+    """Empty `vaults/test` and `vaults/live` directories under each root.
+    Relative-path tests put the same layout under the project and under an
+    unrelated cwd, so a cwd-relative resolution finds a real (wrong)
+    directory instead of failing on a missing one."""
+    for root in roots:
+        (root / "vaults" / "test").mkdir(parents=True)
+        (root / "vaults" / "live").mkdir(parents=True)
+
+
 @pytest.fixture
 def hermetic_hook_project(tmp_path: Path, monkeypatch) -> Path:
     """An empty tmp project as CLAUDE_PROJECT_DIR and no inherited

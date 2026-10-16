@@ -19,7 +19,8 @@ Which vaults:
 PRIVATE_VAULT_PATH is resolved inside this process: the process
 environment first, then .env through hook_utils.env_file_value (the parser
 post_commit_eval.py uses). A relative value resolves against the project
-root, as the API does. The value is never printed, deny messages
+root through hook_utils.project_path, as the API does and as
+post_commit_eval.py does. The value is never printed, deny messages
 included. Parsing .env costs a python-dotenv import (~60 ms per hook
 process), so the value is cached in .claude/.env.vault_cache.json, keyed
 by the .env mtime and size. The cache file's .env.* name puts it under
@@ -62,32 +63,29 @@ Rules:
    (src/**/*.py).
 
 Shared with secret_dump_guard.py: names_vault_path(), vault_dirs(),
-inside_vault(), above_vault(), absolute_path(), path_forms() (one
-definition of "a vault path"). Paths are plain strings: this runs as a
-fresh process on every tool call, and pathlib/typing imports cost ~11 ms.
+inside_vault(), above_vault(), path_forms() (one definition of "a vault
+path"); absolute_path() lives in hook_utils.py. Paths are plain strings:
+this runs as a fresh process on every tool call, and pathlib/typing
+imports cost ~11 ms.
 
 A pattern check, not a sandbox.
 """
 
 import json
 import os
-import re
 import sys
 from collections import namedtuple
 
 # Same directory; Python puts it on sys.path when this file runs as a
-# script. Shared with post_commit_eval.py so both hooks parse .env one way.
-from hook_utils import deny, env_file_value, project_dir
+# script. Shared with post_commit_eval.py so both hooks parse .env one way
+# and resolve a relative PRIVATE_VAULT_PATH against the same root.
+from hook_utils import absolute_path, deny, env_file_value, project_dir, project_path
 
 _VAULT_DIR = "private_vault"
 _VAULT_KEY = "PRIVATE_VAULT_PATH"
 # `.env.*` basename: env_guard.py denies agent reads and writes of it.
 _CACHE_NAME = ".env.vault_cache.json"
 _WILDCARDS = frozenset("*?[")
-
-# Path-form prefixes, matched after backslashes become slashes.
-_DEVICE_PREFIX_RE = re.compile(r"^//[?.]/")  # \\?\C:\x, \\.\C:\x
-_POSIX_DRIVE_RE = re.compile(r"^/(?:mnt/)?([a-z])(?=/|$)", re.IGNORECASE)  # /c/x, /mnt/c/x
 
 
 def _components(path: str) -> list[str]:
@@ -129,19 +127,6 @@ def names_vault_path(candidate) -> bool:
 # ---------------------------------------------------------------------------
 # Vault locations
 # ---------------------------------------------------------------------------
-
-def absolute_path(path: str, base: str) -> str:
-    """`path` as an absolute, lexically normalised path, for every form an
-    agent might write. Relative forms resolve against `base`."""
-    s = _DEVICE_PREFIX_RE.sub("", path.replace("\\", "/"))
-    s = os.path.expanduser(s)
-    m = _POSIX_DRIVE_RE.match(s) if os.name == "nt" else None
-    if m:
-        s = f"{m.group(1)}:/{s[m.end():]}"
-    # ntpath.join also resolves drive-relative C:x against `base` when it is
-    # on the same drive (the only drive whose cwd the hook knows).
-    return os.path.normpath(os.path.join(base, s))
-
 
 def _resolutions(path: str, base: str) -> list[str]:
     """Absolute forms of `path`: lexical, plus the real path (8.3 short
@@ -239,7 +224,7 @@ def vault_dirs() -> list[Vault]:
     project_forms = None  # resolved only once a vault directory exists
     vaults: list[Vault] = []
     for raw in candidates:
-        path = absolute_path(raw, project)
+        path = project_path(raw)
         if not os.path.isdir(path):
             continue
         forms = path_forms(path, project)

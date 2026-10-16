@@ -12,7 +12,9 @@ Read/Grep/Glob are vault_guard.py.
 
 "The vault" is vault_guard.py's definition (by name and by location). A
 path argument counts when it resolves, against the payload cwd and any
-`cd` earlier in the same command line, to a location at or under a vault.
+`cd` earlier in the same command line, to a location at or under a vault,
+or names a private_vault directory. Flag values (--file=x, if=x,
+-Path:x) count as path arguments for both rules.
 A recursive search or listing (grep -r, rg, findstr /s, gci -Recurse,
 find, tree, ls -R, ...) counts when its root is an ancestor of one,
 unless the utility honours
@@ -60,7 +62,7 @@ import shlex
 import sys
 
 # Same directory; Python puts it on sys.path when this file runs as a script.
-from hook_utils import deny
+from hook_utils import absolute_path, command_name, deny
 
 # Content-reading utilities, lowercase (PowerShell and Windows executables
 # are case-insensitive): whole-file dumps, plus content searches, which
@@ -104,10 +106,6 @@ _LIST_UTILITIES = frozenset({
     "find",
     "wc",
 })
-
-# Windows executable suffixes stripped from the leading word, so
-# more.com / cat.exe match the bare utility name.
-_EXE_SUFFIX_RE = re.compile(r"\.(exe|com)$")
 
 # shlex punctuation runs that are redirections or grouping, not words.
 _PUNCTUATION = frozenset("();<>|&")
@@ -164,18 +162,12 @@ def _pipelines(command: str) -> list[list[list[str]]]:
     return pipelines
 
 
-def _command_name(word: str) -> str:
-    """A command word reduced to a bare lowercase name, so an absolute-path
-    utility (C:/Windows/System32/more.com, /usr/bin/cat) matches."""
-    return _EXE_SUFFIX_RE.sub("", word.rsplit("/", 1)[-1].lower())
-
-
 def _utility(tokens: list[str]) -> str:
     """The stage's command name; for `xargs [flags] cmd`, the command xargs
     runs."""
-    name = _command_name(tokens[0])
+    name = command_name(tokens[0])
     if name == "xargs":
-        return next((_command_name(t) for t in tokens[1:] if not t.startswith("-")), name)
+        return next((command_name(t) for t in tokens[1:] if not t.startswith("-")), name)
     return name
 
 
@@ -289,21 +281,26 @@ def _matches_dump_command(command: str, cwd: str | None = None) -> str | None:
             # imported only here: most Bash calls run no read or list
             # utility, and its imports cost ~15 ms on every call.
             import vault_guard as vg
-        if any(vg.names_vault_path(t) for tokens in stages for t in tokens[1:]):
+        # The parsed path candidates (operands, and the value of
+        # --flag=value, if=value and -Param:value) feed both rules, so
+        # --file=private_vault/x is caught by name with no vault directory.
+        # The name rule also reads each whole flag token (-f/x/private_vault).
+        args = [t for tokens in stages for t in tokens[1:]]
+        paths = [c for t in args for c in _path_candidates(t)]
+        flags = [t for t in args if t.startswith("-")]
+        if any(vg.names_vault_path(c) for c in (*paths, *flags)):
             return hit
         if vaults is None:
             vaults = vg.vault_dirs()  # reads .env (or its cache)
         if not vaults:
             continue
         for target in pending_cd:
-            base = vg.absolute_path(target, base)
+            base = absolute_path(target, base)
         pending_cd.clear()
-        if any(
-            vg.inside_vault(c, base, vaults) for tokens in stages for t in tokens[1:] for c in _path_candidates(t)
-        ):
+        if any(vg.inside_vault(c, base, vaults) for c in paths):
             return hit
         # Stages that run their own operands; an xargs stage gets them on stdin.
-        direct = [(tokens, u) for tokens, u in zip(stages, utilities) if _command_name(tokens[0]) == u]
+        direct = [(tokens, u) for tokens, u in zip(stages, utilities) if command_name(tokens[0]) == u]
         if any(_lists_cwd(tokens, u) for tokens, u in direct) and vg.inside_vault(".", base, vaults):
             return hit
         if _reaches_vault(direct, base, vaults, vg):

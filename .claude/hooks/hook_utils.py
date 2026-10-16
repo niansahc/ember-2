@@ -5,9 +5,17 @@ Helpers shared by the hook scripts in this directory, so each rule has one
 definition:
 
   - project_dir(): the project root every hook anchors on.
+  - absolute_path() / project_path(): one resolution of a path string.
+    project_path() is how every hook resolves a configured value
+    (PRIVATE_VAULT_PATH, VAULT_PATH_TEST), so vault_guard.py,
+    secret_dump_guard.py and post_commit_eval.py agree on which directory
+    is the live vault.
+  - command_name(): one "bare command name" rule (env_guard.py,
+    secret_dump_guard.py).
   - read_env_value() / env_file_value(): one .env value reader
     (post_commit_eval.py, vault_guard.py). It never prints a value.
-  - deny(): the PreToolUse deny decision the harness reads from stdout.
+  - deny(): the PreToolUse deny decision the harness reads from stdout
+    (env_guard.py, vault_guard.py, secret_dump_guard.py).
 
 Deliberately pathlib- and typing-free: PreToolUse guards start a fresh
 Python process on every tool call, and those imports cost ~11 ms each time.
@@ -15,6 +23,7 @@ Python process on every tool call, and those imports cost ~11 ms each time.
 
 import json
 import os
+import re
 
 
 def project_dir() -> str:
@@ -23,6 +32,41 @@ def project_dir() -> str:
     return os.environ.get("CLAUDE_PROJECT_DIR") or os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
+
+
+def absolute_path(path: str, base: str) -> str:
+    """`path` as an absolute, lexically normalised path, for every form an
+    agent might write. Relative forms resolve against `base`.
+
+    The path-form patterns are literal strings, compiled through re's cache
+    on first use: env_guard and post_commit_eval import this module on
+    every call and never resolve a path."""
+    # \\?\C:\x and \\.\C:\x, matched after backslashes become slashes.
+    s = re.sub(r"^//[?.]/", "", path.replace("\\", "/"))
+    s = os.path.expanduser(s)
+    # Git Bash /c/x and WSL /mnt/c/x.
+    m = re.match(r"^/(?:mnt/)?([a-zA-Z])(?=/|$)", s) if os.name == "nt" else None
+    if m:
+        s = f"{m.group(1)}:/{s[m.end():]}"
+    # ntpath.join also resolves drive-relative C:x against `base` when it is
+    # on the same drive (the only drive whose cwd the hook knows).
+    return os.path.normpath(os.path.join(base, s))
+
+
+def command_name(word: str) -> str:
+    """A command word reduced to a bare lowercase name, so an absolute-path
+    or Windows-suffixed utility (C:\\Windows\\System32\\more.com,
+    /usr/bin/cat, bash.exe) matches its plain name."""
+    name = word.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return name[:-4] if name.endswith((".exe", ".com")) else name
+
+
+def project_path(value: str) -> str:
+    """A configured path (PRIVATE_VAULT_PATH, VAULT_PATH_TEST) as an
+    absolute path. A relative value resolves against the project root, as
+    the API, started from the project root, resolves it; never against the
+    hook process cwd, which follows the session's cd."""
+    return absolute_path(value, project_dir())
 
 
 def read_env_value(key: str, env_path) -> str | None:

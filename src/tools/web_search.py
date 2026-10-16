@@ -1,4 +1,5 @@
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
@@ -6,7 +7,7 @@ from email.utils import parsedate_to_datetime
 
 import requests
 
-from src.core.config import SEARXNG_BASE_URL
+from src.core.config import SEARXNG_BASE_URL, get_web_search_min_term_hits
 
 logger = logging.getLogger("ember.web_search")
 
@@ -85,6 +86,55 @@ def _freshness_multiplier(
 
 WebSearchStatus = Literal["ok", "empty", "unavailable"]
 
+# Closed set of reasons a search yielded nothing usable. ASCII, no engine
+# names, no exception text: the reason is rendered into the model-facing
+# search note (src/llm/prompt_builder.py).
+REASON_ENGINES_BLOCKED = "engines_blocked"
+REASON_TIMEOUT = "timeout"
+REASON_REQUEST_ERROR = "request_error"
+REASON_NO_RESULTS = "no_results"
+REASON_LOW_RELEVANCE = "low_relevance"
+REASON_FILTERED = "filtered"
+
+_STOPWORDS = frozenset(
+    "the and for are but not you your was were with that this from have has "
+    "had what whats who whom which when where why how about into than then "
+    "them they their there here its just can could would should will did "
+    "does any all out one get got let hey hello please tell give".split()
+)
+
+
+def _content_terms(text) -> set[str]:
+    """Distinct lowercase alphanumeric terms of 3+ chars, minus stopwords."""
+    return {
+        t for t in re.findall(r"[a-z0-9]+", str(text or "").lower())
+        if len(t) >= 3 and t not in _STOPWORDS
+    }
+
+
+def _all_hits_low_relevance(query, items, min_hits) -> bool:
+    """True when every item shares fewer than the required query terms.
+
+    Required terms = min_hits, or 1 when the query has fewer content terms
+    than that. A query with no content terms cannot be judged, so it never
+    suppresses. Only the all-low case is True; one good hit returns False.
+    Logs per-hit term counts only (no hit text) for later calibration.
+    """
+    query_terms = _content_terms(query)
+    if not query_terms or not items:
+        return False
+    needed = min_hits if len(query_terms) >= min_hits else 1
+    counts = [
+        len(query_terms & _content_terms(
+            f"{item.get('title', '')} {item.get('snippet', '')}"))
+        for item in items
+    ]
+    logger.info(
+        "[WEB_SEARCH] term hits per result: %s (need %d of %d query terms)",
+        counts, needed, len(query_terms),
+    )
+    return all(c < needed for c in counts)
+
 
 @dataclass
 class WebSearchResult:
@@ -93,14 +143,18 @@ class WebSearchResult:
     status:
       "ok"          -- at least one result.
       "empty"       -- the search ran and every engine answered, with nothing.
-      "unavailable" -- the request failed, or nothing came back while one or
+      "unavailable" -- the request failed; or nothing came back while one or
                        more engines were unresponsive (rate limit, CAPTCHA,
-                       timeout). SearXNG still answers HTTP 200 in that case,
-                       so `unresponsive_engines` is the only signal.
+                       timeout) -- SearXNG still answers HTTP 200 then, so
+                       `unresponsive_engines` is the only signal; or every
+                       hit was rejected as irrelevant.
+    reason: why a non-"ok" search yielded nothing (REASON_* above); None
+      when the search succeeded.
     """
 
     items: list[dict] = field(default_factory=list)
     status: WebSearchStatus = "ok"
+    reason: str | None = None
 
 
 def run_web_search(query) -> WebSearchResult:
@@ -109,7 +163,9 @@ def run_web_search(query) -> WebSearchResult:
 
     Items are dicts with title/url/snippet/published_at; published_at is an
     ISO 8601 string (UTC) or None when SearXNG did not provide a parseable
-    date. Never raises.
+    date. When WEB_SEARCH_MIN_TERM_HITS is set and every hit falls below it,
+    the hits are dropped and the search reports unavailable/low_relevance.
+    Never raises.
     """
     try:
         response = requests.get(
@@ -146,28 +202,50 @@ def run_web_search(query) -> WebSearchResult:
             str(entry[0]) for entry in data.get("unresponsive_engines", [])
             if entry
         ]
+        reason = None
+        fetched = len(results)
         if results:
             status = "ok"
+            min_hits = get_web_search_min_term_hits()
+            if min_hits > 0 and _all_hits_low_relevance(query, results, min_hits):
+                logger.warning(
+                    "[SEARCH_FAIL] low_relevance: %d hits suppressed "
+                    "(min term hits %d)", len(results), min_hits,
+                )
+                results = []
+                status = "unavailable"
+                reason = REASON_LOW_RELEVANCE
         elif unresponsive:
             status = "unavailable"
+            reason = REASON_ENGINES_BLOCKED
         else:
             status = "empty"
+            reason = REASON_NO_RESULTS
 
-        if status == "unavailable":
+        if reason == REASON_ENGINES_BLOCKED:
             logger.warning(
                 "[WEB_SEARCH] unavailable: 0 results, unresponsive engines: %s",
                 ", ".join(unresponsive),
+            )
+        elif reason == REASON_LOW_RELEVANCE:
+            logger.info(
+                "[WEB_SEARCH] %d results fetched, all suppressed (%s), "
+                "unresponsive engines: %s",
+                fetched, reason, ", ".join(unresponsive) or "none",
             )
         else:
             logger.info(
                 "[WEB_SEARCH] %d results (%s), unresponsive engines: %s",
                 len(results), status, ", ".join(unresponsive) or "none",
             )
-        return WebSearchResult(items=results, status=status)
+        return WebSearchResult(items=results, status=status, reason=reason)
 
+    except requests.Timeout:
+        logger.warning("[WEB_SEARCH] Failed: Timeout")
+        return WebSearchResult(status="unavailable", reason=REASON_TIMEOUT)
     except Exception as exc:
         logger.warning("[WEB_SEARCH] Failed: %s", type(exc).__name__)
-        return WebSearchResult(status="unavailable")
+        return WebSearchResult(status="unavailable", reason=REASON_REQUEST_ERROR)
 
 
 def web_search(query):

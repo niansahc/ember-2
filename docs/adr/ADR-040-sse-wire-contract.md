@@ -137,6 +137,12 @@ web results were used; `true` keeps its meaning. The UI badges only on
 `true`, so clients that ignore the new values are unaffected. SSE frames are
 unchanged; this note does not bump the contract version.
 
+Note (2026-10-16): `unavailable` also covers a search that returned hits but
+yielded nothing usable: every hit rejected as irrelevant (reason
+`low_relevance`, junk-hit filter, off by default) or removed by AI-document
+quarantine (reason `filtered`). The header value and the disclosure line are
+unchanged; the reason is model-facing only and is not on the wire.
+
 Because retrieval stats are credited only for records the model received, the
 delivery commit now runs after generation succeeds (ADR-015); a failed or
 partially streamed turn does not commit.

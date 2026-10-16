@@ -1279,6 +1279,7 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
             _search = run_web_search(_original_query)
             work.confirmation_web_items = _search.items
             work.confirmation_search_status = _search.status
+            work.confirmation_search_reason = _search.reason
             # run_web_search never raises; a failed or blocked search arrives
             # as "unavailable" and routes to the post-gen retry offer.
             work.confirmation_search_failed = _search.status == "unavailable"
@@ -1286,6 +1287,24 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
                         len(_original_query), _search.status)
         elif not _confirmation_result["confirmed"]:
             pass
+
+
+def _merge_confirmation_search(
+    context_packet, items: list, status: str | None, reason: str | None
+) -> None:
+    """Fold the deferred (confirmed ask-first) search into the packet.
+
+    Items always win. The confirm search's status and reason replace the
+    packet's only when that search returned items or the packet holds none:
+    otherwise a failed deferred search would stamp status unavailable onto a
+    packet whose own search succeeded, leaving status and items in
+    disagreement (disclosure line, thinking-off flag).
+    """
+    if items:
+        context_packet.web_items = items
+    if status is not None and (items or not context_packet.web_items):
+        context_packet.web_search_status = status
+        context_packet.web_search_reason = reason
 
 
 def _apply_tasks(gen_ctx: GenerationContext, work: GenerationWork) -> None:
@@ -1635,6 +1654,7 @@ async def _complete_exchange(
     _confirmation_confirmed = work.confirmation_confirmed
     _confirmation_search_failed = work.confirmation_search_failed
     _confirmation_search_status = work.confirmation_search_status
+    _confirmation_search_reason = work.confirmation_search_reason
     _pending_records = work.pending_records
 
     # --- RELATIONAL INTENSITY AMPLIFICATION GATE ---
@@ -1726,9 +1746,12 @@ async def _complete_exchange(
         _explicit_search = getattr(_early_policy, "explicit_search_request", False)
         # Gate bypass: skip_web_search is False when autonomous is on OR
         # the user explicitly requested a search. Confirmation-confirmed
-        # is NOT a bypass - the deferred search at line 956 already ran
-        # with the correct stored query. Letting context_service also
-        # search would pass "Yes" (the confirmation word) to SearXNG.
+        # is NOT a bypass: the deferred search (_apply_confirmation) already
+        # ran with the stored original query. latest_user_message is that
+        # original query on a confirmed turn, so when a bypass does apply
+        # (autonomous switched on while the offer was pending) context_service
+        # searches the same text a second time; _merge_confirmation_search
+        # reconciles the two outcomes.
         # Vision turns never trigger web search. Image-bearing queries are
         # served by the VL preprocessor; mixing in unrelated web hits wastes
         # tokens, pollutes attribution, and contradicts what the user asked
@@ -1750,10 +1773,12 @@ async def _complete_exchange(
     _exchange.ensure_user_indexed()
 
     # Inject deferred web search results from confirmed ask-first flow
-    if _confirmation_web_items:
-        context_packet.web_items = _confirmation_web_items
-    if _confirmation_search_status is not None:
-        context_packet.web_search_status = _confirmation_search_status
+    _merge_confirmation_search(
+        context_packet,
+        _confirmation_web_items,
+        _confirmation_search_status,
+        _confirmation_search_reason,
+    )
 
     # ADR-021 T2 detection. Non-fatal: detection failure falls through to
     # no signal so the chat path always completes.
@@ -1986,6 +2011,7 @@ async def _complete_exchange(
             from src.tools.web_search import run_web_search
             _auto_search = run_web_search(_raw_user_message)
             context_packet.web_search_status = _auto_search.status
+            context_packet.web_search_reason = _auto_search.reason
             if _auto_search.items:
                 context_packet.web_items = _auto_search.items
                 logger.info("[WEB_SEARCH] Autonomous execution: %d results", len(_auto_search.items))

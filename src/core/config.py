@@ -357,6 +357,63 @@ def get_retrieval_min_raw_score() -> float:
     return float(os.getenv("RETRIEVAL_MIN_RAW_SCORE", "0.5"))
 
 
+# Env var names already warned about, so a bad value logs once per process
+# rather than on every search.
+_INVALID_ENV_WARNED: set[str] = set()
+
+
+def _warn_invalid_env_once(name: str, raw: str, fallback) -> None:
+    """Log one warning per variable when a value is invalid and ignored."""
+    if name in _INVALID_ENV_WARNED:
+        return
+    _INVALID_ENV_WARNED.add(name)
+    logger.warning(
+        "[CONFIG] Invalid value %r for %s; using %r", raw, name, fallback
+    )
+
+
+def get_web_search_min_term_hits() -> int:
+    """Minimum distinct query terms a web hit must contain to count as relevant.
+
+    0 (default) turns the junk-hit filter off. When positive and EVERY hit
+    returned by a search falls below it, the search is treated as a search
+    failure (reason low_relevance) and the hits never reach the model. Read
+    at call time. Default 0 until a calibration run sets it. Surrounding
+    whitespace is ignored; a value that is not a non-negative integer logs a
+    warning once and falls back to 0.
+    """
+    raw = os.getenv("WEB_SEARCH_MIN_TERM_HITS", "").strip()
+    if not raw:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError:
+        value = -1
+    if value < 0:
+        _warn_invalid_env_once("WEB_SEARCH_MIN_TERM_HITS", raw, 0)
+        return 0
+    return value
+
+
+def get_search_failure_think_off() -> bool:
+    """True when EMBER_SEARCH_FAIL_THINK_OFF disables thinking after a search failure.
+
+    Default False: generation is unchanged. When True, the answer turn runs
+    with thinking off on turns that carry a search note (status unavailable
+    or empty), so the manual battery can compare both arms. Read at call
+    time. Accepts 1/true/yes/on (on) and 0/false/no/off (off), ignoring case
+    and surrounding whitespace; anything else logs a warning once and counts
+    as off.
+    """
+    raw = os.getenv("EMBER_SEARCH_FAIL_THINK_OFF", "").strip()
+    value = raw.lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value and value not in ("0", "false", "no", "off"):
+        _warn_invalid_env_once("EMBER_SEARCH_FAIL_THINK_OFF", raw, False)
+    return False
+
+
 def get_intent_classifier_timeout_ms() -> int:
     """Hard timeout for Stage 3 of the ADR-034 intent classifier.
 

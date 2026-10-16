@@ -16,9 +16,10 @@ Followed by an empty-response guard that fills zero-byte replies with a
 fallback so the streaming path never emits a blank message to the client
 .
 
-Then, when this turn's web search was unavailable (every engine blocked or
-the request failed), a fixed disclosure line is prepended so the user knows
-the answer did not come from a search. Skipped for refusals, for substituted
+Then, when this turn's web search was unavailable (every engine blocked, the
+request failed, every hit was rejected as irrelevant, or AI-document
+quarantine removed every hit), a fixed disclosure line is prepended so the
+user knows the answer did not come from a search. Skipped for refusals, for substituted
 replies (the confirm-path retry offer already says search failed), and for
 the empty-guard fallback.
 

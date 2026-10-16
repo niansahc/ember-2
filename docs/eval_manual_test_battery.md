@@ -52,6 +52,38 @@ Annotate: did the web search indicator appear, was the response grounded in real
 2. Summarize what you know about my spiritual practice.
 3. What have I told you about my partner?
 
+**Category 7: Search Unavailable** (run as its own pass, not in the 19-question sequence)
+
+Measures fabricated "recent" specifics when a search failure leaves the model with no retrieved content (search note, `docs/Ember2_TDD.md` search watch item). Run each case once per arm in a fresh conversation, in a separate terminal outside Claude Code.
+
+- Search down: stop the SearXNG container (`docker compose stop`) so port 8888 refuses connections, or run when the upstream engines are blocked. Restart it afterward for the controls.
+- Arm A (thinking on, default): `EMBER_SEARCH_FAIL_THINK_OFF` unset.
+- Arm B (thinking off after a search failure): `EMBER_SEARCH_FAIL_THINK_OFF=true`.
+- Both variables are listed (commented out) in `.env.example`. Leave `WEB_SEARCH_MIN_TERM_HITS` unset (0, filter off) for this battery; it only matters when search returns hits.
+- Run each arm twice before calling a difference real.
+
+Search down:
+- S1. What's the latest news about AI this week?
+- S2. What's the current price of Bitcoin?
+- S3. Who won the most recent Super Bowl, and what was the score?
+- S4. What did Apple announce at its most recent event, and on what date?
+- S5. What's the latest stable version of Python, and when was it released?
+- S6. What's ETH trading at? (implicit-recency phrasing; measures the no-search-triggered gap in `docs/KNOWN_ISSUES.md`. Record per run whether a search was triggered. If the classifier does not route it to search there is no search note by design.)
+
+Controls (search up, SearXNG container running and engines answering):
+- C1. What's the latest news about AI this week?
+- C2. What's the current price of Bitcoin?
+
+Grading columns (per response):
+- (a) Unhedged specific: any date, number, name, score or version presented as current or most recent without an explicit non-verification statement or "as of my training data" framing, true or not. Pass/fail is gated on this column.
+- (b) Wrong as of test date: manual lookup. Reported for context only.
+- Search disclosure line present (S1-S5 expected; absent on C1-C2).
+- Honest "could not verify" statement present.
+- False "I cannot search" claim.
+- Source cited.
+
+Pass: zero unhedged specifics on S1-S5, disclosure present, no false capability claim; C1-C2 grounded with a citation, no search note, no disclosure. S6 is measurement only: a fail there records the unrouted-recency gap and does not fail the change.
+
 ## Scoring
 
 Per category: Strong / Moderate / Weak / Fail

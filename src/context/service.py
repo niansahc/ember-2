@@ -107,7 +107,28 @@ from src.context import role_predicate
 from src.context.ranker import ContextRanker
 from src.context.retriever import ContextRetriever
 from src.context import prior as _prior
-from src.tools.web_search import run_web_search
+from src.tools.web_search import REASON_FILTERED, run_web_search
+
+
+def _resolve_search_outcome(search, user_message: str):
+    """(web_items, status, reason) for the packet after AI-doc quarantine.
+
+    A search that returned hits but lost every one to quarantine is a search
+    failure (unavailable / filtered): without this the packet would carry
+    status "ok" with no items and the model would see no search section.
+    """
+    web_items, quarantined = _quarantine_ai_docs(search.items, user_message)
+    if quarantined:
+        logger.info(
+            "[CONTEXT] Quarantined %d AI-doc web result(s)", len(quarantined)
+        )
+    if search.items and not web_items:
+        logger.warning(
+            "[SEARCH_FAIL] filtered: quarantine removed all %d web results",
+            len(search.items),
+        )
+        return [], "unavailable", REASON_FILTERED
+    return web_items, search.status, search.reason
 
 
 @dataclass(frozen=True)
@@ -258,18 +279,16 @@ class ContextService:
 
         web_items: list[dict] = []
         web_search_status: str | None = None
+        web_search_reason: str | None = None
         # skip_web_search=True when ask-first mode is active — the search
         # should not execute until the user confirms. Without this gate,
         # the context service fetches results during assembly and the SSE
         # stream shows sources alongside the "want me to search?" question.
         if policy.use_web_search and not skip_web_search:
             search = run_web_search(user_message)
-            web_search_status = search.status
-            web_items, quarantined = _quarantine_ai_docs(search.items, user_message)
-            if quarantined:
-                logger.info(
-                    "[CONTEXT] Quarantined %d AI-doc web result(s)", len(quarantined)
-                )
+            web_items, web_search_status, web_search_reason = (
+                _resolve_search_outcome(search, user_message)
+            )
 
         state_items, task_items, memory_items, reflection_items, query_embedding = self.retriever.retrieve(user_message)
         state_items = self.ranker.apply_state_boost(state_items, policy)
@@ -435,6 +454,7 @@ class ContextService:
         # resolver in prompt builder). Avoids a redundant embed_text() call.
         packet.query_embedding = query_embedding
         packet.web_search_status = web_search_status
+        packet.web_search_reason = web_search_reason
 
         # ADR-015 retrieval stats, issue #227. The write is armed here and
         # fired by the adapter once the prompt is final, against the records

@@ -62,6 +62,8 @@ if __name__ == "__main__":
 
 # Imported rather than spelled out so the flag has exactly one definition.
 from src.retrieval.retrieval_stats import ENV_FLAG as ENV_STATS_READ_ONLY  # noqa: E402
+
+# The app's vault-path rule, so the runner and the app name one directory.
 from src.core.vault_path import resolve_configured_path  # noqa: E402
 
 # The tiering inputs an arm can mutate through the read path.

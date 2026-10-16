@@ -18,6 +18,8 @@ definition:
     (post_commit_eval.py, vault_guard.py). It never prints a value.
   - deny(): the PreToolUse deny decision the harness reads from stdout
     (env_guard.py, vault_guard.py, secret_dump_guard.py).
+  - deny_on_error(): the fail-closed deny the vault guards emit when their
+    own check raises.
 
 Deliberately pathlib- and typing-free: PreToolUse guards start a fresh
 Python process on every tool call, and those imports cost ~11 ms each time.
@@ -26,7 +28,6 @@ Python process on every tool call, and those imports cost ~11 ms each time.
 import json
 import os
 import re
-import sys
 
 
 # The checkout this file lives in (.claude/hooks/hook_utils.py -> root).
@@ -67,18 +68,36 @@ def command_name(word: str) -> str:
     return name[:-4] if name.endswith((".exe", ".com")) else name
 
 
-def project_path(value: str) -> str:
+_resolve_configured_path = None
+
+
+def _vault_resolver():
+    """resolve_configured_path from this checkout's src/core/vault_path.py,
+    loaded by file path under a private module name and cached.
+
+    Not `import src.core.vault_path`: any other top-level `src` package on
+    sys.path (PYTHONPATH, a .pth file) would shadow it, the import would
+    raise, and a guard that crashes lets the tool call through. Loaded on
+    first use so env_guard never pays for it."""
+    global _resolve_configured_path
+    if _resolve_configured_path is None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_ember_hook_vault_path",
+            os.path.join(CHECKOUT_ROOT, "src", "core", "vault_path.py"),
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _resolve_configured_path = module.resolve_configured_path
+    return _resolve_configured_path
+
+
+def project_path(value: str) -> str | None:
     """A configured path (PRIVATE_VAULT_PATH, VAULT_PATH_TEST) by the app's
     rule, src/core/vault_path.resolve_configured_path, anchored on the
-    project root rather than the hook process cwd.
-
-    The import comes from this checkout (CLAUDE_PROJECT_DIR may be a tmp
-    project without src/) and is deferred so env_guard never loads it."""
-    if CHECKOUT_ROOT not in sys.path:
-        sys.path.append(CHECKOUT_ROOT)
-    from src.core.vault_path import resolve_configured_path
-
-    return resolve_configured_path(value, project_dir())
+    project root rather than the hook process cwd. None for a blank value."""
+    return _vault_resolver()(value, project_dir())
 
 
 def read_env_value(key: str, env_path) -> str | None:
@@ -115,6 +134,18 @@ def env_file_value(key: str, env_path) -> str | None:
         pass
 
     return None
+
+
+def deny_on_error(guard: str, exc: BaseException) -> None:
+    """Fail closed: deny when a guard cannot finish its check. A crashed
+    hook exits non-zero, which the harness treats as a non-blocking error
+    and lets the tool call run. Only the exception type is printed; its
+    message can carry the configured vault path."""
+    deny(
+        f"{guard} could not complete its vault check "
+        f"({type(exc).__name__}); denying rather than allowing an "
+        f"unchecked call. See .claude/hooks/{guard}.py."
+    )
 
 
 def deny(reason: str) -> None:

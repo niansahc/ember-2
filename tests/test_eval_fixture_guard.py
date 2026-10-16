@@ -121,6 +121,44 @@ def test_fixture_does_not_index_into_a_live_vault(tmp_path, monkeypatch):
     assert should_index_record(tmp_path / "live", "api", {"eval_seed": True}) is False
 
 
+@pytest.fixture
+def root_and_cwd(tmp_path, monkeypatch):
+    """A tmp project root and an unrelated cwd, both holding vaults/test, with
+    VAULT_PATH_TEST=vaults/test (the project root's copy by the configured-
+    value rule)."""
+    import src.core.vault_path as vault_path
+
+    root, cwd = tmp_path / "proj", tmp_path / "elsewhere"
+    for base in (root, cwd):
+        (base / "vaults" / "test").mkdir(parents=True)
+    monkeypatch.setattr(vault_path, "PROJECT_ROOT", str(root))
+    monkeypatch.setenv("VAULT_PATH_TEST", "vaults/test")
+    return root, cwd
+
+
+def test_relative_caller_path_is_judged_where_the_caller_reads_it(root_and_cwd, monkeypatch):
+    """A caller holding Path("vaults/test") from another cwd reads
+    <cwd>/vaults/test (rebuild_indexes --vault), which is not the test vault,
+    so its fixtures must not index there."""
+    _, cwd = root_and_cwd
+    monkeypatch.chdir(cwd)
+    assert should_index_record(Path("vaults/test"), "eval_seed") is False
+
+
+def test_relative_caller_path_at_the_project_root_is_the_test_vault(root_and_cwd, monkeypatch):
+    """Positive control for the test above: from the project root the same
+    relative argument names the configured test vault."""
+    root, _ = root_and_cwd
+    monkeypatch.chdir(root)
+    assert should_index_record(Path("vaults/test"), "eval_seed") is True
+
+
+def test_absolute_caller_path_to_the_test_vault_from_any_cwd(root_and_cwd, monkeypatch):
+    root, cwd = root_and_cwd
+    monkeypatch.chdir(cwd)
+    assert should_index_record(root / "vaults" / "test", "eval_seed") is True
+
+
 def test_ordinary_records_index_into_any_vault(tmp_path, monkeypatch):
     # The guard must not become a general indexing gate.
     monkeypatch.delenv("VAULT_PATH_TEST", raising=False)

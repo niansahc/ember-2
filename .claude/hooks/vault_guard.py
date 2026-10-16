@@ -80,7 +80,7 @@ from collections import namedtuple
 # Same directory; Python puts it on sys.path when this file runs as a
 # script. Shared with post_commit_eval.py so both hooks parse .env one way
 # and resolve PRIVATE_VAULT_PATH by the app's rule (src/core/vault_path.py).
-from hook_utils import absolute_path, deny, env_file_value, project_dir, project_path
+from hook_utils import absolute_path, deny, deny_on_error, env_file_value, project_dir, project_path
 
 _VAULT_DIR = "private_vault"
 _VAULT_KEY = "PRIVATE_VAULT_PATH"
@@ -161,9 +161,9 @@ def _covers(parts: list[str], target: list[str], strict: bool = False) -> bool:
     return not strict or len(parts) > len(target)
 
 
-# path: the directory; forms: path_forms() of it; in_project: inside the
-# project, so gitignored, and ripgrep skips it unless a glob whitelists its
-# entries.
+# path: the directory; forms: its realpath and lexical configured forms, as
+# components; in_project: inside the project, so gitignored, and ripgrep
+# skips it unless a glob whitelists its entries.
 Vault = namedtuple("Vault", "path forms in_project")
 
 
@@ -360,7 +360,12 @@ def main():
         payload = json.load(sys.stdin)
     except Exception:
         return
-    target = evaluate(payload)
+    try:
+        target = evaluate(payload)
+    except Exception as exc:
+        # Fail closed: a crash exits non-zero and the harness runs the call.
+        deny_on_error("vault_guard", exc)
+        return
     if target:
         deny(
             f"Vault Privacy Rule: vault content (private_vault/ or the "

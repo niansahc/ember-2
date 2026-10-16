@@ -62,7 +62,7 @@ import shlex
 import sys
 
 # Same directory; Python puts it on sys.path when this file runs as a script.
-from hook_utils import absolute_path, command_name, deny
+from hook_utils import absolute_path, command_name, deny, deny_on_error
 
 # Content-reading utilities, lowercase (PowerShell and Windows executables
 # are case-insensitive): whole-file dumps, plus content searches, which
@@ -313,13 +313,19 @@ def main():
         data = json.load(sys.stdin)
     except Exception:
         return
-
-    command = data.get("tool_input", {}).get("command", "")
-    if not command:
+    # An unusable payload is allowed through, as an unparseable one is.
+    tool_input = data.get("tool_input") if isinstance(data, dict) else None
+    command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+    if not isinstance(command, str) or not command:
         return
 
     cwd = data.get("cwd")
-    matched_utility = _matches_dump_command(command, cwd if isinstance(cwd, str) else None)
+    try:
+        matched_utility = _matches_dump_command(command, cwd if isinstance(cwd, str) else None)
+    except Exception as exc:
+        # Fail closed: a crash exits non-zero and the harness runs the call.
+        deny_on_error("secret_dump_guard", exc)
+        return
     if matched_utility:
         deny(
             f"Vault Privacy Rule (#188): '{matched_utility}' against a "

@@ -54,11 +54,22 @@ def is_eval_fixture(source: str | None, metadata: dict | None = None) -> bool:
     return bool((metadata or {}).get(EVAL_SEED_METADATA_KEY))
 
 
-def _resolved(path: str | os.PathLike | None) -> Path | None:
+def _caller_vault(path: str | os.PathLike | None) -> Path | None:
+    """A vault path a caller holds, resolved the way the caller opens it:
+    against the cwd. A script given `--vault vaults/test` reads
+    `<cwd>/vaults/test`, so that is the vault the gate must judge."""
     if not path:
         return None
     try:
-        return resolve_vault_path(os.fspath(path))
+        return Path(path).resolve()
+    except (OSError, ValueError):
+        return None
+
+
+def _configured_test_vault() -> Path | None:
+    """VAULT_PATH_TEST by the configured-value rule (project root, not cwd)."""
+    try:
+        return resolve_vault_path(os.getenv("VAULT_PATH_TEST"))
     except (OSError, ValueError):
         return None
 
@@ -70,8 +81,8 @@ def is_test_vault(vault_path: str | os.PathLike | None) -> bool:
     vault can be swapped at runtime and a cached answer would outlive the
     swap.
     """
-    target = _resolved(vault_path)
-    configured = _resolved(os.getenv("VAULT_PATH_TEST"))
+    target = _caller_vault(vault_path)
+    configured = _configured_test_vault()
     if target is None or configured is None:
         return False
     return target == configured

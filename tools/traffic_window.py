@@ -247,8 +247,10 @@ def _get(url: str, api_key: str | None, timeout: float = 15.0) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _personal_vault_from_env_file() -> Path | None:
-    """The personal vault path as .env declares it.
+def _personal_vault_from_env_file(env_file: Path | None = None) -> Path | None:
+    """The personal vault path as the env file declares it. `env_file`
+    defaults to the repo's .env; tests pass a tmp file so no test reads
+    the real one.
 
     Read from the file rather than from os.environ on purpose: this
     process may itself have been started with PRIVATE_VAULT_PATH pointed
@@ -260,7 +262,8 @@ def _personal_vault_from_env_file() -> Path | None:
     """
     from src.core.vault_path import resolve_configured_path
 
-    env_file = REPO_ROOT / ".env"
+    if env_file is None:
+        env_file = REPO_ROOT / ".env"
     if not env_file.exists():
         return None
     for line in env_file.read_text(encoding="utf-8").splitlines():

@@ -28,10 +28,20 @@ stage is reduced to its effective command before any rule runs:
     `command`, `exec`, `builtin` and shell keywords (`if then do { !` ...)
     are skipped;
   - the bodies of `$(...)`, backticks, `<(...)` / `>(...)` (not inside
-    single quotes) and the command string of `bash|sh|zsh|dash|ksh -c`,
-    `pwsh|powershell [-Command]`, `cmd /c|/k` and `eval` are parsed as
-    command lines of their own, to a nesting depth of 8 (deeper is denied);
-  - parentheses start a new segment, so `echo (gc x)` exposes `gc`.
+    single quotes) and the command string of `bash|sh|zsh|dash|ksh|fish|
+    csh|tcsh -c`, `pwsh|powershell [-Command]`, `cmd /c|/k`, `eval` and
+    `wsl [flags] [--|-e] CMD` are parsed as command lines of their own, to a
+    nesting depth of 8 (deeper is denied, with a reason that names the
+    limit);
+  - the words of a substitution are also operands of the stage that holds
+    it, since its output becomes words of that command: `cat $(echo
+    private_vault/a.json)` is a read of the vault, though the body only
+    echoes;
+  - parentheses start a new segment, so `echo (gc x)` exposes `gc`;
+  - a backslash before a quote, `$` or a backtick is an escape, as in Bash
+    (`echo it\\'s; cat x`). PowerShell reads a backslash as a path separator
+    whatever follows, so a command holding such an escape is parsed both
+    ways and denied if either reading is.
 Name rule. A stage that names a vault path is denied whatever its utility
 (`python private_vault/x.py` too); echo/printf/test/[/[[/Test-Path/
 Write-Output/Write-Host/mkdir are checked for redirection targets only
@@ -39,8 +49,15 @@ Write-Output/Write-Host/mkdir are checked for redirection targets only
 pattern operand of a content search is text, not a path, and is exempt
 (`rg private_vault src`). A wildcard names a vault only when it carries the
 literal text "vault" (`*vault*`); `priv*` is caught by location when a
-vault directory exists. The quoted-delimiter body of a heredoc is literal
-text and is dropped.
+vault directory exists. The command word counts too: running a file under
+a vault (`./private_vault/run.sh`) is denied.
+Heredocs. A body is dropped only when its receiver merely stores or
+displays it: `cat` (not piped, and not substituted into another command's
+words), `tee`, `git ... -F -`, `gh ... --body-file -`, and the `cat` of a
+`-m "$(cat <<'EOF' ...)"` message. Any other receiver (a shell, an
+interpreter incl. versioned `python3.12`, `sqlite3`, `xargs`, a pipe) keeps
+the body scanned. Behind a bare delimiter the `$(...)` in the body is live
+and is scanned either way.
 Value-taking flags (`rg -C 2`, `rg -g '*.py'`, `gci -Depth 3`) are parsed
 so their values are not mistaken for the pattern or a search root. A root
 that does not exist on disk adds the cwd as a root (grep/rg family).
@@ -52,6 +69,12 @@ which both missed most readers and wrongly denied `cat .env.example`.
 
 This is PREVENTION of known command forms, not redaction, and it is not
 a guarantee (issue #188).
+
+Threat model. These guards prevent accidental exposure by an agent: a tool
+call that would put vault content or entry names into the transcript by mistake, in a known form.
+They are pattern checks, not a sandbox, and do not defend against deliberate
+evasion (a path built at runtime, a script or encoding, a program that opens
+the file itself).
 
 Claude Code's hook system has no mechanism to redact or replace tool
 output after a command runs: PostToolUse hooks receive tool_response but
@@ -78,7 +101,15 @@ import shlex
 import sys
 
 # Same directory; Python puts it on sys.path when this file runs as a script.
-from hook_utils import absolute_path, command_name, deny, deny_on_error
+from hook_utils import (
+    absolute_path,
+    command_name,
+    deny,
+    deny_on_error,
+    drop_inert_heredocs,
+    extract_substitutions,
+    shell_step,
+)
 
 # Content-reading utilities, lowercase (PowerShell and Windows executables
 # are case-insensitive): whole-file dumps, plus content searches, which
@@ -152,15 +183,18 @@ _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
 _XARGS_VALUE = frozenset({"-n", "-P", "-I", "-L", "-s", "-d", "-E", "-a"})
 
 # Nested command lines (see _nested).
-_POSIX_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
+_POSIX_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "fish", "csh", "tcsh"})
 _PS_SHELLS = frozenset({"pwsh", "powershell"})
 # pwsh/powershell flags that take the next word as a value.
 _PS_SHELL_VALUE = frozenset({
     "executionpolicy", "ep", "windowstyle", "w", "outputformat", "o", "inputformat", "in",
     "configurationname", "config", "workingdirectory", "wd", "settingsfile", "version", "v",
 })
+# wsl flags that take the next word as a value; `--` and -e/--exec end the flags.
+_WSL_VALUE = frozenset({"-d", "--distribution", "-u", "--user", "--cd", "--shell-type"})
 _SHELL_C_FLAG = re.compile(r"-[a-zA-Z]*c[a-zA-Z]*")
 _MAX_DEPTH = 8
+_NESTED = "nested command"  # the match reported when a command nests past _MAX_DEPTH
 
 # Recursion, per utility family. Content searches that always recurse:
 _ALWAYS_RECURSIVE = frozenset({"rg", "ag", "ack"})
@@ -213,87 +247,33 @@ class _Redir(str):
 # Parsing: heredocs, substitution, pipelines, wrappers, nested shells
 # ---------------------------------------------------------------------------
 
-_HEREDOC = re.compile(
-    r"(?P<cat>(?<![\w./-])cat[ \t]+)?<<-?[ \t]*(?P<q>['\"]?)(?P<tag>[A-Za-z_]\w*)(?P=q)(?P<rest>[^\n]*)\n(?P<body>.*?)^[ \t]*(?P=tag)[ \t]*$",
-    re.DOTALL | re.MULTILINE,
-)
+# A substitution marker (hook_utils.extract_substitutions) in a word.
+_MARKER = re.compile("\x01(\\d+)\x01")
+# Splits a substitution body into loose words (no shlex, so no quoting
+# trick can make a body unreadable).
+_LOOSE = re.compile("[\\s\"'`;|&<>(){}=,$\x01]+")
 
 
-def _close(text: str, i: int) -> int:
-    """Index of the `)` closing a `(` whose body starts at `i`, quote-aware;
-    the end of `text` when unclosed."""
-    depth, quote = 1, ""
-    while i < len(text):
-        ch = text[i]
-        if quote:
-            if ch == quote:
-                quote = ""
-        elif ch in "'\"":
-            quote = ch
-        elif ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if depth == 0:
-                return i
-        i += 1
-    return len(text)
-
-
-def _extract(text: str) -> tuple[str, list[str]]:
-    """`text` with each command substitution replaced by the word SUBST, and
-    the substitution bodies. Active outside quotes and inside double quotes:
-    `$(...)` and backticks; outside quotes only: `<(...)` and `>(...)`.
-    Literal inside single quotes."""
-    if "$(" not in text and "`" not in text and "<(" not in text and ">(" not in text:
-        return text, []
+def _unescape(command: str, keep_escapes: bool) -> str:
+    """`command` with every backslash read as a path separator ("/"), so
+    C:\\x\\private_vault\\a.json survives shlex, which treats a backslash as
+    an escape. With `keep_escapes` the escapes that matter to quoting
+    (backslash before a quote, `$` or a backtick, outside single quotes) stay
+    escapes, as in Bash. The two readings differ only for a command holding
+    such an escape, and _pipelines walks both: PowerShell reads a backslash
+    as a separator whatever follows, Bash does not."""
+    if not keep_escapes or "\\" not in command:
+        return command.replace("\\", "/")
     out: list[str] = []
-    bodies: list[str] = []
-    quote = ""
-    i, n = 0, len(text)
-    while i < n:
-        ch = text[i]
-        if quote == "'":
-            if ch == "'":
-                quote = ""
-        elif ch == "'" and not quote:
-            quote = "'"
-        elif ch == '"':
-            quote = "" if quote == '"' else '"'
-        elif ch == "`":
-            end = text.find("`", i + 1)
-            end = n if end < 0 else end
-            bodies.append(text[i + 1 : end])
-            out.append("SUBST")
-            i = end + 1
-            continue
-        elif ch in "$<>" and text.startswith("(", i + 1) and (ch == "$" or not quote):
-            end = _close(text, i + 2)
-            bodies.append(text[i + 2 : end])
-            out.append("SUBST")
-            i = end + 1
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out), bodies
-
-
-def _strip_heredocs(text: str) -> tuple[str, list[str]]:
-    """`text` without the bodies of `cat <<EOF` heredocs, and the
-    substitution bodies found in the bodies that are not literal. A body
-    behind a quoted delimiter (<<'EOF') is literal text; behind a bare one
-    (<<EOF) the shell still expands `$(...)` in it. A heredoc fed to
-    anything but cat (`bash <<'EOF'`) is a script and stays in the text."""
-    live: list[str] = []
-
-    def drop(match: re.Match) -> str:
-        if not match["cat"]:
-            return match[0]
-        if not match["q"]:
-            live.extend(_extract(match["body"])[1])
-        return "cat << HERE" + match["rest"]
-
-    return (_HEREDOC.sub(drop, text) if "<<" in text else text), live
+    quote, i = "", 0
+    while i < len(command):
+        size, after = shell_step(command, i, quote)
+        piece = command[i : i + size]
+        if piece[0] == "\\" and (size == 1 or piece == "\\\\"):
+            piece = "/" * size
+        out.append(piece)
+        quote, i = after, i + size
+    return "".join(out)
 
 
 def _tokenize(text: str) -> list[list[list[str]]]:
@@ -352,8 +332,8 @@ def _core(tokens: list[str]) -> tuple[list[str], bool]:
 
 
 def _nested(core: list[str]) -> str | None:
-    """The command line a shell stage runs: `bash -c STR`, `pwsh [-Command]
-    STR`, `cmd /c STR`, `eval STR`."""
+    """The command line a shell stage runs: `bash|fish|csh -c STR`, `pwsh
+    [-Command] STR`, `cmd /c STR`, `eval STR`, `wsl [flags] [--|-e] CMD`."""
     name, rest = command_name(core[0]), core[1:]
     if name in _POSIX_SHELLS:
         for k, word in enumerate(rest):
@@ -361,6 +341,15 @@ def _nested(core: list[str]) -> str | None:
                 return rest[k + 1] if k + 1 < len(rest) else None
     elif name == "eval":
         return " ".join(rest) or None
+    elif name == "wsl":
+        k = 0
+        while k < len(rest) and rest[k].startswith("-"):
+            flag = rest[k]
+            k += 1
+            if flag in ("--", "-e", "--exec"):
+                break
+            k += flag in _WSL_VALUE
+        return shlex.join(rest[k:]) or None
     elif name == "cmd":
         for k, word in enumerate(rest):
             if word.lower() in ("/c", "/k", "/r"):
@@ -380,31 +369,59 @@ def _nested(core: list[str]) -> str | None:
     return None
 
 
-def _pipelines(command: str, depth: int = 0) -> list[list[tuple[list[str], bool]]]:
-    """Every pipeline in `command`, including those inside command
-    substitutions and nested shell command strings. Each stage is
-    `_core`'s (tokens, via_xargs); empty stages are dropped. Backslashes
-    are normalised to "/" first: shlex's POSIX mode treats a backslash as an
-    escape and would turn C:\\x\\private_vault\\a.json into
-    C:xprivate_vaulta.json."""
-    if depth > _MAX_DEPTH:
-        raise _TooDeep
-    text, hidden = _strip_heredocs(command.replace("\r\n", "\n").replace("\\", "/"))
-    text, bodies = _extract(text)
+def _substitution_words(bodies: list[str], stage: list[str]) -> list[str]:
+    """The loose words of the substitutions whose markers appear in `stage`.
+    The output of a substitution becomes words of the stage that holds it
+    (`cat $(echo private_vault/a.json)`), so those words are checked as the
+    stage's operands as well as the body being checked as a command."""
+    words: list[str] = []
+    for token in stage:
+        for index in _MARKER.findall(token):
+            words.extend(w for w in _LOOSE.split(bodies[int(index)]) if w)
+    return words
+
+
+def _parse(text: str, depth: int, heredocs: bool) -> list[list[tuple[list[str], bool]]]:
+    """The pipelines of one reading of a command line (see _unescape).
+    `heredocs`: decide the heredocs in `text`. A substitution body was
+    already covered by the pass over the line that held it, where its
+    receiver and surroundings were known."""
+    if heredocs:
+        text = drop_inert_heredocs(text, literal_only=False)
+    text, bodies = extract_substitutions(text)
     outer = []
     for pipeline in _tokenize(text):
-        stages = [stage for stage in map(_core, pipeline) if stage[0]]
+        stages = []
+        for core, via_xargs in map(_core, pipeline):
+            if core:
+                stages.append((core + _substitution_words(bodies, core), via_xargs))
         if stages:
             outer.append(stages)
     inner = []
-    for body in (*hidden, *bodies):
-        inner.extend(_pipelines(body, depth + 1))
+    for body in bodies:
+        inner.extend(_pipelines(body, depth + 1, heredocs=False))
     for pipeline in outer:
         for core, _ in pipeline:
             line = _nested(core)
             if line:
+                # Markers of the outer line stand for substitutions that sat
+                # in this string: put them back for the nested parse.
+                line = _MARKER.sub(lambda m: f"$({bodies[int(m[1])]})", line)
                 inner.extend(_pipelines(line, depth + 1))
     return outer + inner
+
+
+def _pipelines(command: str, depth: int = 0, heredocs: bool = True) -> list[list[tuple[list[str], bool]]]:
+    """Every pipeline in `command`, including those inside command
+    substitutions and nested shell command strings. Each stage is
+    `_core`'s (tokens, via_xargs) plus the words of the substitutions it
+    holds; empty stages are dropped. A command holding a backslash escape is
+    read both ways (_unescape) and the pipelines of both are returned."""
+    if depth > _MAX_DEPTH:
+        raise _TooDeep
+    command = command.replace("\r\n", "\n")
+    readings = dict.fromkeys((_unescape(command, False), _unescape(command, True)))
+    return [pipeline for text in readings for pipeline in _parse(text, depth, heredocs)]
 
 
 # ---------------------------------------------------------------------------
@@ -637,7 +654,7 @@ def _matches_dump_command(command: str, cwd: str | None = None) -> str | None:
     try:
         pipelines = _pipelines(command)
     except _TooDeep:
-        return "nested command"
+        return _NESTED
     # The name rule needs the literal text "vault" in some word.
     mentions_vault = "vault" in command.lower()
     pending_cd: list[str] = []  # resolved once vault_guard is loaded
@@ -666,6 +683,9 @@ def _matches_dump_command(command: str, cwd: str | None = None) -> str | None:
         for (core, _), utility in zip(pipeline, utilities):
             if utility in _CD and not hit:
                 continue
+            # Running a file under a vault (./private_vault/run.sh) is a read.
+            if vg.names_vault_operand(core[0]):
+                return hit or utility
             candidates, flags = _name_args(core, utility, full=bool(hit))
             if any(vg.names_vault_operand(c) for c in (*candidates, *flags)):
                 return hit or utility
@@ -708,7 +728,15 @@ def main():
         # Fail closed: a crash exits non-zero and the harness runs the call.
         deny_on_error("secret_dump_guard", exc)
         return
-    if matched_utility:
+    if matched_utility == _NESTED:
+        deny(
+            f"Vault Privacy Rule (#188): this command nests substitutions or "
+            f"shells more than {_MAX_DEPTH} levels deep, which the vault "
+            "check does not follow, so it is denied rather than allowed "
+            "unchecked. Flatten the command. See "
+            ".claude/hooks/secret_dump_guard.py."
+        )
+    elif matched_utility:
         deny(
             f"Vault Privacy Rule (#188): '{matched_utility}' against a "
             "vault path (private_vault/ or the configured "

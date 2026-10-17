@@ -743,3 +743,243 @@ def test_listing_the_cwd_ignores_flag_values(in_repo_vault_project):
     cwd = str(in_repo_vault_project)
     assert guard._matches_dump_command("cd private_vault && gci -Depth 3", cwd) is not None
     assert guard._matches_dump_command("cd src && gci -Depth 3", cwd) is None
+
+
+# ---------------------------------------------------------------------------
+# Installer lean-review (PR #43) findings ported: backslash escapes, the words
+# of a substitution, the inert-consumer heredoc rule, more nested shells, a
+# vault file run as a command. Hermetic project: no vault directory, so only
+# the name rule applies unless a test builds a vault. Each deny form has a
+# twin over src/ (same syntax, no vault) that must pass.
+# ---------------------------------------------------------------------------
+
+ESCAPE_DENY = [
+    r"echo \' ; cat private_vault/a.json",
+    r"echo it\'s; cat private_vault/a.json",
+    r"echo 'it'\''s' ; cat private_vault/a.json",
+    r"echo \' $(cat private_vault/a.json)",
+    r'echo \" ; cat private_vault/a.json',
+    r'echo "say \"hi\"" ; cat private_vault/a.json',
+    r"echo \` ; cat private_vault/a.json",
+    # A PowerShell path ending in a backslash inside quotes: no Bash escape.
+    'gc "C:\\x\\private_vault\\"',
+    'type "C:\\x\\private_vault\\a.json"',
+]
+
+
+@pytest.mark.parametrize("command", ESCAPE_DENY)
+def test_a_backslash_escape_does_not_hide_the_rest_of_the_line(hermetic_hook_project, command):
+    assert guard._matches_dump_command(command, str(hermetic_hook_project)) is not None
+
+
+@pytest.mark.parametrize("command", ESCAPE_DENY)
+def test_the_same_escapes_over_src_are_allowed(hermetic_hook_project, command):
+    assert guard._matches_dump_command(command.replace("private_vault", "src"), str(hermetic_hook_project)) is None
+
+
+def test_quote_scan_controls(hermetic_hook_project):
+    """Controls for the escape cases: a correctly quoted apostrophe never hid
+    anything, and an escaped quote keeps its text literal."""
+    cwd = str(hermetic_hook_project)
+    assert guard._matches_dump_command('echo "it\'s" ; cat private_vault/a.json', cwd) is not None
+    # \' is a literal quote, so the single-quoted-looking text stays one word.
+    assert guard._matches_dump_command(r"echo \'private_vault\' ", cwd) is None
+    assert guard._matches_dump_command(r"echo \' ; cat src/a.py", cwd) is None
+
+
+SUBSTITUTION_WORD_DENY = [
+    "cat $(echo private_vault/a.json)",
+    "cat $(printf %s private_vault/a.json)",
+    "cat `echo private_vault/a.json`",
+    'cat "$(echo private_vault/a.json)"',
+    "head -1 $(echo private_vault/a.json)",
+    "cat $(cat <<EOF\nprivate_vault/a.json\nEOF\n)",
+    "cat $(cat <<'EOF'\nprivate_vault/a.json\nEOF\n)",
+    'cat "$(cat <<\'EOF\'\nprivate_vault/a.json\nEOF\n)"',
+    "echo $(echo private_vault/a.json) | xargs cat",
+    "python $(echo private_vault/x.py)",
+]
+
+
+@pytest.mark.parametrize("command", SUBSTITUTION_WORD_DENY)
+def test_substitution_output_is_checked_as_operands_of_the_outer_command(hermetic_hook_project, command):
+    assert guard._matches_dump_command(command, str(hermetic_hook_project)) is not None
+
+
+@pytest.mark.parametrize("command", SUBSTITUTION_WORD_DENY)
+def test_the_same_substitutions_over_src_are_allowed(hermetic_hook_project, command):
+    assert guard._matches_dump_command(command.replace("private_vault", "src"), str(hermetic_hook_project)) is None
+
+
+def test_substitution_words_only_count_for_the_stage_that_holds_them(hermetic_hook_project):
+    cwd = str(hermetic_hook_project)
+    # echo prints its operands: nothing is read.
+    assert guard._matches_dump_command("echo $(echo private_vault/a.json)", cwd) is None
+    # Control: the same words reach a reader.
+    assert guard._matches_dump_command("cat $(echo private_vault/a.json)", cwd) is not None
+    # A substitution in another stage does not leak its words into this one.
+    assert guard._matches_dump_command("cat src/a.py; echo $(echo private_vault/a.json)", cwd) is None
+
+
+def test_substitution_words_check_a_configured_vault_by_location(configured):
+    cwd = str(configured.project)
+    target = f"{configured.vault.as_posix()}/memory/rec.json"
+    assert guard._matches_dump_command(f"cat $(echo {target})", cwd) is not None
+    assert guard._matches_dump_command(f"cat $(printf %s {target})", cwd) is not None
+    assert guard._matches_dump_command(f"cat $(echo {configured.outside.as_posix()}/notes.txt)", cwd) is None
+
+
+# A body is dropped only for a receiver that stores or displays it.
+INERT_HEREDOC = [
+    "cat <<'EOF'\n{body}\nEOF\n",
+    "cat > notes.txt <<'EOF'\n{body}\nEOF\n",
+    "tee notes.txt <<'EOF'\n{body}\nEOF\n",
+    "git commit -F - <<'EOF'\n{body}\nEOF\n",
+    "gh pr create --body-file - <<'EOF'\n{body}\nEOF\n",
+    "git commit -m \"$(cat <<'EOF'\n{body}\nEOF\n)\"",
+]
+SCRIPT_RECEIVERS = [
+    "bash <<'EOF'\n{body}\nEOF\n",
+    "python3.12 <<'EOF'\n{body}\nEOF\n",
+    "python <<'EOF'\n{body}\nEOF\n",
+    "sqlite3 <<'EOF'\n{body}\nEOF\n",
+    "sudo bash <<'EOF'\n{body}\nEOF\n",
+    "cat <<'EOF' | bash\n{body}\nEOF\n",
+    "cat <<'EOF' | sh -s\n{body}\nEOF\n",
+    "cat <<'EOF' | python3.12 -\n{body}\nEOF\n",
+    "echo \"$(cat <<'EOF'\n{body}\nEOF\n)\"",
+    "git log $(cat <<'EOF'\n{body}\nEOF\n)",
+    "xargs <<'EOF'\n{body}\nEOF\n",
+]
+
+
+PROSE_BODY = "see private_vault/a.json for details"
+
+
+@pytest.mark.parametrize("template", INERT_HEREDOC)
+def test_a_body_given_to_an_inert_consumer_is_text(hermetic_hook_project, template):
+    command = template.format(body=PROSE_BODY)
+    assert guard._matches_dump_command(command, str(hermetic_hook_project)) is None
+
+
+@pytest.mark.parametrize("template", SCRIPT_RECEIVERS)
+def test_the_same_body_is_scanned_when_the_receiver_runs_or_reads_it(hermetic_hook_project, template):
+    """Control for the allow cases above: identical body text, a receiver
+    that is not inert (a shell, an interpreter incl. versioned names,
+    sqlite3, xargs, a pipe, or a substitution used as words)."""
+    assert guard._matches_dump_command(template.format(body=PROSE_BODY), str(hermetic_hook_project)) is not None
+    # And the receiver alone is not the cause: no vault in the body, no deny.
+    assert guard._matches_dump_command(template.format(body="see src/a.py"), str(hermetic_hook_project)) is None
+
+
+def test_an_unquoted_delimiter_still_runs_its_substitutions(hermetic_hook_project):
+    cwd = str(hermetic_hook_project)
+    body = "$(cat private_vault/a.json)"
+    assert guard._matches_dump_command(f"cat <<EOF\n{body}\nEOF\n", cwd) is not None
+    assert guard._matches_dump_command(f"tee out.txt <<EOF\n{body}\nEOF\n", cwd) is not None
+    assert guard._matches_dump_command("cat <<EOF\n$(cat src/a.py)\nEOF\n", cwd) is None
+
+
+NESTED_SHELL_FORMS = [
+    "wsl cat {t}",
+    "wsl -e cat {t}",
+    "wsl --exec cat {t}",
+    "wsl -- cat {t}",
+    "wsl -d Ubuntu cat {t}",
+    "wsl -u root -- cat {t}",
+    "wsl --cd /tmp cat {t}",
+    "wsl.exe cat {t}",
+    'wsl bash -c "cat {t}"',
+    'fish -c "cat {t}"',
+    'csh -c "cat {t}"',
+    'tcsh -c "cat {t}"',
+    'bash -c "cat {t}"',
+]
+
+
+@pytest.mark.parametrize("form", NESTED_SHELL_FORMS)
+def test_nested_shells_are_walked_for_a_configured_vault(configured, form):
+    cwd = str(configured.project)
+    vault = form.format(t=f"{configured.vault.as_posix()}/memory/rec.json")
+    assert guard._matches_dump_command(vault, cwd) is not None
+    # Control: the same wrapper over a file next to the vault.
+    other = form.format(t=f"{configured.outside.as_posix()}/notes.txt")
+    assert guard._matches_dump_command(other, cwd) is None
+
+
+@pytest.mark.parametrize("form", NESTED_SHELL_FORMS)
+def test_nested_shells_are_walked_for_the_name_rule(hermetic_hook_project, form):
+    cwd = str(hermetic_hook_project)
+    assert guard._matches_dump_command(form.format(t="private_vault/a.json"), cwd) is not None
+    assert guard._matches_dump_command(form.format(t="src/a.py"), cwd) is None
+
+
+COMMAND_WORD_DENY = [
+    "./private_vault/run.sh",
+    "private_vault/run.sh --flag",
+    "sudo ./private_vault/run.sh",
+    "FOO=1 ./private_vault/run.sh",
+    "(./private_vault/run.sh)",
+    "true && ./private_vault/run.sh",
+    "xargs -n1 ./private_vault/run.sh",
+    "python3.12 <<'EOF'\nprint(open('private_vault/a.json').read())\nEOF\n",
+    "bash -c ./private_vault/run.sh",
+]
+
+
+@pytest.mark.parametrize("command", COMMAND_WORD_DENY)
+def test_running_a_file_under_a_vault_is_denied(hermetic_hook_project, command):
+    assert guard._matches_dump_command(command, str(hermetic_hook_project)) is not None
+
+
+@pytest.mark.parametrize("command", COMMAND_WORD_DENY)
+def test_running_the_same_file_elsewhere_is_allowed(hermetic_hook_project, command):
+    assert guard._matches_dump_command(command.replace("private_vault", "scripts"), str(hermetic_hook_project)) is None
+
+
+def test_the_command_word_rule_matches_a_component_not_a_substring(hermetic_hook_project):
+    cwd = str(hermetic_hook_project)
+    assert guard._matches_dump_command("./scripts/run.sh", cwd) is None
+    assert guard._matches_dump_command("./scripts/private_vault_notes.sh", cwd) is None
+    assert guard._matches_dump_command("./scripts/run_private_vault.sh", cwd) is None
+    assert guard._matches_dump_command("./private_vault/run.sh", cwd) is not None
+
+
+def test_a_wildcard_through_a_vault_alias_is_denied(in_repo_vault_project):
+    """The configured vault is a junction or symlink alias of the in-project
+    one: a glob through the alias needs the alias's own spelling, which the
+    dedup in vault_dirs must keep."""
+    project = in_repo_vault_project
+    try:
+        _link(project / "private_vault", project / "alias")
+    except (OSError, AttributeError) as exc:
+        pytest.skip(f"cannot create a directory link here: {exc}")
+    (project / ".env").write_text("PRIVATE_VAULT_PATH=alias\n", encoding="utf-8")
+    cwd = str(project)
+    for command in ("cat alias/*.json", "cat al*/top.json", "cat alias/top.json", "ls alias", "ls al*"):
+        assert guard._matches_dump_command(command, cwd) is not None, command
+    assert guard._matches_dump_command("cat src/*.py", cwd) is None
+    assert guard._matches_dump_command("ls src", cwd) is None
+
+
+def _link(target, link) -> None:
+    import os
+    import sys
+
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def test_nesting_past_the_cap_names_the_limit_in_the_deny_reason(hermetic_hook_project):
+    payload = {"tool_name": "Bash", "tool_input": {"command": _nest("echo hi", 9)}, "cwd": str(hermetic_hook_project)}
+    reason = hook_output(_run_hook(payload))["permissionDecisionReason"]
+    assert "more than 8 levels" in reason
+    # Control: an ordinary deny keeps the vault wording.
+    payload["tool_input"]["command"] = "cat private_vault/a.json"
+    ordinary = hook_output(_run_hook(payload))["permissionDecisionReason"]
+    assert "more than 8 levels" not in ordinary
+    assert "vault path" in ordinary

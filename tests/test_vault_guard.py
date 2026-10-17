@@ -478,3 +478,139 @@ def test_leak_check_positive_control(configured_vault):
     """_leaks_vault_path sees the path when the payload itself carries it."""
     denied = _run(_config_payload(CONFIG_DENY["read-native"], configured_vault))
     assert _leaks_vault_path(denied, configured_vault)
+
+
+# --- aliases and process-environment precedence (installer lean-review #43) -
+
+def _link(target, link) -> None:
+    if WINDOWS:
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def test_configured_vault_alias_keeps_its_own_spelling(in_repo_vault_project):
+    """PRIVATE_VAULT_PATH names a junction or symlink alias of the in-project
+    vault: both spellings are kept, so a glob through either one is denied."""
+    project = in_repo_vault_project
+    try:
+        _link(project / "private_vault", project / "alias")
+    except (OSError, AttributeError) as exc:
+        pytest.skip(f"cannot create a directory link here: {exc}")
+    (project / ".env").write_text("PRIVATE_VAULT_PATH=alias\n", encoding="utf-8")
+    cwd = str(project)
+    vaults = guard.vault_dirs()
+    assert len(vaults) == 1  # one directory...
+    assert len(vaults[0].forms) >= 2  # ...under more than one spelling
+    for pattern in ("alias/*", "al*/*", "alias/**", "private_vault/*"):
+        assert guard.evaluate(hook_payload("Glob", cwd=cwd, pattern=pattern)) is not None, pattern
+    # Controls: the same globs elsewhere, and no alias means no alias spelling.
+    assert guard.evaluate(hook_payload("Glob", cwd=cwd, pattern="src/*")) is None
+    assert guard.evaluate(hook_payload("Glob", cwd=cwd, pattern="sr*/*")) is None
+
+
+def test_the_alias_spelling_is_lost_without_the_configuration(in_repo_vault_project):
+    """Control: with no PRIVATE_VAULT_PATH naming the alias, a glob through
+    it is not recognised by location (it has no name match either)."""
+    project = in_repo_vault_project
+    try:
+        _link(project / "private_vault", project / "alias")
+    except (OSError, AttributeError) as exc:
+        pytest.skip(f"cannot create a directory link here: {exc}")
+    assert guard.evaluate(hook_payload("Glob", cwd=str(project), pattern="al*/*")) is None
+
+
+@pytest.fixture
+def two_roots(hermetic_hook_project, tmp_path, monkeypatch):
+    """A tmp project whose .env builds PRIVATE_VAULT_PATH from ${ROOT}, and
+    two roots, each holding a vault directory."""
+    project = tmp_path / "ref_proj"
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    (project / ".claude").mkdir(parents=True)
+    roots = {}
+    for name in ("a", "b"):
+        roots[name] = tmp_path / f"root_{name}"
+        (roots[name] / "vaults" / "live").mkdir(parents=True)
+    (project / ".env").write_text(
+        f"ROOT={roots['a'].as_posix()}\nPRIVATE_VAULT_PATH=${{ROOT}}/vaults/live\n", encoding="utf-8"
+    )
+    return SimpleNamespace(project=project, roots=roots)
+
+
+def _reads(project, root) -> bool:
+    target = str(root / "vaults" / "live" / "rec.json")
+    return guard.evaluate(hook_payload("Read", cwd=str(project), file_path=target)) is not None
+
+
+def test_a_process_variable_beats_the_file_in_a_reference(two_roots, monkeypatch):
+    """ember-2 loads .env with load_dotenv's default override=False, so a
+    process ROOT wins over the file's ROOT in `${ROOT}`. The guard protects
+    the directory the app uses."""
+    monkeypatch.setenv("ROOT", two_roots.roots["b"].as_posix())
+    assert _reads(two_roots.project, two_roots.roots["b"])
+    assert not _reads(two_roots.project, two_roots.roots["a"])
+
+
+def test_the_file_value_is_used_when_the_process_has_no_such_variable(two_roots, monkeypatch):
+    """Control: with no process ROOT the file's ROOT applies, so the test
+    above is about the precedence and not about ROOT being read at all."""
+    monkeypatch.delenv("ROOT", raising=False)
+    assert _reads(two_roots.project, two_roots.roots["a"])
+    assert not _reads(two_roots.project, two_roots.roots["b"])
+
+
+def test_the_cache_follows_a_referenced_process_variable(two_roots, monkeypatch):
+    """The cached value depends on the process environment, so changing a
+    referenced variable must not serve the old vault."""
+    monkeypatch.setenv("ROOT", two_roots.roots["b"].as_posix())
+    assert _reads(two_roots.project, two_roots.roots["b"])  # cache written
+    monkeypatch.setenv("ROOT", two_roots.roots["a"].as_posix())
+    assert _reads(two_roots.project, two_roots.roots["a"])
+    assert not _reads(two_roots.project, two_roots.roots["b"])
+
+
+def test_the_cache_is_still_used_while_the_environment_is_unchanged(two_roots, monkeypatch):
+    """Control: an unchanged environment is a cache hit, so the key change
+    did not turn the cache off."""
+    monkeypatch.setenv("ROOT", two_roots.roots["b"].as_posix())
+    calls = []
+    real = guard.env_file_value
+    monkeypatch.setattr(guard, "env_file_value", lambda key, path: calls.append(key) or real(key, path))
+    assert _reads(two_roots.project, two_roots.roots["b"])
+    assert _reads(two_roots.project, two_roots.roots["b"])
+    assert len(calls) == 1
+
+
+# --- an unusable configured value is a deny, not "no vault" ----------------
+
+@pytest.mark.parametrize("value", ["a\x00b", "x" * 40000], ids=["nul-byte", "over-path-limit"])
+def test_an_unusable_configured_vault_value_fails_closed(hermetic_hook_project, value):
+    (hermetic_hook_project / ".env").write_text(f"PRIVATE_VAULT_PATH={value}\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        guard.vault_dirs()
+    out = run_hook("vault_guard.py", hook_payload("Read", cwd=str(hermetic_hook_project), file_path="src/a.py"))
+    assert hook_output(out)["permissionDecision"] == "deny"
+
+
+def test_a_configured_vault_that_does_not_exist_is_just_absent(hermetic_hook_project, tmp_path):
+    """Control: a well-formed value naming no directory is no vault, and the
+    call is allowed."""
+    (hermetic_hook_project / ".env").write_text(f"PRIVATE_VAULT_PATH={tmp_path / 'nope'}\n", encoding="utf-8")
+    assert guard.vault_dirs() == []
+    out = run_hook("vault_guard.py", hook_payload("Read", cwd=str(hermetic_hook_project), file_path="src/a.py"))
+    assert out.stdout.strip() == ""
+
+
+# Installer lean-review finding 5 does not apply: Python's fnmatch drops only
+# the empty range, so a set holding a reversed range keeps its valid members.
+@pytest.mark.parametrize("pattern", ["[z-ap]rivate_vault/*", "pri[z-av]ate_vault/*"])
+def test_a_set_with_a_reversed_range_still_names_the_vault(pattern):
+    assert guard.names_vault_path(pattern)
+
+
+@pytest.mark.parametrize("pattern", ["[z-a]rivate_vault/*", "pri[z-a]ate_vault/*"])
+def test_a_set_that_is_only_a_reversed_range_names_nothing(pattern):
+    """Control: with no valid member left the component cannot match."""
+    assert not guard.names_vault_path(pattern)

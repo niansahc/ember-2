@@ -32,6 +32,24 @@ A quoted literal name (`'.env'`) or a quoted glob with literal text after
 the dot (`'.e*'`) is still denied. PowerShell expands wildcards in quoted
 cmdlet arguments, so quoting changes nothing there.
 
+Quoting is read by the scanner shared with secret_dump_guard.py
+(hook_utils.shell_spans): a backslash before a quote is an escape, so in
+`cat \\' .* \\'` the glob is unquoted and expanded by the shell.
+
+Heredocs. The body of a heredoc behind a quoted delimiter is dropped only
+when its receiver merely stores or displays it (`cat` not piped and not
+substituted into another command's words, `tee`, `git ... -F -`,
+`gh ... --body-file -`, and the `cat` of a `-m "$(cat <<'EOF' ...)"`
+message). Any other receiver (a shell, an interpreter incl. `python3.12`,
+`sqlite3`, `xargs`, a pipe) keeps it scanned, and so does a bare-delimiter
+body.
+
+Threat model. These guards prevent accidental exposure by an agent: a tool
+call that would put a .env file's contents into the transcript by mistake, in a known form.
+They are pattern checks, not a sandbox, and do not defend against deliberate
+evasion (a path built at runtime, a script or encoding, a program that opens
+the file itself).
+
 Limits: a pattern check on the call, not a sandbox. A name built at
 runtime (`.e""nv`, PowerShell backtick escapes, base64, a script that
 opens the file, an 8.3 short name) is not caught, and neither is a
@@ -50,7 +68,7 @@ import re
 import sys
 
 # Same directory; Python puts it on sys.path when this file runs as a script.
-from hook_utils import command_name, deny
+from hook_utils import command_name, deny, drop_inert_heredocs, shell_spans
 
 # `.env`, `.env.local`, `.env.production`, ... (case-insensitive: Windows).
 _ENV_NAME = re.compile(r"^\.env(\..+)?$", re.IGNORECASE)
@@ -233,24 +251,14 @@ _PROSE_FLAG_VALUE = re.compile(
     r"""(?:^|\s)(?:-a?m|--message|--body|--title|--notes)(?:\s+|=)"""
     r"""(?:"(?:[^"\\$`]|\\.|\$(?!\())*"|'[^']*')"""
 )
-# The body of `cat <<'EOF'` (a quoted delimiter) is literal text: the usual
-# commit-message idiom. A bare delimiter is not (the shell expands `$(...)`
-# in it), and a heredoc fed to anything but cat (`bash <<'EOF'`, `python -`)
-# is a script, so both stay scanned.
-_QUOTED_HEREDOC = re.compile(
-    r"""(?<![\w./-])cat[ \t]+<<-?[ \t]*(?P<q>['"])(?P<tag>[A-Za-z_]\w*)(?P=q)(?P<rest>[^\n]*)\n.*?^[ \t]*(?P=tag)[ \t]*$""",
-    re.DOTALL | re.MULTILINE,
-)
 _SEGMENT_SPLIT = re.compile(r"([;&|]+)")
 _GIT_OR_GH = re.compile(r"^\s*(?:git|gh)\s")
 # Quotes, separators, redirections and `=` (for --path=.env) all delimit.
 # Backslashes do NOT, so Windows paths survive intact.
 _TOKEN_SPLIT = re.compile(r"""[\s"'`;|&<>(){}=,]+""")
-# A closed quoted span, a lone unmatched quote, or an unquoted run.
-_SPAN = re.compile(r""""(?:[^"\\]|\\.)*"|'[^']*'|["']|[^"']+""")
 # Programs that run quoted text as a command line of their own, where the
 # wildcards in it are expanded after all.
-_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "fish", "eval", "pwsh", "powershell", "cmd", "wsl"})
+_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "eval", "pwsh", "powershell", "cmd", "wsl"})
 # Flags whose value the program matches as a glob against file names.
 _GLOB_FLAGS = frozenset({
     "-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename",
@@ -259,8 +267,7 @@ _GLOB_FLAGS = frozenset({
 
 
 def _without_prose(command: str) -> str:
-    if "<<" in command:
-        command = _QUOTED_HEREDOC.sub(lambda m: "cat << HERE" + m["rest"], command.replace("\r\n", "\n"))
+    command = drop_inert_heredocs(command)
     return "".join(
         _PROSE_FLAG_VALUE.sub(" ", seg) if _GIT_OR_GH.match(seg) else seg
         for seg in _SEGMENT_SPLIT.split(command)
@@ -273,7 +280,7 @@ def _words(command: str, bash: bool) -> list[tuple[str, bool]]:
     wildcards through as text."""
     spans = [
         (span, [word for word in _TOKEN_SPLIT.split(span) if word])
-        for span in _SPAN.findall(_without_prose(command))
+        for span in shell_spans(_without_prose(command))
     ]
     if bash and any(command_name(word) in _SHELLS for _, words in spans for word in words):
         bash = False

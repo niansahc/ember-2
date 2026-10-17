@@ -69,7 +69,20 @@ path"); absolute_path() lives in hook_utils.py. Paths are plain strings:
 this runs as a fresh process on every tool call, and pathlib/typing
 imports cost ~11 ms.
 
-A pattern check, not a sandbox.
+Resolution matches the app. A `${VAR}` in .env resolves from the process
+environment first and the file's own keys second (src/core/config.py loads
+the file with load_dotenv's default override=False); the cache key holds the
+process values of the variables the file references. A configured value the
+OS cannot look up (a NUL byte, over the path limit) is a deny, not "no
+vault". The configured vault reached through a junction or symlink alias
+keeps the alias's own spelling, since a glob through the alias gets no
+realpath.
+
+Threat model. These guards prevent accidental exposure by an agent: a tool
+call that would put vault content or entry names into the transcript by mistake, in a known form.
+They are pattern checks, not a sandbox, and do not defend against deliberate
+evasion (a path built at runtime, a script or encoding, a program that opens
+the file itself).
 """
 
 import json
@@ -80,7 +93,15 @@ from collections import namedtuple
 # Same directory; Python puts it on sys.path when this file runs as a
 # script. Shared with post_commit_eval.py so both hooks parse .env one way
 # and resolve PRIVATE_VAULT_PATH by the app's rule (src/core/vault_path.py).
-from hook_utils import absolute_path, deny, deny_on_error, env_file_value, project_dir, project_path
+from hook_utils import (
+    absolute_path,
+    deny,
+    deny_on_error,
+    env_file_value,
+    env_references,
+    project_dir,
+    project_path,
+)
 
 _VAULT_DIR = "private_vault"
 _VAULT_KEY = "PRIVATE_VAULT_PATH"
@@ -211,7 +232,9 @@ def _configured_vault() -> str | None:
     except OSError:
         _note(".env not found")
         return None
-    key = [stat.st_mtime_ns, stat.st_size]
+    # A `${VAR}` in the file resolves from the process environment first, so
+    # the process values of the variables it references are part of the key.
+    key = [stat.st_mtime_ns, stat.st_size, env_references(env_path)]
     cache = os.path.join(project, ".claude", _CACHE_NAME)
     try:
         with open(cache, encoding="utf-8") as handle:
@@ -226,6 +249,19 @@ def _configured_vault() -> str | None:
     if not value:
         _note(f"{_VAULT_KEY} is not set in .env")
     return value
+
+
+def _is_dir(path: str) -> bool:
+    """True for an existing directory, False when there is none. Any other
+    failure to look (a NUL byte, a value over the OS path limit, no
+    permission) is not an absent vault and raises: the entry point turns it
+    into a deny, where os.path.isdir would have called the vault absent and
+    allowed the call."""
+    try:
+        mode = os.stat(path).st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return (mode & 0o170000) == 0o040000
 
 
 def vault_dirs() -> list[Vault]:
@@ -244,18 +280,24 @@ def vault_dirs() -> list[Vault]:
         # gets no realpath (it has wildcards), so only the lexical form
         # matches it.
         path = project_path(raw)
-        if not os.path.isdir(path):
+        if not _is_dir(path):
             continue
         forms = [_components(path)]
         lexical = _components(absolute_path(raw, project))
         if lexical not in forms:
             forms.append(lexical)
-        if any(f in v.forms for v in vaults for f in forms):
-            continue
         if project_forms is None:
             project_forms = path_forms(project, project)
         in_project = any(_covers(f, p) for f in forms for p in project_forms)
-        vaults.append(Vault(path, forms, in_project))
+        same = next((k for k, v in enumerate(vaults) if any(f in v.forms for f in forms)), None)
+        if same is None:
+            vaults.append(Vault(path, forms, in_project))
+            continue
+        # The same directory under another name (a junction or symlink
+        # alias): keep every spelling, since a glob through the alias gets no
+        # realpath and only its lexical form matches it.
+        known = vaults[same]
+        vaults[same] = Vault(known.path, known.forms + [f for f in forms if f not in known.forms], known.in_project or in_project)
     return vaults
 
 

@@ -487,3 +487,110 @@ def test_settings_command_fires_from_another_cwd(tmp_path, script, payload):
     )
     assert result.returncode == 0, result.stderr
     assert hook_output(result)["permissionDecision"] == "deny"
+
+
+# ---------------------------------------------------------------------------
+# Installer lean-review (PR #43) findings ported: backslash escapes in the
+# quote scan, and the heredoc rule inverted to inert consumers.
+# ---------------------------------------------------------------------------
+
+ESCAPE_DENY = [
+    # An escaped quote is a literal character, so the quoted-looking `.*`
+    # that follows is an unquoted glob the shell expands.
+    r"cat \' .* \'",
+    r'cat \" .* \"',
+    r"cat it\'s .*",
+    r"echo \' ; cat .env",
+    r"echo it\'s; cat .env",
+    r"echo 'it'\''s' ; cat .env",
+    r'echo \" ; cat .env',
+    # An escaped quote inside double quotes does not close the span.
+    r'cat "a \" b" .env',
+]
+
+ESCAPE_ALLOW = [
+    # Controls: the same text with real quotes keeps a dot-only pattern text.
+    "cat ' .* '",
+    'cat " .* "',
+    "echo \"it's\" ; cat '.*'",
+    r"echo \' ; cat src/a.py",
+    r"echo it\'s; cat README.md",
+    "jq '.[0]' data.json",
+]
+
+
+@pytest.mark.parametrize("command", ESCAPE_DENY)
+def test_a_backslash_escaped_quote_is_not_a_quote(command):
+    assert env_guard.command_names_env_file(command, bash=True) is not None
+
+
+@pytest.mark.parametrize("command", ESCAPE_ALLOW)
+def test_real_quotes_and_unrelated_escapes_still_allow(command):
+    assert env_guard.command_names_env_file(command, bash=True) is None
+
+
+# The receiver decides whether a heredoc body is text.
+INERT_RECEIVERS = [
+    "cat <<'EOF'\n{body}\nEOF\n",
+    "cat > notes.md <<'EOF'\n{body}\nEOF\n",
+    "tee notes.md <<'EOF'\n{body}\nEOF\n",
+    "git commit -F - <<'EOF'\n{body}\nEOF\n",
+    "gh pr create --body-file - <<'EOF'\n{body}\nEOF\n",
+    "gh pr create --title t -F - <<'EOF'\n{body}\nEOF\n",
+    'git commit -m "$(cat <<\'EOF\'\n{body}\nEOF\n)"',
+    'gh pr create --body "$(cat <<\'EOF\'\n{body}\nEOF\n)"',
+]
+RUNNING_RECEIVERS = [
+    "bash <<'EOF'\n{body}\nEOF\n",
+    "python3.12 <<'EOF'\n{body}\nEOF\n",
+    "python3 <<'EOF'\n{body}\nEOF\n",
+    "sqlite3 <<'EOF'\n{body}\nEOF\n",
+    "psql <<'EOF'\n{body}\nEOF\n",
+    "lua - <<'EOF'\n{body}\nEOF\n",
+    "ed <<'EOF'\n{body}\nEOF\n",
+    "cat <<'EOF' | bash\n{body}\nEOF\n",
+    "cat <<'EOF' | python3.12 -\n{body}\nEOF\n",
+    "cat $(cat <<'EOF'\n{body}\nEOF\n)",
+    'cat "$(cat <<\'EOF\'\n{body}\nEOF\n)"',
+    'echo "$(cat <<\'EOF\'\n{body}\nEOF\n)"',
+    "git log $(cat <<'EOF'\n{body}\nEOF\n)",
+    "git commit -m 'x' <<'EOF'\n{body}\nEOF\n",
+]
+HEREDOC_BODY = "mentions .env here"
+
+
+@pytest.mark.parametrize("template", INERT_RECEIVERS)
+def test_a_body_given_to_an_inert_consumer_is_text(template):
+    assert env_guard.command_names_env_file(template.format(body=HEREDOC_BODY), bash=True) is None
+
+
+@pytest.mark.parametrize("template", RUNNING_RECEIVERS)
+def test_a_body_given_to_anything_else_is_scanned(template):
+    """Control for the allow cases above: the identical body text."""
+    assert env_guard.command_names_env_file(template.format(body=HEREDOC_BODY), bash=True) is not None
+    assert env_guard.command_names_env_file(template.format(body="mentions nothing"), bash=True) is None
+
+
+def test_a_bare_delimiter_body_is_scanned_even_for_an_inert_consumer():
+    assert env_guard.command_names_env_file("cat <<EOF\nmentions .env here\nEOF\n", bash=True) is not None
+    assert env_guard.command_names_env_file("cat <<EOF\nmentions nothing\nEOF\n", bash=True) is None
+
+
+def test_a_name_on_the_heredoc_line_is_never_dropped():
+    assert env_guard.command_names_env_file("cat <<'EOF' > .env\nX=1\nEOF\n", bash=True) is not None
+    assert env_guard.command_names_env_file("cat <<'EOF' > notes.md\nX=1\nEOF\n", bash=True) is None
+
+
+# Installer lean-review finding 5 (a set holding a reversed range plus a valid
+# member matched nothing) does not apply here: Python's fnmatch drops only
+# the empty range, as Git Bash does. Pinned so a change of matcher shows up.
+@pytest.mark.parametrize("glob", [".[z-ae]nv", ".[z-ae]nv.local", ".e[z-an]v"])
+def test_a_set_with_a_reversed_range_still_matches_its_valid_members(glob):
+    assert env_guard.names_env_file(glob)
+    assert fnmatch.fnmatchcase(".env", glob.replace(".local", "")) or glob.endswith(".local")
+
+
+@pytest.mark.parametrize("glob", [".[z-a]nv", ".e[z-a]v"])
+def test_a_set_that_is_only_a_reversed_range_matches_nothing(glob):
+    """Control: with no valid member left the glob cannot name .env."""
+    assert not env_guard.names_env_file(glob)

@@ -16,6 +16,7 @@ that comparison fails when the two disagree.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 import pytest
@@ -57,11 +58,31 @@ PARITY = [
 ]
 
 
+def _hide_dotenv(patch) -> None:
+    """Make `from dotenv... import ...` raise ImportError. The submodule entry
+    too: an already imported dotenv.main would otherwise still resolve."""
+    patch.setitem(sys.modules, "dotenv", None)
+    patch.setitem(sys.modules, "dotenv.main", None)
+
+
+def _app_value(path) -> str | None:
+    """KEY as the app loads it: src/core/config.py calls load_dotenv(path)
+    with the default override=False, so the process environment wins."""
+    before = dict(os.environ)
+    os.environ.pop(KEY, None)
+    try:
+        dotenv.load_dotenv(str(path))
+        return (os.environ.get(KEY) or "").strip() or None
+    finally:  # load_dotenv sets every key of the file: put the environment back
+        os.environ.clear()
+        os.environ.update(before)
+
+
 def _both(path, monkeypatch) -> tuple:
-    """(dotenv result, fallback result) for KEY in the file at `path`."""
-    official = (dotenv.dotenv_values(path).get(KEY) or "").strip() or None
+    """(the app's result, fallback result) for KEY in the file at `path`."""
+    official = _app_value(path)
     with monkeypatch.context() as patch:
-        patch.setitem(sys.modules, "dotenv", None)  # `from dotenv import ...` raises ImportError
+        _hide_dotenv(patch)
         fallback = hook_utils.env_file_value(KEY, str(path))
     return official, fallback
 
@@ -90,9 +111,34 @@ def test_fallback_reference_to_a_process_variable(tmp_path, monkeypatch):
     assert official == fallback == "/home/probe/vault"
 
 
-def test_file_value_beats_process_variable_in_a_reference(tmp_path, monkeypatch):
-    """dotenv_values lets the file's own keys override the environment."""
+def test_process_variable_beats_file_value_in_a_reference(tmp_path, monkeypatch):
+    """The app loads the file with load_dotenv's default override=False, so a
+    `${BASE}` resolves from the process environment before the file's own
+    BASE. Both hook paths (python-dotenv and the fallback) must agree with
+    the app, with the two BASE values different."""
     monkeypatch.setenv("BASE", "/from-process")
+    path = tmp_path / "probe.env"
+    path.write_text(f"BASE=/from-file\n{KEY}=${{BASE}}/vault\n", encoding="utf-8")
+    official, fallback = _both(path, monkeypatch)
+    assert official == "/from-process/vault"
+    assert fallback == official
+    assert hook_utils.env_file_value(KEY, str(path)) == official  # python-dotenv path
+
+
+def test_the_old_precedence_differs_from_the_app(tmp_path, monkeypatch):
+    """Positive control: dotenv_values (override=True, what the hooks used)
+    resolves the same file to the file's BASE, so the test above fails
+    against it."""
+    monkeypatch.setenv("BASE", "/from-process")
+    path = tmp_path / "probe.env"
+    path.write_text(f"BASE=/from-file\n{KEY}=${{BASE}}/vault\n", encoding="utf-8")
+    assert dotenv.dotenv_values(path).get(KEY) == "/from-file/vault"
+    assert dotenv.dotenv_values(path).get(KEY) != _app_value(path)
+
+
+def test_the_reference_resolves_from_the_file_when_the_process_has_no_such_variable(tmp_path, monkeypatch):
+    """Control: without a process BASE the file's BASE is used on every path."""
+    monkeypatch.delenv("BASE", raising=False)
     path = tmp_path / "probe.env"
     path.write_text(f"BASE=/from-file\n{KEY}=${{BASE}}/vault\n", encoding="utf-8")
     official, fallback = _both(path, monkeypatch)
@@ -134,7 +180,7 @@ def test_fallback_raises_when_it_cannot_read_a_line_like_dotenv(tmp_path, monkey
     path = tmp_path / "probe.env"
     path.write_text(text, encoding="utf-8")
     with monkeypatch.context() as patch:
-        patch.setitem(sys.modules, "dotenv", None)
+        _hide_dotenv(patch)
         with pytest.raises(ValueError):
             hook_utils.env_file_value(KEY, str(path))
 
@@ -171,7 +217,8 @@ def test_vault_guard_denies_when_the_fallback_cannot_read_the_file(hermetic_hook
     assert capsys.readouterr().out.strip() == ""
 
     # Fallback only: the unclosed quote raises, and the guard denies.
-    monkeypatch.setitem(sys.modules, "dotenv", None)
-    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
-    vault_guard.main()
+    with monkeypatch.context() as patch:
+        _hide_dotenv(patch)
+        patch.setattr(sys, "stdin", io.StringIO(payload))
+        vault_guard.main()
     assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"

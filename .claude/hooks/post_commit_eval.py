@@ -71,7 +71,10 @@ def _resolve_test_vault() -> tuple[Path | None, str | None]:
     Returns (path, None) on success and (None, reason) on failure. Every
     failure path is a refusal, never a fallback to the live vault.
     """
-    test_vault = read_env_value("VAULT_PATH_TEST", ENV_PATH)
+    try:
+        test_vault = read_env_value("VAULT_PATH_TEST", ENV_PATH)
+    except ValueError:
+        return None, "VAULT_PATH_TEST cannot be read from .env"
     if not test_vault:
         return None, "VAULT_PATH_TEST is not set"
 
@@ -81,7 +84,10 @@ def _resolve_test_vault() -> tuple[Path | None, str | None]:
         # new empty vault and report a meaningless all-FAIL eval.
         return None, "VAULT_PATH_TEST does not point at an existing directory"
 
-    live_vault = read_env_value("PRIVATE_VAULT_PATH", ENV_PATH)
+    try:
+        live_vault = read_env_value("PRIVATE_VAULT_PATH", ENV_PATH)
+    except ValueError:
+        return None, "PRIVATE_VAULT_PATH cannot be read from .env"
     if live_vault and _configured_path(live_vault) == test_path:
         return None, "VAULT_PATH_TEST resolves to the same path as PRIVATE_VAULT_PATH"
 

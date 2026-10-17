@@ -16,15 +16,20 @@ definition:
     secret_dump_guard.py).
   - read_env_value() / env_file_value(): one .env value reader
     (post_commit_eval.py, vault_guard.py). It never prints a value.
+  - shell_step() / close_paren() / extract_substitutions() / shell_spans() /
+    drop_inert_heredocs(): the shell scanner env_guard.py and
+    secret_dump_guard.py share (quote state with backslash escapes, command
+    substitution, quoted spans, heredocs whose receiver only stores them).
   - deny(): the PreToolUse deny decision the harness reads from stdout
     (env_guard.py, vault_guard.py, secret_dump_guard.py).
-  - deny_on_error(): the fail-closed deny the vault guards emit when their
-    own check raises.
+  - deny_on_error(): the fail-closed deny the guards emit when their own
+    check raises.
 
 Deliberately pathlib- and typing-free: PreToolUse guards start a fresh
 Python process on every tool call, and those imports cost ~11 ms each time.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -107,33 +112,343 @@ def read_env_value(key: str, env_path) -> str | None:
     return (os.environ.get(key) or "").strip() or env_file_value(key, env_path)
 
 
-def env_file_value(key: str, env_path) -> str | None:
-    """Return `key` from the .env file at `env_path` only.
+def env_file_value(key: str, env_path, strict: bool = False) -> str | None:
+    """Return `key` from the .env file at `env_path` only. With `strict`, a
+    file that cannot be opened raises OSError instead of reading as "no
+    key", so a caller that caches the answer can tell a failed read from an
+    absent key.
 
     The value comes from python-dotenv (the venv has it), with a minimal
     KEY=VALUE parser as a fallback so a hook never hard-depends on an
     import being present.
     """
     try:
-        from dotenv import dotenv_values
+        from dotenv.main import DotEnv
 
-        return (dotenv_values(env_path).get(key) or "").strip() or None
+        # override=False is how the app loads this file (src/core/config.py:
+        # load_dotenv's default): in a `${VAR}` reference the process
+        # environment wins over the file's own keys. dotenv_values() uses
+        # override=True, the reverse, and would point the guards at another
+        # directory whenever the two define the same name.
+        values = DotEnv(env_path, encoding="utf-8", interpolate=True, override=False).dict()
+        return (values.get(key) or "").strip() or None
     except Exception:
         pass
 
     try:
-        with open(env_path, encoding="utf-8") as handle:
-            for raw in handle.read().splitlines():
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                name, _, val = line.partition("=")
-                if name.strip() == key:
-                    return val.strip().strip('"').strip("'") or None
-    except Exception:
-        pass
+        with open(env_path, encoding="utf-8-sig") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        if strict:
+            raise
+        return None
+    return _fallback_value(key, lines)
 
-    return None
+
+# One `[export] KEY = value` line, and python-dotenv's `${NAME}` /
+# `${NAME:-default}` reference.
+_ENV_LINE = re.compile(r"(?:export[ \t]+)?([^=#\s]+)[ \t]*=[ \t]*(.*)")
+_ENV_REFERENCE = re.compile(r"\$\{([^}:]*)(?::-([^}]*))?\}")
+
+
+def _fallback_value(key: str, lines: list) -> str | None:
+    """`key` from .env `lines`, read as python-dotenv's dotenv_values reads
+    them (a BOM, `export`, quoted values with escapes, an unquoted value's
+    ` # comment`, `${VAR}` and `${VAR:-default}` resolved from the process
+    environment first, then the keys above it, as the app's load_dotenv with
+    override=False does). The fallback must agree with dotenv: a different
+    PRIVATE_VAULT_PATH points the vault guards at the wrong directory. A
+    line this parser cannot read the way dotenv does (an unclosed quote, a
+    quoted value followed by text, a reference left unresolved, such as a
+    nested default) is unreadable. Only that line's own key suffers: the
+    lookup raises ValueError when `key` itself, or a variable its value
+    references, ends up unreadable, and the vault guards deny when a check
+    raises, so no guess is made. An unreadable line of any other key is
+    skipped, as dotenv skips it."""
+    values: dict = {}
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _ENV_LINE.fullmatch(line)
+        if not match:
+            continue
+        name, text = match.groups()
+        try:
+            value = _fallback_literal(text)
+            if "${" in value:
+                env = {**values, **os.environ}
+                value = _ENV_REFERENCE.sub(_reference(env), value)
+                if "${" in value:
+                    raise ValueError("unresolved reference in .env value")
+        except ValueError:
+            value = _UNREADABLE
+        values[name] = value
+    result = values.get(key)
+    if result is _UNREADABLE:
+        raise ValueError("unreadable .env value")
+    return (result or "").strip() or None
+
+
+# The value of a key whose line could not be read (see _fallback_value).
+_UNREADABLE = object()
+
+
+def _reference(env: dict):
+    """The substitution for one `${NAME}` / `${NAME:-default}` match."""
+    def resolve(match) -> str:
+        name, default = match.groups()
+        if name not in env:
+            return default or ""
+        if env[name] is _UNREADABLE:
+            raise ValueError("reference to an unreadable .env value")
+        return env[name]
+    return resolve
+
+
+def _fallback_literal(text: str) -> str:
+    """One value as dotenv reads it, before `${}` references are resolved."""
+    if text[:1] in ("'", '"'):
+        quote = text[0]
+        match = re.match(quote + r"((?:\\.|[^" + quote + r"\\])*)" + quote + r"[ \t]*(?:#.*)?", text)
+        if not match or match.end() != len(text):
+            raise ValueError("unreadable quoted .env value")
+        body = match[1]
+        if quote == "'":
+            return re.sub(r"\\([\\'])", r"\1", body)
+        return re.sub(
+            r"\\[\\'\"abfnrtv]", lambda m: m[0].encode("ascii").decode("unicode-escape"), body
+        )
+    return re.sub(r"\s+#.*", "", text).rstrip()
+
+
+_ENV_REFERENCE_NAME = re.compile(r"\$\{([^}:]*)")
+
+
+def env_references(env_path) -> str:
+    """A digest of the process-environment values of every `${NAME}` the file
+    at `env_path` references ("" when it has none). Part of the
+    PRIVATE_VAULT_PATH cache key: a reference resolves from the process
+    environment first, so the cached result is stale when one of them
+    changes. A digest, so a referenced value is never copied into the cache
+    file."""
+    try:
+        with open(env_path, encoding="utf-8-sig") as handle:
+            names = set(_ENV_REFERENCE_NAME.findall(handle.read()))
+    except OSError:
+        return ""
+    if not names:
+        return ""
+    pairs = json.dumps([[name, os.environ.get(name)] for name in sorted(names)])
+    return hashlib.sha256(pairs.encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Shell scanning shared by the guards: quote state with backslash escapes,
+# command substitution, and heredocs. One scanner, so a quote or an escape is
+# read the same way by every rule.
+# ---------------------------------------------------------------------------
+
+# Characters a backslash escapes, by quote state. Any other backslash is a
+# path separator here (C:\x\y), not an escape.
+_ESCAPABLE = {"": "'\"`$\\", '"': '"`$\\', "'": ""}
+
+
+def shell_step(text: str, i: int, quote: str) -> tuple[int, str]:
+    """(length of the piece at `i`, quote state after it). A piece is one
+    character, or a two-character backslash escape (`\\'`, `\\"`, `\\$`, a
+    backtick, `\\\\`) outside single quotes. `quote` is "", "'" or '"'."""
+    ch = text[i]
+    if ch == "\\" and i + 1 < len(text) and text[i + 1] in _ESCAPABLE[quote]:
+        return 2, quote
+    if quote:
+        return 1, "" if ch == quote else quote
+    return 1, ch if ch in "'\"" else ""
+
+
+def close_paren(text: str, i: int) -> int:
+    """Index of the `)` closing a `(` whose body starts at `i`, quote-aware;
+    the end of `text` when unclosed."""
+    depth, quote, n = 1, "", len(text)
+    while i < n:
+        size, after = shell_step(text, i, quote)
+        if not quote and not after:
+            if text[i] == "(":
+                depth += 1
+            elif text[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    return i
+        quote, i = after, i + size
+    return n
+
+
+def extract_substitutions(text: str) -> tuple[str, list[str]]:
+    """`text` with each command substitution replaced by an index marker
+    (\\x01N\\x01), and the substitution bodies. Active outside quotes and
+    inside double quotes: `$(...)` and backticks; outside quotes only:
+    `<(...)` and `>(...)`. Literal inside single quotes and when escaped."""
+    if "$(" not in text and "`" not in text and "<(" not in text and ">(" not in text:
+        return text, []
+    out: list[str] = []
+    bodies: list[str] = []
+    quote = ""
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        end = -1
+        if quote != "'":
+            if ch == "`":
+                end = text.find("`", i + 1)
+                end = n if end < 0 else end
+                body = text[i + 1 : end]
+            elif ch in "$<>" and text.startswith("(", i + 1) and (ch == "$" or not quote):
+                end = close_paren(text, i + 2)
+                body = text[i + 2 : end]
+        if end >= 0:
+            out.append(f"\x01{len(bodies)}\x01")
+            bodies.append(body)
+            i = end + 1
+            continue
+        size, quote = shell_step(text, i, quote)
+        out.append(text[i : i + size])
+        i += size
+    return "".join(out), bodies
+
+
+def shell_spans(text: str) -> list[str]:
+    """`text` cut into closed quoted spans (quotes included), a lone
+    unmatched quote, and the unquoted runs between them."""
+    spans: list[str] = []
+    start, quote, i, n = 0, "", 0, len(text)
+    while i < n:
+        size, after = shell_step(text, i, quote)
+        if not quote and after:  # opens a quote
+            if i > start:
+                spans.append(text[start:i])
+            start = i
+        elif quote and not after:  # closes it
+            spans.append(text[start : i + size])
+            start = i + size
+        quote, i = after, i + size
+    if quote:  # unterminated: the quote stands alone, the rest is scanned afresh
+        spans.append(text[start])
+        spans.extend(shell_spans(text[start + 1 :]))
+    elif start < n:
+        spans.append(text[start:])
+    return spans
+
+
+_HEREDOC_START = re.compile(
+    r"(?<!<)<<-?[ \t]*(?P<q>['\"]?)(?P<tag>[A-Za-z_]\w*)(?P=q)(?P<rest>[^\n]*)\n"
+)
+_PIPED = re.compile(r"(?<!\|)\|(?!\|)")
+# The value of a message flag of a git or gh command is prose.
+# The one list of message flags whose value is prose on a git or gh command
+# (env_guard.py's prose rule imports it too), and the git/gh command test.
+PROSE_FLAG_NAMES = r"(?:-a?m|--message|--body|--title|--notes)"
+GIT_OR_GH = re.compile(r"^\s*(?:git|gh)\s")
+_PROSE_FLAG = re.compile(r"(?:^|\s)" + PROSE_FLAG_NAMES + r"(?:\s+|=)\"?$")
+_STDIN_FILE_FLAGS = {"git": ("-F", "--file"), "gh": ("-F", "--body-file")}
+_ASSIGNMENT_WORD = re.compile(r"[A-Za-z_]\w*=")
+
+
+def _last_separator(text: str) -> int:
+    """Index of the last unquoted `; & | ( newline` or backtick in `text`, or
+    -1. A `$(` inside double quotes opens a fresh unquoted context, so the
+    commit idiom `-m "$(cat <<'EOF'` finds the `(`."""
+    sep, quote, i = -1, "", 0
+    resume: list[tuple[int, str]] = []  # (paren depth, quote) to return to at the matching `)`
+    depth = 0
+    while i < len(text):
+        ch = text[i]
+        if quote == '"' and ch == "$" and text[i + 1 : i + 2] == "(":
+            resume.append((depth, quote))
+            depth, quote, sep, i = 0, "", i + 1, i + 2
+            continue
+        size, after = shell_step(text, i, quote)
+        if not quote and not after:
+            if ch == ")":
+                if depth:
+                    depth -= 1
+                elif resume:
+                    depth, after = resume.pop()
+            elif ch in (";", "&", "|", "`", "\n"):
+                sep = i
+            elif ch == "(":
+                depth, sep = depth + 1, i
+        quote, i = after, i + size
+    return sep
+
+
+def _heredoc_is_inert(before: str, rest: str) -> bool:
+    """True when the receiver of a heredoc only stores or displays its body:
+    `cat` whose output is not used as words, `tee`, `git ... -F -` and
+    `gh ... --body-file -`. `before` is the text preceding `<<`, `rest` the
+    remainder of its line. Every other receiver (a shell, an interpreter,
+    sqlite3, xargs, versioned python3.12, ...) may run the body, and so does
+    a pipe on the line."""
+    if _PIPED.search(rest):
+        return False
+    sep = _last_separator(before)
+    in_substitution = sep >= 0 and (before[sep] == "`" or (before[sep] == "(" and before[sep - 1 : sep] == "$"))
+    if in_substitution:
+        # The output of $(...) becomes words of the outer command: prose is
+        # the one use that does not run or read anything.
+        outer = before[: sep - 1] if before[sep] == "(" else before[:sep]
+        segment = outer[_last_separator(outer) + 1 :]
+        if not (GIT_OR_GH.match(segment) and _PROSE_FLAG.search(segment)):
+            return False
+    try:
+        import shlex
+
+        words = [w for w in shlex.split(before[sep + 1 :]) if not _ASSIGNMENT_WORD.match(w)]
+    except ValueError:
+        return False
+    name = command_name(words[0]) if words else ""
+    if name in ("cat", "tee"):
+        return True
+    flags = _STDIN_FILE_FLAGS.get(name, ())
+    for k, word in enumerate(words):
+        flag, eq, value = word.partition("=")
+        if word == "-F-" and "-F" in flags:
+            return True
+        if flag in flags and (value == "-" if eq else words[k + 1 : k + 2] == ["-"]):
+            return True
+    return False
+
+
+def drop_inert_heredocs(text: str, literal_only: bool = True) -> str:
+    """`text` without the bodies of heredocs whose receiver only stores or
+    displays them (_heredoc_is_inert). A body behind a quoted delimiter
+    (<<'EOF') is literal. Behind a bare one (<<EOF) the shell still expands
+    `$(...)` in it, so with `literal_only` False the body is replaced by those
+    substitutions, and with True it stays as it is."""
+    if "<<" not in text:
+        return text
+    text = text.replace("\r\n", "\n")
+    out: list[str] = []
+    pos = 0
+    while True:
+        match = _HEREDOC_START.search(text, pos)
+        if not match:
+            break
+        end = re.compile(rf"^[ \t]*{match['tag']}[ \t]*$", re.MULTILINE).search(text, match.end())
+        if not end or not _heredoc_is_inert(text[: match.start()], match["rest"]):
+            out.append(text[pos : match.end()])
+            pos = match.end()
+            continue
+        literal = bool(match["q"])
+        body = text[match.end() : end.start()]
+        if not literal and literal_only:
+            out.append(text[pos : end.end()])
+        else:
+            out.append(text[pos : match.start()] + "<< HERE" + match["rest"])
+            if not literal:
+                out.append("".join(f"\n$({b})" for b in extract_substitutions(body)[1]))
+        pos = end.end()
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def deny_on_error(guard: str, exc: BaseException) -> None:
@@ -142,7 +457,7 @@ def deny_on_error(guard: str, exc: BaseException) -> None:
     and lets the tool call run. Only the exception type is printed; its
     message can carry the configured vault path."""
     deny(
-        f"{guard} could not complete its vault check "
+        f"{guard} could not complete its check "
         f"({type(exc).__name__}); denying rather than allowing an "
         f"unchecked call. See .claude/hooks/{guard}.py."
     )

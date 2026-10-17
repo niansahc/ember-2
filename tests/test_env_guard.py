@@ -459,6 +459,31 @@ _BASH = _find_git_bash()
 _VENV_PY = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
 
 
+def _tmp_hook_project(tmp_path: Path) -> Path:
+    """A tmp CLAUDE_PROJECT_DIR the settings commands run in: a copy of the
+    hooks and the vault-path resolver they load, a stub environment file,
+    and a link to the checkout's venv (the interpreter the commands name)."""
+    project = tmp_path / "settings_proj"
+    shutil.copytree(
+        REPO_ROOT / ".claude" / "hooks", project / ".claude" / "hooks",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    (project / "src" / "core").mkdir(parents=True)
+    shutil.copy(REPO_ROOT / "src" / "core" / "vault_path.py", project / "src" / "core" / "vault_path.py")
+    (project / ".env").write_text("OTHER_SETTING=1\n", encoding="utf-8")
+    link = project / ".venv"
+    try:
+        if os.name == "nt":
+            import _winapi
+
+            _winapi.CreateJunction(str(REPO_ROOT / ".venv"), str(link))
+        else:
+            os.symlink(REPO_ROOT / ".venv", link, target_is_directory=True)
+    except (OSError, AttributeError) as exc:
+        pytest.skip(f"cannot link the venv here: {exc}")
+    return project
+
+
 @pytest.mark.skipif(
     _BASH is None or not _VENV_PY.exists(),
     reason="needs bash and the Windows venv interpreter the settings commands name",
@@ -473,9 +498,13 @@ _VENV_PY = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
 )
 def test_settings_command_fires_from_another_cwd(tmp_path, script, payload):
     """Run the exact settings.json command string the way the harness does
-    (bash), from a directory that is not the project root."""
+    (bash), from a directory that is not the project root. The project is a
+    tmp copy of the hooks, so a guard that reads the environment file or
+    writes its cache touches the tmp project, never the checkout."""
     command = next(c for _, c in _hook_entries("PreToolUse") if script in c)
-    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(REPO_ROOT)}
+    project = _tmp_hook_project(tmp_path)
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project)}
+    env.pop("PRIVATE_VAULT_PATH", None)
     result = subprocess.run(
         [_BASH, "-c", command],
         input=json.dumps(payload),
@@ -594,3 +623,127 @@ def test_a_set_with_a_reversed_range_still_matches_its_valid_members(glob):
 def test_a_set_that_is_only_a_reversed_range_matches_nothing(glob):
     """Control: with no valid member left the glob cannot name .env."""
     assert not env_guard.names_env_file(glob)
+
+
+# ---------------------------------------------------------------------------
+# Final lean review: prose with separators, PowerShell here-strings, fail
+# closed on an internal error.
+# ---------------------------------------------------------------------------
+
+SEPARATOR_PROSE_ALLOW = [
+    'git commit -m "fix: read .env; add test"',
+    "git commit -m 'fix: read .env; add test'",
+    'git commit -m "fix: guard & .env"',
+    "git commit -m 'fix: a | .env'",
+    'git commit -m "fix .env" && git push',
+    'gh pr create --title "a; .env" --body "b && .env"',
+]
+SEPARATOR_PROSE_DENY = [
+    # Control: outside the message the name is still caught.
+    'git commit -m "fix: read; add test" && cat .env',
+    'git commit -m "fix: x"; cat .env',
+    'cat .env; git commit -m "fix: x"',
+    # A live substitution in the message is not prose.
+    'git commit -m "fix: $(cat .env); add test"',
+    # Not a git/gh message flag.
+    'tool -m "a; .env"',
+]
+
+
+@pytest.mark.parametrize("command", SEPARATOR_PROSE_ALLOW)
+def test_a_message_holding_a_separator_is_still_prose(command):
+    assert env_guard.command_names_env_file(command, bash=True) is None
+
+
+@pytest.mark.parametrize("command", SEPARATOR_PROSE_DENY)
+def test_the_name_outside_a_message_is_still_denied(command):
+    assert env_guard.command_names_env_file(command, bash=True) is not None
+
+
+def test_segments_cut_at_separators_outside_quotes_only():
+    assert env_guard._segments('a "b; c" ; d') == ['a "b; c" ', ";", " d"]
+    assert env_guard._segments("a && b | c") == ["a ", "&&", " b ", "|", " c"]
+    assert env_guard._segments("plain") == ["plain"]
+
+
+HERE_STRING_ALLOW = [
+    "git commit -m @'\nfix: stop reading .env in hooks\n'@",
+    'git commit -m @"\nfix: stop reading .env in hooks\n"@',
+    "git commit -a -m @'\nfix: it's about .env\n'@",
+    "gh pr create --title t --body @'\nmentions .env\n'@",
+]
+HERE_STRING_DENY = [
+    # Control: the name outside the here-string, or no git/gh command.
+    "git commit -m @'\nfix\n'@; cat .env",
+    "git commit -m @'\nfix\n'@\ncat .env",
+    "echo -m @'\nmentions .env\n'@",
+    # A double-quoted here-string expands `$(` and backticks.
+    'git commit -m @"\nfix $(cat .env)\n"@',
+    # Without the message flag it is just a string argument.
+    "git commit @'\nmentions .env\n'@",
+]
+
+
+@pytest.mark.parametrize("command", HERE_STRING_ALLOW, ids=[c.replace("\n", "|")[:50] for c in HERE_STRING_ALLOW])
+def test_a_powershell_here_string_message_is_prose(command):
+    assert env_guard.command_names_env_file(command, bash=False) is None
+
+
+@pytest.mark.parametrize("command", HERE_STRING_DENY, ids=[c.replace("\n", "|")[:50] for c in HERE_STRING_DENY])
+def test_the_name_outside_a_here_string_message_is_denied(command):
+    assert env_guard.command_names_env_file(command, bash=False) is not None
+
+
+def test_powershell_has_no_heredoc():
+    """`<<` is not a heredoc in PowerShell: the body is not dropped there.
+    Control: the same text is a heredoc in Bash and is dropped."""
+    command = "cat <<'EOF'\nmentions .env\nEOF\n"
+    assert env_guard.command_names_env_file(command, bash=False) is not None
+    assert env_guard.command_names_env_file(command, bash=True) is None
+
+
+def test_the_two_prose_rules_share_one_flag_list():
+    hook_utils = load_hook("hook_utils.py")
+    assert hook_utils.PROSE_FLAG_NAMES in env_guard._PROSE_FLAG_VALUE.pattern
+    assert hook_utils.PROSE_FLAG_NAMES in hook_utils._PROSE_FLAG.pattern
+    assert hook_utils.PROSE_FLAG_NAMES in env_guard._HERE_STRING_VALUE.pattern
+
+
+def _main_output(monkeypatch, capsys, payload):
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    env_guard.main()
+    return capsys.readouterr().out
+
+
+def test_an_internal_error_is_a_deny(monkeypatch, capsys):
+    payload = hook_payload("Read", file_path="src/a.py")
+
+    def broken(_payload):
+        raise RuntimeError("boom")
+
+    # Control: the same payload with a working check is allowed (no output).
+    assert _main_output(monkeypatch, capsys, payload) == ""
+    monkeypatch.setattr(env_guard, "evaluate", broken)
+    out = json.loads(_main_output(monkeypatch, capsys, payload))["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    assert "RuntimeError" in out["permissionDecisionReason"]
+    assert "boom" not in out["permissionDecisionReason"]
+
+
+def test_an_error_while_building_the_reason_is_a_deny(monkeypatch, capsys):
+    payload = hook_payload("Read", file_path=".env")
+
+    def broken(_target):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(env_guard, "reason", broken)
+    out = json.loads(_main_output(monkeypatch, capsys, payload))["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+
+
+def test_the_ordinary_deny_keeps_its_wording(monkeypatch, capsys):
+    out = json.loads(_main_output(monkeypatch, capsys, hook_payload("Read", file_path=".env")))["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    assert "could not complete" not in out["permissionDecisionReason"]

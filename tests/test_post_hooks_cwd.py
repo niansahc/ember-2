@@ -177,3 +177,32 @@ def test_post_commit_relative_values_from_another_cwd(tmp_path, elsewhere, same)
     else:
         assert "EVAL STUB ran" in result.stdout, result.stdout
         assert f"Vault: {(project / 'vaults' / 'test').resolve()}" in result.stdout
+
+
+def test_an_unreadable_env_value_is_a_skip_reason_not_a_traceback(rel_project, monkeypatch):
+    """read_env_value raises ValueError for a value it cannot read the way
+    the app does. The eval hook refuses with a reason instead of crashing."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(rel_project))
+    hook = load_hook(POST_COMMIT)
+    test_vault = str(rel_project / "vaults" / "test")
+    live_vault = str(rel_project / "vaults" / "live")
+
+    def reader(broken):
+        def read(key, path):
+            if key == broken:
+                raise ValueError("unreadable")
+            return {"VAULT_PATH_TEST": test_vault, "PRIVATE_VAULT_PATH": live_vault}[key]
+        return read
+
+    # Control: with nothing unreadable the test vault resolves.
+    monkeypatch.setattr(hook, "read_env_value", reader(None))
+    vault, reason = hook._resolve_test_vault()
+    assert reason is None and vault is not None
+
+    monkeypatch.setattr(hook, "read_env_value", reader("VAULT_PATH_TEST"))
+    vault, reason = hook._resolve_test_vault()
+    assert vault is None and "VAULT_PATH_TEST cannot be read" in reason
+
+    monkeypatch.setattr(hook, "read_env_value", reader("PRIVATE_VAULT_PATH"))
+    vault, reason = hook._resolve_test_vault()
+    assert vault is None and "PRIVATE_VAULT_PATH cannot be read" in reason

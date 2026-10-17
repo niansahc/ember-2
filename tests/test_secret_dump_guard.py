@@ -983,3 +983,92 @@ def test_nesting_past_the_cap_names_the_limit_in_the_deny_reason(hermetic_hook_p
     ordinary = hook_output(_run_hook(payload))["permissionDecisionReason"]
     assert "more than 8 levels" not in ordinary
     assert "vault path" in ordinary
+
+
+# ---------------------------------------------------------------------------
+# Final lean review: comments, options after -c, a dedicated nesting type.
+# ---------------------------------------------------------------------------
+
+COMMENT_DENY = [
+    "# c\ncat private_vault/a",
+    "echo hi # note\ncat private_vault/a",
+    "# inspect records\ncat private_vault/a.json",
+    "ls  # list\nls private_vault",
+    "echo a#b; cat private_vault/a",
+    "echo a#b && cat private_vault/a",
+    # A # inside quotes, or one that does not start a word, is no comment.
+    "echo '# not a comment'; cat private_vault/a",
+    'echo "x # y"; cat private_vault/a',
+    "echo ${#x}; cat private_vault/a",
+    "cat private_vault/a # trailing comment",
+]
+
+
+@pytest.mark.parametrize("command", COMMENT_DENY, ids=[c.replace("\n", "|")[:50] for c in COMMENT_DENY])
+def test_a_comment_hides_only_the_rest_of_its_line(hermetic_hook_project, command):
+    assert guard._matches_dump_command(command, str(hermetic_hook_project)) is not None
+
+
+@pytest.mark.parametrize("command", COMMENT_DENY, ids=[c.replace("\n", "|")[:50] for c in COMMENT_DENY])
+def test_the_same_commands_over_src_are_allowed(hermetic_hook_project, command):
+    """Control: the deny comes from the vault path, not from the comment or
+    quote forms."""
+    allowed = command.replace("private_vault", "src")
+    assert guard._matches_dump_command(allowed, str(hermetic_hook_project)) is None
+
+
+def test_comment_text_is_not_a_command(hermetic_hook_project):
+    """The comment itself is dropped, as the shell drops it: a vault path in
+    it names nothing. Control: the same words as a command are denied."""
+    cwd = str(hermetic_hook_project)
+    assert guard._matches_dump_command("cat src/a # private_vault/x", cwd) is None
+    assert guard._matches_dump_command("cat src/a ; cat private_vault/x", cwd) is not None
+    assert guard._matches_dump_command("cat src/a\n# cat private_vault/x", cwd) is None
+    assert guard._matches_dump_command("cat src/a\ncat private_vault/x", cwd) is not None
+
+
+def test_strip_comments_units():
+    strip = guard._strip_comments
+    assert strip("a # b\nc") == "a \nc"
+    assert strip("a#b") == "a#b"
+    assert strip("'# x'") == "'# x'"
+    assert strip("echo $#") == "echo $#"
+    assert strip(r"echo \# x") == r"echo \# x"
+    assert strip("x;# y") == "x;"  # control: a # after a separator starts a word
+
+
+BASH_C_OPTIONS = [
+    "bash -c -- 'cat private_vault/a'",
+    "bash -c -x 'cat private_vault/a'",
+    "sh -c -- 'cat private_vault/a'",
+    "bash -c -o pipefail 'cat private_vault/a'",
+    "bash -xc -- 'cat private_vault/a'",
+    "bash -c 'cat private_vault/a'",  # control: no option, always walked
+]
+
+
+@pytest.mark.parametrize("command", BASH_C_OPTIONS)
+def test_options_after_dash_c_do_not_hide_the_command_string(hermetic_hook_project, command):
+    assert guard._matches_dump_command(command, str(hermetic_hook_project)) is not None
+
+
+@pytest.mark.parametrize("command", BASH_C_OPTIONS)
+def test_the_same_dash_c_forms_over_src_are_allowed(hermetic_hook_project, command):
+    assert guard._matches_dump_command(command.replace("private_vault", "src"), str(hermetic_hook_project)) is None
+
+
+@pytest.mark.parametrize("flag", ["/c", "/k", "/r"])
+def test_every_cmd_switch_is_walked(hermetic_hook_project, flag):
+    cwd = str(hermetic_hook_project)
+    assert guard._matches_dump_command(f"cmd {flag} type private_vault\\a.json", cwd) is not None
+    assert guard._matches_dump_command(f"cmd {flag} type src\\a.json", cwd) is None
+
+
+def test_a_command_word_reading_nested_command_is_an_ordinary_match(hermetic_hook_project):
+    cwd = str(hermetic_hook_project)
+    hit = guard._matches_dump_command('"nested command" private_vault/x', cwd)
+    assert hit and not isinstance(hit, guard._NestedTooDeep)
+    # Control: real over-nesting is the dedicated type.
+    assert isinstance(guard._matches_dump_command(_nest("echo hi", 9), cwd), guard._NestedTooDeep)
+    payload = {"tool_name": "Bash", "tool_input": {"command": '"nested command" private_vault/x'}, "cwd": cwd}
+    assert "more than 8 levels" not in hook_output(_run_hook(payload))["permissionDecisionReason"]

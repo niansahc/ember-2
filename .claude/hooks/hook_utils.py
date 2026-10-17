@@ -22,13 +22,14 @@ definition:
     substitution, quoted spans, heredocs whose receiver only stores them).
   - deny(): the PreToolUse deny decision the harness reads from stdout
     (env_guard.py, vault_guard.py, secret_dump_guard.py).
-  - deny_on_error(): the fail-closed deny the vault guards emit when their
-    own check raises.
+  - deny_on_error(): the fail-closed deny the guards emit when their own
+    check raises.
 
 Deliberately pathlib- and typing-free: PreToolUse guards start a fresh
 Python process on every tool call, and those imports cost ~11 ms each time.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -111,8 +112,11 @@ def read_env_value(key: str, env_path) -> str | None:
     return (os.environ.get(key) or "").strip() or env_file_value(key, env_path)
 
 
-def env_file_value(key: str, env_path) -> str | None:
-    """Return `key` from the .env file at `env_path` only.
+def env_file_value(key: str, env_path, strict: bool = False) -> str | None:
+    """Return `key` from the .env file at `env_path` only. With `strict`, a
+    file that cannot be opened raises OSError instead of reading as "no
+    key", so a caller that caches the answer can tell a failed read from an
+    absent key.
 
     The value comes from python-dotenv (the venv has it), with a minimal
     KEY=VALUE parser as a fallback so a hook never hard-depends on an
@@ -135,6 +139,8 @@ def env_file_value(key: str, env_path) -> str | None:
         with open(env_path, encoding="utf-8-sig") as handle:
             lines = handle.read().splitlines()
     except OSError:
+        if strict:
+            raise
         return None
     return _fallback_value(key, lines)
 
@@ -154,8 +160,11 @@ def _fallback_value(key: str, lines: list) -> str | None:
     PRIVATE_VAULT_PATH points the vault guards at the wrong directory. A
     line this parser cannot read the way dotenv does (an unclosed quote, a
     quoted value followed by text, a reference left unresolved, such as a
-    nested default) raises ValueError; the vault guards deny when a check
-    raises, so no guess is made."""
+    nested default) is unreadable. Only that line's own key suffers: the
+    lookup raises ValueError when `key` itself, or a variable its value
+    references, ends up unreadable, and the vault guards deny when a check
+    raises, so no guess is made. An unreadable line of any other key is
+    skipped, as dotenv skips it."""
     values: dict = {}
     for raw in lines:
         line = raw.strip()
@@ -165,14 +174,36 @@ def _fallback_value(key: str, lines: list) -> str | None:
         if not match:
             continue
         name, text = match.groups()
-        value = _fallback_literal(text)
-        if "${" in value:
-            env = {**values, **os.environ}
-            value = _ENV_REFERENCE.sub(lambda m: env[m[1]] if m[1] in env else (m[2] or ""), value)
+        try:
+            value = _fallback_literal(text)
             if "${" in value:
-                raise ValueError("unresolved reference in .env value")
+                env = {**values, **os.environ}
+                value = _ENV_REFERENCE.sub(_reference(env), value)
+                if "${" in value:
+                    raise ValueError("unresolved reference in .env value")
+        except ValueError:
+            value = _UNREADABLE
         values[name] = value
-    return (values.get(key) or "").strip() or None
+    result = values.get(key)
+    if result is _UNREADABLE:
+        raise ValueError("unreadable .env value")
+    return (result or "").strip() or None
+
+
+# The value of a key whose line could not be read (see _fallback_value).
+_UNREADABLE = object()
+
+
+def _reference(env: dict):
+    """The substitution for one `${NAME}` / `${NAME:-default}` match."""
+    def resolve(match) -> str:
+        name, default = match.groups()
+        if name not in env:
+            return default or ""
+        if env[name] is _UNREADABLE:
+            raise ValueError("reference to an unreadable .env value")
+        return env[name]
+    return resolve
 
 
 def _fallback_literal(text: str) -> str:
@@ -194,18 +225,22 @@ def _fallback_literal(text: str) -> str:
 _ENV_REFERENCE_NAME = re.compile(r"\$\{([^}:]*)")
 
 
-def env_references(env_path) -> list:
-    """The process-environment values of every `${NAME}` the file at
-    `env_path` references, as sorted [name, value] pairs. Part of the
+def env_references(env_path) -> str:
+    """A digest of the process-environment values of every `${NAME}` the file
+    at `env_path` references ("" when it has none). Part of the
     PRIVATE_VAULT_PATH cache key: a reference resolves from the process
     environment first, so the cached result is stale when one of them
-    changes."""
+    changes. A digest, so a referenced value is never copied into the cache
+    file."""
     try:
         with open(env_path, encoding="utf-8-sig") as handle:
             names = set(_ENV_REFERENCE_NAME.findall(handle.read()))
     except OSError:
-        return []
-    return [[name, os.environ.get(name)] for name in sorted(names)]
+        return ""
+    if not names:
+        return ""
+    pairs = json.dumps([[name, os.environ.get(name)] for name in sorted(names)])
+    return hashlib.sha256(pairs.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +344,11 @@ _HEREDOC_START = re.compile(
 )
 _PIPED = re.compile(r"(?<!\|)\|(?!\|)")
 # The value of a message flag of a git or gh command is prose.
-_PROSE_FLAG = re.compile(r"(?:^|\s)(?:-a?m|--message|--body|--title|--notes)(?:\s+|=)\"?$")
-_GIT_OR_GH = re.compile(r"^\s*(?:git|gh)\s")
+# The one list of message flags whose value is prose on a git or gh command
+# (env_guard.py's prose rule imports it too), and the git/gh command test.
+PROSE_FLAG_NAMES = r"(?:-a?m|--message|--body|--title|--notes)"
+GIT_OR_GH = re.compile(r"^\s*(?:git|gh)\s")
+_PROSE_FLAG = re.compile(r"(?:^|\s)" + PROSE_FLAG_NAMES + r"(?:\s+|=)\"?$")
 _STDIN_FILE_FLAGS = {"git": ("-F", "--file"), "gh": ("-F", "--body-file")}
 _ASSIGNMENT_WORD = re.compile(r"[A-Za-z_]\w*=")
 
@@ -359,7 +397,7 @@ def _heredoc_is_inert(before: str, rest: str) -> bool:
         # the one use that does not run or read anything.
         outer = before[: sep - 1] if before[sep] == "(" else before[:sep]
         segment = outer[_last_separator(outer) + 1 :]
-        if not (_GIT_OR_GH.match(segment) and _PROSE_FLAG.search(segment)):
+        if not (GIT_OR_GH.match(segment) and _PROSE_FLAG.search(segment)):
             return False
     try:
         import shlex
@@ -419,7 +457,7 @@ def deny_on_error(guard: str, exc: BaseException) -> None:
     and lets the tool call run. Only the exception type is printed; its
     message can carry the configured vault path."""
     deny(
-        f"{guard} could not complete its vault check "
+        f"{guard} could not complete its check "
         f"({type(exc).__name__}); denying rather than allowing an "
         f"unchecked call. See .claude/hooks/{guard}.py."
     )

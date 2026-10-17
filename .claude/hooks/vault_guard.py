@@ -24,7 +24,10 @@ get_private_vault_path() and post_commit_eval.py use: a relative value
 against the project root, never the cwd. The value is never printed, deny messages
 included. Parsing .env costs a python-dotenv import (~60 ms per hook
 process), so the value is cached in .claude/.env.vault_cache.json, keyed
-by the .env mtime and size. The cache file's .env.* name puts it under
+by the .env mtime and size plus a digest of the process values of the
+${VAR} names the file references (the digest, never the values). Only a
+successful read is cached: a file that cannot be opened is not "no key".
+The cache file's .env.* name puts it under
 env_guard.py, which denies agent reads and writes of it; it is
 gitignored. With no .env, or no key in it, only the in-repo rules apply
 and a note goes to stderr.
@@ -79,10 +82,10 @@ keeps the alias's own spelling, since a glob through the alias gets no
 realpath.
 
 Threat model. These guards prevent accidental exposure by an agent: a tool
-call that would put vault content or entry names into the transcript by mistake, in a known form.
-They are pattern checks, not a sandbox, and do not defend against deliberate
-evasion (a path built at runtime, a script or encoding, a program that opens
-the file itself).
+call that would put vault content or entry names into the transcript by
+mistake, in a known form. They are pattern checks, not a sandbox, and do not
+defend against deliberate evasion (a path built at runtime, a script or
+encoding, a program that opens the file itself).
 """
 
 import json
@@ -214,6 +217,10 @@ def _write_cache(cache: str, data: dict) -> None:
             json.dump(data, handle)
         os.replace(tmp, cache)
     except OSError:
+        pass
+    finally:
+        # After a good replace there is no tmp file; after any failure the
+        # half-written one must not stay behind.
         try:
             os.unlink(tmp)
         except OSError:
@@ -244,7 +251,13 @@ def _configured_vault() -> str | None:
     except (OSError, ValueError, KeyError, TypeError):
         hit = False
     if not hit:
-        value = env_file_value(_VAULT_KEY, env_path)
+        try:
+            value = env_file_value(_VAULT_KEY, env_path, strict=True)
+        except OSError:
+            # A lock or a permission error is not "no key": answer for this
+            # call only, and leave the cache as it was.
+            _note(".env could not be read")
+            return None
         _write_cache(cache, {"key": key, "value": value})
     if not value:
         _note(f"{_VAULT_KEY} is not set in .env")

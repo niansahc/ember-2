@@ -29,7 +29,7 @@ stage is reduced to its effective command before any rule runs:
     are skipped;
   - the bodies of `$(...)`, backticks, `<(...)` / `>(...)` (not inside
     single quotes) and the command string of `bash|sh|zsh|dash|ksh|fish|
-    csh|tcsh -c`, `pwsh|powershell [-Command]`, `cmd /c|/k`, `eval` and
+    csh|tcsh -c`, `pwsh|powershell [-Command]`, `cmd /c|/k|/r`, `eval` and
     `wsl [flags] [--|-e] CMD` are parsed as command lines of their own, to a
     nesting depth of 8 (deeper is denied, with a reason that names the
     limit);
@@ -71,10 +71,10 @@ This is PREVENTION of known command forms, not redaction, and it is not
 a guarantee (issue #188).
 
 Threat model. These guards prevent accidental exposure by an agent: a tool
-call that would put vault content or entry names into the transcript by mistake, in a known form.
-They are pattern checks, not a sandbox, and do not defend against deliberate
-evasion (a path built at runtime, a script or encoding, a program that opens
-the file itself).
+call that would put vault content or entry names into the transcript by
+mistake, in a known form. They are pattern checks, not a sandbox, and do not
+defend against deliberate evasion (a path built at runtime, a script or
+encoding, a program that opens the file itself).
 
 Claude Code's hook system has no mechanism to redact or replace tool
 output after a command runs: PostToolUse hooks receive tool_response but
@@ -88,10 +88,12 @@ output will actually be. So this hook recognizes the "dump, search, or
 list a vault path" family and nothing else. A command written a
 different way -- a Python one-liner, a different utility, base64, a script, a path
 built at runtime ($VAR, %VAR%), a flag value taken for a path or missed
-as one -- is not caught. That is a real, permanent limitation, not an
-oversight: the space of "ways to print a file's content" in a shell is
-unbounded, and claiming to catch all of it would be worse than admitting
-this only raises the bar for common forms.
+as one -- is not caught: the space of "ways to print a file's content" in a
+shell is unbounded, and claiming to catch all of it would be worse than
+admitting this only raises the bar for common forms.
+
+Comments. A `#` that starts a word, outside quotes, comments out the rest of
+its line, as in both shells; the lines after it are still read.
 """
 
 import json
@@ -194,7 +196,14 @@ _PS_SHELL_VALUE = frozenset({
 _WSL_VALUE = frozenset({"-d", "--distribution", "-u", "--user", "--cd", "--shell-type"})
 _SHELL_C_FLAG = re.compile(r"-[a-zA-Z]*c[a-zA-Z]*")
 _MAX_DEPTH = 8
-_NESTED = "nested command"  # the match reported when a command nests past _MAX_DEPTH
+
+
+class _NestedTooDeep(str):
+    """The match reported when a command nests past _MAX_DEPTH. A type of its
+    own: a command word that reads "nested command" is an ordinary match."""
+
+
+_NESTED = _NestedTooDeep("nested command")
 
 # Recursion, per utility family. Content searches that always recurse:
 _ALWAYS_RECURSIVE = frozenset({"rg", "ag", "ack"})
@@ -276,6 +285,26 @@ def _unescape(command: str, keep_escapes: bool) -> str:
     return "".join(out)
 
 
+def _strip_comments(text: str) -> str:
+    """`text` without shell comments: a `#` that starts a word, outside
+    quotes, up to the end of its line (the newline stays). `a#b`, `$#`,
+    `${#x}` and a quoted `#` are not comments."""
+    if "#" not in text:
+        return text
+    out: list[str] = []
+    quote, i = "", 0
+    while i < len(text):
+        size, after = shell_step(text, i, quote)
+        piece = text[i : i + size]
+        if piece == "#" and not quote and (not out or out[-1][-1] in " \t\n;|&(<>"):
+            end = text.find("\n", i)
+            i = len(text) if end < 0 else end
+            continue
+        out.append(piece)
+        quote, i = after, i + size
+    return "".join(out)
+
+
 def _tokenize(text: str) -> list[list[list[str]]]:
     """Pipelines (separated by ; && || & newline or a parenthesis), each a
     list of pipe stages, each a list of shlex words. Quote-aware: a `|` or
@@ -283,8 +312,9 @@ def _tokenize(text: str) -> list[list[list[str]]]:
     cannot cleanly tokenize (unmatched quotes) yields nothing rather than
     falling back to a loose substring check: precision matters more than
     recall here (see module docstring)."""
-    lexer = shlex.shlex(text.replace("\n", " ; "), posix=True, punctuation_chars=True)
+    lexer = shlex.shlex(_strip_comments(text).replace("\n", " ; "), posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
+    lexer.commenters = ""  # shlex would end the whole command at any #
     try:
         tokens = list(lexer)
     except ValueError:
@@ -333,12 +363,20 @@ def _core(tokens: list[str]) -> tuple[list[str], bool]:
 
 def _nested(core: list[str]) -> str | None:
     """The command line a shell stage runs: `bash|fish|csh -c STR`, `pwsh
-    [-Command] STR`, `cmd /c STR`, `eval STR`, `wsl [flags] [--|-e] CMD`."""
+    [-Command] STR`, `cmd /c|/k|/r STR`, `eval STR`, `wsl [flags] [--|-e] CMD`."""
     name, rest = command_name(core[0]), core[1:]
     if name in _POSIX_SHELLS:
         for k, word in enumerate(rest):
             if _SHELL_C_FLAG.fullmatch(word):
-                return rest[k + 1] if k + 1 < len(rest) else None
+                k += 1
+                # Options may follow -c; a lone `--` ends them.
+                while k < len(rest) and rest[k][:1] in ("-", "+") and len(rest[k]) > 1:
+                    flag = rest[k]
+                    k += 1
+                    if flag == "--":
+                        break
+                    k += flag in ("-o", "+o", "-O", "+O")
+                return rest[k] if k < len(rest) else None
     elif name == "eval":
         return " ".join(rest) or None
     elif name == "wsl":
@@ -728,7 +766,7 @@ def main():
         # Fail closed: a crash exits non-zero and the harness runs the call.
         deny_on_error("secret_dump_guard", exc)
         return
-    if matched_utility == _NESTED:
+    if isinstance(matched_utility, _NestedTooDeep):
         deny(
             f"Vault Privacy Rule (#188): this command nests substitutions or "
             f"shells more than {_MAX_DEPTH} levels deep, which the vault "

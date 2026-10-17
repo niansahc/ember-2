@@ -36,7 +36,7 @@ PARITY = [
     ("spaces-around-equals", f"{KEY} = /data/vault\n", "/data/vault"),
     ("empty", f"{KEY}=\n", None),
     ("missing-key", "OTHER=/data/vault\n", None),
-    ("bom", f"﻿{KEY}=/data/vault\n", "/data/vault"),
+    ("bom", f"\ufeff{KEY}=/data/vault\n", "/data/vault"),
     ("export-prefix", f"export {KEY}=/data/vault\n", "/data/vault"),
     ("inline-comment", f"{KEY}=/data/vault # note\n", "/data/vault"),
     ("comment-after-quoted", f'{KEY}="/data/vault"  # note\n', "/data/vault"),
@@ -185,13 +185,92 @@ def test_fallback_raises_when_it_cannot_read_a_line_like_dotenv(tmp_path, monkey
             hook_utils.env_file_value(KEY, str(path))
 
 
-def test_fallback_ignores_an_unreadable_line_for_another_key(tmp_path, monkeypatch):
-    """Control for the raise cases: a line the fallback can read parses, so
-    the raise is about the line, not the file."""
+def test_the_bom_case_really_starts_with_a_bom():
+    """The BOM is written as an escape; an editor that strips an invisible
+    character would otherwise turn the case into a plain-file test."""
+    text = next(case[1] for case in PARITY if case[0] == "bom")
+    assert text.startswith("\ufeff")
+
+
+# A line the fallback cannot read, for a key nobody asked about.
+UNRELATED_UNREADABLE = [
+    'OTHER="unclosed\n{key}=/data/vault\n',
+    "OTHER='/a'b\n{key}=/data/vault\n",
+    'OTHER="a\nb"\n{key}=/data/vault\n',
+    "OTHER=${{NOPE_UNSET_X:-${{NOPE_UNSET_Y}}}}\n{key}=/data/vault\n",
+]
+
+
+@pytest.mark.parametrize("text", UNRELATED_UNREADABLE, ids=["unclosed", "text-after-quote", "multi-line", "nested-default"])
+def test_fallback_skips_an_unreadable_line_of_another_key(tmp_path, monkeypatch, text):
     path = tmp_path / "probe.env"
-    path.write_text(f"{KEY}=/data/vault\nOTHER=ok\n", encoding="utf-8")
-    _, fallback = _both(path, monkeypatch)
-    assert fallback == "/data/vault"
+    path.write_text(text.format(key=KEY), encoding="utf-8")
+    official, fallback = _both(path, monkeypatch)
+    assert official == "/data/vault"
+    assert fallback == official
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{key}="/data/vault\n',  # the key's own line
+        "OTHER='/a'b\n{key}=${{OTHER}}/vault\n",  # the key's value needs the unreadable one
+        "{key}='/a'b\n",
+    ],
+    ids=["own-line", "references-unreadable", "own-line-text-after-quote"],
+)
+def test_fallback_raises_when_the_requested_key_is_affected(tmp_path, monkeypatch, text):
+    """Control for the skip cases above: the same kind of line still raises
+    when it is the requested key's, or one its value reads."""
+    path = tmp_path / "probe.env"
+    path.write_text(text.format(key=KEY), encoding="utf-8")
+    with monkeypatch.context() as patch:
+        _hide_dotenv(patch)
+        with pytest.raises(ValueError):
+            hook_utils.env_file_value(KEY, str(path))
+
+
+def test_a_later_good_line_replaces_an_unreadable_one(tmp_path, monkeypatch):
+    path = tmp_path / "probe.env"
+    path.write_text(f"{KEY}='/a'b\n{KEY}=/data/vault\n", encoding="utf-8")
+    official, fallback = _both(path, monkeypatch)
+    assert official == "/data/vault"
+    assert fallback == official
+
+
+def test_strict_read_raises_when_the_file_cannot_be_opened(tmp_path, monkeypatch):
+    """`strict` lets a caller that caches the answer tell a failed read from
+    an absent key. Control: the default still reads it as no key."""
+    path = tmp_path / "probe.env"
+    path.write_text(f"{KEY}=/data/vault\n", encoding="utf-8")
+    real_open = open
+
+    def locked(file, *args, **kwargs):
+        if str(file) == str(path):
+            raise PermissionError("locked")
+        return real_open(file, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        _hide_dotenv(patch)
+        patch.setattr("builtins.open", locked)
+        with pytest.raises(PermissionError):
+            hook_utils.env_file_value(KEY, str(path), strict=True)
+        assert hook_utils.env_file_value(KEY, str(path)) is None
+    assert hook_utils.env_file_value(KEY, str(path), strict=True) == "/data/vault"
+
+
+def test_references_digest_hides_values_and_follows_them(tmp_path, monkeypatch):
+    path = tmp_path / "probe.env"
+    path.write_text("A=${PROBE_REF_ONE}/x\nB=plain\n", encoding="utf-8")
+    monkeypatch.setenv("PROBE_REF_ONE", "first-value")
+    first = hook_utils.env_references(str(path))
+    assert len(first) == 64 and "first-value" not in first
+    monkeypatch.setenv("PROBE_REF_ONE", "second-value")
+    assert hook_utils.env_references(str(path)) != first
+    # Control: a file with no reference has no digest, whatever the environment.
+    plain = tmp_path / "plain.env"
+    plain.write_text("A=1\n", encoding="utf-8")
+    assert hook_utils.env_references(str(plain)) == ""
 
 
 def test_missing_file_is_none_on_both_paths(tmp_path, monkeypatch):

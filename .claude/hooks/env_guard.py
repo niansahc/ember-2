@@ -45,21 +45,22 @@ message). Any other receiver (a shell, an interpreter incl. `python3.12`,
 body.
 
 Threat model. These guards prevent accidental exposure by an agent: a tool
-call that would put a .env file's contents into the transcript by mistake, in a known form.
-They are pattern checks, not a sandbox, and do not defend against deliberate
-evasion (a path built at runtime, a script or encoding, a program that opens
-the file itself).
-
-Limits: a pattern check on the call, not a sandbox. A name built at
-runtime (`.e""nv`, PowerShell backtick escapes, base64, a script that
-opens the file, an 8.3 short name) is not caught, and neither is a
-program that expands a quoted dot-only pattern itself (a Python glob call
-on '.*'), or a recursive read that never names the file (grep -r KEY .).
+call that would put a .env file's contents into the transcript by mistake,
+in a known form. They are pattern checks, not a sandbox, and do not defend
+against deliberate evasion (a path built at runtime, a script or encoding, a
+program that opens the file itself). So a name built at runtime (`.e""nv`,
+PowerShell backtick escapes, base64, a script that opens the file, an 8.3
+short name) is not caught, and neither is a program that expands a quoted
+dot-only pattern itself (a Python glob call on '.*'), or a recursive read that
+never names the file (grep -r KEY .).
 
 Input: hook JSON on stdin. Output: a deny decision on stdout, or nothing.
 Exit code is always 0. An unparseable payload is allowed through with a
 note on stderr: failing closed here would block every Read and Bash call
-and lock the session out of fixing the hook.
+and lock the session out of fixing the hook. A payload that parses but makes
+the check itself raise is denied (hook_utils.deny_on_error): a crashed hook
+exits non-zero, which the harness treats as non-blocking, and the call would
+run.
 """
 
 import fnmatch
@@ -68,7 +69,16 @@ import re
 import sys
 
 # Same directory; Python puts it on sys.path when this file runs as a script.
-from hook_utils import command_name, deny, drop_inert_heredocs, shell_spans
+from hook_utils import (
+    GIT_OR_GH,
+    PROSE_FLAG_NAMES,
+    command_name,
+    deny,
+    deny_on_error,
+    drop_inert_heredocs,
+    shell_step,
+    shell_spans,
+)
 
 # `.env`, `.env.local`, `.env.production`, ... (case-insensitive: Windows).
 _ENV_NAME = re.compile(r"^\.env(\..+)?$", re.IGNORECASE)
@@ -248,11 +258,16 @@ SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
 # it holds no `$(` and no backtick: the shell runs those, so
 # `--body "$(cat .env)"` is scanned like any other command.
 _PROSE_FLAG_VALUE = re.compile(
-    r"""(?:^|\s)(?:-a?m|--message|--body|--title|--notes)(?:\s+|=)"""
+    r"(?:^|\s)" + PROSE_FLAG_NAMES + r"""(?:\s+|=)"""
     r"""(?:"(?:[^"\\$`]|\\.|\$(?!\())*"|'[^']*')"""
 )
-_SEGMENT_SPLIT = re.compile(r"([;&|]+)")
-_GIT_OR_GH = re.compile(r"^\s*(?:git|gh)\s")
+# PowerShell here-string value: @'...'@ is literal; @"..."@ expands `$(` and
+# backticks, so it is prose only when it holds neither.
+_HERE_STRING_VALUE = re.compile(
+    r"(?:^|\s)" + PROSE_FLAG_NAMES + r"""(?:\s+|=)"""
+    r"""(?:@'[\s\S]*?\n'@|@"(?:(?!\$\(|`)[\s\S])*?\n"@)"""
+)
+_SEPARATORS = ";&|"
 # Quotes, separators, redirections and `=` (for --path=.env) all delimit.
 # Backslashes do NOT, so Windows paths survive intact.
 _TOKEN_SPLIT = re.compile(r"""[\s"'`;|&<>(){}=,]+""")
@@ -266,11 +281,49 @@ _GLOB_FLAGS = frozenset({
 })
 
 
-def _without_prose(command: str) -> str:
-    command = drop_inert_heredocs(command)
+def _segments(command: str) -> list[str]:
+    """`command` cut at ; & | outside quotes, separators kept as segments of
+    their own. A message value such as "fix: a; b" stays in one piece."""
+    out: list[str] = []
+    start, quote, i = 0, "", 0
+    while i < len(command):
+        size, after = shell_step(command, i, quote)
+        if not quote and command[i] in _SEPARATORS:
+            if i > start:
+                out.append(command[start:i])
+            j = i
+            while j < len(command) and command[j] in _SEPARATORS:
+                j += 1
+            out.append(command[i:j])
+            start = i = j
+            continue
+        quote, i = after, i + size
+    if start < len(command):
+        out.append(command[start:])
+    return out
+
+
+def _drop_here_strings(command: str) -> str:
+    """`command` without the PowerShell here-string values of message flags
+    on git and gh commands (`git commit -m @'...'@`)."""
+    def drop(match) -> str:
+        line = command.rfind("\n", 0, match.start()) + 1
+        cut = max(command.rfind(c, line, match.start()) for c in _SEPARATORS) + 1
+        return " " if GIT_OR_GH.match(command[max(line, cut) : match.start() + 1]) else match.group(0)
+    return _HERE_STRING_VALUE.sub(drop, command)
+
+
+def _without_prose(command: str, bash: bool = True) -> str:
+    """`command` without the text the shell cannot run: message values and
+    inert heredoc bodies. `bash` False is PowerShell, which has no `<<`
+    heredoc but has here-strings."""
+    if bash:
+        command = drop_inert_heredocs(command)
+    else:
+        command = _drop_here_strings(command)
     return "".join(
-        _PROSE_FLAG_VALUE.sub(" ", seg) if _GIT_OR_GH.match(seg) else seg
-        for seg in _SEGMENT_SPLIT.split(command)
+        _PROSE_FLAG_VALUE.sub(" ", seg) if GIT_OR_GH.match(seg) else seg
+        for seg in _segments(command)
     )
 
 
@@ -280,7 +333,7 @@ def _words(command: str, bash: bool) -> list[tuple[str, bool]]:
     wildcards through as text."""
     spans = [
         (span, [word for word in _TOKEN_SPLIT.split(span) if word])
-        for span in shell_spans(_without_prose(command))
+        for span in shell_spans(_without_prose(command, bash))
     ]
     if bash and any(command_name(word) in _SHELLS for _, words in spans for word in words):
         bash = False
@@ -338,9 +391,15 @@ def main():
     except Exception as exc:
         print(f"[env_guard] unparseable hook payload, allowing: {exc}", file=sys.stderr)
         return
-    target = evaluate(payload)
-    if target:
-        deny(reason(target))
+    try:
+        target = evaluate(payload)
+        message = reason(target) if target else None
+    except Exception as exc:
+        # Fail closed: a crash exits non-zero and the harness runs the call.
+        deny_on_error("env_guard", exc)
+        return
+    if message:
+        deny(message)
 
 
 if __name__ == "__main__":

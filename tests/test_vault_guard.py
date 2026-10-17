@@ -395,7 +395,7 @@ def test_configured_vault_by_home_relative_path(configured_vault):
 def test_cache_skips_the_parse_until_the_env_file_changes(configured_vault, monkeypatch):
     calls = []
     real = guard.env_file_value
-    monkeypatch.setattr(guard, "env_file_value", lambda key, path: calls.append(key) or real(key, path))
+    monkeypatch.setattr(guard, "env_file_value", lambda key, path, **kw: calls.append(key) or real(key, path, **kw))
     payload = _config_payload(CONFIG_DENY["read-native"], configured_vault)
     assert guard.evaluate(payload) is not None
     assert guard.evaluate(payload) is not None
@@ -577,7 +577,7 @@ def test_the_cache_is_still_used_while_the_environment_is_unchanged(two_roots, m
     monkeypatch.setenv("ROOT", two_roots.roots["b"].as_posix())
     calls = []
     real = guard.env_file_value
-    monkeypatch.setattr(guard, "env_file_value", lambda key, path: calls.append(key) or real(key, path))
+    monkeypatch.setattr(guard, "env_file_value", lambda key, path, **kw: calls.append(key) or real(key, path, **kw))
     assert _reads(two_roots.project, two_roots.roots["b"])
     assert _reads(two_roots.project, two_roots.roots["b"])
     assert len(calls) == 1
@@ -614,3 +614,62 @@ def test_a_set_with_a_reversed_range_still_names_the_vault(pattern):
 def test_a_set_that_is_only_a_reversed_range_names_nothing(pattern):
     """Control: with no valid member left the component cannot match."""
     assert not guard.names_vault_path(pattern)
+
+
+# --- final lean review: what the cache stores and when -----------------------
+
+def _cache_file(project):
+    return project / ".claude" / guard._CACHE_NAME
+
+
+def test_a_failed_env_read_is_not_cached(configured_vault, monkeypatch):
+    """A lock or a permission error while reading the file is not "no key":
+    the call that hit it is answered without the configured vault, and the
+    next call reads the file again and finds it."""
+    real = guard.env_file_value
+    state = {"locked": True}
+
+    def flaky(key, path, **kw):
+        if state["locked"]:
+            raise PermissionError("locked")
+        return real(key, path, **kw)
+
+    monkeypatch.setattr(guard, "env_file_value", flaky)
+    payload = _config_payload(CONFIG_DENY["read-native"], configured_vault)
+    assert guard.evaluate(payload) is None
+    assert not _cache_file(configured_vault.project).exists()
+    state["locked"] = False
+    assert guard.evaluate(payload) is not None
+    # Control: a successful read is cached.
+    assert _cache_file(configured_vault.project).is_file()
+
+
+def test_the_cache_holds_a_digest_of_referenced_values_not_the_values(two_roots, monkeypatch):
+    secret = "probe-secret-value-1"
+    (two_roots.project / ".env").write_text(
+        f"ROOT={two_roots.roots['a'].as_posix()}\nPRIVATE_VAULT_PATH=${{ROOT}}/vaults/live\n"
+        "UNRELATED=${PROBE_REFERENCED}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PROBE_REFERENCED", secret)
+    assert _reads(two_roots.project, two_roots.roots["a"])
+    text = _cache_file(two_roots.project).read_text(encoding="utf-8")
+    assert secret not in text
+    first = json.loads(text)["key"]
+    # Control: the digest still follows the value, so the cache is not stale.
+    monkeypatch.setenv("PROBE_REFERENCED", "probe-secret-value-2")
+    assert _reads(two_roots.project, two_roots.roots["a"])
+    second = json.loads(_cache_file(two_roots.project).read_text(encoding="utf-8"))["key"]
+    assert first != second
+
+
+def test_a_failed_cache_write_leaves_no_temp_file(configured_vault):
+    cache = _cache_file(configured_vault.project)
+    with pytest.raises(TypeError):
+        guard._write_cache(str(cache), {"key": [1], "value": object()})
+    assert list(cache.parent.glob("*.tmp")) == []
+    assert not cache.exists()
+    # Control: a good write leaves the cache and no temp file.
+    guard._write_cache(str(cache), {"key": [1], "value": "x"})
+    assert cache.is_file()
+    assert list(cache.parent.glob("*.tmp")) == []

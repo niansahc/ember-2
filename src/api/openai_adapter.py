@@ -40,7 +40,7 @@ from src.memory.service import MemoryService
 from src.memory.read_memory import read_memories
 from src.memory.exchange import ExchangeRecorder, ExchangeStorageError, OUTCOME_FAILED
 from src.memory.session import get_session, list_sessions
-from src.context.service import ContextService
+from src.context.service import ContextService, resolve_search_outcome
 from src.llm.adapter import LLMAdapter, StatusSignal
 # Shared with the post-gen pipeline, which skips the search-unavailable
 # disclosure on refusals.
@@ -1275,16 +1275,26 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
             _original_query = _confirmation_result["query"]
             work.message = _original_query
             work.raw_message = _original_query
-            from src.tools.web_search import run_web_search
+            from src.tools.web_search import REASON_FILTERED, run_web_search
             _search = run_web_search(_original_query)
-            work.confirmation_web_items = _search.items
-            work.confirmation_search_status = _search.status
-            work.confirmation_search_reason = _search.reason
+            # AI-doc quarantine, as on every search path.
+            (
+                work.confirmation_web_items,
+                work.confirmation_search_status,
+                work.confirmation_search_reason,
+            ) = resolve_search_outcome(_search, _original_query)
             # run_web_search never raises; a failed or blocked search arrives
-            # as "unavailable" and routes to the post-gen retry offer.
-            work.confirmation_search_failed = _search.status == "unavailable"
-            logger.info("[CONFIRM] Executing deferred web search (%d chars), status=%s",
-                        len(_original_query), _search.status)
+            # as "unavailable" and routes to the post-gen retry offer. A search
+            # the quarantine emptied is not retried: a retry returns the same
+            # filtered result, so the model answers with the search note and
+            # the disclosure line instead.
+            work.confirmation_search_failed = (
+                work.confirmation_search_status == "unavailable"
+                and work.confirmation_search_reason != REASON_FILTERED
+            )
+            logger.info("[CONFIRM] Executing deferred web search (%d chars), status=%s reason=%s",
+                        len(_original_query), work.confirmation_search_status,
+                        work.confirmation_search_reason)
         elif not _confirmation_result["confirmed"]:
             pass
 
@@ -2010,11 +2020,15 @@ async def _complete_exchange(
         if _should_search:
             from src.tools.web_search import run_web_search
             _auto_search = run_web_search(_raw_user_message)
-            context_packet.web_search_status = _auto_search.status
-            context_packet.web_search_reason = _auto_search.reason
-            if _auto_search.items:
-                context_packet.web_items = _auto_search.items
-                logger.info("[WEB_SEARCH] Autonomous execution: %d results", len(_auto_search.items))
+            # AI-doc quarantine, as on every search path.
+            _auto_items, _auto_status, _auto_reason = resolve_search_outcome(
+                _auto_search, _raw_user_message
+            )
+            context_packet.web_search_status = _auto_status
+            context_packet.web_search_reason = _auto_reason
+            if _auto_items:
+                context_packet.web_items = _auto_items
+                logger.info("[WEB_SEARCH] Autonomous execution: %d results", len(_auto_items))
 
     # Web search transparency: track whether web search results were used
     # in context assembly. Communicated to the UI via X-Ember-Web-Search response

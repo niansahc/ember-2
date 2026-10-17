@@ -588,8 +588,12 @@ def test_the_cache_is_still_used_while_the_environment_is_unchanged(two_roots, m
 @pytest.mark.parametrize("value", ["a\x00b", "x" * 40000], ids=["nul-byte", "over-path-limit"])
 def test_an_unusable_configured_vault_value_fails_closed(hermetic_hook_project, value):
     (hermetic_hook_project / ".env").write_text(f"PRIVATE_VAULT_PATH={value}\n", encoding="utf-8")
-    with pytest.raises(ValueError):
+    # The type is the platform's: a NUL byte is a ValueError everywhere, an
+    # over-long path a ValueError on Windows and OSError (ENAMETOOLONG) on
+    # Linux. Neither is the "no such directory" pair that reads as no vault.
+    with pytest.raises((ValueError, OSError)) as caught:
         guard.vault_dirs()
+    assert not isinstance(caught.value, (FileNotFoundError, NotADirectoryError))
     out = run_hook("vault_guard.py", hook_payload("Read", cwd=str(hermetic_hook_project), file_path="src/a.py"))
     assert hook_output(out)["permissionDecision"] == "deny"
 
@@ -673,3 +677,22 @@ def test_a_failed_cache_write_leaves_no_temp_file(configured_vault):
     guard._write_cache(str(cache), {"key": [1], "value": "x"})
     assert cache.is_file()
     assert list(cache.parent.glob("*.tmp")) == []
+
+
+def test_the_linux_over_length_error_is_a_failure_to_look_not_an_absent_vault(monkeypatch):
+    """Linux reports an over-long path as OSError(ENAMETOOLONG), where Windows
+    raises ValueError. Simulated here so the Linux behavior is pinned on every
+    platform. Control: ENOENT is an absent directory."""
+    import errno
+
+    def too_long(path):
+        raise OSError(errno.ENAMETOOLONG, "File name too long")
+
+    def missing(path):
+        raise FileNotFoundError(errno.ENOENT, "No such file")
+
+    monkeypatch.setattr(guard.os, "stat", too_long)
+    with pytest.raises(OSError):
+        guard._is_dir("x")
+    monkeypatch.setattr(guard.os, "stat", missing)
+    assert guard._is_dir("x") is False

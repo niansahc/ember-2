@@ -58,9 +58,20 @@ AI_DOC_MARKERS: tuple[str, ...] = (
 # AI system (not Ember), quarantined content should be surfaced.
 _AI_INQUIRY_PATTERNS = (
     "tell me about claude", "tell me about gpt", "tell me about gemini",
-    "compare", "how does claude", "how does gpt", "what is claude",
+    "how does claude", "how does gpt", "what is claude",
     "what is chatgpt", "what is openai", "what is anthropic",
 )
+# A comparison opens the hatch only when it names an AI system: a bare
+# "compare" let "compare laptop prices" through unfiltered.
+_AI_COMPARISON_WORD = "compare"
+
+
+def _is_ai_inquiry(user_lower: str) -> bool:
+    if any(pattern in user_lower for pattern in _AI_INQUIRY_PATTERNS):
+        return True
+    return _AI_COMPARISON_WORD in user_lower and any(
+        name in user_lower for name in AI_SYSTEM_NAMES
+    )
 
 
 def _quarantine_ai_docs(
@@ -79,7 +90,7 @@ def _quarantine_ai_docs(
     """
     user_lower = user_message.lower()
     if count("web_quarantine.ai_inquiry_escape_hatch",
-             any(pattern in user_lower for pattern in _AI_INQUIRY_PATTERNS)):
+             _is_ai_inquiry(user_lower)):
         return web_items, []
 
     safe: list[dict] = []
@@ -110,8 +121,14 @@ from src.context import prior as _prior
 from src.tools.web_search import REASON_FILTERED, run_web_search
 
 
-def _resolve_search_outcome(search, user_message: str):
+def resolve_search_outcome(search, user_message: str):
     """(web_items, status, reason) for the packet after AI-doc quarantine.
+
+    The single quarantine entry for every search result that can reach the
+    context packet: context assembly, the ask-first confirm path and the
+    autonomous backstop in src/api/openai_adapter.py. A caller of run_web_search that
+    skips it lets AI system documentation into the packet unfiltered
+    (tests/test_search_quarantine_paths.py checks every caller).
 
     A search that returned hits but lost every one to quarantine is a search
     failure (unavailable / filtered): without this the packet would carry
@@ -287,7 +304,7 @@ class ContextService:
         if policy.use_web_search and not skip_web_search:
             search = run_web_search(user_message)
             web_items, web_search_status, web_search_reason = (
-                _resolve_search_outcome(search, user_message)
+                resolve_search_outcome(search, user_message)
             )
 
         state_items, task_items, memory_items, reflection_items, query_embedding = self.retriever.retrieve(user_message)

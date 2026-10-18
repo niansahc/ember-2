@@ -15,7 +15,7 @@ import requests
 
 import src.tools.web_search as web_search_mod
 from src.context.models import ContextPacket
-from src.context.service import _resolve_search_outcome
+from src.context.service import resolve_search_outcome
 from src.llm.adapter import LLMAdapter, search_failure_think
 from src.llm.prompt_builder import PromptBuilder
 from src.llm.post_gen_pipeline import (
@@ -162,7 +162,7 @@ _AI_DOC_HIT = {
 
 def test_quarantine_emptying_the_list_is_filtered():
     search = WebSearchResult(items=[_AI_DOC_HIT], status="ok")
-    items, status, reason = _resolve_search_outcome(search, "price of bitcoin")
+    items, status, reason = resolve_search_outcome(search, "price of bitcoin")
     assert (items, status, reason) == ([], "unavailable", "filtered")
     assert "reason: filtered" in _section(status, reason)
 
@@ -172,14 +172,14 @@ def test_quarantine_leaving_a_hit_is_untouched():
     good = {"title": "Bitcoin price", "url": "https://example.com/b",
             "snippet": "price today", "published_at": None}
     search = WebSearchResult(items=[_AI_DOC_HIT, good], status="ok")
-    items, status, reason = _resolve_search_outcome(search, "price of bitcoin")
+    items, status, reason = resolve_search_outcome(search, "price of bitcoin")
     assert items == [good]
     assert (status, reason) == ("ok", None)
 
 
 def test_failed_search_passes_through_resolve_unchanged():
     search = WebSearchResult(status="unavailable", reason="timeout")
-    assert _resolve_search_outcome(search, "q") == ([], "unavailable", "timeout")
+    assert resolve_search_outcome(search, "q") == ([], "unavailable", "timeout")
 
 
 # ---------------------------------------------------------------------------

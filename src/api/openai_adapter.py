@@ -40,7 +40,8 @@ from src.memory.service import MemoryService
 from src.memory.read_memory import read_memories
 from src.memory.exchange import ExchangeRecorder, ExchangeStorageError, OUTCOME_FAILED
 from src.memory.session import get_session, list_sessions
-from src.context.service import ContextService
+from src.context.service import ContextService, resolve_search_outcome
+from src.tools.web_search import NO_REPEAT_OFFER_REASONS
 from src.llm.adapter import LLMAdapter, StatusSignal
 # Shared with the post-gen pipeline, which skips the search-unavailable
 # disclosure on refusals.
@@ -409,6 +410,7 @@ def _store_reply(
     user_turn_text: str,
     pending_query: str,
     pending_records: list,
+    search_reason: str | None = None,
 ) -> None:
     """Store the reply, then the work that must exist before [DONE].
 
@@ -417,6 +419,10 @@ def _store_reply(
     A reply write failure raises ExchangeStorageError; the stream guard or the
     handler turns it into storage_failed. _write_pending_confirmation catches
     its own errors. Used by the streaming paths and the non-stream path alike.
+
+    search_reason is the packet's web_search_reason. On a reason in
+    NO_REPEAT_OFFER_REASONS no pending confirmation is written: a "yes" would
+    re-run the same search and get the same result.
     """
     exchange.record_reply(reply)
     if skip_vault_write:
@@ -428,6 +434,12 @@ def _store_reply(
         vault=exchange.vault,
         session_id=exchange.session_id,
     )
+    if search_reason in NO_REPEAT_OFFER_REASONS:
+        logger.info(
+            "[ASK_FIRST] pending_confirmation not written: search reason=%s "
+            "repeats on retry", search_reason,
+        )
+        return
     with vault_binding(exchange.vault):
         _write_pending_confirmation(
             reply, pending_query, exchange.session_id,
@@ -1277,14 +1289,32 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
             work.raw_message = _original_query
             from src.tools.web_search import run_web_search
             _search = run_web_search(_original_query)
-            work.confirmation_web_items = _search.items
-            work.confirmation_search_status = _search.status
-            work.confirmation_search_reason = _search.reason
+            # AI-doc quarantine, as on every search path.
+            (
+                work.confirmation_web_items,
+                work.confirmation_search_status,
+                work.confirmation_search_reason,
+            ) = resolve_search_outcome(_search, _original_query)
             # run_web_search never raises; a failed or blocked search arrives
-            # as "unavailable" and routes to the post-gen retry offer.
-            work.confirmation_search_failed = _search.status == "unavailable"
-            logger.info("[CONFIRM] Executing deferred web search (%d chars), status=%s",
-                        len(_original_query), _search.status)
+            # as "unavailable" and routes to the post-gen retry offer. A reason
+            # in NO_REPEAT_OFFER_REASONS is not retried: a retry returns the
+            # same result, so the model answers with the search note and the
+            # disclosure line instead.
+            work.confirmation_search_failed = (
+                work.confirmation_search_status == "unavailable"
+                and work.confirmation_search_reason not in NO_REPEAT_OFFER_REASONS
+            )
+            logger.info("[CONFIRM] Executing deferred web search (%d chars), status=%s reason=%s "
+                        "retry_offer=%s",
+                        len(_original_query), work.confirmation_search_status,
+                        work.confirmation_search_reason, work.confirmation_search_failed)
+            # The quarantine logs in resolve_search_outcome do not say which
+            # path ran them; this line does.
+            logger.info(
+                "[WEB_SEARCH] path=confirm: %d of %d results kept, status=%s reason=%s",
+                len(work.confirmation_web_items), len(_search.items),
+                work.confirmation_search_status, work.confirmation_search_reason,
+            )
         elif not _confirmation_result["confirmed"]:
             pass
 
@@ -1779,6 +1809,13 @@ async def _complete_exchange(
         _confirmation_search_status,
         _confirmation_search_reason,
     )
+    # The retry offer is for a turn with nothing to answer from. When context
+    # assembly also searched (autonomous switched on while the offer was
+    # pending) and its items survived the merge, the model answers from them.
+    if _confirmation_search_failed and context_packet.web_items:
+        logger.info("[CONFIRM] deferred search failed, merged packet has "
+                    "%d web items: no retry offer", len(context_packet.web_items))
+        _confirmation_search_failed = False
 
     # ADR-021 T2 detection. Non-fatal: detection failure falls through to
     # no signal so the chat path always completes.
@@ -1971,10 +2008,13 @@ async def _complete_exchange(
     # under-searching is harmful. Err toward searching on temporal queries.
     # Autonomous web search backstop. The classifier's _intent_class is the
     # authoritative "should this search?" signal -- the inner check below
-    # gates on it. Do NOT add a conversational-marker outer gate here: the
-    # eval_manual --auto X-Test-Session path skips the primary search inside
-    # build_context (line 1118 empty-packet branch), making this backstop the
-    # only remaining trigger. A substring keyword heuristic (CONVERSATIONAL_MARKERS)
+    # gates on it. Do NOT add a conversational-marker outer gate here: on a
+    # stateless turn (vault toggle off) the empty-packet branch above skips
+    # build_context and its search, and on an intent mismatch (assembly
+    # reclassifies the message as non-web_search) build_context does not
+    # search either, so this backstop is the only remaining trigger.
+    # X-Test-Session suppresses writes only, not reads, so it does not reach
+    # this path. A substring keyword heuristic (CONVERSATIONAL_MARKERS)
     # used to gate this block, which suppressed web search on queries like
     # "Hi there, happy Friday. What's the latest news about AI?" -- the
     # classifier returned web_search intent but the conversational-prefix
@@ -2010,11 +2050,20 @@ async def _complete_exchange(
         if _should_search:
             from src.tools.web_search import run_web_search
             _auto_search = run_web_search(_raw_user_message)
-            context_packet.web_search_status = _auto_search.status
-            context_packet.web_search_reason = _auto_search.reason
-            if _auto_search.items:
-                context_packet.web_items = _auto_search.items
-                logger.info("[WEB_SEARCH] Autonomous execution: %d results", len(_auto_search.items))
+            # AI-doc quarantine, as on every search path.
+            _auto_items, _auto_status, _auto_reason = resolve_search_outcome(
+                _auto_search, _raw_user_message
+            )
+            context_packet.web_search_status = _auto_status
+            context_packet.web_search_reason = _auto_reason
+            if _auto_items:
+                context_packet.web_items = _auto_items
+            # Logged on every outcome, filtered and empty included: the
+            # quarantine logs in resolve_search_outcome carry no path.
+            logger.info(
+                "[WEB_SEARCH] path=autonomous: %d of %d results kept, status=%s reason=%s",
+                len(_auto_items), len(_auto_search.items), _auto_status, _auto_reason,
+            )
 
     # Web search transparency: track whether web search results were used
     # in context assembly. Communicated to the UI via X-Ember-Web-Search response
@@ -2076,6 +2125,7 @@ async def _complete_exchange(
         user_turn_text=gen_ctx.user_turn_text,
         pending_query=_raw_user_message,
         pending_records=_pending_records,
+        search_reason=context_packet.web_search_reason,
     )
 
     # --- STREAMING PATH ---

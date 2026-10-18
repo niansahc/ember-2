@@ -137,7 +137,9 @@ class GenerationWork:
     confirmation_web_items: list = field(default_factory=list)
     confirmation_confirmed: bool = False
     confirmation_search_failed: bool = False
-    # run_web_search status of the deferred search; None when none ran.
+    # Status and reason of the deferred search after the AI-doc quarantine
+    # (resolve_search_outcome): "unavailable" / "filtered" when the search
+    # returned "ok" but every hit was quarantined. None when none ran.
     confirmation_search_status: str | None = None
     confirmation_search_reason: str | None = None
     pending_records: list = field(default_factory=list)

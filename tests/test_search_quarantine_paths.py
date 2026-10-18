@@ -394,13 +394,17 @@ def test_autonomous_engines_blocked_still_offers(client, stream):
 
 @pytest.mark.parametrize("reason", ["filtered", "low_relevance"])
 def test_confirm_no_pending_after_unrepeatable_failure(client, reason, caplog):
+    """No canned retry offer either: the model's reply stands, behind the
+    disclosure line."""
     response, min_hits = _failing_search(reason)
     with caplog.at_level("INFO", logger="ember.openai_adapter"):
-        _, _, packet, write_pending = _turn(
+        _, text, packet, write_pending = _turn(
             client, [response], autonomous=False, confirm=True,
             min_term_hits=min_hits, reply=_OFFER_REPLY)
     assert packet.web_search_reason == reason
     assert _NO_REPEAT in _search_section(packet)
+    assert text == f"{WEB_SEARCH_UNAVAILABLE_DISCLOSURE}\n\n{_OFFER_REPLY}"
+    assert f"retry offer skipped: search reason={reason}" in caplog.text
     write_pending.assert_not_called()
     assert (f"path=confirm: 0 of {_RETURNED[reason]} results kept, status=unavailable reason={reason}"
             in caplog.text)
@@ -408,7 +412,8 @@ def test_confirm_no_pending_after_unrepeatable_failure(client, reason, caplog):
 
 def test_confirm_engines_blocked_still_gets_the_retry_offer(client):
     """Positive control for the test above: a blocked confirm search routes
-    to the post-gen retry offer, and that reply reaches the pending writer."""
+    to the post-gen retry offer, and that reply reaches the pending writer.
+    engines_blocked is not in NO_REPEAT_OFFER_REASONS."""
     response, _ = _failing_search("engines_blocked")
     _, text, _, write_pending = _turn(
         client, [response], autonomous=False, confirm=True, reply=_OFFER_REPLY)

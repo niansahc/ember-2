@@ -1287,7 +1287,7 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
             _original_query = _confirmation_result["query"]
             work.message = _original_query
             work.raw_message = _original_query
-            from src.tools.web_search import REASON_FILTERED, run_web_search
+            from src.tools.web_search import run_web_search
             _search = run_web_search(_original_query)
             # AI-doc quarantine, as on every search path.
             (
@@ -1296,14 +1296,19 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
                 work.confirmation_search_reason,
             ) = resolve_search_outcome(_search, _original_query)
             # run_web_search never raises; a failed or blocked search arrives
-            # as "unavailable" and routes to the post-gen retry offer. A search
-            # the quarantine emptied is not retried: a retry returns the same
-            # filtered result, so the model answers with the search note and
-            # the disclosure line instead.
+            # as "unavailable" and routes to the post-gen retry offer. A reason
+            # in NO_REPEAT_OFFER_REASONS (filtered, low_relevance) is not
+            # retried: a retry returns the same result, so the model answers
+            # with the search note and the disclosure line instead.
             work.confirmation_search_failed = (
                 work.confirmation_search_status == "unavailable"
-                and work.confirmation_search_reason != REASON_FILTERED
+                and work.confirmation_search_reason not in NO_REPEAT_OFFER_REASONS
             )
+            if work.confirmation_search_reason in NO_REPEAT_OFFER_REASONS:
+                logger.info(
+                    "[CONFIRM] retry offer skipped: search reason=%s repeats on retry",
+                    work.confirmation_search_reason,
+                )
             logger.info("[CONFIRM] Executing deferred web search (%d chars), status=%s reason=%s",
                         len(_original_query), work.confirmation_search_status,
                         work.confirmation_search_reason)
@@ -2011,8 +2016,9 @@ async def _complete_exchange(
     # stateless turn (vault toggle off) the empty-packet branch above skips
     # build_context and its search, and on an intent mismatch (assembly
     # reclassifies the message as non-web_search) build_context does not
-    # search either, so this backstop is the only remaining trigger. X-Test-Session suppresses writes only, not
-    # reads, so it does not reach this path. A substring keyword heuristic (CONVERSATIONAL_MARKERS)
+    # search either, so this backstop is the only remaining trigger.
+    # X-Test-Session suppresses writes only, not reads, so it does not reach
+    # this path. A substring keyword heuristic (CONVERSATIONAL_MARKERS)
     # used to gate this block, which suppressed web search on queries like
     # "Hi there, happy Friday. What's the latest news about AI?" -- the
     # classifier returned web_search intent but the conversational-prefix

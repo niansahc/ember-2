@@ -95,6 +95,12 @@ REASON_REQUEST_ERROR = "request_error"
 REASON_NO_RESULTS = "no_results"
 REASON_LOW_RELEVANCE = "low_relevance"
 REASON_FILTERED = "filtered"
+# Reasons a repeat of the same search returns the same result: the hits came
+# back and were dropped here (low_relevance) or by the AI-doc quarantine
+# (filtered). An offer to search again would only repeat the failure, so the
+# search note tells the model not to make one and the adapter writes no
+# ask-first pending_confirmation on such a turn.
+NO_REPEAT_OFFER_REASONS = frozenset({REASON_LOW_RELEVANCE, REASON_FILTERED})
 
 _STOPWORDS = frozenset(
     "the and for are but not you your was were with that this from have has "

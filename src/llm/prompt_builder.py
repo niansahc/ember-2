@@ -28,6 +28,7 @@ from src.context.render_window import (
 from src.safety.nature_loader import NatureLoader
 from src.safety.identity_rules_loader import IdentityRulesLoader
 from src.safety.lodestone_loader import LodestoneLoader
+from src.tools.web_search import NO_REPEAT_OFFER_REASONS
 
 logger = logging.getLogger("ember.prompt_builder")
 
@@ -280,6 +281,13 @@ _SEARCH_NOTE_TAILS = {
     ),
     "empty": " The search ran and found nothing. Say that nothing was found.",
 }
+# Added for NO_REPEAT_OFFER_REASONS (src/tools/web_search.py): searching again
+# returns the same result, and a "want me to search?" would be taken up by the
+# ask-first flow as a real offer.
+_SEARCH_NOTE_NO_REPEAT_OFFER = (
+    " Searching again would return the same result, so do not offer to "
+    "search again."
+)
 
 
 def render_search_note(status: str | None, reason: str | None) -> str:
@@ -287,6 +295,8 @@ def render_search_note(status: str | None, reason: str | None) -> str:
     tail = _SEARCH_NOTE_TAILS.get(status)
     if tail is None:
         return ""
+    if reason in NO_REPEAT_OFFER_REASONS:
+        tail += _SEARCH_NOTE_NO_REPEAT_OFFER
     reason = reason or "unspecified"
     return (
         "<web_search_status>\n"

@@ -58,9 +58,20 @@ AI_DOC_MARKERS: tuple[str, ...] = (
 # AI system (not Ember), quarantined content should be surfaced.
 _AI_INQUIRY_PATTERNS = (
     "tell me about claude", "tell me about gpt", "tell me about gemini",
-    "compare", "how does claude", "how does gpt", "what is claude",
+    "how does claude", "how does gpt", "what is claude",
     "what is chatgpt", "what is openai", "what is anthropic",
 )
+# A comparison opens the hatch only when it names an AI system: a bare
+# "compare" let "compare laptop prices" through unfiltered.
+_AI_COMPARISON_WORD = "compare"
+
+
+def _is_ai_inquiry(user_lower: str) -> bool:
+    if any(pattern in user_lower for pattern in _AI_INQUIRY_PATTERNS):
+        return True
+    return _AI_COMPARISON_WORD in user_lower and any(
+        name in user_lower for name in AI_SYSTEM_NAMES
+    )
 
 
 def _quarantine_ai_docs(
@@ -79,7 +90,7 @@ def _quarantine_ai_docs(
     """
     user_lower = user_message.lower()
     if count("web_quarantine.ai_inquiry_escape_hatch",
-             any(pattern in user_lower for pattern in _AI_INQUIRY_PATTERNS)):
+             _is_ai_inquiry(user_lower)):
         return web_items, []
 
     safe: list[dict] = []

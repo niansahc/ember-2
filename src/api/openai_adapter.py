@@ -1297,21 +1297,17 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
             ) = resolve_search_outcome(_search, _original_query)
             # run_web_search never raises; a failed or blocked search arrives
             # as "unavailable" and routes to the post-gen retry offer. A reason
-            # in NO_REPEAT_OFFER_REASONS (filtered, low_relevance) is not
-            # retried: a retry returns the same result, so the model answers
-            # with the search note and the disclosure line instead.
+            # in NO_REPEAT_OFFER_REASONS is not retried: a retry returns the
+            # same result, so the model answers with the search note and the
+            # disclosure line instead.
             work.confirmation_search_failed = (
                 work.confirmation_search_status == "unavailable"
                 and work.confirmation_search_reason not in NO_REPEAT_OFFER_REASONS
             )
-            if work.confirmation_search_reason in NO_REPEAT_OFFER_REASONS:
-                logger.info(
-                    "[CONFIRM] retry offer skipped: search reason=%s repeats on retry",
-                    work.confirmation_search_reason,
-                )
-            logger.info("[CONFIRM] Executing deferred web search (%d chars), status=%s reason=%s",
+            logger.info("[CONFIRM] Executing deferred web search (%d chars), status=%s reason=%s "
+                        "retry_offer=%s",
                         len(_original_query), work.confirmation_search_status,
-                        work.confirmation_search_reason)
+                        work.confirmation_search_reason, work.confirmation_search_failed)
             # The quarantine logs in resolve_search_outcome do not say which
             # path ran them; this line does.
             logger.info(

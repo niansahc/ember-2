@@ -404,7 +404,6 @@ def test_confirm_no_pending_after_unrepeatable_failure(client, reason, caplog):
     assert packet.web_search_reason == reason
     assert _NO_REPEAT in _search_section(packet)
     assert text == f"{WEB_SEARCH_UNAVAILABLE_DISCLOSURE}\n\n{_OFFER_REPLY}"
-    assert f"retry offer skipped: search reason={reason}" in caplog.text
     write_pending.assert_not_called()
     assert (f"path=confirm: 0 of {_RETURNED[reason]} results kept, status=unavailable reason={reason}"
             in caplog.text)

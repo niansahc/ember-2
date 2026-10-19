@@ -4,7 +4,6 @@ confirmation flow and web search execution pipeline."""
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -12,7 +11,7 @@ import pytest
 
 from src.llm.ask_first_validator import (
     SCRIPTED_ASK_FIRST_RESPONSE,
-    _has_confirmation_question,
+    has_search_offer,
     _has_first_person_marker,
     validate_ask_first_response,
 )
@@ -25,19 +24,14 @@ from src.llm.post_gen_pipeline import run_post_gen_pipeline
 
 
 class TestDeterministicKeywordMatch:
-    """YES/NO matching uses word-set intersection, not LLM."""
-
-    _SINGLE = {"yes", "yeah", "sure", "please", "yep", "ok", "okay",
-                "search", "y"}
-    _PHRASES = ("go ahead", "do it", "please search")
+    """YES/NO matching is deterministic, not an LLM call. Exercises the real
+    interpreter in src/api/openai_adapter.py (negation first, then
+    affirmatives), not a local copy of its logic."""
 
     def _is_affirmed(self, msg: str) -> bool:
-        cleaned = re.sub(r"[^\w\s]", "", msg.strip()).lower()
-        words = set(cleaned.split())
-        return (
-            bool(words & self._SINGLE)
-            or any(p in cleaned for p in self._PHRASES)
-        )
+        from src.api.openai_adapter import _interpret_confirmation_reply
+        confirmed, _ = _interpret_confirmation_reply(msg)
+        return confirmed
 
     @pytest.mark.parametrize("msg", [
         "Yes", "yes", "YES", "Yeah", "Sure", "Please", "Go ahead",
@@ -266,7 +260,7 @@ class TestConfirmationPatterns:
         "I can look that up for you?",
     ])
     def test_patterns_detected(self, text):
-        assert _has_confirmation_question(text) is True
+        assert has_search_offer(text) is True
 
     @pytest.mark.parametrize("text", [
         "I don't have access to live data.",
@@ -276,7 +270,7 @@ class TestConfirmationPatterns:
         "",
     ])
     def test_patterns_not_detected(self, text):
-        assert _has_confirmation_question(text) is False
+        assert has_search_offer(text) is False
 
 
 # ---------------------------------------------------------------------------

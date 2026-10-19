@@ -46,7 +46,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from src.llm.ask_first_validator import validate_ask_first_response
+from src.llm.ask_first_validator import (
+    RETRY_OFFER_RESPONSE,
+    validate_ask_first_response,
+)
 from src.llm.refusal import is_refusal_response
 from src.llm.source_validator import (
     extract_web_domains,
@@ -168,11 +171,11 @@ def run_post_gen_pipeline(
         logger.info("[POSTGEN] ask-first response substituted")
 
     # Search failure on confirmation turn — substitute with a retry offer
-    # instead of letting the model narrate or re-offer from scratch.
+    # instead of letting the model narrate or re-offer from scratch. The
+    # retry offer matches OFFER_PATTERNS, so the adapter writes a pending
+    # confirmation for it and the user's next "yes" re-runs the search.
     if confirmation_search_failed:
-        reply = (
-            "I tried searching but hit an error. Want me to try again?"
-        )
+        reply = RETRY_OFFER_RESPONSE
         ask_first_substituted = True
         logger.warning("[POSTGEN] confirmation search failed - retry offer substituted")
 

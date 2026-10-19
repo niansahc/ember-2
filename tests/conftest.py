@@ -578,6 +578,31 @@ def synthetic_session_id() -> str:
     return f"sess_test_{uuid.uuid4().hex[:8]}"
 
 
+def active_pendings(session_id: str) -> list:
+    """Unresolved pending_confirmation records for one session, read through
+    the adapter's state service (the throwaway test vault)."""
+    from src.api.openai_adapter import state_service
+    records = state_service.read_by_category("pending_confirmation")
+    resolved = state_service.resolved_ids(records)
+    return [r for r in records
+            if r.id not in resolved
+            and (r.metadata or {}).get("session_id") == session_id]
+
+
+def seed_pending(session_id: str, query: str,
+                 text: str = "Want me to search for that?"):
+    """Write one active web_search pending_confirmation for a synthetic
+    session into the throwaway test vault. Returns the record."""
+    from src.api.openai_adapter import state_service
+    record = state_service.make_record(
+        state_type="pending_confirmation", text=text, source="ask_first_detector",
+        metadata={"action": "web_search", "query": query,
+                  "session_id": session_id, "resolved": False},
+    )
+    state_service.write(record)
+    return record
+
+
 def write_conversation_turn(session_id: str, text: str, **metadata) -> str:
     """Write one synthetic conversation turn for `session_id` to the session
     test vault and return its record id. Use with stub_write_embeddings."""

@@ -238,8 +238,15 @@ class ContextService:
         project_id: str | None = None,
         skip_web_search: bool = False,
         read_only: bool = False,
+        policy=None,
     ) -> ContextPacket:
         """Assemble the context packet for one turn.
+
+        policy, when given, is used instead of classify_query(user_message).
+        Only the B2 next-turn dispatch in src/api/openai_adapter.py passes
+        it: its forced explicit web_search policy must reach assembly, and
+        re-classifying the bare follow-up ("the eagles game") would route it
+        to default and skip the search. Every other caller leaves it None.
 
         read_only suppresses the retrieval-stats write at the end of
         assembly, and nothing else -- the packet returned is identical
@@ -261,7 +268,11 @@ class ContextService:
         a chat path that silently stopped writing would look identical to
         this fix while quietly disabling tiering's only upward path.
         """
-        policy = classify_query(user_message)
+        if policy is None:
+            policy = classify_query(user_message)
+        else:
+            logger.info("[CONTEXT] caller-supplied policy: %s (explicit=%s)",
+                        policy.name, getattr(policy, "explicit_search_request", False))
         # Guard hit counters record this turn only if it is a real one:
         # not read_only, and not inside a suppressed-stats scope. Every
         # investigative caller sets one or the other, so eval harnesses,

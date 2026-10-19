@@ -1,7 +1,8 @@
 """
 src/llm/ask_first_validator.py
 
-Post-generation validator for ask-first mode compliance.
+Post-generation validator for ask-first mode compliance, and the single
+source of truth for how Ember phrases an offer to search the web.
 
 Problem: when the classifier routes a query to web_search intent AND
 web_search_autonomous=False, the prompt instructs the model to ask
@@ -22,6 +23,14 @@ turns 7/9/10 surfaced this — recall queries hitting Stage 2 false-
 positive on needs_internet exemplars). When the user_message contains a
 first-person marker, we skip the substitution and let the model's draft
 through. The downstream coaching filter still trims any RLHF residue.
+
+Offer phrasing (2026-10-18 review, finding 1): OFFER_PATTERNS is the one
+list of offer phrasings. The validator accepts a reply as an offer on it,
+the post-gen pipeline substitutes RETRY_OFFER_RESPONSE (which matches it),
+and src/api/openai_adapter._write_pending_confirmation writes a pending
+confirmation on it. Before this, the writer kept its own list: the retry
+offer and some accepted model offers wrote no pending, so the user's
+"yes" did nothing.
 """
 
 from __future__ import annotations
@@ -30,6 +39,13 @@ import re
 
 SCRIPTED_ASK_FIRST_RESPONSE = (
     "I don't have current information on that — want me to search?"
+)
+
+# Substituted by the post-gen pipeline when the deferred (confirmed) search
+# fails for a reason a retry could fix. It is an offer like any other: it
+# matches OFFER_PATTERNS, so a pending confirmation is written for it.
+RETRY_OFFER_RESPONSE = (
+    "I tried searching but hit an error. Want me to try again?"
 )
 
 # First-person markers: pronouns and contractions that indicate the user
@@ -58,30 +74,53 @@ def _has_first_person_marker(user_message: str) -> bool:
         return False
     return bool(_FIRST_PERSON_GUARD.search(user_message))
 
-# Confirmation patterns. Case-insensitive. The "?" check is loose because
-# the model sometimes drops terminal punctuation.
-_CONFIRMATION_PATTERNS = [
-    re.compile(r"\bwant\s+me\s+to\s+search\b", re.IGNORECASE),
-    re.compile(r"\bshould\s+i\s+search\b", re.IGNORECASE),
-    re.compile(r"\bshall\s+i\s+search\b", re.IGNORECASE),
-    re.compile(r"\bwould\s+you\s+like\s+me\s+to\s+search\b", re.IGNORECASE),
-    re.compile(r"\bdo\s+you\s+want\s+me\s+to\s+search\b", re.IGNORECASE),
-    re.compile(r"\blet\s+me\s+know\s+if\s+you\s+want\s+me\s+to\s+search\b", re.IGNORECASE),
-    # "I can search for that" etc. — require a nearby question mark to
-    # avoid matching statements like "I can search but I won't."
-    re.compile(r"\bi\s+can\s+search\b[^\.\!]*\?", re.IGNORECASE),
-    re.compile(r"\bi\s+can\s+look\s+(?:that|it)\s+up\b[^\.\!]*\?", re.IGNORECASE),
-]
+
+# Every phrasing that counts as an offer to search. Case-insensitive.
+# The "?" check is loose because the model sometimes drops terminal
+# punctuation, except for the "I can / I could" forms: those need a
+# question mark or an "if you like / want" in the same sentence, so a
+# statement such as "I can search but I won't." is not an offer.
+OFFER_PATTERNS: tuple[re.Pattern, ...] = (
+    # Also covers "do you want me to ..." and "let me know if you want me to ...".
+    re.compile(
+        r"\bwant\s+me\s+to\s+(?:search|look|find|try\s+(?:the\s+search\s+)?again)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(?:should|shall)\s+i\s+(?:search|look)\b", re.IGNORECASE),
+    re.compile(
+        r"\bwould\s+you\s+like\s+me\s+to\s+(?:search|look|find|try\s+again)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bi\s+(?:can|could)\s+(?:search|look\s+(?:that|it)\s+up)\b"
+        r"[^.!?]*(?:\?|\bif\s+you(?:'d)?\s+(?:like|want)\b)",
+        re.IGNORECASE,
+    ),
+)
+
+# Sentence split for find_offer_sentence: after terminal punctuation.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 
-def _has_confirmation_question(response: str) -> bool:
-    """Return True if the response contains a search-confirmation pattern."""
-    if not response:
+def has_search_offer(text: str) -> bool:
+    """Return True if the text contains an offer to search (OFFER_PATTERNS)."""
+    if not text:
         return False
-    for pattern in _CONFIRMATION_PATTERNS:
-        if pattern.search(response):
-            return True
-    return False
+    return any(pattern.search(text) for pattern in OFFER_PATTERNS)
+
+
+def find_offer_sentence(text: str) -> str | None:
+    """Return the sentence that carries the offer, or None when there is none.
+
+    No pattern spans terminal punctuation, so an offer anywhere in the text
+    is always inside one sentence.
+    """
+    if not text:
+        return None
+    for sentence in _SENTENCE_SPLIT.split(text):
+        if has_search_offer(sentence):
+            return sentence.strip()
+    return None
 
 
 def is_substitutable(response: str) -> bool:
@@ -90,7 +129,7 @@ def is_substitutable(response: str) -> bool:
     not by this validator."""
     if not response or not response.strip():
         return False
-    return not _has_confirmation_question(response)
+    return not has_search_offer(response)
 
 
 def validate_ask_first_response(

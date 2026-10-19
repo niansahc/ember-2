@@ -11,7 +11,7 @@ import pytest
 
 from src.llm.ask_first_validator import (
     SCRIPTED_ASK_FIRST_RESPONSE,
-    _has_confirmation_question,
+    has_search_offer,
     _has_first_person_marker,
     validate_ask_first_response,
 )
@@ -260,7 +260,7 @@ class TestConfirmationPatterns:
         "I can look that up for you?",
     ])
     def test_patterns_detected(self, text):
-        assert _has_confirmation_question(text) is True
+        assert has_search_offer(text) is True
 
     @pytest.mark.parametrize("text", [
         "I don't have access to live data.",
@@ -270,7 +270,7 @@ class TestConfirmationPatterns:
         "",
     ])
     def test_patterns_not_detected(self, text):
-        assert _has_confirmation_question(text) is False
+        assert has_search_offer(text) is False
 
 
 # ---------------------------------------------------------------------------

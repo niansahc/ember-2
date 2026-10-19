@@ -30,12 +30,15 @@ from fastapi.testclient import TestClient
 
 import src.tools.web_search as web_search_mod
 from src.context.models import ContextPacket
+from src.llm.ask_first_validator import RETRY_OFFER_RESPONSE
 from src.llm.post_gen_pipeline import (
     WEB_SEARCH_UNAVAILABLE_DISCLOSURE,
     run_post_gen_pipeline,
 )
 from src.llm.prompt_builder import PromptBuilder
 from src.tools.web_search import WebSearchResult
+from tests.conftest import active_pendings as _active_pendings
+from tests.conftest import seed_pending
 
 # The AI hit carries the query terms so a WEB_SEARCH_MIN_TERM_HITS setting
 # cannot drop it before the quarantine sees it; "model card" quarantines it.
@@ -337,7 +340,6 @@ def test_autonomous_clean_hit_passes(client, stream):
 # --- 4. No repeat search offer after a filtered result -------------------------
 
 _OFFER_REPLY = "I could not find that. Want me to search again?"
-_RETRY_OFFER = "I tried searching but hit an error. Want me to try again?"
 _JUNK_HIT = {
     "title": "Weather report",
     "url": "https://example.com/weather",
@@ -424,37 +426,20 @@ def test_confirm_no_pending_after_unrepeatable_failure(client, reason, caplog):
             in caplog.text)
 
 
-def _active_pendings(session_id):
-    import src.api.openai_adapter as adapter
-    records = adapter.state_service.read_by_category("pending_confirmation")
-    resolved = adapter.state_service.resolved_ids(records)
-    return [r for r in records
-            if r.id not in resolved
-            and (r.metadata or {}).get("session_id") == session_id]
-
-
 def test_confirm_engines_blocked_still_gets_the_retry_offer(client, isolate_to_test_vault):
     """Positive control for the test above: a blocked confirm search routes
     to the post-gen retry offer (engines_blocked is not in
     NO_REPEAT_OFFER_REASONS), and that offer leaves a REAL active pending for
     the original query in the throwaway test vault. The user's next "yes"
     re-runs the search."""
-    import src.api.openai_adapter as adapter
-    from src.llm.ask_first_validator import RETRY_OFFER_RESPONSE
     session_id = "sess_test_confirm_retry_pending"
-    seeded = adapter.state_service.make_record(
-        state_type="pending_confirmation", text="Want me to search for that?",
-        source="ask_first_detector",
-        metadata={"action": "web_search", "query": _QUERY,
-                  "session_id": session_id, "resolved": False},
-    )
-    adapter.state_service.write(seeded)
+    seeded = seed_pending(session_id, _QUERY)
     real = (isolate_to_test_vault, session_id)
 
     response, _ = _failing_search("engines_blocked")
     _, text, _, _ = _turn(client, [response], autonomous=False, confirm=True,
                           reply=_OFFER_REPLY, real_pending=real)
-    assert text == _RETRY_OFFER == RETRY_OFFER_RESPONSE
+    assert text == RETRY_OFFER_RESPONSE
     pendings = _active_pendings(session_id)
     assert [p.metadata["query"] for p in pendings] == [_QUERY]
     assert seeded.id not in [p.id for p in pendings]
@@ -491,7 +476,7 @@ def test_confirm_failure_with_merged_items_is_not_a_retry(client, assembly_items
     resp, text, packet, _ = _turn(
         client, [blocked, second], confirm=True, assembly_searches=True)
     if expect_retry:
-        assert text == _RETRY_OFFER
+        assert text == RETRY_OFFER_RESPONSE
     else:
         assert [i["url"] for i in packet.web_items] == [_CLEAN_HIT["url"]]
         assert text == _MODEL_REPLY

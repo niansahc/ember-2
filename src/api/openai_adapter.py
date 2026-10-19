@@ -1,8 +1,10 @@
 import json
 import logging
 import re
+import threading
 import time
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Literal
 
@@ -44,7 +46,7 @@ from src.memory.session import get_session, list_sessions
 from src.context.service import ContextService, resolve_search_outcome
 from src.tools.web_search import NO_REPEAT_OFFER_REASONS
 from src.llm.adapter import LLMAdapter, StatusSignal
-from src.llm.ask_first_validator import find_offer_sentence
+from src.llm.ask_first_validator import find_offer_sentence, has_search_offer
 # Shared with the post-gen pipeline, which skips the search-unavailable
 # disclosure on refusals.
 from src.llm.refusal import is_refusal_response as _is_refusal_response
@@ -433,16 +435,17 @@ def _store_reply(
     "yes" can still be honoured.
     """
     exchange.record_reply(reply)
+    # This turn may hold an offer: in the vault, or in process when stateless.
+    may_hold_pending = stateless_pending or not skip_vault_write
+    repeats = search_reason in NO_REPEAT_OFFER_REASONS
+    if may_hold_pending and repeats:
+        logger.info(
+            "[ASK_FIRST] pending_confirmation not written: search reason=%s "
+            "repeats on retry", search_reason,
+        )
     if skip_vault_write:
-        if stateless_pending:
-            if search_reason in NO_REPEAT_OFFER_REASONS:
-                logger.info(
-                    "[ASK_FIRST] pending_confirmation not written: search reason=%s "
-                    "repeats on retry", search_reason,
-                )
-            else:
-                _stateless_pending_store.offer(
-                    exchange.session_id, reply, pending_query)
+        if stateless_pending and not repeats:
+            _stateless_pending_store.offer(exchange.session_id, reply, pending_query)
         return
     _spawn_deviation_detection(
         reply=reply,
@@ -451,11 +454,7 @@ def _store_reply(
         vault=exchange.vault,
         session_id=exchange.session_id,
     )
-    if search_reason in NO_REPEAT_OFFER_REASONS:
-        logger.info(
-            "[ASK_FIRST] pending_confirmation not written: search reason=%s "
-            "repeats on retry", search_reason,
-        )
+    if repeats:
         return
     with vault_binding(exchange.vault):
         _write_pending_confirmation(
@@ -550,8 +549,7 @@ def _interpret_confirmation_reply(user_message: str) -> tuple[bool, str]:
     always "" for a decline).
     """
     cleaned = _normalise_confirmation_text(user_message)
-    without_idioms = " ".join(_CONFIRM_AFFIRMING_IDIOMS.sub(" ", cleaned).split())
-    if set(without_idioms.split()) & _CONFIRM_NEGATIONS:
+    if set(_CONFIRM_AFFIRMING_IDIOMS.sub(" ", cleaned).split()) & _CONFIRM_NEGATIONS:
         return False, ""
     padded = f" {cleaned} "
     confirmed = (
@@ -595,34 +593,30 @@ class _StatelessPendingStore:
         max_sessions: int = STATELESS_PENDING_MAX_SESSIONS,
         clock=time.monotonic,
     ) -> None:
-        import threading
-        from collections import OrderedDict
-
         self._ttl = ttl_seconds
         self._max = max_sessions
         self._clock = clock
         self._lock = threading.Lock()
-        # session_id -> (query, offer_sentence, expires_at)
-        self._items: "OrderedDict[str, tuple[str, str, float]]" = OrderedDict()
+        # session_id -> (query, expires_at)
+        self._items: "OrderedDict[str, tuple[str, float]]" = OrderedDict()
 
     def _purge(self, now: float) -> None:
-        for sid in [s for s, (_, _, exp) in self._items.items() if exp <= now]:
+        for sid in [s for s, (_, exp) in self._items.items() if exp <= now]:
             del self._items[sid]
 
     def offer(self, session_id: str, reply: str, query: str) -> bool:
-        """Hold the offer in `reply` for `query`. False when there is none."""
-        offer_sentence = find_offer_sentence(reply)
-        if not offer_sentence or not session_id:
+        """Hold an offer for `query` when `reply` makes one. False otherwise."""
+        if not session_id or not has_search_offer(reply):
             return False
         with self._lock:
             now = self._clock()
             self._purge(now)
             self._items.pop(session_id, None)
-            self._items[session_id] = (query, offer_sentence, now + self._ttl)
+            self._items[session_id] = (query, now + self._ttl)
             while len(self._items) > self._max:
                 self._items.popitem(last=False)
-        logger.info("[ASK_FIRST] Held stateless pending in process (%d chars, ttl %ds)",
-                    len(offer_sentence), int(self._ttl))
+        logger.info("[ASK_FIRST] Held stateless pending in process (ttl %ds)",
+                    int(self._ttl))
         return True
 
     def take(self, session_id: str) -> dict | None:
@@ -632,8 +626,7 @@ class _StatelessPendingStore:
             entry = self._items.pop(session_id, None)
         if entry is None:
             return None
-        query, offer_sentence, _ = entry
-        return {"action": "web_search", "query": query, "text": offer_sentence}
+        return {"action": "web_search", "query": entry[0]}
 
     def __len__(self) -> int:
         with self._lock:
@@ -1446,19 +1439,19 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
     none.
     """
     if gen_ctx.is_test:
-        _confirmation_result, work.pending_records = None, []
+        result, work.pending_records = None, []
     elif not gen_ctx.vault_enabled:
-        _confirmation_result = _check_stateless_pending(gen_ctx.session_id, work.message)
+        result = _check_stateless_pending(gen_ctx.session_id, work.message)
         work.pending_records = []
     else:
-        _confirmation_result, work.pending_records = _check_pending_confirmation(
+        result, work.pending_records = _check_pending_confirmation(
             gen_ctx.session_id, work.message
         )
-    if _confirmation_result is not None:
-        if _confirmation_result["confirmed"] and _confirmation_result["action"] == "web_search":
+    if result is not None:
+        if result["confirmed"] and result["action"] == "web_search":
             work.confirmation_confirmed = True
-            _original_query = _confirmation_result["query"]
-            _follow_up = _confirmation_result.get("follow_up") or ""
+            _original_query = result["query"]
+            _follow_up = result.get("follow_up") or ""
             work.message = (f"{_original_query}\n\n{_follow_up}" if _follow_up
                             else _original_query)
             work.raw_message = _original_query
@@ -1900,22 +1893,26 @@ async def _complete_exchange(
     except Exception:
         pass  # Non-fatal - proceed without suppression
 
-    _early_policy = None
-    _explicit_search = False
+    # One classification for the turn. gen_ctx.policy already holds
+    # classify_query(raw_user_message); it is reused unless Phase B rewrote
+    # the message (a confirmed reply, a task or timer note).
+    from src.context.policies import classify_query
+    if gen_ctx.policy is not None and latest_user_message == gen_ctx.raw_user_message:
+        _early_policy = gen_ctx.policy
+    else:
+        _early_policy = classify_query(latest_user_message)
     # Vision turn snapshot. The packet's image_data is cleared after VL
     # preprocessing succeeds (line ~1297), so any check downstream of that
     # point must use this snapshot, not context_packet.image_data.
     _has_image = bool(image_data)
 
     if _skip_vault_read:
-        # Stateless mode: empty context packet, no vault reads. Classified
-        # here as on the vault path, so an explicit request ("search the web
-        # for X") is honoured as explicit: it bypasses ask-first, and the
-        # backstop below runs its search because assembly did not.
+        # Stateless mode: empty context packet, no vault reads. The turn is
+        # classified as on the vault path, so an explicit request ("search
+        # the web for X") is honoured as explicit: it bypasses ask-first, and
+        # the backstop below runs its search because assembly did not.
         from src.context.models import ContextPacket
-        from src.context.policies import classify_query as _classify_stateless
-        _early_policy = _classify_stateless(latest_user_message)
-        _explicit_search = getattr(_early_policy, "explicit_search_request", False)
+        _explicit_search = _early_policy.explicit_search_request
         context_packet = ContextPacket(
             user_message=latest_user_message,
             image_data=image_data or [],
@@ -1930,9 +1927,7 @@ async def _complete_exchange(
         # Explicit search request bypass: "search the web", "google that",
         # "look it up" etc. The user's own words ARE the confirmation -
         # ask-first gate must not block this.
-        from src.context.policies import classify_query as _classify_early
         from src.context.policies import _web_search_policy as _force_web_search_policy
-        _early_policy = _classify_early(latest_user_message)
 
         # B2 next-turn dispatch: if the immediately prior assistant turn
         # was a clarification ("What would you like me to search for?"),
@@ -1956,7 +1951,7 @@ async def _complete_exchange(
                 "[CLARIFY] Next-turn check failed (non-fatal): %s", type(exc).__name__,
             )
 
-        _explicit_search = getattr(_early_policy, "explicit_search_request", False)
+        _explicit_search = _early_policy.explicit_search_request
         # Gate bypass: skip_web_search is False when autonomous is on OR
         # the user explicitly requested a search. Confirmation-confirmed
         # is NOT a bypass: the deferred search (_apply_confirmation) already
@@ -2012,11 +2007,7 @@ async def _complete_exchange(
     except Exception as exc:
         logger.warning("[T2_DETECTOR] detection failed (non-fatal): %s", type(exc).__name__)
 
-    # Reuse the early classification (both branches set it; the fallback
-    # covers a policy object that came back falsy).
-    from src.context.policies import classify_query
-    _policy = _early_policy or classify_query(latest_user_message)
-    _intent_class = _policy.name
+    _intent_class = _early_policy.name
 
     # Stash intent class on request for audit log
     request.state.intent_class = _intent_class
@@ -2212,7 +2203,6 @@ async def _complete_exchange(
             _intent_class == "web_search"
             and (_web_autonomous or _explicit_search)
         )
-        _backstop_path = "autonomous" if _web_autonomous else "explicit"
 
         if _should_search:
             from src.tools.web_search import run_web_search
@@ -2229,7 +2219,7 @@ async def _complete_exchange(
             # quarantine logs in resolve_search_outcome carry no path.
             logger.info(
                 "[WEB_SEARCH] path=%s: %d of %d results kept, status=%s reason=%s",
-                _backstop_path, len(_auto_items), len(_auto_search.items),
+                "autonomous" if _web_autonomous else "explicit", len(_auto_items), len(_auto_search.items),
                 _auto_status, _auto_reason,
             )
 

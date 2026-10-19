@@ -27,12 +27,12 @@ from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 import src.tools.web_search as web_search_mod
 from src.llm.ask_first_validator import RETRY_OFFER_RESPONSE, SCRIPTED_ASK_FIRST_RESPONSE
 from src.tools.web_search import WebSearchResult
-from tests.conftest import sse_events
+from tests.conftest import active_pendings as _active_pendings
+from tests.conftest import seed_pending, sse_events
 
 MODEL_REPLY = "Here is an answer."
 OFFER_REPLY = "I don't have that. Want me to search?"
@@ -44,10 +44,8 @@ CLEAN_HIT = {"title": "Bitcoin price", "url": "https://example.com/btc",
 # --- helpers -------------------------------------------------------------------
 
 @pytest.fixture
-def client():
-    with patch("src.api.main.get_ember_api_key", return_value=None):
-        from src.api.main import app
-        yield TestClient(app)
+def client(keyless_client):
+    return keyless_client
 
 
 @pytest.fixture(autouse=True)
@@ -73,24 +71,8 @@ def _searxng(items, unresponsive=()):
     return response
 
 
-def _active_pendings(session_id):
-    svc = _adapter().state_service
-    records = svc.read_by_category("pending_confirmation")
-    resolved = svc.resolved_ids(records)
-    return [r for r in records
-            if r.id not in resolved
-            and (r.metadata or {}).get("session_id") == session_id]
-
-
-def _seed_pending(session_id, query=QUERY, text="Want me to search for that?"):
-    svc = _adapter().state_service
-    rec = svc.make_record(
-        state_type="pending_confirmation", text=text, source="ask_first_detector",
-        metadata={"action": "web_search", "query": query,
-                  "session_id": session_id, "resolved": False},
-    )
-    svc.write(rec)
-    return rec
+def _seed_pending(session_id, query=QUERY):
+    return seed_pending(session_id, query)
 
 
 def _turn(client, test_vault, responses, *, query, session_id, stream=False,

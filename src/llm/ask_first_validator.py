@@ -112,20 +112,15 @@ def has_search_offer(text: str) -> bool:
 def find_offer_sentence(text: str) -> str | None:
     """Return the sentence that carries the offer, or None when there is none.
 
-    When the text holds an offer but no single sentence does (an offer that
-    spans a split point), the last 200 characters stand in for it.
+    No pattern spans terminal punctuation, so an offer anywhere in the text
+    is always inside one sentence.
     """
-    if not has_search_offer(text):
+    if not text:
         return None
     for sentence in _SENTENCE_SPLIT.split(text):
         if has_search_offer(sentence):
             return sentence.strip()
-    return text[-200:].strip()
-
-
-def _has_confirmation_question(response: str) -> bool:
-    """Return True if the response contains a search-confirmation pattern."""
-    return has_search_offer(response)
+    return None
 
 
 def is_substitutable(response: str) -> bool:
@@ -134,7 +129,7 @@ def is_substitutable(response: str) -> bool:
     not by this validator."""
     if not response or not response.strip():
         return False
-    return not _has_confirmation_question(response)
+    return not has_search_offer(response)
 
 
 def validate_ask_first_response(

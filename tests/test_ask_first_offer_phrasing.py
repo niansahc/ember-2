@@ -26,6 +26,7 @@ from src.llm.ask_first_validator import (
     has_search_offer,
     is_substitutable,
 )
+from tests.conftest import active_pendings as _active_pendings
 
 QUERY = "latest widget price"
 
@@ -59,13 +60,11 @@ NON_OFFERS = [
 ]
 
 
-def _active_pendings(session_id: str) -> list:
-    from src.api.openai_adapter import state_service
-    records = state_service.read_by_category("pending_confirmation")
-    resolved = state_service.resolved_ids(records)
-    return [r for r in records
-            if r.id not in resolved
-            and (r.metadata or {}).get("session_id") == session_id]
+def _string_literal_lists(tree: ast.AST) -> list:
+    """List or tuple literals made only of strings: an offer phrase list."""
+    return [n for n in ast.walk(tree) if isinstance(n, (ast.List, ast.Tuple))
+            and n.elts and all(isinstance(e, ast.Constant)
+                               and isinstance(e.value, str) for e in n.elts)]
 
 
 def _sid(prefix: str, text: str) -> str:
@@ -135,17 +134,10 @@ def test_pending_writer_keeps_no_phrase_list_of_its_own():
     tree = ast.parse(inspect.getsource(openai_adapter._write_pending_confirmation))
     names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
     assert "find_offer_sentence" in names
-    literal_lists = [n for n in ast.walk(tree) if isinstance(n, (ast.List, ast.Tuple))
-                     and n.elts and all(isinstance(e, ast.Constant)
-                                        and isinstance(e.value, str) for e in n.elts)]
-    assert literal_lists == []
+    assert _string_literal_lists(tree) == []
 
 
 def test_structural_check_flags_a_writer_with_its_own_list():
     """Positive control for the structural test above."""
     src = "def w(reply):\n    ask_patterns = ['want me to search', 'shall i look']\n"
-    tree = ast.parse(src)
-    literal_lists = [n for n in ast.walk(tree) if isinstance(n, (ast.List, ast.Tuple))
-                     and n.elts and all(isinstance(e, ast.Constant)
-                                        and isinstance(e.value, str) for e in n.elts)]
-    assert len(literal_lists) == 1
+    assert len(_string_literal_lists(ast.parse(src))) == 1

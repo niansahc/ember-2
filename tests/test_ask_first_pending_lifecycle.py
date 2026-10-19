@@ -32,6 +32,7 @@ import pytest
 from src.memory.exchange import ExchangeStorageError
 from tests.conftest import active_pendings, seed_pending
 from tests.test_ask_first_routing import (  # noqa: F401  (client is a fixture)
+    _adapter,
     CLEAN_HIT,
     MODEL_REPLY,
     OFFER_REPLY,
@@ -42,10 +43,6 @@ from tests.test_ask_first_routing import (  # noqa: F401  (client is a fixture)
     client,
 )
 
-
-def _adapter():
-    import src.api.openai_adapter as adapter
-    return adapter
 
 
 def _store():
@@ -324,6 +321,7 @@ def _store_reply_log(caplog, reply):
             exchange, reply, skip_vault_write=True, intent_class="web_search",
             user_turn_text=QUERY, pending_query=QUERY, search_reason="filtered",
             stateless_pending=True,
+            pending_guard=_adapter()._PendingGuard("sess_test_log_no_repeat", None),
         )
     return caplog.text
 

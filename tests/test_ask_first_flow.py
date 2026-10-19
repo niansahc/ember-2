@@ -29,9 +29,8 @@ class TestDeterministicKeywordMatch:
     affirmatives), not a local copy of its logic."""
 
     def _is_affirmed(self, msg: str) -> bool:
-        from src.api.openai_adapter import _interpret_confirmation_reply
-        confirmed, _ = _interpret_confirmation_reply(msg)
-        return confirmed
+        from src.api.openai_adapter import _confirmation_result
+        return _confirmation_result("web_search", "q", msg)["confirmed"]
 
     @pytest.mark.parametrize("msg", [
         "Yes", "yes", "YES", "Yeah", "Sure", "Please", "Go ahead",

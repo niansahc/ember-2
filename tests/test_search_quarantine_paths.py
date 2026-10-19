@@ -123,7 +123,7 @@ def _confirm(items, query=_QUERY):
     work = GenerationWork(message="yes")
     pending = {"confirmed": True, "action": "web_search", "query": query}
     with patch("src.api.openai_adapter._check_pending_confirmation",
-               return_value=(pending, [])), \
+               return_value=pending), \
          patch("src.tools.web_search.run_web_search",
                return_value=WebSearchResult(items=list(items), status="ok")):
         _apply_confirmation(ctx, work)
@@ -271,7 +271,7 @@ def _turn(client, responses, *, query=_QUERY, stream=False, autonomous=True,
             pending = {"confirmed": True, "action": "web_search", "query": query}
             stack.enter_context(patch(
                 "src.api.openai_adapter._check_pending_confirmation",
-                return_value=(pending if confirm else None, [])))
+                return_value=pending if confirm else None))
         stack.enter_context(patch("src.llm.coaching_filter.filter_coaching_frame",
                                   side_effect=lambda reply, *a, **kw: reply))
         stack.enter_context(patch("src.safety.grounding_check.should_short_circuit_grounding",

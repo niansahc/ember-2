@@ -246,7 +246,7 @@ def _confirm(search_result):
     work = GenerationWork(message="yes")
     pending = {"confirmed": True, "action": "web_search", "query": "synthetic query"}
     with patch("src.api.openai_adapter._check_pending_confirmation",
-               return_value=(pending, [])), \
+               return_value=pending), \
          patch("src.tools.web_search.run_web_search", return_value=search_result):
         _apply_confirmation(ctx, work)
     return work
@@ -266,7 +266,7 @@ def test_confirmed_search_unavailable_routes_to_retry_offer():
         web_search_status=work.confirmation_search_status,
     )
     # The retry offer replaces the reply; no disclosure line on top of it.
-    assert result.reply == "I tried searching but hit an error. Want me to try again?"
+    assert result.reply == "I tried searching but hit an error. Want me to try the search again?"
 
 
 def test_confirmed_search_with_results_is_not_a_failure():

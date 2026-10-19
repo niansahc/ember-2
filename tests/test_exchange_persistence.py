@@ -265,7 +265,7 @@ def test_task_prefixed_turn_stores_the_sent_text(client, vault, casual_policy):
 
 
 def test_confirmed_yes_turn_stores_yes(client, vault, casual_policy):
-    pending = ({"confirmed": True, "action": "web_search", "query": "the original question"}, [])
+    pending = {"confirmed": True, "action": "web_search", "query": "the original question"}
     _chat(client, "yes", policy=casual_policy, extra=(
         patch("src.api.openai_adapter._check_pending_confirmation", return_value=pending),
         patch("src.tools.web_search.run_web_search",

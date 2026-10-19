@@ -361,7 +361,7 @@ class TestPendingConfirmationIsSessionScoped:
             from src.api.openai_adapter import _check_pending_confirmation
 
             with caplog.at_level(logging.INFO):
-                result, _ = _check_pending_confirmation(SESSION_B, "unrelated question")
+                result = _check_pending_confirmation(SESSION_B, "unrelated question")
 
         assert result is None
         assert _resolve_logs(caplog) == []
@@ -375,7 +375,7 @@ class TestPendingConfirmationIsSessionScoped:
             from src.api.openai_adapter import _check_pending_confirmation
 
             _check_pending_confirmation(SESSION_B, "unrelated question")
-            result, _ = _check_pending_confirmation(SESSION_A, "yes")
+            result = _check_pending_confirmation(SESSION_A, "yes")
 
         assert result is not None
         assert result["confirmed"] is True

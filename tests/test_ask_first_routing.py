@@ -1,13 +1,15 @@
 """
 tests/test_ask_first_routing.py
 
-Regression tests for the ask-first routing defects confirmed in the
-2026-10-18 logic review (findings 1, 2, 4, 5, 5b, 10). Each test asserts the
-CORRECT behaviour; the review repros asserted the defect.
+Regression tests for ask-first routing. Each test asserts the CORRECT
+behaviour.
 
   - Declines win: any negation word declines, checked before affirmatives,
     with one fixed carve-out ("why not", "no problem", "not a problem").
-  - "yes, but what about X?" keeps X.
+  - "yes, but what about X?" keeps X; an elaborated yes ("Yes, that would be
+    great") carries no follow-up.
+  - A non-web offer ("look over the draft") leaves nothing a "yes" could
+    turn into a web search.
   - A failed confirm search's retry offer leaves a pending; "yes" re-runs.
   - Stateless mode (vault toggle off): explicit requests search; ask-first
     pendings live in process with a TTL, never in the vault.
@@ -50,14 +52,6 @@ def client(keyless_client):
     return keyless_client
 
 
-@pytest.fixture(autouse=True)
-def empty_stateless_store():
-    from src.api.openai_adapter import _stateless_pending_store
-    _stateless_pending_store.clear()
-    yield
-    _stateless_pending_store.clear()
-
-
 def _adapter():
     import src.api.openai_adapter as adapter
     return adapter
@@ -79,11 +73,16 @@ def _seed_pending(session_id, query=QUERY):
 
 def _turn(client, test_vault, responses, *, query, session_id, stream=False,
           autonomous=False, vault_enabled=True, real_classifier=False,
-          request_policy=None, awaiting_search=False, reply=MODEL_REPLY):
+          request_policy=None, awaiting_search=False, reply=MODEL_REPLY,
+          fail=None, record_reply_error=None, image=False):
     """One /v1/chat/completions turn. _check_pending_confirmation and
     _write_pending_confirmation are REAL and run against the test vault.
     request_policy replaces the request classifier's web_search verdict;
     context assembly receives the same policy (one classification per turn).
+    fail is raised by generation; record_reply_error by the reply write;
+    image sends an image whose vision preprocessing fails. A failing turn
+    returns resp None (a raise reached the test client) or the error stream,
+    and text "".
     Returns (resp, text, llm mock, requests.get mock)."""
     adapter = _adapter()
     from src.context.policies import _web_search_policy
@@ -106,6 +105,11 @@ def _turn(client, test_vault, responses, *, query, session_id, stream=False,
         rec = stack.enter_context(patch("src.api.openai_adapter.ExchangeRecorder"))
         rec.return_value.vault = str(test_vault)
         rec.return_value.session_id = session_id
+        if record_reply_error is not None:
+            rec.return_value.record_reply.side_effect = record_reply_error
+        if image:
+            vision = stack.enter_context(patch("src.api.openai_adapter.vision_service"))
+            vision.analyze.return_value = None
         for name in ("_background_state_extraction", "_detect_and_write_commitment",
                      "_detect_task_in_response", "_background_topic_decline_resolution",
                      "_spawn_deviation_detection", "_spawn_post_exchange_extractors"):
@@ -126,13 +130,28 @@ def _turn(client, test_vault, responses, *, query, session_id, stream=False,
                                   new=AsyncMock(return_value=(True, None))))
         llm.generate_response.return_value = reply
         llm.generate_response_iter.return_value = iter([reply])
+        if fail is not None:
+            llm.generate_response.side_effect = fail
+            llm.generate_response_iter.side_effect = fail
 
-        resp = client.post(
-            "/v1/chat/completions",
-            json={"model": "ember", "stream": stream, "vault_enabled": vault_enabled,
-                  "messages": [{"role": "user", "content": query}]},
-            headers={"X-Session-ID": session_id},
-        )
+        content = query
+        if image:
+            content = [{"type": "text", "text": query},
+                       {"type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,AAAA"}}]
+        try:
+            resp = client.post(
+                "/v1/chat/completions",
+                json={"model": "ember", "stream": stream, "vault_enabled": vault_enabled,
+                      "messages": [{"role": "user", "content": content}]},
+                headers={"X-Session-ID": session_id},
+            )
+        except Exception:
+            if fail is None and record_reply_error is None:
+                raise
+            resp = None
+    if fail is not None or record_reply_error is not None or image:
+        return resp, "", llm, get
     assert resp.status_code == 200
     if stream:
         text = "".join(
@@ -149,7 +168,7 @@ def _searched_query(get) -> str:
     return get.call_args.kwargs["params"]["q"]
 
 
-# --- 1. Declines win (finding 2) -------------------------------------------------
+# --- 1. Declines win -------------------------------------------------------------
 
 DECLINES = [
     "No, please don't search",
@@ -188,8 +207,8 @@ def test_affirmatives_and_affirming_idioms_confirm(message):
 def test_decline_resolves_the_pending_and_runs_no_search(client, isolate_to_test_vault, message):
     """End to end: the decline is a plain turn on the user's own words and
     the offer is resolved. The request classifier is pinned to default: the
-    real one routes none of these declines to web_search (checked
-    2026-10-18), so no new offer follows."""
+    real one routes none of these declines to web_search, so no new offer
+    follows."""
     from src.context.policies import ContextPolicy
     sid = f"sess_test_decline_{abs(hash(message)) % 100000}"
     seeded = _seed_pending(sid)
@@ -247,7 +266,69 @@ def test_plain_yes_carries_no_follow_up(message):
     assert work.message == QUERY
 
 
-# --- 3. Retry offer leaves a pending; "yes" re-runs (finding 1) ------------------
+@pytest.mark.parametrize("message", [
+    "Yes, that would be great", "yes sure thing", "Yeah that's fine",
+    "Yes, I'd appreciate it", "ok cool", "Sure, thanks a lot",
+])
+def test_elaborated_yes_carries_no_follow_up(message):
+    """No connector and no question: the words only elaborate the yes."""
+    confirmed, follow_up = _adapter()._interpret_confirmation_reply(message)
+    assert (confirmed, follow_up) == (True, "")
+
+
+@pytest.mark.parametrize("message,expected", [
+    ("yes, but what about the weather tomorrow?", "what about the weather tomorrow?"),
+    ("Yes please, and is it open Sunday", "is it open Sunday"),
+    ("sure, also check the forecast", "check the forecast"),
+    ("ok then compare it with last year", "compare it with last year"),
+    ("yes, is it open on Sunday?", "is it open on Sunday?"),
+])
+def test_connector_or_question_keeps_the_follow_up(message, expected):
+    """Control for the test above: new content after a connector or in a
+    question is kept."""
+    confirmed, follow_up = _adapter()._interpret_confirmation_reply(message)
+    assert (confirmed, follow_up) == (True, expected)
+
+
+DRAFT = "here is my draft paragraph about a synthetic topic"
+
+
+def test_non_web_offer_then_yes_never_sends_the_draft_to_searxng(
+        client, isolate_to_test_vault):
+    """A reply offering to look over the draft is not a search offer: no
+    pending is written, and the user's "yes" searches nothing, so the draft
+    text never reaches SearXNG."""
+    from src.context.policies import ContextPolicy
+    sid = "sess_test_non_web_offer"
+    _turn(client, isolate_to_test_vault, [], query=DRAFT, session_id=sid,
+          request_policy=ContextPolicy(name="default"),
+          reply="Would you like me to look over the draft for typos?")
+    assert _active_pendings(sid) == []
+    _, _, llm, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
+                           query="yes", session_id=sid,
+                           request_policy=ContextPolicy(name="default"))
+    assert get.call_count == 0
+    assert all(DRAFT not in str(call) for call in get.call_args_list)
+    assert llm.generate_response.call_args.args[0].user_message == "yes"
+
+
+def test_web_offer_then_yes_searches_the_stored_message(client, isolate_to_test_vault):
+    """Positive control for the test above: a real search offer, then "yes",
+    does send the stored message to SearXNG."""
+    from src.context.policies import ContextPolicy
+    sid = "sess_test_web_offer_control"
+    _turn(client, isolate_to_test_vault, [], query=DRAFT, session_id=sid,
+          request_policy=ContextPolicy(name="default"),
+          reply="Want me to look that up online?")
+    assert len(_active_pendings(sid)) == 1
+    _, _, _, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
+                         query="yes", session_id=sid,
+                         request_policy=ContextPolicy(name="default"))
+    assert get.call_count == 1
+    assert _searched_query(get) == DRAFT
+
+
+# --- 3. Retry offer leaves a pending; "yes" re-runs ------------------------------
 
 def test_yes_after_the_retry_offer_reruns_the_search(client, isolate_to_test_vault):
     """Offer -> "yes" -> engines blocked -> retry offer -> "yes" -> search."""
@@ -269,7 +350,7 @@ def test_yes_after_the_retry_offer_reruns_the_search(client, isolate_to_test_vau
     assert resp.headers.get("x-ember-web-search") == "true"
 
 
-# --- 4. Stateless mode (finding 4) -----------------------------------------------
+# --- 4. Stateless mode -----------------------------------------------------------
 
 def test_stateless_explicit_request_searches(client, isolate_to_test_vault):
     sid = "sess_test_stateless_explicit"
@@ -343,7 +424,7 @@ def test_stateless_store_is_bounded():
     assert store.take("sess_test_cap_2") is not None
 
 
-# --- 5. B2 next-turn dispatch and the dead prefix (findings 5, 5b) ---------------
+# --- 5. B2 next-turn dispatch and the dead prefix --------------------------------
 
 def test_b2_follow_up_under_ask_first_searches(client, isolate_to_test_vault):
     """The bare follow-up searches under ask-first. The request classifier
@@ -389,7 +470,7 @@ def test_offer_to_search_prefix_is_gone():
     assert "no relevant vault content found" not in source
 
 
-# --- 6. "searching" status only on turns that search (finding 10) ----------------
+# --- 6. "searching" status only on turns that search -----------------------------
 
 def _statuses(resp):
     return [e["content"] for e in sse_events(resp.text)

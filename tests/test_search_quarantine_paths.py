@@ -217,12 +217,15 @@ def _autonomous(client, items, *, query=_QUERY, stream=False):
 
 def _turn(client, responses, *, query=_QUERY, stream=False, autonomous=True,
           confirm=False, assembly_searches=False, min_term_hits=0,
-          reply=_MODEL_REPLY):
+          reply=_MODEL_REPLY, real_pending=None):
     """One /v1/chat/completions turn with SearXNG answering `responses` in
     order, one per search. confirm=True makes this the "yes" turn of an
     ask-first offer for `query`. assembly_searches=True lets context assembly
     search too (autonomous switched on while the offer was pending).
-    Returns (resp, text, packet, _write_pending_confirmation mock)."""
+    real_pending=(test_vault, session_id) runs the REAL pending checker and
+    writer against the throwaway test vault for that synthetic session
+    instead of mocking them; the caller seeds the pending.
+    Returns (resp, text, packet, _write_pending_confirmation mock or None)."""
     import src.api.openai_adapter as adapter
     from src.context.policies import ContextPolicy, _web_search_policy
 
@@ -240,7 +243,8 @@ def _turn(client, responses, *, query=_QUERY, stream=False, autonomous=True,
         stack.enter_context(patch.object(adapter.context_service.retriever, "retrieve",
                                          return_value=([], [], [], [], None)))
         llm = stack.enter_context(patch("src.api.openai_adapter.llm_adapter"))
-        for name in ("ExchangeRecorder", "_background_state_extraction",
+        recorder = stack.enter_context(patch("src.api.openai_adapter.ExchangeRecorder"))
+        for name in ("_background_state_extraction",
                      "_detect_and_write_commitment", "_detect_task_in_response",
                      "_background_topic_decline_resolution"):
             stack.enter_context(patch(f"src.api.openai_adapter.{name}"))
@@ -249,12 +253,23 @@ def _turn(client, responses, *, query=_QUERY, stream=False, autonomous=True,
         stack.enter_context(patch("src.core.preferences.get",
                                   side_effect=lambda k, d=None, *a, **kw:
                                   autonomous if k == "web_search_autonomous" else d))
-        write_pending = stack.enter_context(
-            patch("src.api.openai_adapter._write_pending_confirmation"))
-        pending = {"confirmed": True, "action": "web_search", "query": query}
-        stack.enter_context(patch(
-            "src.api.openai_adapter._check_pending_confirmation",
-            return_value=(pending if confirm else None, [])))
+        headers = {}
+        if real_pending is not None:
+            test_vault, session_id = real_pending
+            # A real vault path for vault_binding and a JSON-serialisable
+            # session id for the pending record.
+            recorder.return_value.vault = str(test_vault)
+            recorder.return_value.session_id = session_id
+            stack.enter_context(patch("src.api.openai_adapter._spawn_deviation_detection"))
+            headers = {"X-Session-ID": session_id}
+            write_pending = None
+        else:
+            write_pending = stack.enter_context(
+                patch("src.api.openai_adapter._write_pending_confirmation"))
+            pending = {"confirmed": True, "action": "web_search", "query": query}
+            stack.enter_context(patch(
+                "src.api.openai_adapter._check_pending_confirmation",
+                return_value=(pending if confirm else None, [])))
         stack.enter_context(patch("src.llm.coaching_filter.filter_coaching_frame",
                                   side_effect=lambda reply, *a, **kw: reply))
         stack.enter_context(patch("src.safety.grounding_check.should_short_circuit_grounding",
@@ -268,7 +283,7 @@ def _turn(client, responses, *, query=_QUERY, stream=False, autonomous=True,
             "model": "ember",
             "messages": [{"role": "user", "content": "yes" if confirm else query}],
             "stream": stream,
-        })
+        }, headers=headers)
     assert resp.status_code == 200
     # Every scripted search ran (the backstop or the confirm path, plus
     # assembly when it searches) and none ran twice.
@@ -409,16 +424,47 @@ def test_confirm_no_pending_after_unrepeatable_failure(client, reason, caplog):
             in caplog.text)
 
 
-def test_confirm_engines_blocked_still_gets_the_retry_offer(client):
+def _active_pendings(session_id):
+    import src.api.openai_adapter as adapter
+    records = adapter.state_service.read_by_category("pending_confirmation")
+    resolved = adapter.state_service.resolved_ids(records)
+    return [r for r in records
+            if r.id not in resolved
+            and (r.metadata or {}).get("session_id") == session_id]
+
+
+def test_confirm_engines_blocked_still_gets_the_retry_offer(client, isolate_to_test_vault):
     """Positive control for the test above: a blocked confirm search routes
-    to the post-gen retry offer, and that reply reaches the pending writer.
-    engines_blocked is not in NO_REPEAT_OFFER_REASONS."""
+    to the post-gen retry offer (engines_blocked is not in
+    NO_REPEAT_OFFER_REASONS), and that offer leaves a REAL active pending for
+    the original query in the throwaway test vault. The user's next "yes"
+    re-runs the search."""
+    import src.api.openai_adapter as adapter
+    from src.llm.ask_first_validator import RETRY_OFFER_RESPONSE
+    session_id = "sess_test_confirm_retry_pending"
+    seeded = adapter.state_service.make_record(
+        state_type="pending_confirmation", text="Want me to search for that?",
+        source="ask_first_detector",
+        metadata={"action": "web_search", "query": _QUERY,
+                  "session_id": session_id, "resolved": False},
+    )
+    adapter.state_service.write(seeded)
+    real = (isolate_to_test_vault, session_id)
+
     response, _ = _failing_search("engines_blocked")
-    _, text, _, write_pending = _turn(
-        client, [response], autonomous=False, confirm=True, reply=_OFFER_REPLY)
-    assert text == _RETRY_OFFER
-    write_pending.assert_called_once()
-    assert write_pending.call_args.args[0] == _RETRY_OFFER
+    _, text, _, _ = _turn(client, [response], autonomous=False, confirm=True,
+                          reply=_OFFER_REPLY, real_pending=real)
+    assert text == _RETRY_OFFER == RETRY_OFFER_RESPONSE
+    pendings = _active_pendings(session_id)
+    assert [p.metadata["query"] for p in pendings] == [_QUERY]
+    assert seeded.id not in [p.id for p in pendings]
+
+    resp, text, packet, _ = _turn(client, [_searxng_response([_CLEAN_HIT])],
+                                  autonomous=False, confirm=True, real_pending=real)
+    assert [i["url"] for i in packet.web_items] == [_CLEAN_HIT["url"]]
+    assert text == _MODEL_REPLY
+    assert resp.headers.get("x-ember-web-search") == "true"
+    assert _active_pendings(session_id) == []
 
 
 def test_autonomous_empty_search_logs_its_path(client, caplog):

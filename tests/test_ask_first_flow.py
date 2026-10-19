@@ -4,7 +4,6 @@ confirmation flow and web search execution pipeline."""
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -25,19 +24,14 @@ from src.llm.post_gen_pipeline import run_post_gen_pipeline
 
 
 class TestDeterministicKeywordMatch:
-    """YES/NO matching uses word-set intersection, not LLM."""
-
-    _SINGLE = {"yes", "yeah", "sure", "please", "yep", "ok", "okay",
-                "search", "y"}
-    _PHRASES = ("go ahead", "do it", "please search")
+    """YES/NO matching is deterministic, not an LLM call. Exercises the real
+    interpreter in src/api/openai_adapter.py (negation first, then
+    affirmatives), not a local copy of its logic."""
 
     def _is_affirmed(self, msg: str) -> bool:
-        cleaned = re.sub(r"[^\w\s]", "", msg.strip()).lower()
-        words = set(cleaned.split())
-        return (
-            bool(words & self._SINGLE)
-            or any(p in cleaned for p in self._PHRASES)
-        )
+        from src.api.openai_adapter import _interpret_confirmation_reply
+        confirmed, _ = _interpret_confirmation_reply(msg)
+        return confirmed
 
     @pytest.mark.parametrize("msg", [
         "Yes", "yes", "YES", "Yeah", "Sure", "Please", "Go ahead",

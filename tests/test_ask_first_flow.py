@@ -290,7 +290,7 @@ class TestConfirmationSearchFailed:
             used_vision=False,
             confirmation_search_failed=True,
         )
-        assert "try again" in result.reply.lower()
+        assert "try the search again" in result.reply.lower()
         assert result.ask_first_substituted is True
 
     def test_no_substitution_when_not_failed(self):
@@ -303,7 +303,7 @@ class TestConfirmationSearchFailed:
             used_vision=False,
             confirmation_search_failed=False,
         )
-        assert "try again" not in result.reply.lower()
+        assert "try the search again" not in result.reply.lower()
         assert "Tokyo" in result.reply
 
 

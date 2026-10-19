@@ -44,7 +44,7 @@ exactly one funnel and keeping this module free of any response-builder import.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Generic, Optional, Sequence, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Sequence, TypeVar
 
 if TYPE_CHECKING:
     # Typing-only import: the memoized query policy carried on GenerationContext.
@@ -128,7 +128,7 @@ class GenerationWork:
     message at construction). The confirmation builder overwrites BOTH message
     and raw_message with the original deferred query on a confirmed web search;
     the task and timer builders prefix only message, leaving raw_message clean
-    for _write_pending_confirmation. confirmation_* / pending_records carry the
+    for _write_pending_confirmation. confirmation_* / consumed_pending carry the
     confirmation builder's outputs to the generation handler.
     """
 
@@ -142,7 +142,10 @@ class GenerationWork:
     # returned "ok" but every hit was quarantined. None when none ran.
     confirmation_search_status: str | None = None
     confirmation_search_reason: str | None = None
-    pending_records: list = field(default_factory=list)
+    # The pending offer a confirmed reply took this turn (the adapter's
+    # _ConsumedPending), put back if the exchange ends unanswered. None when
+    # nothing was confirmed.
+    consumed_pending: Any = None
 
     def __post_init__(self):
         # Snapshot the clean message when a caller does not pass raw_message.

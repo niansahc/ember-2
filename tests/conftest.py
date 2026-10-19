@@ -385,6 +385,12 @@ def restore_process_state():
 
     clear_store_cache()
     clear_index_cache()
+    # The adapter's in-process stateless pendings (offers, B2 clarifications)
+    # are keyed by session id; test files reuse fixed ids, so an entry must
+    # not outlive the test that left it. Only when the adapter was imported.
+    adapter = sys.modules.get("src.api.openai_adapter")
+    if adapter is not None:
+        adapter._stateless_pending_store.clear()
     if prior_path is None:
         clear_vault_path_override()
     else:

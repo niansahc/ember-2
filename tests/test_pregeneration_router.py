@@ -268,7 +268,7 @@ def test_generation_work_defaults_and_prep_fields():
     assert work.confirmation_web_items == []
     assert work.confirmation_confirmed is False
     assert work.confirmation_search_failed is False
-    assert work.pending_records == []
+    assert work.consumed_pending is None
 
 
 # ---------------------------------------------------------------------------

@@ -57,6 +57,12 @@ def _adapter():
     return adapter
 
 
+def _interpret(message: str) -> tuple[bool, str]:
+    """(confirmed, follow_up) from the real interpreter."""
+    result = _adapter()._confirmation_result("web_search", "q", message)
+    return result["confirmed"], result["follow_up"]
+
+
 def _searxng(items, unresponsive=()):
     response = MagicMock(status_code=200)
     response.json.return_value = {
@@ -191,14 +197,14 @@ CONFIRMS = [
 
 @pytest.mark.parametrize("message", DECLINES)
 def test_reply_with_a_negation_declines(message):
-    confirmed, follow_up = _adapter()._interpret_confirmation_reply(message)
+    confirmed, follow_up = _interpret(message)
     assert (confirmed, follow_up) == (False, "")
 
 
 @pytest.mark.parametrize("message", CONFIRMS)
 def test_affirmatives_and_affirming_idioms_confirm(message):
     """Control for the declines above, and the fixed idiom carve-out."""
-    confirmed, _ = _adapter()._interpret_confirmation_reply(message)
+    confirmed, _ = _interpret(message)
     assert confirmed is True
 
 
@@ -272,7 +278,7 @@ def test_plain_yes_carries_no_follow_up(message):
 ])
 def test_elaborated_yes_carries_no_follow_up(message):
     """No connector and no question: the words only elaborate the yes."""
-    confirmed, follow_up = _adapter()._interpret_confirmation_reply(message)
+    confirmed, follow_up = _interpret(message)
     assert (confirmed, follow_up) == (True, "")
 
 
@@ -286,7 +292,7 @@ def test_elaborated_yes_carries_no_follow_up(message):
 def test_connector_or_question_keeps_the_follow_up(message, expected):
     """Control for the test above: new content after a connector or in a
     question is kept."""
-    confirmed, follow_up = _adapter()._interpret_confirmation_reply(message)
+    confirmed, follow_up = _interpret(message)
     assert (confirmed, follow_up) == (True, expected)
 
 

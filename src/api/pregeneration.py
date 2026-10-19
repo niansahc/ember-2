@@ -44,7 +44,7 @@ exactly one funnel and keeping this module free of any response-builder import.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Sequence, TypeVar
+from typing import TYPE_CHECKING, Callable, Generic, Optional, Sequence, TypeVar
 
 if TYPE_CHECKING:
     # Typing-only import: the memoized query policy carried on GenerationContext.
@@ -142,10 +142,10 @@ class GenerationWork:
     # returned "ok" but every hit was quarantined. None when none ran.
     confirmation_search_status: str | None = None
     confirmation_search_reason: str | None = None
-    # The pending offer a confirmed reply took this turn (the adapter's
-    # _ConsumedPending), put back if the exchange ends unanswered. None when
-    # nothing was confirmed.
-    consumed_pending: Any = None
+    # The pending offer a confirmed reply took this turn ({query, offer_text,
+    # stateless}), which the adapter's _PendingGuard puts back if the exchange
+    # ends unanswered. None when nothing was confirmed.
+    consumed_pending: dict | None = None
 
     def __post_init__(self):
         # Snapshot the clean message when a caller does not pass raw_message.

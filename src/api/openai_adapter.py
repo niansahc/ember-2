@@ -415,7 +415,7 @@ def _store_reply(
     pending_query: str,
     search_reason: str | None = None,
     stateless_pending: bool = False,
-    pending_guard: "_PendingGuard | None" = None,
+    pending_guard: "_PendingGuard",
 ) -> None:
     """Store the reply, then the work that must exist before [DONE].
 
@@ -438,8 +438,7 @@ def _store_reply(
     answered, so a pending this turn consumed is not put back.
     """
     exchange.record_reply(reply)
-    if pending_guard is not None:
-        pending_guard.settle()
+    pending_guard.settle()
     # This turn may hold an offer: in the vault, or in process when stateless.
     may_hold_pending = stateless_pending or not skip_vault_write
     repeats = search_reason in NO_REPEAT_OFFER_REASONS
@@ -571,20 +570,13 @@ def _confirmation_verdict(user_message: str) -> str:
     return "unmatched"
 
 
-def _interpret_confirmation_reply(user_message: str) -> tuple[bool, str]:
-    """(confirmed, follow_up) for the user's reply to an ask-first offer.
+def _confirmation_result(action: str, query: str, user_message: str) -> dict:
+    """Interpret the reply to a pending offer and log the verdict.
 
-    confirmed is _confirmation_verdict(...) == "confirmed"; a decline and an
+    confirmed is True only for a "confirmed" verdict; a decline and an
     unmatched reply are both False. follow_up is the new content a
     confirmation carries ("" for a plain yes, always "" otherwise).
     """
-    if _confirmation_verdict(user_message) != "confirmed":
-        return False, ""
-    return True, _confirmation_follow_up(user_message)
-
-
-def _confirmation_result(action: str, query: str, user_message: str) -> dict:
-    """Interpret the reply to a pending offer and log the verdict."""
     verdict = _confirmation_verdict(user_message)
     follow_up = ""
     if verdict == "confirmed":
@@ -728,7 +720,6 @@ class _PendingGuard:
         self._session_id = session_id
         self._vault = vault
         self._consumed: dict | None = None
-        self._done = False
         self._lock = threading.Lock()
 
     def arm(self, consumed: dict | None) -> None:
@@ -738,15 +729,14 @@ class _PendingGuard:
 
     def settle(self) -> None:
         with self._lock:
-            self._done = True
+            self._consumed = None
 
     def restore(self, outcome: str, reason: str | None = None) -> bool:
         """Put the consumed pending back. True when it was put back."""
         with self._lock:
-            if self._done or self._consumed is None:
+            consumed, self._consumed = self._consumed, None
+            if consumed is None:
                 return False
-            self._done = True
-            consumed = self._consumed
         try:
             if consumed["stateless"]:
                 _stateless_pending_store.hold(self._session_id, consumed["query"])
@@ -1544,7 +1534,7 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
     """Pending-confirmation check (pre-generation).
 
     If Ember previously offered to search and the user is now responding,
-    interpret the response deterministically (_interpret_confirmation_reply:
+    interpret the response deterministically (_confirmation_result:
     any negation word declines, checked before the affirmatives) and route
     accordingly. A confirmed web_search runs the deferred search on the
     ORIGINAL stored query and sets work.raw_message to it, so the search, the
@@ -1913,7 +1903,7 @@ async def _complete_exchange(
     image_data: list[str],
     gen_ctx: GenerationContext,
     exchange: ExchangeRecorder,
-    pending_guard: "_PendingGuard | None" = None,
+    pending_guard: "_PendingGuard",
 ):
     """Run one exchange after its user turn is stored, and return the response.
 
@@ -1925,8 +1915,6 @@ async def _complete_exchange(
     """
     _exchange = exchange
     _turn_vault = exchange.vault
-    if pending_guard is None:
-        pending_guard = _PendingGuard(gen_ctx.session_id, _turn_vault)
 
     # A vault-on turn drops whatever this session holds in process (a
     # stateless offer or B2 clarification), so it cannot fire after the vault

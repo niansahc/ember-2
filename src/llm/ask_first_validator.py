@@ -41,7 +41,7 @@ from __future__ import annotations
 import re
 
 SCRIPTED_ASK_FIRST_RESPONSE = (
-    "I don't have current information on that — want me to search?"
+    "I don't have current information on that. Want me to search?"
 )
 
 # Substituted by the post-gen pipeline when the deferred (confirmed) search

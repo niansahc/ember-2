@@ -28,6 +28,8 @@ import threading
 
 import pytest
 
+from unittest.mock import patch
+
 from src.memory.exchange import ExchangeStorageError
 from tests.conftest import active_pendings, seed_pending
 from tests.test_ask_first_routing import (  # noqa: F401  (client is a fixture)
@@ -290,21 +292,115 @@ def test_writer_reads_fresh_after_an_earlier_check():
 
 # --- The in-process store does not outlive a test ------------------------------
 
-_LEFT_BEHIND = {"held": False}
-
-
-def test_store_entry_left_by_a_test():
-    """Leaves an entry; the conftest teardown must clear it. Its own check
-    is the positive control: the entry is live inside this test."""
+def test_teardown_helper_empties_the_store():
+    """The conftest teardown helper empties the store. The entry being live
+    before the call is the positive control."""
+    from tests.conftest import clear_adapter_process_stores
     assert _store().hold("sess_test_left_behind", QUERY)
     assert len(_store()) == 1
-    _LEFT_BEHIND["held"] = True
-
-
-def test_store_is_empty_in_the_next_test():
-    if not _LEFT_BEHIND["held"]:
-        pytest.skip("runs after test_store_entry_left_by_a_test")
+    clear_adapter_process_stores()
     assert len(_store()) == 0
+
+
+def test_every_test_ends_with_the_teardown_helper():
+    """restore_process_state (autouse) calls the helper after its yield, so
+    no test leaves an entry for the next one, in any order."""
+    import ast
+    import inspect
+    import tests.conftest as conftest
+    tree = ast.parse(inspect.getsource(conftest))
+    fixture = next(node for node in ast.walk(tree)
+                   if isinstance(node, ast.FunctionDef)
+                   and node.name == "restore_process_state")
+    body = fixture.body
+    after_yield = body[next(i for i, stmt in enumerate(body)
+                            if isinstance(getattr(stmt, "value", None), ast.Yield)) + 1:]
+    called = {node.func.id for stmt in after_yield for node in ast.walk(stmt)
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    assert "clear_adapter_process_stores" in called
+
+
+# --- The search clarification comes back with an unanswered exchange ------------
+
+def _clarify(client, vault, sid):
+    """Vault off: "google please" holds the clarification in process."""
+    _, text, _, _ = _turn(client, vault, [], query="google please", session_id=sid,
+                          vault_enabled=False, real_classifier=True)
+    assert text == "What would you like me to search for?"
+
+
+@pytest.mark.parametrize("failure", ["generation", "vision"])
+def test_unanswered_content_exchange_puts_the_clarification_back(
+        client, isolate_to_test_vault, failure):
+    sid = f"sess_test_b2_restore_{failure}"
+    _clarify(client, isolate_to_test_vault, sid)
+    kwargs = {"fail": RuntimeError("boom")} if failure == "generation" else {"image": True}
+    _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])], query="the eagles game",
+          session_id=sid, vault_enabled=False, **kwargs)
+    assert _store().take_awaiting(sid) is True
+
+
+def test_answered_content_exchange_leaves_no_clarification(client, isolate_to_test_vault):
+    """Positive control for the test above: the store is checked, and an
+    answered exchange leaves it empty."""
+    sid = "sess_test_b2_restore_control"
+    _clarify(client, isolate_to_test_vault, sid)
+    assert len(_store()) == 1
+    _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])], query="the eagles game",
+          session_id=sid, vault_enabled=False)
+    assert len(_store()) == 0
+
+
+# --- Restore reports what it did ------------------------------------------------
+
+def test_restore_skips_and_says_so_when_an_active_pending_exists(caplog):
+    sid = "sess_test_restore_duplicate"
+    seed_pending(sid, QUERY)
+    guard = _adapter()._PendingGuard(sid, None)
+    guard.arm({"query": QUERY, "offer_text": "Want me to search?", "stateless": False})
+    with caplog.at_level(logging.INFO):
+        assert guard.restore("failed", "RuntimeError") is False
+    assert "Restore skipped: an active pending already exists" in caplog.text
+    assert "Restored pending" not in caplog.text
+    assert len(active_pendings(sid)) == 1
+
+
+def test_restore_without_a_duplicate_writes_and_says_so(caplog):
+    """Control for the test above."""
+    sid = "sess_test_restore_no_duplicate"
+    guard = _adapter()._PendingGuard(sid, None)
+    guard.arm({"query": QUERY, "offer_text": "Want me to search?", "stateless": False})
+    with caplog.at_level(logging.INFO):
+        assert guard.restore("failed", "RuntimeError") is True
+    assert "Restored pending" in caplog.text
+    assert len(active_pendings(sid)) == 1
+
+
+# --- A failure after the reply is stored puts nothing back -----------------------
+
+def _fail_after_the_reply_is_stored(client, vault, sid):
+    """A confirmed "yes" whose stream breaks after the reply was stored: the
+    final [DONE] frame raises, so the stream guard reports a failure."""
+    seed_pending(sid, QUERY)
+    with patch("src.api.openai_adapter.sse_done", side_effect=RuntimeError("after store")):
+        _turn(client, vault, [_searxng([CLEAN_HIT])], query="yes", session_id=sid,
+              stream=True)
+
+
+def test_failure_after_the_reply_is_stored_does_not_restore(client, isolate_to_test_vault):
+    sid = "sess_test_settle_wiring"
+    _fail_after_the_reply_is_stored(client, isolate_to_test_vault, sid)
+    assert active_pendings(sid) == []
+
+
+def test_without_settle_the_same_failure_restores(client, isolate_to_test_vault, monkeypatch):
+    """Positive control for the test above: with _store_reply's settle() out
+    of the way, the same failure does put the pending back, so the test above
+    sees a missing settle."""
+    monkeypatch.setattr(_adapter()._PendingGuard, "settle", lambda self: None)
+    sid = "sess_test_settle_wiring_control"
+    _fail_after_the_reply_is_stored(client, isolate_to_test_vault, sid)
+    assert [p.metadata["query"] for p in active_pendings(sid)] == [QUERY]
 
 
 # --- Log lines -----------------------------------------------------------------

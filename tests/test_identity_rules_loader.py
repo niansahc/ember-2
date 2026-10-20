@@ -135,5 +135,6 @@ def test_loads_real_identity_rules_file() -> None:
     # were removed as redundant — superseded by the more detailed
     # preference_expression and identity_under_pressure rules.
     # 2026-04-15 UAT batch added 4 grounding rules: no_invented_sources,
-    # ask_first_confirmation, injected_date_authority, third_party_provenance.
+    # current_data_gap (was ask_first_confirmation), injected_date_authority,
+    # third_party_provenance.
     assert len(rules.rules) == 14

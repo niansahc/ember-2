@@ -425,8 +425,9 @@ def test_autonomous_engines_blocked_still_offers(client, stream):
 
 @pytest.mark.parametrize("reason", ["filtered", "low_relevance"])
 def test_confirm_no_pending_after_unrepeatable_failure(client, reason, caplog):
-    """No canned retry offer either: the model's reply stands, behind the
-    disclosure line."""
+    """No repeat-search offer either: the model's answer stands behind the
+    disclosure line, and its own offer to search again is removed (ADR-048):
+    nothing would honour a "yes" to it."""
     response, min_hits = _failing_search(reason)
     with caplog.at_level("INFO", logger="ember.openai_adapter"):
         _, text, packet, write_pending = _turn(
@@ -434,7 +435,7 @@ def test_confirm_no_pending_after_unrepeatable_failure(client, reason, caplog):
             min_term_hits=min_hits, reply=_OFFER_REPLY)
     assert packet.web_search_reason == reason
     assert _NO_REPEAT in _search_section(packet)
-    assert text == f"{WEB_SEARCH_UNAVAILABLE_DISCLOSURE}\n\n{_OFFER_REPLY}"
+    assert text == f"{WEB_SEARCH_UNAVAILABLE_DISCLOSURE}\n\nI could not find that."
     write_pending.assert_not_called()
     assert (f"path=confirm: 0 of {_RETURNED[reason]} results kept, status=unavailable reason={reason}"
             in caplog.text)

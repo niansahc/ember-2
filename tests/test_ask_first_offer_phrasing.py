@@ -8,8 +8,9 @@ A model offer on any other exchange writes nothing, whatever its wording, so a
 constitutional refusal is never turned into an offer, and a first-person
 exchange (the query looks personal) is not an ask-first exchange.
 
-OFFER_PATTERNS no longer decides pendings. It only detects the model's own
-offers (has_search_offer).
+OFFER_PATTERNS no longer decides pendings. It detects the model's own offers
+(find_offer_sentences) so the post-generation guard can remove them: the
+model never offers a search, and the prompt never tells it to.
 
 End-to-end cases run through /v1/chat/completions with the helpers from
 tests/test_ask_first_routing.py against the conftest throwaway test vault.
@@ -25,10 +26,10 @@ from src.llm.ask_first_validator import (
     REPEAT_SEARCH_OFFER,
     RETRY_OFFER_RESPONSE,
     SCRIPTED_ASK_FIRST_RESPONSE,
-    find_offer_sentence,
-    has_search_offer,
+    UNBACKED_OFFER_FALLBACK,
+    find_offer_sentences,
 )
-from src.llm.post_gen_pipeline import run_post_gen_pipeline
+from src.llm.post_gen_pipeline import WEB_SEARCH_UNAVAILABLE_DISCLOSURE, run_post_gen_pipeline
 from tests.conftest import active_pendings as _active_pendings
 from tests.test_ask_first_routing import (  # noqa: F401  (client is a fixture)
     CLEAN_HIT,
@@ -213,10 +214,65 @@ def test_refusal_after_a_failed_search_gets_no_repeat_offer():
     assert result.code_offer is None
 
 
+# --- The model never offers a search -------------------------------------------
+
+def _postgen(reply, **kw):
+    return run_post_gen_pipeline(
+        reply, intent_class="default", web_search_autonomous=True,
+        used_web_search=False, used_vault=False, used_vision=False, **kw,
+    )
+
+
+def test_model_offer_on_a_default_exchange_is_removed(client, isolate_to_test_vault):
+    sid = "sess_test_guard_e2e"
+    _, text, _, _ = _turn(client, isolate_to_test_vault, [], query=QUERY, session_id=sid,
+                          request_policy=DEFAULT,
+                          reply="I don't have that in my memory, want me to search?")
+    assert text == UNBACKED_OFFER_FALLBACK
+    assert _active_pendings(sid) == []
+
+
+def test_only_the_offer_sentence_is_removed():
+    assert (_postgen("The 2024 figure was 12. Want me to look it up online?").reply
+            == "The 2024 figure was 12.")
+
+
+def test_offer_to_search_a_local_source_is_removed():
+    """Ember has no action behind "search your notes" either."""
+    assert _postgen("Want me to search your notes?").reply == UNBACKED_OFFER_FALLBACK
+
+
+@pytest.mark.parametrize("reply", [
+    "Would you like me to look over the draft for typos?",
+    "Here is the answer.",
+])
+def test_replies_without_a_search_offer_are_untouched(reply):
+    """Control for the removals above: the guard is not a match-all."""
+    assert _postgen(reply).reply == reply
+
+
+def test_refusal_is_never_rewritten_by_the_guard():
+    refusal = "I can't help with that. Want me to search for something else?"
+    assert _postgen(refusal).reply == refusal
+
+
+def test_the_code_offers_survive_the_guard():
+    ask = run_post_gen_pipeline(
+        "Want me to look it up?", intent_class="web_search",
+        web_search_autonomous=False, used_web_search=False, used_vault=False,
+        used_vision=False, ask_first_active=True,
+    )
+    assert ask.reply == SCRIPTED_ASK_FIRST_RESPONSE
+    repeat = _postgen("Here is what I know. Want me to search again?",
+                      web_search_status="unavailable", web_search_reason="engines_blocked")
+    assert repeat.reply == (f"{WEB_SEARCH_UNAVAILABLE_DISCLOSURE}\n\n"
+                            f"Here is what I know.\n\n{REPEAT_SEARCH_OFFER}")
+
+
 # --- Detecting the model's own offers --------------------------------------------
 
 OFFERS = [
-    "I don't have that. Want me to search for it?",
+    "I don't have that, want me to search for it?",
     "Do you want me to look it up?",
     "Want me to look up the score online?",
     "Want me to try the search again?",
@@ -227,6 +283,7 @@ OFFERS = [
     "Would you like me to find out the price on the web?",
     "I can search for that, interested?",
     "I could look it up for you if you like.",
+    "Want me to search your notes?",
     # Curly apostrophe, as a mobile keyboard sends it.
     "I could search for that if you\u2019d like.",
 ]
@@ -246,31 +303,76 @@ NON_OFFERS = [
 
 @pytest.mark.parametrize("offer", OFFERS)
 def test_model_offers_are_detected(offer):
-    assert has_search_offer(offer) is True
+    assert find_offer_sentences(offer) == [offer]
 
 
 @pytest.mark.parametrize("text", NON_OFFERS)
 def test_non_offers_are_not_detected(text):
     """Control for the test above: the patterns are not a match-all."""
-    assert has_search_offer(text) is False
+    assert find_offer_sentences(text) == []
 
 
 def test_curly_offer_sentence_is_returned_as_written():
     reply = "I don't have it. I could search for that if you\u2019d like."
-    assert find_offer_sentence(reply) == "I could search for that if you\u2019d like."
+    assert find_offer_sentences(reply) == ["I could search for that if you\u2019d like."]
 
 
-def test_offer_sentence_is_the_sentence_with_the_offer():
+def test_offer_sentences_are_the_sentences_with_an_offer():
     reply = "Prices change daily. I don't have today's. Want me to search for it? Happy to."
-    assert find_offer_sentence(reply) == "Want me to search for it?"
-    assert find_offer_sentence("No offer here.") is None
+    assert find_offer_sentences(reply) == ["Want me to search for it?"]
+    assert find_offer_sentences("No offer here.") == []
 
 
 def test_post_gen_retry_offer_is_the_shared_constant():
-    from src.llm.post_gen_pipeline import run_post_gen_pipeline
     result = run_post_gen_pipeline(
         "I'm working on it.", intent_class="web_search",
         web_search_autonomous=False, used_web_search=False, used_vault=False,
         used_vision=False, confirmation_search_failed=True,
     )
     assert result.reply == RETRY_OFFER_RESPONSE
+
+
+# --- The prompt never tells the model to offer -----------------------------------
+
+OFFER_INSTRUCTIONS = ("offer to search", "ask to search")
+
+
+def _prompt(**kw):
+    from src.context.models import ContextPacket
+    from src.llm.prompt_builder import PromptBuilder
+    return PromptBuilder().build_prompt(ContextPacket(user_message=QUERY), **kw)
+
+
+def _offer_instructions(text):
+    return [p for p in OFFER_INSTRUCTIONS if p in text.lower()]
+
+
+def test_prompt_never_tells_the_model_to_offer_a_search():
+    assert _offer_instructions(_prompt(intent_class="default")) == []
+
+
+def test_prompt_check_sees_the_ask_block():
+    """Positive control: the scan reads the rendered prompt, and the one
+    place offers are asked for (the ask-first exchange, where the code
+    makes the offer) is found by it."""
+    prompt = _prompt(ask_first_active=True, intent_class="web_search")
+    assert "<search_confirmation>" in prompt
+    assert _offer_instructions(prompt) == ["ask to search"]
+
+
+def test_identity_rules_never_tell_the_model_to_offer_a_search():
+    from src.safety.identity_rules_loader import IdentityRulesLoader
+    loader = IdentityRulesLoader()
+    loader.load()
+    assert _offer_instructions(loader.to_prompt_text()) == []
+
+
+def test_identity_rule_check_detects_an_offer_instruction(tmp_path):
+    """Positive control for the test above."""
+    from src.safety.identity_rules_loader import IdentityRulesLoader
+    path = tmp_path / "identity_rules.yaml"
+    path.write_text('version: "t"\nrules:\n  - id: x\n    trigger: "t"\n'
+                    '    rule: "Say so and offer to search."\n', encoding="utf-8")
+    loader = IdentityRulesLoader(config_path=path)
+    loader.load()
+    assert _offer_instructions(loader.to_prompt_text()) == ["offer to search"]

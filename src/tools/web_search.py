@@ -163,6 +163,27 @@ class WebSearchResult:
     reason: str | None = None
 
 
+# The note the UI prepends when the user attaches documents
+# (ember-2-ui src/hooks/useChat.js). It is part of what the client sends, so
+# the user turn keeps it, but it names the uploaded files and is not the
+# user's question: it never goes to the search engines.
+_UI_UPLOAD_NOTE = re.compile(
+    r"^\[I just uploaded .+? to my vault\. "
+    r"The content is now available in your memory\.\]\s*"
+)
+
+
+def search_text_from(user_text: str) -> str:
+    """The text a web search may send for this user text: the user's own
+    words, without the UI's leading upload note. Ember's own notes (task,
+    timer) are never part of it; callers pass the clean pre-prefix message."""
+    text = user_text or ""
+    stripped = _UI_UPLOAD_NOTE.sub("", text, count=1)
+    if stripped != text:
+        logger.info("[WEB_SEARCH] upload note removed from the search text")
+    return stripped
+
+
 def run_web_search(query) -> WebSearchResult:
     """Query local SearXNG, re-rank by combined SearXNG-rank + freshness,
     and return the top MAX_RESULTS with a status (see WebSearchResult).

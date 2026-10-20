@@ -44,7 +44,7 @@ from src.memory.read_memory import read_memories
 from src.memory.exchange import ExchangeRecorder, ExchangeStorageError, OUTCOME_FAILED
 from src.memory.session import get_session, list_sessions
 from src.context.service import ContextService, resolve_search_outcome
-from src.tools.web_search import NO_REPEAT_OFFER_REASONS
+from src.tools.web_search import NO_REPEAT_OFFER_REASONS, search_text_from
 from src.llm.adapter import LLMAdapter, StatusSignal
 from src.llm.ask_first_validator import find_offer_sentence, has_search_offer
 # Shared with the post-gen pipeline, which skips the search-unavailable
@@ -1572,13 +1572,16 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
                             else _original_query)
             work.raw_message = _original_query
             from src.tools.web_search import run_web_search
-            _search = run_web_search(_original_query)
+            # The stored query is the user's text; search_text_from also
+            # drops an upload note that a pending written before it held.
+            _search_query = search_text_from(_original_query)
+            _search = run_web_search(_search_query)
             # AI-doc quarantine, as on every search path.
             (
                 work.confirmation_web_items,
                 work.confirmation_search_status,
                 work.confirmation_search_reason,
-            ) = resolve_search_outcome(_search, _original_query)
+            ) = resolve_search_outcome(_search, _search_query)
             # run_web_search never raises; a failed or blocked search arrives
             # as "unavailable" and routes to the post-gen retry offer. A reason
             # in NO_REPEAT_OFFER_REASONS is not retried: a retry returns the
@@ -1984,6 +1987,10 @@ async def _complete_exchange(
         pending_guard.arm(work.consumed_pending)
     latest_user_message = work.message
     _raw_user_message = work.raw_message
+    # What a web search may send this exchange: the user's own words. Never
+    # latest_user_message, which can carry Ember's task and timer notes or a
+    # confirmation's follow-up, and never the UI's upload note.
+    _search_text = search_text_from(_raw_user_message)
     _confirmation_web_items = work.confirmation_web_items
     _confirmation_confirmed = work.confirmation_confirmed
     _confirmation_search_failed = work.confirmation_search_failed
@@ -2122,6 +2129,7 @@ async def _complete_exchange(
             project_id=project_id,
             skip_web_search=_skip_search,
             policy=_early_policy if _b2_dispatch else None,
+            search_text=_search_text,
         )
 
     # Retrieval for this exchange is done, so its own user turn can be indexed
@@ -2355,10 +2363,10 @@ async def _complete_exchange(
 
         if _should_search:
             from src.tools.web_search import run_web_search
-            _auto_search = run_web_search(_raw_user_message)
+            _auto_search = run_web_search(_search_text)
             # AI-doc quarantine, as on every search path.
             _auto_items, _auto_status, _auto_reason = resolve_search_outcome(
-                _auto_search, _raw_user_message
+                _auto_search, _search_text
             )
             context_packet.web_search_status = _auto_status
             context_packet.web_search_reason = _auto_reason
@@ -2430,7 +2438,7 @@ async def _complete_exchange(
         skip_vault_write=_skip_vault_write,
         intent_class=_intent_class,
         user_turn_text=gen_ctx.user_turn_text,
-        pending_query=_raw_user_message,
+        pending_query=_search_text,
         search_reason=context_packet.web_search_reason,
         # Stateless turns hold an offer in process; test sessions hold none.
         stateless_pending=_skip_vault_write and not gen_ctx.is_test,

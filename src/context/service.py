@@ -239,8 +239,15 @@ class ContextService:
         skip_web_search: bool = False,
         read_only: bool = False,
         policy=None,
+        search_text: str | None = None,
     ) -> ContextPacket:
         """Assemble the context packet for one turn.
+
+        search_text, when given, is what the web search sends instead of
+        user_message. The chat endpoint passes the user's own words: the
+        message it retrieves with can carry Ember's task and timer notes or a
+        confirmation's follow-up, and none of that may reach the search
+        engines. Retrieval and classification still use user_message.
 
         policy, when given, is used instead of classify_query(user_message).
         The chat path in src/api/openai_adapter.py always passes its turn
@@ -296,7 +303,8 @@ class ContextService:
             or (not read_only and not retrieval_stats_disabled_now())
         ):
             return self._build_context(user_message, image_data, project_id,
-                                       skip_web_search, read_only, policy)
+                                       skip_web_search, read_only, policy,
+                                       search_text=search_text)
 
     def _build_context(
         self,
@@ -306,6 +314,7 @@ class ContextService:
         skip_web_search: bool,
         read_only: bool,
         policy,
+        search_text: str | None = None,
     ) -> ContextPacket:
         """Assembly proper. Split out so the counter scope wraps all of it."""
 
@@ -317,9 +326,13 @@ class ContextService:
         # the context service fetches results during assembly and the SSE
         # stream shows sources alongside the "want me to search?" question.
         if policy.use_web_search and not skip_web_search:
-            search = run_web_search(user_message)
+            query = user_message if search_text is None else search_text
+            if search_text is not None:
+                logger.info("[WEB_SEARCH] path=assembly: searching the user's text "
+                            "(%d chars)", len(query))
+            search = run_web_search(query)
             web_items, web_search_status, web_search_reason = (
-                resolve_search_outcome(search, user_message)
+                resolve_search_outcome(search, query)
             )
 
         state_items, task_items, memory_items, reflection_items, query_embedding = self.retriever.retrieve(user_message)

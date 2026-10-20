@@ -731,24 +731,26 @@ _stateless_pending_store = _StatelessPendingStore()
 
 
 class _PendingGuard:
-    """Puts back a pending offer a confirmed reply consumed, if the exchange
-    ends unanswered.
+    """Puts back what an exchange consumed, if it ends unanswered.
 
     Resolve-first (the loop guard) removes the pending before the deferred
-    search and generation run. When the exchange then ends without a stored
-    reply (a generation or storage error, a client disconnect, the
-    vision_unavailable return), the user's "yes" would be lost: restore()
-    writes the same offer back, to the vault or to the in-process store.
-    settle() marks the exchange answered. Whichever runs first wins; both
-    take a lock because the SSE guard calls restore() from a worker thread.
-    Only a confirmation is armed: a decline or an unrelated reply already
-    settled the offer, and restoring it would let a later "ok" search.
+    search and generation run, and a vault-off exchange takes its search
+    clarification from the in-process store before it searches. When the
+    exchange then ends without a stored reply (a generation or storage error,
+    a client disconnect, the vision_unavailable return), the user's "yes" or
+    search content would be lost: restore() puts the offer back (vault or
+    in-process store) or the clarification back (in-process store). settle()
+    marks the exchange answered. Whichever runs first wins; both take a lock
+    because the SSE guard calls restore() from a worker thread. Only a
+    confirmation is armed: a decline or an unrelated reply already settled
+    the offer, and restoring it would let a later "ok" search.
     """
 
     def __init__(self, session_id: str, vault) -> None:
         self._session_id = session_id
         self._vault = vault
         self._consumed: dict | None = None
+        self._awaiting = False
         self._lock = threading.Lock()
 
     def arm(self, consumed: dict | None) -> None:
@@ -756,23 +758,36 @@ class _PendingGuard:
         with self._lock:
             self._consumed = consumed
 
+    def arm_awaiting(self) -> None:
+        """Remember that this exchange took the session's search clarification."""
+        with self._lock:
+            self._awaiting = True
+
     def settle(self) -> None:
         with self._lock:
             self._consumed = None
+            self._awaiting = False
 
     def restore(self, outcome: str, reason: str | None = None) -> bool:
-        """Put the consumed pending back. True when it was put back."""
+        """Put back what this exchange consumed. True when something was put back."""
         with self._lock:
             consumed, self._consumed = self._consumed, None
-            if consumed is None:
-                return False
+            awaiting, self._awaiting = self._awaiting, False
+        restored = False
+        if consumed is not None:
+            restored = self._restore_pending(consumed, outcome, reason)
+        if awaiting:
+            restored = self._restore_awaiting(outcome, reason) or restored
+        return restored
+
+    def _restore_pending(self, consumed: dict, outcome: str, reason: str | None) -> bool:
         try:
             if consumed["stateless"]:
-                _stateless_pending_store.hold(self._session_id, consumed["query"])
+                written = _stateless_pending_store.hold(self._session_id, consumed["query"])
                 store = "process"
             else:
                 with vault_binding(self._vault):
-                    _write_pending_record(
+                    written = _write_pending_record(
                         consumed["offer_text"], consumed["query"], self._session_id,
                         offer_kind=consumed.get("offer"),
                     )
@@ -781,9 +796,23 @@ class _PendingGuard:
             logger.warning("[CONFIRM] Pending restore failed (non-fatal): %s",
                            type(exc).__name__)
             return False
+        if not written:
+            logger.info("[CONFIRM] Restore skipped: %s (store=%s)",
+                        "an active pending already exists" if store == "vault"
+                        else "nothing held for this session", store)
+            return False
         logger.info(
             "[CONFIRM] Restored pending after unanswered exchange: "
             "outcome=%s reason=%s store=%s", outcome, reason or "-", store,
+        )
+        return True
+
+    def _restore_awaiting(self, outcome: str, reason: str | None) -> bool:
+        if not _stateless_pending_store.hold_awaiting(self._session_id):
+            return False
+        logger.info(
+            "[CLARIFY] Restored awaiting_search_content after an unanswered "
+            "exchange: outcome=%s reason=%s", outcome, reason or "-",
         )
         return True
 
@@ -2117,6 +2146,8 @@ async def _complete_exchange(
         # awaiting flag in process (no reply is stored), so this message is
         # the search content, as on the vault path below.
         if _stateless_pending_store.take_awaiting(session_id):
+            # Put back if this exchange ends unanswered (_PendingGuard).
+            pending_guard.arm_awaiting()
             from src.context.policies import _web_search_policy
             _early_policy = _web_search_policy(explicit=True)
             logger.info(

@@ -296,6 +296,92 @@ def test_connector_or_question_keeps_the_follow_up(message, expected):
     assert (confirmed, follow_up) == (True, expected)
 
 
+# --- 2b. Only a clear yes confirms; anything else runs as itself (ADR-048) ------
+
+@pytest.mark.parametrize("message,expected", [
+    ("yes", (True, "")),
+    ("sure, go ahead", (True, "")),
+    ("please search", (True, "")),
+    ("yup", (True, "")),
+    ("of course", (True, "")),
+    ("go for it", (True, "")),
+    ("sounds good", (True, "")),
+    ("please do", (True, "")),
+    ("yeah that'd be great", (True, "")),
+    ("Yes, I'd love that", (True, "")),
+    ("yes, what about the weather in Paris", (True, "what about the weather in Paris")),
+    ("ok so what is the capital of France", (True, "what is the capital of France")),
+    ("Please rewrite my draft paragraph", (False, "")),
+    ("Sure, tell me the capital of France", (False, "")),
+    ("can you search my notes for the recipe?", (False, "")),
+    ("what time is it?", (False, "")),
+    ("No, but what about the weather?", (False, "")),
+])
+def test_confirmation_grammar(message, expected):
+    """A leading affirmative, then nothing, an elaboration, a connector with
+    new content, or a question. Anything else is not a yes."""
+    assert _interpret(message) == expected
+
+
+def test_unrelated_request_after_an_offer_runs_as_itself(client, isolate_to_test_vault):
+    """The old search does not run and the user's request reaches the model.
+    The control is test_confirm_runs_the_stored_query."""
+    from src.context.policies import ContextPolicy
+    sid = "sess_test_unrelated_request"
+    _seed_pending(sid)
+    message = "Please rewrite my draft paragraph"
+    _, _, llm, get = _turn(client, isolate_to_test_vault, [], query=message, session_id=sid,
+                           request_policy=ContextPolicy(name="default"))
+    assert get.call_count == 0
+    assert llm.generate_response.call_args.args[0].user_message == message
+    assert _active_pendings(sid) == []
+
+
+def test_yes_with_a_question_searches_and_keeps_the_question(client, isolate_to_test_vault):
+    sid = "sess_test_yes_question"
+    _seed_pending(sid)
+    _, _, llm, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
+                           query="yes, what about the weather in Paris", session_id=sid)
+    assert get.call_count == 1
+    assert _searched_query(get) == QUERY
+    assert (llm.generate_response.call_args.args[0].user_message
+            == f"{QUERY}\n\nwhat about the weather in Paris")
+
+
+def test_yes_with_an_image_is_not_a_confirmation(client, isolate_to_test_vault):
+    """An image exchange never searches (the vision gate): the pending is
+    resolved without a search, so the failed vision exchange has nothing to
+    put back. The control is test_confirm_runs_the_stored_query."""
+    sid = "sess_test_yes_image"
+    _seed_pending(sid)
+    _, _, _, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
+                         query="yes", session_id=sid, image=True)
+    assert get.call_count == 0
+    assert _active_pendings(sid) == []
+
+
+def test_clarification_ends_an_older_offer(client, isolate_to_test_vault):
+    """The search clarification is the newest assistant turn: the reply is
+    the search content, not an answer to the older offer."""
+    sid = "sess_test_clarification_supersedes"
+    _seed_pending(sid)
+    content = "sure, what's the score?"
+    _, _, _, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])] * 2,
+                         query=content, session_id=sid, awaiting_search=True)
+    assert [call.kwargs["params"]["q"] for call in get.call_args_list] == [content]
+    assert _active_pendings(sid) == []
+
+
+def test_without_a_clarification_the_same_reply_confirms(client, isolate_to_test_vault):
+    """Control for the test above."""
+    sid = "sess_test_clarification_control"
+    _seed_pending(sid)
+    _, _, _, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
+                         query="sure, what's the score?", session_id=sid)
+    assert get.call_count == 1
+    assert _searched_query(get) == QUERY
+
+
 # No first-person marker, so the control below is an ask-first exchange.
 DRAFT = "here is the draft paragraph about a synthetic topic"
 

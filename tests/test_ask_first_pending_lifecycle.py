@@ -97,16 +97,6 @@ def test_storage_error_on_the_reply_restores_the_pending(client, isolate_to_test
     assert [p.metadata["query"] for p in active_pendings(sid)] == [QUERY]
 
 
-def test_vision_unavailable_restores_the_pending(client, isolate_to_test_vault):
-    sid = "sess_test_restore_vision"
-    seed_pending(sid, QUERY)
-    resp, _, llm, _ = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
-                            query="yes", session_id=sid, image=True)
-    assert resp.status_code == 200
-    llm.generate_response.assert_not_called()
-    assert [p.metadata["query"] for p in active_pendings(sid)] == [QUERY]
-
-
 def test_client_disconnect_restores_through_the_guard():
     """guard_sse calls on_abort("interrupted", None) on a disconnect
     (tests/test_sse_guard.py); the guard restores on that call."""
@@ -216,7 +206,7 @@ def test_vault_on_turn_drops_the_stateless_offer(client, isolate_to_test_vault, 
     assert "[CONFIRM] Dropped stateless entry on a vault-on turn" in caplog.text
     assert len(_store()) == 0
     _, _, _, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
-                         query="ok, different topic", session_id=sid,
+                         query="ok", session_id=sid,
                          vault_enabled=False,
                          request_policy=ContextPolicy(name="default"))
     assert get.call_count == 0
@@ -241,7 +231,7 @@ def test_without_a_vault_on_turn_the_stateless_offer_confirms(
     sid = "sess_test_vault_on_drop_ctl"
     _stateless_offer(client, isolate_to_test_vault, sid)
     _, _, _, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
-                         query="ok, different topic", session_id=sid,
+                         query="ok", session_id=sid,
                          vault_enabled=False,
                          request_policy=ContextPolicy(name="default"))
     assert get.call_count == 1

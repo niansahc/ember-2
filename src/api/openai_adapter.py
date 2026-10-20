@@ -472,13 +472,22 @@ def _resolve_original_pending(pending, reason: str = "user_response") -> None:
 
 # --- Ask-first reply interpretation (deterministic, no LLM call) ---
 # A keyword match replaced an LLM call that added ~500ms latency and could
-# misread the reply at 8B scale. Decline is checked first: a reply holding
-# any negation word is a no, whatever affirmative words it also holds
-# ("No, please don't search" contains "please").
+# misread the reply at 8B scale. A reply confirms only when it is clearly a
+# yes (ADR-048): it starts with an affirmative, and what follows is nothing,
+# an elaboration, new content after a connector, or a question. Anything
+# else is unmatched and runs as a new request, so an unrelated message after
+# an offer is never replaced by the old search. Decline is checked first: a
+# reply holding any negation word is a no, whatever affirmative words it
+# also holds ("No, please don't search" contains "please").
 _CONFIRM_SINGLE_AFFIRM = frozenset(
-    {"yes", "yeah", "sure", "please", "yep", "ok", "okay", "search", "y"}
+    {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "please", "y", "search"}
 )
-_CONFIRM_PHRASE_AFFIRM = ("go ahead", "do it")
+# Affirmatives of more than one word, as normalised words.
+_CONFIRM_PHRASE_AFFIRM: tuple[tuple[str, ...], ...] = (
+    ("not", "a", "problem"), ("go", "for", "it"), ("go", "ahead"), ("do", "it"),
+    ("why", "not"), ("no", "problem"), ("of", "course"), ("sounds", "good"),
+    ("please", "do"),
+)
 # Compared after normalisation, which drops apostrophes: "don't" arrives as
 # "dont".
 _CONFIRM_NEGATIONS = frozenset(
@@ -489,20 +498,28 @@ _CONFIRM_NEGATIONS = frozenset(
 # "Sure, why not" and "no problem, go ahead" confirm while "why not search
 # later, no" still declines on its own "no". Nothing else is exempt.
 _CONFIRM_AFFIRMING_IDIOMS = re.compile(r"\b(?:why not|not a problem|no problem)\b")
-# Leading words skipped when looking for new content after a yes:
-# affirmatives and the words of the affirmative phrases.
-_CONFIRM_LEAD_WORDS = _CONFIRM_SINGLE_AFFIRM | frozenset(
-    {"go", "ahead", "do", "it", "so", "though"}
-)
-# A connector after the yes introduces new content ("yes, but what about X").
-_CONFIRM_CONNECTORS = frozenset({"but", "and", "also", "then"})
-# Words that carry no new request. A remainder made only of these (after the
-# affirming idioms are removed) is not a follow-up: "yes, and search the web
-# for it" is a plain yes.
-_CONFIRM_FILLER_WORDS = _CONFIRM_LEAD_WORDS | _CONFIRM_CONNECTORS | frozenset({
-    "thanks", "thank", "you", "ty", "thx", "now", "for", "that", "this", "the",
-    "a", "web", "online", "them", "look", "up", "find", "again", "try",
+# New content after the yes starts after a connector ("yes, but what about X").
+_CONFIRM_CONNECTORS = frozenset({"but", "and", "also", "then", "so"})
+# A remainder that asks something is new content: it holds a "?" or starts
+# with one of these words ("yes, what about the weather in Paris").
+_CONFIRM_QUESTION_WORDS = frozenset({
+    "what", "who", "when", "where", "why", "how", "which", "is", "are", "can",
+    "could", "does", "do", "did", "will", "would", "should",
 })
+# Words that only elaborate the yes ("Yes, that would be great").
+_CONFIRM_ELABORATION = frozenset({
+    "thanks", "thank", "you", "ty", "thx", "now", "for", "that", "this", "the",
+    "a", "it", "web", "online", "them", "look", "up", "find", "again", "try",
+    "great", "good", "fine", "cool", "perfect", "awesome", "nice", "sounds",
+    "would", "be", "thats", "thatd", "id", "i", "appreciate", "love", "lot",
+    "much", "thing", "really", "very",
+})
+# Words that carry no new request: the elaborations, and the affirmatives and
+# connectors themselves ("yes, and please search" is a plain yes).
+_CONFIRM_FILLER = (
+    _CONFIRM_ELABORATION | _CONFIRM_SINGLE_AFFIRM | _CONFIRM_CONNECTORS
+    | {word for phrase in _CONFIRM_PHRASE_AFFIRM for word in phrase}
+) - _CONFIRM_NEGATIONS
 _CONFIRM_WORD = re.compile(r"[A-Za-z0-9'\u2018\u2019]+")
 
 
@@ -515,72 +532,96 @@ def _normalise_confirmation_text(text: str) -> str:
     return " ".join(text.split())
 
 
-def _confirmation_follow_up(user_message: str) -> str:
-    """New content a confirming reply carries beyond the yes, or "".
-
-    Leading affirmatives are skipped. The rest is new content only when it
-    follows a connector (but/and/also/then) or asks a question, and holds at
-    least one word that is not filler; it is then kept verbatim.
-    "yes, but what about the weather tomorrow?" -> "what about the weather
-    tomorrow?"; "yes, is it open on Sunday?" -> "is it open on Sunday?";
-    "Yes, that would be great" -> "" (an elaborated yes, not a request).
-    """
-    tokens = list(_CONFIRM_WORD.finditer(user_message))
+def _leading_affirmatives(words: list[str]) -> int:
+    """How many of `words` (normalised) form the leading run of affirmatives."""
     i = 0
-    while i < len(tokens) and _normalise_confirmation_text(tokens[i].group()) in _CONFIRM_LEAD_WORDS:
-        i += 1
-    connected = False
-    while i < len(tokens) and _normalise_confirmation_text(tokens[i].group()) in _CONFIRM_CONNECTORS:
-        i += 1
-        connected = True
-    if i == len(tokens):
-        return ""
-    remainder = user_message[tokens[i].start():].strip()
-    if not connected and "?" not in remainder:
-        return ""
-    words = _CONFIRM_AFFIRMING_IDIOMS.sub(
-        " ", _normalise_confirmation_text(remainder)).split()
-    if not any(w not in _CONFIRM_FILLER_WORDS for w in words):
-        return ""
-    return remainder
+    while i < len(words):
+        phrase = next((p for p in _CONFIRM_PHRASE_AFFIRM
+                       if tuple(words[i:i + len(p)]) == p), None)
+        if phrase is not None:
+            i += len(phrase)
+        elif words[i] in _CONFIRM_SINGLE_AFFIRM:
+            i += 1
+        else:
+            break
+    return i
 
 
-def _confirmation_verdict(user_message: str) -> str:
-    """"confirmed", "declined" or "unmatched" for a reply to an ask-first offer.
+def _is_filler(words: list[str]) -> bool:
+    """True when `words` carry no new request (affirming idioms removed)."""
+    text = _CONFIRM_AFFIRMING_IDIOMS.sub(" ", " ".join(words))
+    return all(word in _CONFIRM_FILLER for word in text.split())
 
-    Deterministic. Negation wins: after the affirming idioms are removed,
-    any word in _CONFIRM_NEGATIONS is "declined". Otherwise a word in
-    _CONFIRM_SINGLE_AFFIRM or a phrase in _CONFIRM_PHRASE_AFFIRM is
-    "confirmed". Anything else (a new question, "never mind") is "unmatched",
-    which the caller treats as a decline.
+
+def _confirmation_grammar(user_message: str) -> tuple[str, str]:
+    """(verdict, follow_up) for a reply to a search offer.
+
+    verdict is "confirmed", "declined" or "unmatched". A negation word
+    (outside the affirming idioms) declines. Otherwise the reply must start
+    with an affirmative, and what follows decides:
+      - nothing, or only elaboration: a plain yes;
+      - a connector (but/and/also/then/so): a yes, the text after it the
+        follow-up;
+      - a question (a "?", or a question word first): a yes, the question
+        the follow-up;
+      - anything else: unmatched ("Please rewrite my draft paragraph").
+    A follow-up made only of filler is dropped ("yes, and search the web for
+    it" is a plain yes). The follow-up is kept as the user wrote it.
     """
     cleaned = _normalise_confirmation_text(user_message)
     if set(_CONFIRM_AFFIRMING_IDIOMS.sub(" ", cleaned).split()) & _CONFIRM_NEGATIONS:
-        return "declined"
-    padded = f" {cleaned} "
-    if (set(cleaned.split()) & _CONFIRM_SINGLE_AFFIRM
-            or any(f" {p} " in padded for p in _CONFIRM_PHRASE_AFFIRM)):
-        return "confirmed"
-    return "unmatched"
+        return "declined", ""
+    tokens = list(_CONFIRM_WORD.finditer(user_message))
+    words = [_normalise_confirmation_text(t.group()) for t in tokens]
+    i = _leading_affirmatives(words)
+    if i == 0:
+        return "unmatched", ""
+    if i == len(words):
+        return "confirmed", ""
+    asks = (words[i] in _CONFIRM_CONNECTORS or words[i] in _CONFIRM_QUESTION_WORDS
+            or "?" in user_message[tokens[i].start():])
+    if not asks:
+        return ("confirmed", "") if _is_filler(words[i:]) else ("unmatched", "")
+    while i < len(words) and words[i] in _CONFIRM_CONNECTORS:
+        i += 1
+    if i == len(words) or _is_filler(words[i:]):
+        return "confirmed", ""
+    return "confirmed", user_message[tokens[i].start():].strip()
 
 
-def _confirmation_result(action: str, query: str, user_message: str) -> dict:
+# Why a pending offer ends without its reply being read: an image exchange
+# never searches (the vision gate), and a search clarification is the newer
+# assistant turn, so the reply is the search content, not an answer to it.
+_SUPERSEDED_LOGS = {
+    "image": "[CONFIRM] Image exchange: pending %s action resolved without a search",
+    "clarification": "[CONFIRM] Clarification superseded the pending %s action",
+}
+
+
+def _confirmation_result(
+    action: str, query: str, user_message: str, superseded_by: str | None = None,
+) -> dict:
     """Interpret the reply to a pending offer and log the verdict.
 
     confirmed is True only for a "confirmed" verdict; a decline and an
     unmatched reply are both False. follow_up is the new content a
     confirmation carries ("" for a plain yes, always "" otherwise).
+    superseded_by ("image" or "clarification") ends the offer without
+    reading the reply.
     """
-    verdict = _confirmation_verdict(user_message)
     follow_up = ""
+    if superseded_by is not None:
+        verdict = "superseded"
+        logger.info(_SUPERSEDED_LOGS[superseded_by], action)
+    else:
+        verdict, follow_up = _confirmation_grammar(user_message)
     if verdict == "confirmed":
-        follow_up = _confirmation_follow_up(user_message)
         logger.info("[CONFIRM] User confirmed pending %s action (follow-up %d chars)",
                     action, len(follow_up))
     elif verdict == "declined":
         logger.info("[CONFIRM] User declined pending %s action (%d chars)",
                     action, len(user_message))
-    else:
+    elif verdict == "unmatched":
         logger.info("[CONFIRM] Unmatched response (treating as decline) for pending "
                     "%s action (%d chars)", action, len(user_message))
     return {"confirmed": verdict == "confirmed", "action": action, "query": query,
@@ -747,28 +788,47 @@ class _PendingGuard:
         return True
 
 
-def _check_stateless_pending(session_id: str, user_message: str) -> dict | None:
+def _check_stateless_pending(
+    session_id: str, user_message: str, *, has_image: bool = False,
+) -> dict | None:
     """Stateless counterpart of _check_pending_confirmation.
 
     Takes this session's in-process pending (so it is never re-found) and
-    interprets the reply. None when nothing is pending or it expired.
+    interprets the reply; an image exchange ends it unread. None when
+    nothing is pending or it expired. A search clarification already
+    replaced any offer in the store (one entry per session).
     """
     pending = _stateless_pending_store.take(session_id)
     if pending is None:
         return None
     logger.info("[CONFIRM] Took stateless pending for this session")
-    return _confirmation_result(pending["action"], pending["query"], user_message)
+    return _confirmation_result(pending["action"], pending["query"], user_message,
+                                "image" if has_image else None)
 
 
-def _check_pending_confirmation(session_id: str, user_message: str) -> dict | None:
+def _prior_turn_is_clarification(session_id: str) -> bool:
+    """_prior_turn_awaits_search_content, with a read failure as False."""
+    try:
+        return _prior_turn_awaits_search_content(session_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[CONFIRM] Clarification check failed (non-fatal): %s",
+                       type(exc).__name__)
+        return False
+
+
+def _check_pending_confirmation(
+    session_id: str, user_message: str, *, has_image: bool = False,
+) -> dict | None:
     """Check for a pending_confirmation state record and interpret the user's response.
 
-    Interpretation is deterministic (_confirmation_verdict, no LLM call): any
+    Interpretation is deterministic (_confirmation_grammar, no LLM call): any
     negation word declines, checked before the affirmatives. Returns a dict
     with action, query, confirmed, follow_up (new content a "yes, but ..."
     reply carries, "" otherwise) and offer_text (the pending's stored offer
     sentence, so _PendingGuard can put it back); confirmed=False on a decline
-    or an unrelated message. None if no pending confirmation exists.
+    or an unrelated message. None if no pending confirmation exists. An
+    image exchange, or a reply to a search clarification, ends the pending
+    without reading the reply (ADR-048).
     """
     try:
         # Read pending_confirmation records directly, filtered to this
@@ -813,7 +873,10 @@ def _check_pending_confirmation(session_id: str, user_message: str) -> dict | No
         # that ends unanswered puts a confirmed pending back (_PendingGuard).
         _resolve_original_pending(pending)
 
-        result = _confirmation_result(action, action_query, user_message)
+        superseded_by = "image" if has_image else None
+        if superseded_by is None and _prior_turn_is_clarification(session_id):
+            superseded_by = "clarification"
+        result = _confirmation_result(action, action_query, user_message, superseded_by)
         result["offer_text"] = pending.text
         result["offer"] = (pending.metadata or {}).get("offer")
         return result
@@ -1542,12 +1605,15 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
     search runs, so the handler's _PendingGuard can put it back if the
     exchange ends unanswered.
     """
+    has_image = gen_ctx.image_count > 0
     if gen_ctx.is_test:
         result = None
     elif not gen_ctx.vault_enabled:
-        result = _check_stateless_pending(gen_ctx.session_id, work.message)
+        result = _check_stateless_pending(gen_ctx.session_id, work.message,
+                                          has_image=has_image)
     else:
-        result = _check_pending_confirmation(gen_ctx.session_id, work.message)
+        result = _check_pending_confirmation(gen_ctx.session_id, work.message,
+                                             has_image=has_image)
     if result is not None:
         if result["confirmed"] and result["action"] == "web_search":
             work.confirmation_confirmed = True

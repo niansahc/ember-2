@@ -80,8 +80,8 @@ class GenerationContext:
     completion_id and stream are carried forward from the request's RouterContext
     so a single id spans the pre-router terminals, the clarification terminal,
     and the final generation response. raw_user_message is the clean pre-prefix
-    snapshot of the user message taken at the Phase A->B boundary (the value
-    _write_pending_confirmation stores as the web-search query); the mutating
+    snapshot of the user message taken at the Phase A->B boundary (the source
+    of the exchange's web-search text); the mutating
     message itself lives on GenerationWork, not here.
     """
 
@@ -128,7 +128,7 @@ class GenerationWork:
     message at construction). The confirmation builder overwrites BOTH message
     and raw_message with the original deferred query on a confirmed web search;
     the task and timer builders prefix only message, leaving raw_message clean
-    for _write_pending_confirmation. confirmation_* / consumed_pending carry the
+    for the web-search text. confirmation_* / consumed_pending carry the
     confirmation builder's outputs to the generation handler.
     """
 

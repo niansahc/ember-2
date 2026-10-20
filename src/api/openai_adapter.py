@@ -46,7 +46,7 @@ from src.memory.session import get_session, list_sessions
 from src.context.service import ContextService, resolve_search_outcome
 from src.tools.web_search import NO_REPEAT_OFFER_REASONS, search_text_from
 from src.llm.adapter import LLMAdapter, StatusSignal
-from src.llm.ask_first_validator import find_offer_sentence, has_search_offer
+from src.llm.ask_first_validator import has_first_person_marker
 # Shared with the post-gen pipeline, which skips the search-unavailable
 # disclosure on refusals.
 from src.llm.refusal import is_refusal_response as _is_refusal_response
@@ -413,9 +413,9 @@ def _store_reply(
     intent_class: str,
     user_turn_text: str,
     pending_query: str,
-    search_reason: str | None = None,
     stateless_pending: bool = False,
     pending_guard: "_PendingGuard",
+    code_offer=None,
 ) -> None:
     """Store the reply, then the work that must exist before [DONE].
 
@@ -425,31 +425,25 @@ def _store_reply(
     handler turns it into storage_failed. _write_pending_confirmation catches
     its own errors. Used by the streaming paths and the non-stream path alike.
 
-    search_reason is the packet's web_search_reason. On a reason in
-    NO_REPEAT_OFFER_REASONS no pending confirmation is written: a "yes" would
-    re-run the same search and get the same result.
+    code_offer is the search offer the code made on this exchange
+    (post_gen_pipeline.CodeOffer), or None. A pending confirmation is written
+    for it and for nothing else (ADR-048): an offer the model phrased itself
+    never becomes one. pending_query is the user's own text the search will
+    send.
 
     stateless_pending is True on a stateless turn (vault toggle off, not a
-    test session). Nothing is written to the vault then, but an offer in the
-    reply is held in the in-process _stateless_pending_store so the user's
-    "yes" can still be honoured.
+    test session). Nothing is written to the vault then; the code's offer is
+    held in the in-process _stateless_pending_store so the user's "yes" can
+    still be honoured.
 
     pending_guard is settled once the reply is stored: the exchange is
     answered, so a pending this turn consumed is not put back.
     """
     exchange.record_reply(reply)
     pending_guard.settle()
-    # This turn may hold an offer: in the vault, or in process when stateless.
-    may_hold_pending = stateless_pending or not skip_vault_write
-    repeats = search_reason in NO_REPEAT_OFFER_REASONS
-    if may_hold_pending and repeats and has_search_offer(reply):
-        logger.info(
-            "[ASK_FIRST] pending_confirmation not written: search reason=%s "
-            "repeats on retry", search_reason,
-        )
     if skip_vault_write:
-        if stateless_pending and not repeats:
-            _stateless_pending_store.offer(exchange.session_id, reply, pending_query)
+        if stateless_pending and code_offer is not None:
+            _stateless_pending_store.hold(exchange.session_id, pending_query)
         return
     _spawn_deviation_detection(
         reply=reply,
@@ -458,10 +452,10 @@ def _store_reply(
         vault=exchange.vault,
         session_id=exchange.session_id,
     )
-    if repeats:
+    if code_offer is None:
         return
     with vault_binding(exchange.vault):
-        _write_pending_confirmation(reply, pending_query, exchange.session_id)
+        _write_pending_confirmation(code_offer, pending_query, exchange.session_id)
 
 
 def _resolve_original_pending(pending, reason: str = "user_response") -> None:
@@ -658,12 +652,6 @@ class _StatelessPendingStore:
                     int(self._ttl))
         return True
 
-    def offer(self, session_id: str, reply: str, query: str) -> bool:
-        """Hold an offer for `query` when `reply` makes one. False otherwise."""
-        if not has_search_offer(reply):
-            return False
-        return self.hold(session_id, query)
-
     def hold_awaiting(self, session_id: str) -> bool:
         """Hold the B2 clarification: the next turn is the search content."""
         if not self._put(session_id, _STATELESS_AWAITING, ""):
@@ -745,6 +733,7 @@ class _PendingGuard:
                 with vault_binding(self._vault):
                     _write_pending_record(
                         consumed["offer_text"], consumed["query"], self._session_id,
+                        offer_kind=consumed.get("offer"),
                     )
                 store = "vault"
         except Exception as exc:  # noqa: BLE001
@@ -826,6 +815,7 @@ def _check_pending_confirmation(session_id: str, user_message: str) -> dict | No
 
         result = _confirmation_result(action, action_query, user_message)
         result["offer_text"] = pending.text
+        result["offer"] = (pending.metadata or {}).get("offer")
         return result
 
     except Exception as exc:
@@ -842,10 +832,13 @@ def _check_pending_confirmation(session_id: str, user_message: str) -> dict | No
 _pending_write_lock = threading.Lock()
 
 
-def _write_pending_record(offer_sentence: str, query: str, session_id: str) -> bool:
+def _write_pending_record(
+    offer_sentence: str, query: str, session_id: str, offer_kind: str | None = None,
+) -> bool:
     """Write an active pending_confirmation for `query` unless this session
     already holds one for it. True when a record was written. Raises on a
-    storage error; callers decide whether that is fatal.
+    storage error; callers decide whether that is fatal. offer_kind is the
+    code offer's kind ("ask_first", "repeat_search"), kept for the logs.
     """
     with _pending_write_lock:
         existing = state_service.read_by_category("pending_confirmation")
@@ -870,31 +863,28 @@ def _write_pending_record(offer_sentence: str, query: str, session_id: str) -> b
                 "query": query,
                 "session_id": session_id,
                 "resolved": False,
+                "offer": offer_kind,
             },
         )
         state_service.write(record)
-    logger.info("[ASK_FIRST] Wrote pending_confirmation (%d chars)", len(offer_sentence))
+    logger.info("[ASK_FIRST] Wrote pending_confirmation offer=%s (%d chars)",
+                offer_kind or "-", len(offer_sentence))
     return True
 
 
-def _write_pending_confirmation(reply: str, user_message: str, session_id: str) -> None:
-    """Detect ask-first offers in Ember's response and write pending_confirmation state.
+def _write_pending_confirmation(offer, query: str, session_id: str) -> None:
+    """Write the pending_confirmation for a search offer the code made on
+    this exchange (post_gen_pipeline.CodeOffer, ADR-048).
 
-    An offer is any phrasing in src.llm.ask_first_validator.OFFER_PATTERNS,
-    the same list the ask-first validator accepts and the post-gen retry
-    offer matches, so every offer Ember can emit gets a pending. The
-    duplicate guard (_write_pending_record) prevents re-offer loops when the
-    deferred search fails and the model falls back to the scripted ask-first
-    response again.
+    The record text is the offer as the user saw it; `query` is the user's
+    own text the search will send. Non-fatal: the reply is already stored.
+    The duplicate guard (_write_pending_record) keeps one active pending per
+    query when the same offer is made again.
     """
     try:
-        # The sentence carrying the offer (stored as the record text).
-        offer_sentence = find_offer_sentence(reply)
-        if offer_sentence is None:
-            return
-        _write_pending_record(offer_sentence, user_message, session_id)
+        _write_pending_record(offer.text, query, session_id, offer_kind=offer.kind)
     except Exception as exc:
-        logger.warning("[ASK_FIRST] Detection failed (non-fatal): %s", type(exc).__name__)
+        logger.warning("[ASK_FIRST] Pending write failed (non-fatal): %s", type(exc).__name__)
 
 
 # --- Override detection patterns (jailbreak-class) ---
@@ -1527,7 +1517,7 @@ def _build_generation_context(
 # generation handler, in a fixed order: confirmation, tasks, timers. Each
 # operates on the mutable GenerationWork: work.message is the evolving query
 # (rewritten with system prefixes for the model), while work.raw_message stays
-# the clean pre-prefix snapshot _write_pending_confirmation needs.
+# the clean pre-prefix snapshot the exchange's web-search text comes from.
 # ---------------------------------------------------------------------------
 
 def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> None:
@@ -1565,6 +1555,7 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
             work.consumed_pending = {
                 "query": _original_query,
                 "offer_text": result.get("offer_text") or "",
+                "offer": result.get("offer"),
                 "stateless": not gen_ctx.vault_enabled,
             }
             _follow_up = result.get("follow_up") or ""
@@ -1970,8 +1961,8 @@ async def _complete_exchange(
     # --- PHASE B: generation-prep builders (ADR-042 PR c) ---
     # Confirmation, task, and timer prep run over a mutable GenerationWork whose
     # message is the evolving query (rewritten with system prefixes for the
-    # model) and whose raw_message stays the clean pre-prefix snapshot that
-    # _write_pending_confirmation needs for the deferred web-search query. (B2
+    # model) and whose raw_message stays the clean pre-prefix snapshot the
+    # exchange's web-search text (_search_text) comes from. (B2
     # next-turn dispatch and relational suppression remain inline below - they
     # are retrieval-gating policy, not message prep; see ADR-042.)
     work = GenerationWork(message=latest_user_message)
@@ -2324,13 +2315,17 @@ async def _complete_exchange(
     # to substitute a canned RLHF refusal with the scripted confirmation.
     # Explicit search requests bypass ask-first - the user's words ARE
     # the confirmation. No need to ask "want me to search?" when they
-    # literally said "search for X" or "google that".
+    # literally said "search for X" or "google that". A query with a
+    # first-person marker is treated as personal (the classifier misroutes
+    # some recall questions, B-CTX-001): it is not ask-first, so the model
+    # answers and no offer is made.
     _ask_first_active = bool(
         _intent_class == "web_search"
         and not _web_autonomous
         and not _explicit_search
         and not _confirmation_confirmed
         and not _has_image
+        and not has_first_person_marker(_search_text)
     )
     # Web search backstop. Runs when this turn's search has not run yet: no
     # web items, no status, no image. It searches on web_search intent when
@@ -2439,7 +2434,6 @@ async def _complete_exchange(
         intent_class=_intent_class,
         user_turn_text=gen_ctx.user_turn_text,
         pending_query=_search_text,
-        search_reason=context_packet.web_search_reason,
         # Stateless turns hold an offer in process; test sessions hold none.
         stateless_pending=_skip_vault_write and not gen_ctx.is_test,
         pending_guard=pending_guard,
@@ -2668,6 +2662,7 @@ async def _complete_exchange(
                     memory_items=getattr(context_packet, "memory_items", None),
                     state_items=getattr(context_packet, "state_items", None),
                     web_search_status=context_packet.web_search_status,
+                    web_search_reason=context_packet.web_search_reason,
                 )
                 full_reply = _postgen.reply
                 # When the post-gen pipeline substituted the response
@@ -2694,7 +2689,8 @@ async def _complete_exchange(
 
                 # 3.8. Store the reply and the pending confirmation before any
                 # of the reply's text is sent (ADR-047, decision D).
-                _store_reply(_exchange, full_reply, **_store_kwargs)
+                _store_reply(_exchange, full_reply, code_offer=_postgen.code_offer,
+                             **_store_kwargs)
 
                 # 4. Re-stream verified response word by word
                 tokens = full_reply.split(" ")
@@ -2777,12 +2773,14 @@ async def _complete_exchange(
                     memory_items=getattr(context_packet, "memory_items", None),
                     state_items=getattr(context_packet, "state_items", None),
                     web_search_status=context_packet.web_search_status,
+                    web_search_reason=context_packet.web_search_reason,
                 )
                 full_reply = _postgen.reply
 
                 # Store before [DONE] (ADR-047). Partial tokens are never
                 # stored: a raise or disconnect mid-stream skips this line.
-                _store_reply(_exchange, full_reply, **_store_kwargs)
+                _store_reply(_exchange, full_reply, code_offer=_postgen.code_offer,
+                             **_store_kwargs)
 
                 # Vault sources event (if applicable)
                 if vault_sources:
@@ -2868,6 +2866,7 @@ async def _complete_exchange(
         memory_items=getattr(context_packet, "memory_items", None),
         state_items=getattr(context_packet, "state_items", None),
         web_search_status=context_packet.web_search_status,
+        web_search_reason=context_packet.web_search_reason,
     )
     reply = _postgen_ns.reply
     if _postgen_ns.ask_first_substituted or _postgen_ns.web_refusal_substituted:
@@ -2895,7 +2894,8 @@ async def _complete_exchange(
     # Store the reply, then the pending confirmation, before the response
     # (ADR-047). Every write belongs to the vault this exchange started in,
     # whether it runs inline or in a spawned thread (issue #144).
-    _store_reply(_exchange, reply, **_store_kwargs)
+    _store_reply(_exchange, reply, code_offer=_postgen_ns.code_offer,
+                 **_store_kwargs)
     if _skip_vault_write:
         logger.warning("[TASK] Skipped task detection (test session)")
     else:

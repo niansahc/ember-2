@@ -296,7 +296,8 @@ def test_connector_or_question_keeps_the_follow_up(message, expected):
     assert (confirmed, follow_up) == (True, expected)
 
 
-DRAFT = "here is my draft paragraph about a synthetic topic"
+# No first-person marker, so the control below is an ask-first exchange.
+DRAFT = "here is the draft paragraph about a synthetic topic"
 
 
 def test_non_web_offer_then_yes_never_sends_the_draft_to_searxng(
@@ -318,18 +319,14 @@ def test_non_web_offer_then_yes_never_sends_the_draft_to_searxng(
     assert llm.generate_response.call_args.args[0].user_message == "yes"
 
 
-def test_web_offer_then_yes_searches_the_stored_message(client, isolate_to_test_vault):
-    """Positive control for the test above: a real search offer, then "yes",
-    does send the stored message to SearXNG."""
-    from src.context.policies import ContextPolicy
+def test_code_offer_then_yes_searches_the_stored_message(client, isolate_to_test_vault):
+    """Positive control for the test above: the code's offer on an ask-first
+    exchange, then "yes", does send the stored message to SearXNG."""
     sid = "sess_test_web_offer_control"
-    _turn(client, isolate_to_test_vault, [], query=DRAFT, session_id=sid,
-          request_policy=ContextPolicy(name="default"),
-          reply="Want me to look that up online?")
+    _turn(client, isolate_to_test_vault, [], query=DRAFT, session_id=sid)
     assert len(_active_pendings(sid)) == 1
     _, _, _, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
-                         query="yes", session_id=sid,
-                         request_policy=ContextPolicy(name="default"))
+                         query="yes", session_id=sid)
     assert get.call_count == 1
     assert _searched_query(get) == DRAFT
 
@@ -385,9 +382,9 @@ def test_stateless_offer_is_held_in_process_and_yes_searches(client, isolate_to_
     from src.api.openai_adapter import _stateless_pending_store
     sid = "sess_test_stateless_offer"
     _, text, _, get = _turn(client, isolate_to_test_vault, [], query=QUERY,
-                            session_id=sid, vault_enabled=False, reply=OFFER_REPLY)
+                            session_id=sid, vault_enabled=False)
     assert get.call_count == 0
-    assert text == OFFER_REPLY
+    assert text == SCRIPTED_ASK_FIRST_RESPONSE
     # Never in the vault; held in process (the positive half of the check).
     assert _active_pendings(sid) == []
     assert len(_stateless_pending_store) == 1
@@ -404,18 +401,17 @@ def test_stateless_pending_expires_after_the_ttl():
     from src.api.openai_adapter import _StatelessPendingStore
     now = [1000.0]
     store = _StatelessPendingStore(ttl_seconds=60, clock=lambda: now[0])
-    assert store.offer("sess_test_ttl", OFFER_REPLY, QUERY) is True
+    assert store.hold("sess_test_ttl", QUERY) is True
     now[0] += 59
     assert len(store) == 1
     now[0] += 2
     assert store.take("sess_test_ttl") is None
 
 
-def test_stateless_pending_is_taken_once_and_needs_an_offer():
+def test_stateless_pending_is_taken_once():
     from src.api.openai_adapter import _StatelessPendingStore
     store = _StatelessPendingStore()
-    assert store.offer("sess_test_take", "Here is an answer.", QUERY) is False
-    assert store.offer("sess_test_take", OFFER_REPLY, QUERY) is True
+    assert store.hold("sess_test_take", QUERY) is True
     assert store.take("sess_test_take")["query"] == QUERY
     assert store.take("sess_test_take") is None
 
@@ -424,7 +420,7 @@ def test_stateless_store_is_bounded():
     from src.api.openai_adapter import _StatelessPendingStore
     store = _StatelessPendingStore(max_sessions=2)
     for i in range(3):
-        store.offer(f"sess_test_cap_{i}", OFFER_REPLY, QUERY)
+        store.hold(f"sess_test_cap_{i}", QUERY)
     assert len(store) == 2
     assert store.take("sess_test_cap_0") is None
     assert store.take("sess_test_cap_2") is not None

@@ -11,11 +11,11 @@ import pytest
 
 from src.llm.ask_first_validator import (
     SCRIPTED_ASK_FIRST_RESPONSE,
+    has_first_person_marker,
     has_search_offer,
-    _has_first_person_marker,
     validate_ask_first_response,
 )
-from src.llm.post_gen_pipeline import run_post_gen_pipeline
+from src.llm.post_gen_pipeline import CodeOffer, run_post_gen_pipeline
 
 
 # ---------------------------------------------------------------------------
@@ -81,14 +81,26 @@ class TestAskFirstValidator:
         assert sub is True
         assert resp == SCRIPTED_ASK_FIRST_RESPONSE
 
-    def test_preserves_when_confirmation_present(self):
+    def test_replaces_the_model_offer_with_the_fixed_offer(self):
+        """The model's own offer wording never reaches the user on an
+        ask-first exchange (ADR-048)."""
         resp, sub = validate_ask_first_response(
-            "I don't have that — want me to search for it?",
+            "I don't have that, want me to search for it?",
             intent_class="web_search",
             ask_first_mode=True,
         )
+        assert sub is True
+        assert resp == SCRIPTED_ASK_FIRST_RESPONSE
+
+    def test_refusal_is_kept(self):
+        resp, sub = validate_ask_first_response(
+            "I can't help with that.",
+            intent_class="web_search",
+            ask_first_mode=True,
+            is_refusal=True,
+        )
         assert sub is False
-        assert "want me to search" in resp.lower()
+        assert resp == "I can't help with that."
 
     def test_no_op_when_not_web_search(self):
         resp, sub = validate_ask_first_response(
@@ -106,14 +118,14 @@ class TestAskFirstValidator:
         )
         assert sub is False
 
-    def test_empty_passes_through(self):
+    def test_empty_draft_gets_the_fixed_offer(self):
         resp, sub = validate_ask_first_response(
             "",
             intent_class="web_search",
             ask_first_mode=True,
         )
-        assert sub is False
-        assert resp == ""
+        assert sub is True
+        assert resp == SCRIPTED_ASK_FIRST_RESPONSE
 
 
 # ---------------------------------------------------------------------------
@@ -122,8 +134,9 @@ class TestAskFirstValidator:
 
 
 class TestFirstPersonMarkerDetection:
-    """The _has_first_person_marker helper identifies conversational /
-    personal queries so the ask-first substitution can be skipped."""
+    """has_first_person_marker identifies conversational / personal queries,
+    which the adapter does not treat as ask-first exchanges (the end-to-end
+    cases are in tests/test_ask_first_offer_phrasing.py)."""
 
     @pytest.mark.parametrize("msg", [
         "What was I nervous about for this weekend?",
@@ -134,7 +147,7 @@ class TestFirstPersonMarkerDetection:
         "tell me about myself",
     ])
     def test_first_person_detected(self, msg):
-        assert _has_first_person_marker(msg) is True
+        assert has_first_person_marker(msg) is True
 
     @pytest.mark.parametrize("msg", [
         "current price of bitcoin",
@@ -149,97 +162,13 @@ class TestFirstPersonMarkerDetection:
         "",
     ])
     def test_no_first_person_in_external_queries(self, msg):
-        assert _has_first_person_marker(msg) is False
+        assert has_first_person_marker(msg) is False
 
     def test_common_word_substrings_do_not_false_match(self):
         # Word-boundary guard: substring 'i' in "welcome" or "remembered"
         # must not trigger the pattern.
-        assert _has_first_person_marker("welcome to the briefing") is False
-        assert _has_first_person_marker("she remembered to write") is False
-
-
-class TestAskFirstFirstPersonGuard:
-    """When the user message is clearly first-person/conversational, the
-    ask-first substitution is suppressed even if intent_class=web_search.
-
-    This protects against the B-CTX-001 family failure mode where Stage 2
-    misroutes conversational/recall queries to needs_internet and the
-    user would otherwise receive a canned 61-char 'want me to search?'
-    response on personal questions.
-    """
-
-    def test_guard_blocks_substitution_on_first_person_query(self):
-        # All three conditions for substitution hold (web_search intent,
-        # ask-first mode, no confirmation in draft) — guard should still fire.
-        draft = "I don't have access to that information."
-        resp, sub = validate_ask_first_response(
-            draft,
-            intent_class="web_search",
-            ask_first_mode=True,
-            user_message="What was I nervous about for this weekend?",
-        )
-        assert sub is False
-        assert resp == draft  # original draft preserved
-
-    def test_guard_blocks_on_we_pronoun(self):
-        draft = "I'll need to search for that."
-        resp, sub = validate_ask_first_response(
-            draft,
-            intent_class="web_search",
-            ask_first_mode=True,
-            user_message="What are we discussing right now?",
-        )
-        assert sub is False
-        assert resp == draft
-
-    def test_guard_blocks_on_possessive_my(self):
-        draft = "I'd need to look that up online."
-        resp, sub = validate_ask_first_response(
-            draft,
-            intent_class="web_search",
-            ask_first_mode=True,
-            user_message="remind me what I told you about my migration plan",
-        )
-        assert sub is False
-        assert resp == draft
-
-    def test_guard_does_not_block_dative_me_alone(self):
-        # 'me' as dative object in imperative construction. The user is
-        # asking the system to fetch external info — substitution should
-        # still fire. Turn 7 of B-CTX-001 is the analogue case; it routes
-        # vault via the classifier-side fix, not via this guard.
-        draft = "I don't have that information."
-        resp, sub = validate_ask_first_response(
-            draft,
-            intent_class="web_search",
-            ask_first_mode=True,
-            user_message="tell me about quantum computing",
-        )
-        assert sub is True
-        assert resp == SCRIPTED_ASK_FIRST_RESPONSE
-
-    def test_guard_does_not_block_on_external_query(self):
-        # External-world query — substitution should still fire.
-        draft = "I don't have that information."
-        resp, sub = validate_ask_first_response(
-            draft,
-            intent_class="web_search",
-            ask_first_mode=True,
-            user_message="current price of bitcoin",
-        )
-        assert sub is True
-        assert resp == SCRIPTED_ASK_FIRST_RESPONSE
-
-    def test_no_user_message_defaults_to_old_behavior(self):
-        # Backward compatibility: callers that don't pass user_message
-        # still get the original substitution behavior.
-        resp, sub = validate_ask_first_response(
-            "I don't have access to live data. Check Google.",
-            intent_class="web_search",
-            ask_first_mode=True,
-        )
-        assert sub is True
-        assert resp == SCRIPTED_ASK_FIRST_RESPONSE
+        assert has_first_person_marker("welcome to the briefing") is False
+        assert has_first_person_marker("she remembered to write") is False
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +289,7 @@ class TestDuplicateWriteGuard:
         with patch("src.api.openai_adapter.state_service", svc):
             from src.api.openai_adapter import _write_pending_confirmation
             _write_pending_confirmation(
-                "I don't have that — want me to search?",
+                CodeOffer("ask_first", SCRIPTED_ASK_FIRST_RESPONSE),
                 "population of Tokyo",
                 "sess_dup_test",
             )
@@ -387,7 +316,7 @@ class TestDuplicateWriteGuard:
         with patch("src.api.openai_adapter.state_service", svc):
             from src.api.openai_adapter import _write_pending_confirmation
             _write_pending_confirmation(
-                "I don't have that — want me to search?",
+                CodeOffer("ask_first", SCRIPTED_ASK_FIRST_RESPONSE),
                 "weather in London",
                 "sess_dup_test2",
             )

@@ -142,6 +142,7 @@ def _confirm_postgen(work, packet):
         used_vision=False,
         confirmation_search_failed=work.confirmation_search_failed,
         web_search_status=packet.web_search_status,
+        web_search_reason=packet.web_search_reason,
     )
 
 
@@ -381,7 +382,8 @@ def test_search_note_engines_blocked_keeps_the_offer_open():
 @pytest.mark.parametrize("reason", ["filtered", "low_relevance"])
 def test_autonomous_no_pending_after_unrepeatable_failure(client, reason, stream, caplog):
     response, min_hits = _failing_search(reason)
-    with caplog.at_level("INFO", logger="ember.openai_adapter"):
+    with caplog.at_level("INFO", logger="ember.openai_adapter"), \
+            caplog.at_level("INFO", logger="src.llm.post_gen_pipeline"):
         resp, _, packet, write_pending = _turn(
             client, [response], min_term_hits=min_hits, reply=_OFFER_REPLY,
             stream=stream)
@@ -390,7 +392,7 @@ def test_autonomous_no_pending_after_unrepeatable_failure(client, reason, stream
         assert packet.web_search_reason == reason
         assert _NO_REPEAT in _search_section(packet)
     write_pending.assert_not_called()
-    assert f"pending_confirmation not written: search reason={reason}" in caplog.text
+    assert f"no repeat-search offer: reason={reason} repeats on retry" in caplog.text
 
 
 @pytest.mark.parametrize("reason", ["filtered", "low_relevance"])
@@ -408,15 +410,17 @@ def test_backstop_logs_an_unrepeatable_failure_with_its_path(client, reason, cap
 @pytest.mark.parametrize("stream", [False, True])
 def test_autonomous_engines_blocked_still_offers(client, stream):
     """Positive control for the test above: a blocked search can succeed on
-    retry, so the model's offer reaches the pending writer."""
+    retry, so the code offers to repeat it and writes the pending for it."""
+    from src.llm.ask_first_validator import REPEAT_SEARCH_OFFER
+    from src.llm.post_gen_pipeline import CodeOffer
     response, _ = _failing_search("engines_blocked")
-    _, _, packet, write_pending = _turn(client, [response], reply=_OFFER_REPLY,
-                                        stream=stream)
+    _, text, packet, write_pending = _turn(client, [response], stream=stream)
     if packet is not None:
         assert packet.web_search_reason == "engines_blocked"
         assert _NO_REPEAT not in _search_section(packet)
+    assert text.endswith(REPEAT_SEARCH_OFFER)
     write_pending.assert_called_once()
-    assert write_pending.call_args.args[0].endswith("Want me to search again?")
+    assert write_pending.call_args.args[0] == CodeOffer("repeat_search", REPEAT_SEARCH_OFFER)
 
 
 @pytest.mark.parametrize("reason", ["filtered", "low_relevance"])

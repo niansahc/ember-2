@@ -150,6 +150,7 @@ def test_apply_confirmation_confirmed_web_search_overwrites_message():
     # The consumed pending is recorded for the handler's _PendingGuard.
     assert work.consumed_pending == {"query": "population of tokyo",
                                      "offer_text": "Want me to search?",
+                                     "offer": None,
                                      "stateless": False}
 
 

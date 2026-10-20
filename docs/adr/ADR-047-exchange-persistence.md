@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-09
 **Target:** v0.19.0
+**Amended:** 2026-10-19 (ADR-048: step 8 writes a pending only for a code offer; a consumed pending is put back)
 **Amends:** ADR-015 (memory tiering), ADR-026 (deviation engine), ADR-038 (pending_confirmation), ADR-040 (SSE wire contract), ADR-042 (GenerationContext)
 **Related:** ADR-002 (append-only memory), ADR-021 (third-party flag), ADR-031 (vault toggle), ADR-033 (StateExtractor gating), ADR-039 (atomic JSON writes), issue #164, `CONTEXT.md`
 
@@ -209,3 +210,20 @@ user turn, the assistant turn and the outcome. Other records an exchange writes
 - `src/api/sse.py` -- `guard_sse(on_abort=...)`, `storage_failed`.
 - `src/memory/session.py` -- `get_turns`.
 - `tests/test_exchange_recorder.py`, `tests/test_exchange_persistence.py`.
+
+## Amendment (2026-10-19, ADR-048)
+
+- **Step 8 writes a pending only for a code offer.** In the ordering (section
+  4), step 8 writes the pending confirmation only when Ember's code made a
+  search offer on the exchange: the ask-first offer or the repeat-search offer.
+  A reply whose wording offers a search writes nothing. On a vault-off exchange
+  the offer is held in process instead (ADR-031 amendment).
+- **A consumed pending is put back.** When an exchange that took a pending
+  search with a confirmation ends `failed` or `interrupted` (section 5), the
+  pending is put back as a new record (ADR-038 amendment). A vault-off
+  exchange records no outcome, but the same failures put back its in-process
+  entry, and also a search clarification's waiting state. An exchange with an
+  image is never a confirmation, so `vision_unavailable` can only put back a
+  clarification's waiting state. `record_reply` settles the exchange: a failure after the reply is
+  stored puts nothing back, as in the row "Client disconnects after the reply
+  is stored".

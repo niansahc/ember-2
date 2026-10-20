@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-06-12
 **Target:** v0.18.1
-**Amended:** 2026-10-09 (ADR-047: written before `[DONE]`)
+**Amended:** 2026-10-09 (ADR-047: written before `[DONE]`); 2026-10-19 (ADR-048: written only for a code offer; a consumed pending is restored as a new record)
 
 ## Context
 
@@ -55,3 +55,22 @@ assistant turn is stored on the streaming paths, and before the JSON response on
 the non-stream path. Timing only. Resolution logic, the append-only tombstones
 and `resolved_ids` are unchanged. A client that reads `[DONE]` and sends "yes"
 immediately can no longer arrive before the pending record exists.
+
+## Amendment (2026-10-19, ADR-048)
+
+- **Written only for a code offer.** A `pending_confirmation` is written only
+  when Ember's code made a search offer on the exchange: the ask-first offer or
+  the repeat-search offer. A reply whose wording offers a search writes
+  nothing. The record's text is the offer as the user saw it, `metadata.offer`
+  is its kind (`ask_first` or `repeat_search`), and `metadata.query` is the
+  user's own text: never Ember's task or timer notes, a confirmation's
+  follow-up, or the UI's upload note.
+- **Restore writes a new record.** Resolve-first is unchanged: the pending is
+  tombstoned before the confirmed search runs. When that exchange ends
+  unanswered (failed or interrupted, ADR-047), the consumed pending is written
+  back as a new record with the same offer text and query. The tombstoned
+  original stays resolved, so the restore is append-only. Nothing is written
+  when the conversation already holds an active pending for the same query.
+- **Other resolutions.** An unmatched reply still resolves the pending. An
+  exchange with an image, and a search clarification, also resolve it, without
+  a search.

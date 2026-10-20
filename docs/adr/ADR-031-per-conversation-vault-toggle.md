@@ -2,6 +2,7 @@
 
 **Status:** Accepted (final)
 **Date:** 2026-04-13
+**Amended:** 2026-10-19 (ADR-048: a vault-off exchange holds a search offer or a search clarification in process)
 
 ## Context
 
@@ -65,3 +66,17 @@ These are orthogonal toggles. Both use the same two-layer gate pattern (global e
 + Clear separation from bare mode — two orthogonal concerns.
 - All-or-nothing may feel heavy for users who want "read but don't write" — this is intentionally excluded to prevent inconsistent vault state.
 - Per-conversation toggle resets on every new conversation — by design, not a limitation.
+
+## Amendment (2026-10-19, ADR-048)
+
+A vault-off exchange writes nothing, so a search offer or a search
+clarification cannot be stored for the next exchange to read. Ember holds it in
+process instead: one entry per conversation, never written to the vault or to
+disk, lost on restart, and dropped after a TTL
+(`STATELESS_PENDING_TTL_SECONDS`, 15 minutes). The next exchange takes the
+entry when it reads it, so it cannot fire twice. If the exchange that took a
+confirmed offer or the clarification's waiting state ends unanswered, the entry
+is put back. Any vault-on exchange in the same conversation drops the entry, so
+an offer made with the vault off never runs a search after the vault is
+switched back on. Only offers Ember's code makes are held (ADR-048), and the
+entry holds the user's own text.

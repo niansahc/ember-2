@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import logging
 import threading
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -250,13 +249,19 @@ def test_without_a_vault_on_turn_the_stateless_offer_confirms(
 
 # --- Duplicate guard under concurrency -----------------------------------------
 
+def _ask_first_offer():
+    from src.llm.ask_first_validator import SCRIPTED_ASK_FIRST_RESPONSE
+    from src.llm.post_gen_pipeline import CodeOffer
+    return CodeOffer("ask_first", SCRIPTED_ASK_FIRST_RESPONSE)
+
+
 def _write_concurrently(sid, queries):
     from src.api.openai_adapter import _write_pending_confirmation
     barrier = threading.Barrier(len(queries))
 
     def run(query):
         barrier.wait()
-        _write_pending_confirmation(OFFER_REPLY, query, sid)
+        _write_pending_confirmation(_ask_first_offer(), query, sid)
 
     threads = [threading.Thread(target=run, args=(q,)) for q in queries]
     for t in threads:
@@ -286,8 +291,8 @@ def test_writer_reads_fresh_after_an_earlier_check():
     )
     sid = "sess_test_dedupe_interleave"
     assert _check_pending_confirmation(sid, "latest news?") is None
-    _write_pending_confirmation(OFFER_REPLY, QUERY, sid)
-    _write_pending_confirmation(OFFER_REPLY, QUERY, sid)
+    _write_pending_confirmation(_ask_first_offer(), QUERY, sid)
+    _write_pending_confirmation(_ask_first_offer(), QUERY, sid)
     assert len(active_pendings(sid)) == 1
     assert _check_pending_confirmation(sid, "yes")["confirmed"] is True
     assert _check_pending_confirmation(sid, "ok") is None
@@ -313,28 +318,6 @@ def test_store_is_empty_in_the_next_test():
 
 
 # --- Log lines -----------------------------------------------------------------
-
-def _store_reply_log(caplog, reply):
-    exchange = MagicMock(session_id="sess_test_log_no_repeat", vault=None)
-    with caplog.at_level(logging.INFO):
-        _adapter()._store_reply(
-            exchange, reply, skip_vault_write=True, intent_class="web_search",
-            user_turn_text=QUERY, pending_query=QUERY, search_reason="filtered",
-            stateless_pending=True,
-            pending_guard=_adapter()._PendingGuard("sess_test_log_no_repeat", None),
-        )
-    return caplog.text
-
-
-def test_no_repeat_log_is_absent_without_an_offer(caplog):
-    assert "pending_confirmation not written" not in _store_reply_log(
-        caplog, "Here is the answer, no offer in it.")
-
-
-def test_no_repeat_log_is_present_for_an_offer(caplog):
-    """Positive control for the test above."""
-    assert "pending_confirmation not written" in _store_reply_log(caplog, OFFER_REPLY)
-
 
 def test_unmatched_reply_logs_unmatched_not_declined(caplog):
     with caplog.at_level(logging.INFO):

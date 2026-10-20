@@ -2,7 +2,7 @@
 tests/test_ask_first_confirmation.py
 
 Tests for the ask-first confirmation routing feature:
-  - _write_pending_confirmation (pattern detection, state record creation)
+  - _write_pending_confirmation (the record for an offer the code made)
   - _check_pending_confirmation (LLM-based yes/no interpretation, resolution)
   - pending_confirmation category membership in models, extractor, resolver
 """
@@ -36,62 +36,52 @@ def svc(vault):
 
 
 # ---------------------------------------------------------------------------
-# 1. _write_pending_confirmation detects ask-first pattern and writes record
+# 1. _write_pending_confirmation writes the record for the code's offer
 # ---------------------------------------------------------------------------
 
 class TestWritePendingConfirmation:
+    """The writer takes the offer the code made (ADR-048), never reply text.
+    That a model's own offer writes nothing is covered end to end in
+    tests/test_ask_first_offer_phrasing.py."""
 
-    def test_detects_want_me_to_search(self, svc, vault):
-        """Response containing 'want me to search' writes a pending_confirmation record."""
+    def test_writes_the_ask_first_offer(self, svc, vault):
+        from src.llm.ask_first_validator import SCRIPTED_ASK_FIRST_RESPONSE
+        from src.llm.post_gen_pipeline import CodeOffer
         with patch("src.api.openai_adapter.state_service", svc):
             from src.api.openai_adapter import _write_pending_confirmation
 
             _write_pending_confirmation(
-                reply="I don't have recent info on that. Want me to search the web for you?",
-                user_message="What happened in the news today?",
-                session_id="sess_test_001",
+                CodeOffer("ask_first", SCRIPTED_ASK_FIRST_RESPONSE),
+                "What happened in the news today?",
+                "sess_test_001",
             )
 
         records = svc.read_by_category("pending_confirmation")
         assert len(records) == 1
         rec = records[0]
+        assert rec.text == SCRIPTED_ASK_FIRST_RESPONSE
         assert rec.source == "ask_first_detector"
         assert rec.metadata["action"] == "web_search"
         assert rec.metadata["query"] == "What happened in the news today?"
         assert rec.metadata["session_id"] == "sess_test_001"
         assert rec.metadata["resolved"] is False
+        assert rec.metadata["offer"] == "ask_first"
 
-    def test_detects_shall_i_search(self, svc, vault):
-        """Other ask-first patterns also trigger detection."""
+    def test_writes_the_repeat_search_offer(self, svc, vault):
+        from src.llm.ask_first_validator import REPEAT_SEARCH_OFFER
+        from src.llm.post_gen_pipeline import CodeOffer
         with patch("src.api.openai_adapter.state_service", svc):
             from src.api.openai_adapter import _write_pending_confirmation
 
             _write_pending_confirmation(
-                reply="I could look that up for you if you like.",
-                user_message="Who won the game last night?",
-                session_id="sess_test_002",
+                CodeOffer("repeat_search", REPEAT_SEARCH_OFFER),
+                "Who won the game last night?",
+                "sess_test_002",
             )
 
         records = svc.read_by_category("pending_confirmation")
-        assert len(records) == 1
-
-    # -------------------------------------------------------------------
-    # 2. _write_pending_confirmation does NOT fire without ask-first pattern
-    # -------------------------------------------------------------------
-
-    def test_no_pattern_no_record(self, svc, vault):
-        """Response without any ask-first phrase writes nothing."""
-        with patch("src.api.openai_adapter.state_service", svc):
-            from src.api.openai_adapter import _write_pending_confirmation
-
-            _write_pending_confirmation(
-                reply="Here is what I know about that topic based on your vault.",
-                user_message="Tell me about my project priorities.",
-                session_id="sess_test_003",
-            )
-
-        records = svc.read_by_category("pending_confirmation")
-        assert len(records) == 0
+        assert [(r.text, r.metadata["offer"]) for r in records] == [
+            (REPEAT_SEARCH_OFFER, "repeat_search")]
 
 
 # ---------------------------------------------------------------------------

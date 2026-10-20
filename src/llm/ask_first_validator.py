@@ -19,21 +19,19 @@ keeping any of it risks carrying the RLHF refusal through.
 
 First-person guard (v0.18.0): the intent classifier occasionally misroutes
 clearly first-person/conversational queries to web_search (B-CTX-001
-turns 7/9/10 surfaced this — recall queries hitting Stage 2 false-
-positive on needs_internet exemplars). When the user_message contains a
-first-person marker, we skip the substitution and let the model's draft
-through. The downstream coaching filter still trims any RLHF residue.
+turns 7/9/10 surfaced this: recall queries hitting Stage 2 false-
+positive on needs_internet exemplars). has_first_person_marker defines
+the guard; src/api/openai_adapter applies it to the ask-first decision, so
+such an exchange is not an ask-first exchange at all: no ask block in the
+prompt, no fixed offer, and the model answers.
 
-Offer phrasing: OFFER_PATTERNS is the one list of offer phrasings. The
-validator accepts a reply as an offer on it, the post-gen pipeline
-substitutes RETRY_OFFER_RESPONSE (which matches it), and
-src/api/openai_adapter._write_pending_confirmation writes a pending
-confirmation on it. A pending is a web search waiting for the user's "yes",
-and that search sends the user's previous message to the search engines.
-So only an offer to look something up on the web counts: "want me to look
-over the draft?" or "should I look at your notes?" is not an offer, and an
-offer that names a local source ("look it up in your notes") is not one
-either unless it also says web, online or internet.
+Search offers come only from Ember's code (ADR-048). On an ask-first
+exchange the reply is always SCRIPTED_ASK_FIRST_RESPONSE, which names the
+web, so the user's consent is unambiguous; a refusal is kept and gets no
+offer. RETRY_OFFER_RESPONSE is the repeat-search offer the post-gen
+pipeline substitutes when a confirmed search fails. The adapter writes a
+pending confirmation for these offers only. OFFER_PATTERNS detects the
+model's own offers (has_search_offer); nothing it matches writes a pending.
 """
 
 from __future__ import annotations
@@ -41,17 +39,19 @@ from __future__ import annotations
 import re
 
 SCRIPTED_ASK_FIRST_RESPONSE = (
-    "I don't have current information on that. Want me to search?"
+    "I don't have current information on that. Want me to search the web for it?"
 )
 
-# Substituted by the post-gen pipeline when the deferred (confirmed) search
-# fails for a reason a retry could fix. It is an offer like any other: it
-# matches OFFER_PATTERNS, so a pending confirmation is written for it. It
-# names the search, because a bare "want me to try again?" is not an offer
-# to search.
+# The repeat-search offers (ADR-048): the code's offer after a search failed
+# for a reason a repeat could fix (engines blocked, timeout, request error).
+# RETRY_OFFER_RESPONSE replaces the reply on a confirmation exchange whose
+# deferred search failed; REPEAT_SEARCH_OFFER is appended to the reply after
+# any other failed search (autonomous, explicit, search clarification). The
+# adapter writes a pending confirmation for either. Both name the web.
 RETRY_OFFER_RESPONSE = (
-    "I tried searching but hit an error. Want me to try the search again?"
+    "I tried searching the web but hit an error. Want me to try the search again?"
 )
+REPEAT_SEARCH_OFFER = "Want me to try the web search again?"
 
 # First-person markers: pronouns and contractions that indicate the user
 # is asking about themselves or the conversation. When present, we treat
@@ -73,7 +73,7 @@ _FIRST_PERSON_GUARD = re.compile(
 )
 
 
-def _has_first_person_marker(user_message: str) -> bool:
+def has_first_person_marker(user_message: str) -> bool:
     """Return True if the user message contains a first-person marker."""
     if not user_message:
         return False
@@ -155,41 +155,22 @@ def has_search_offer(text: str) -> bool:
     return find_offer_sentence(text) is not None
 
 
-def is_substitutable(response: str) -> bool:
-    """Return True when the response lacks a confirmation question AND is
-    non-empty. Empty responses are handled by the empty-response guard,
-    not by this validator."""
-    if not response or not response.strip():
-        return False
-    return not has_search_offer(response)
-
-
 def validate_ask_first_response(
     response: str,
     intent_class: str,
     ask_first_mode: bool,
-    user_message: str = "",
+    is_refusal: bool = False,
 ) -> tuple[str, bool]:
-    """Enforce the ask-first confirmation pattern.
+    """Put the code's offer on an ask-first exchange.
 
-    Returns (final_response, was_substituted). Substitution happens only
-    when all of: intent_class == "web_search", ask_first_mode is True,
-    the response lacks any recognised confirmation question, AND the
-    user_message lacks a first-person marker. Empty responses pass
-    through unchanged — the empty-response guard runs separately.
-
-    The first-person guard protects the user from receiving a canned
-    "want me to search?" response on conversational/recall queries that
-    the classifier mistakenly routed to web_search (B-CTX-001 family).
-    When the guard fires, the model's actual draft is preserved; any
-    RLHF residue is handled by the coaching filter downstream.
+    Returns (final_response, was_substituted). On an ask-first exchange
+    (intent_class == "web_search" and ask_first_mode) the reply is always
+    SCRIPTED_ASK_FIRST_RESPONSE, whatever the model drafted: its own offer
+    wording could leave the user unsure that the search goes to the web. A
+    constitutional refusal is the one exception: it is kept as written and
+    gets no offer (CLAUDE.md implementation standard 2). Anywhere else the
+    response passes through unchanged.
     """
-    if intent_class != "web_search":
-        return response, False
-    if not ask_first_mode:
-        return response, False
-    if _has_first_person_marker(user_message):
-        return response, False
-    if not is_substitutable(response):
+    if intent_class != "web_search" or not ask_first_mode or is_refusal:
         return response, False
     return SCRIPTED_ASK_FIRST_RESPONSE, True

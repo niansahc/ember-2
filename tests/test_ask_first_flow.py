@@ -11,8 +11,8 @@ import pytest
 
 from src.llm.ask_first_validator import (
     SCRIPTED_ASK_FIRST_RESPONSE,
+    find_offer_sentences,
     has_first_person_marker,
-    has_search_offer,
     validate_ask_first_response,
 )
 from src.llm.post_gen_pipeline import CodeOffer, run_post_gen_pipeline
@@ -188,7 +188,7 @@ class TestConfirmationPatterns:
         "I can look that up for you?",
     ])
     def test_patterns_detected(self, text):
-        assert has_search_offer(text) is True
+        assert find_offer_sentences(text) != []
 
     @pytest.mark.parametrize("text", [
         "I don't have access to live data.",
@@ -198,7 +198,7 @@ class TestConfirmationPatterns:
         "",
     ])
     def test_patterns_not_detected(self, text):
-        assert has_search_offer(text) is False
+        assert find_offer_sentences(text) == []
 
 
 # ---------------------------------------------------------------------------

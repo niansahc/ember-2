@@ -2182,8 +2182,9 @@ async def _complete_exchange(
     # --- KNOWLEDGE-GAP INJECTION ---
     # When the relevance gate has stripped vault content (memory_items is
     # empty or profile-only) AND no web search was triggered, inject a
-    # system note so the model knows it has a knowledge gap and can offer
-    # to search rather than fabricate. Ask-first mode is the safety net.
+    # system note so the model knows it has a knowledge gap and says so
+    # rather than fabricate. It does not offer a search: only the code
+    # makes search offers (ADR-048).
     #
     # SUPPRESS for conversational/emotional queries: "I'm tired", "How are
     # you?", "That was a hard week" don't need vault content and should not

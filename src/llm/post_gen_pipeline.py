@@ -51,6 +51,7 @@ from src.llm.ask_first_validator import (
     REPEAT_SEARCH_OFFER,
     RETRY_OFFER_RESPONSE,
     SCRIPTED_ASK_FIRST_RESPONSE,
+    remove_unbacked_offers,
     validate_ask_first_response,
 )
 from src.llm.refusal import is_refusal_response
@@ -201,6 +202,14 @@ def run_post_gen_pipeline(
             ask_first_substituted = True
             code_offer = CodeOffer("repeat_search", RETRY_OFFER_RESPONSE)
             logger.warning("[POSTGEN] confirmation search failed - retry offer substituted")
+
+    # The model never offers a search (ADR-048): on an exchange where the
+    # code made no offer, nothing would honour a "yes" to one, so every
+    # offer sentence the model wrote is removed. A refusal is never rewritten.
+    if code_offer is None and not is_refusal:
+        reply, removed = remove_unbacked_offers(reply)
+        if removed:
+            logger.info("[POSTGEN] removed %d unbacked search offer(s)", removed)
 
     if not reply or not reply.strip():
         reply = _EMPTY_FALLBACK

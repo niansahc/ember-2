@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-07-20
 **Target:** v0.18.1
-**Amended:** 2026-10-09 (ADR-047: Phase A stores the user turn; one id now spans every response)
+**Amended:** 2026-10-09 (ADR-047: Phase A stores the user turn; one id now spans every response); 2026-10-19 (ADR-048: `consumed_pending` replaces `pending_records`)
 **Related:** ADR-041 (PreGeneration terminal router), ADR-040 (SSE wire contract), issue #93 (decompose `chat_completions`)
 
 ## Context
@@ -36,7 +36,7 @@ enrichment-resolved values and shares mutable locals.
 - **`GenerationWork`** (mutable) carries the evolving user message (rewritten with
   system prefixes by the prep builders) and the values those builders derive
   (`confirmation_web_items`, `confirmation_confirmed`, `confirmation_search_failed`,
-  `pending_records`; `raw_message` stays the clean snapshot).
+  `consumed_pending`; `raw_message` stays the clean snapshot).
 
 Why split rather than one object: PR (b)'s frozen `RouterContext` gave a
 *structural* no-mutation guarantee that made interceptor inputs tamper-proof. A
@@ -148,3 +148,16 @@ runtime string carries U+2014.
 - **One failure guard.** Everything after the user-turn write runs in
   `_complete_exchange` under the handler's guard, which records a `failed`
   exchange outcome before re-raising.
+
+## Amendment (2026-10-19, ADR-048)
+
+- **`pending_records` no longer exists.** `GenerationWork` no longer carries a
+  snapshot of pending records: the duplicate check before a pending write reads
+  fresh, under one lock (PR #302).
+- **`consumed_pending` carries what a confirmation took.**
+  `GenerationWork.consumed_pending` holds the pending search a confirmed reply
+  took, so the handler's `_PendingGuard` can put it back if the exchange ends
+  unanswered. It is None when nothing was confirmed.
+- **The web-search text.** `GenerationWork.raw_message` is the source of every
+  web search's text, through `search_text_from`; the prefixed `message` never
+  is.

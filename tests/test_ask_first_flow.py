@@ -11,9 +11,8 @@ import pytest
 
 from src.llm.ask_first_validator import (
     SCRIPTED_ASK_FIRST_RESPONSE,
-    find_offer_sentences,
     has_first_person_marker,
-    validate_ask_first_response,
+    remove_unbacked_offers,
 )
 from src.llm.post_gen_pipeline import CodeOffer, run_post_gen_pipeline
 
@@ -66,66 +65,50 @@ class TestDeterministicKeywordMatch:
 
 
 # ---------------------------------------------------------------------------
-# 2. Ask-first validator
+# 2. Ask-first substitution (post-gen pipeline)
 # ---------------------------------------------------------------------------
 
 
-class TestAskFirstValidator:
+def _ask_first(reply, *, intent_class="web_search", ask_first_active=True):
+    """The post-gen pipeline on an exchange the adapter made ask-first (or not)."""
+    return run_post_gen_pipeline(
+        reply, intent_class=intent_class, web_search_autonomous=not ask_first_active,
+        used_web_search=False, used_vault=False, used_vision=False,
+        ask_first_active=ask_first_active,
+    )
+
+
+class TestAskFirstSubstitution:
 
     def test_substitutes_when_no_confirmation_question(self):
-        resp, sub = validate_ask_first_response(
-            "I don't have access to live data. Check Google.",
-            intent_class="web_search",
-            ask_first_mode=True,
-        )
-        assert sub is True
-        assert resp == SCRIPTED_ASK_FIRST_RESPONSE
+        result = _ask_first("I don't have access to live data. Check Google.")
+        assert result.ask_first_substituted is True
+        assert result.reply == SCRIPTED_ASK_FIRST_RESPONSE
 
     def test_replaces_the_model_offer_with_the_fixed_offer(self):
         """The model's own offer wording never reaches the user on an
         ask-first exchange (ADR-048)."""
-        resp, sub = validate_ask_first_response(
-            "I don't have that, want me to search for it?",
-            intent_class="web_search",
-            ask_first_mode=True,
-        )
-        assert sub is True
-        assert resp == SCRIPTED_ASK_FIRST_RESPONSE
+        result = _ask_first("I don't have that, want me to search for it?")
+        assert result.ask_first_substituted is True
+        assert result.reply == SCRIPTED_ASK_FIRST_RESPONSE
 
     def test_refusal_is_kept(self):
-        resp, sub = validate_ask_first_response(
-            "I can't help with that.",
-            intent_class="web_search",
-            ask_first_mode=True,
-            is_refusal=True,
-        )
-        assert sub is False
-        assert resp == "I can't help with that."
+        result = _ask_first("I can't help with that.")
+        assert result.ask_first_substituted is False
+        assert result.reply == "I can't help with that."
 
     def test_no_op_when_not_web_search(self):
-        resp, sub = validate_ask_first_response(
-            "Some response without search offer.",
-            intent_class="default",
-            ask_first_mode=True,
-        )
-        assert sub is False
+        result = _ask_first("Some response without search offer.", intent_class="default")
+        assert result.ask_first_substituted is False
 
     def test_no_op_when_autonomous(self):
-        resp, sub = validate_ask_first_response(
-            "I don't have live data.",
-            intent_class="web_search",
-            ask_first_mode=False,
-        )
-        assert sub is False
+        result = _ask_first("I don't have live data.", ask_first_active=False)
+        assert result.ask_first_substituted is False
 
     def test_empty_draft_gets_the_fixed_offer(self):
-        resp, sub = validate_ask_first_response(
-            "",
-            intent_class="web_search",
-            ask_first_mode=True,
-        )
-        assert sub is True
-        assert resp == SCRIPTED_ASK_FIRST_RESPONSE
+        result = _ask_first("")
+        assert result.ask_first_substituted is True
+        assert result.reply == SCRIPTED_ASK_FIRST_RESPONSE
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +171,7 @@ class TestConfirmationPatterns:
         "I can look that up for you?",
     ])
     def test_patterns_detected(self, text):
-        assert find_offer_sentences(text) != []
+        assert remove_unbacked_offers(text)[1] == 1
 
     @pytest.mark.parametrize("text", [
         "I don't have access to live data.",
@@ -198,7 +181,7 @@ class TestConfirmationPatterns:
         "",
     ])
     def test_patterns_not_detected(self, text):
-        assert find_offer_sentences(text) == []
+        assert remove_unbacked_offers(text) == (text, 0)
 
 
 # ---------------------------------------------------------------------------

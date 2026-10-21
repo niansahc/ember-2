@@ -24,17 +24,18 @@ the conftest throwaway test vault. Synthetic session ids only.
 from __future__ import annotations
 
 import logging
-import threading
 
 import pytest
 
 from unittest.mock import patch
 
+from src.context.policies import SCRIPTED_CLARIFICATION_RESPONSE
 from src.memory.exchange import ExchangeStorageError
-from tests.conftest import active_pendings, seed_pending
+from tests.conftest import active_pendings, run_in_threads, seed_pending
 from tests.test_ask_first_routing import (  # noqa: F401  (client is a fixture)
     _adapter,
     CLEAN_HIT,
+    DEFAULT,
     MODEL_REPLY,
     OFFER_REPLY,
     QUERY,
@@ -133,11 +134,10 @@ def test_settled_guard_restores_nothing_and_restores_once():
 
 def test_declined_pending_is_not_restored(client, isolate_to_test_vault):
     """A decline settles the offer: a failed exchange does not put it back."""
-    from src.context.policies import ContextPolicy
     sid = "sess_test_restore_decline"
     seed_pending(sid, QUERY)
     _turn(client, isolate_to_test_vault, [], query="no thanks", session_id=sid,
-          request_policy=ContextPolicy(name="default"),
+          request_policy=DEFAULT,
           fail=RuntimeError("model down"))
     assert active_pendings(sid) == []
 
@@ -154,16 +154,15 @@ def test_restore_logs_the_outcome(caplog):
 # --- Stateless B2 next-turn dispatch -------------------------------------------
 
 def test_stateless_b2_follow_up_searches(client, isolate_to_test_vault):
-    from src.context.policies import ContextPolicy
     sid = "sess_test_stateless_b2"
     _, text, _, get = _turn(client, isolate_to_test_vault, [], query="google please",
                             session_id=sid, vault_enabled=False, real_classifier=True)
     assert get.call_count == 0
-    assert text == "What would you like me to search for?"
+    assert text == SCRIPTED_CLARIFICATION_RESPONSE
     _, text, llm, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
                               query="the eagles game", session_id=sid,
                               vault_enabled=False,
-                              request_policy=ContextPolicy(name="default"))
+                              request_policy=DEFAULT)
     assert get.call_count == 1
     assert _searched_query(get) == "the eagles game"
     assert llm.generate_response.call_args.kwargs["ask_first_active"] is False
@@ -174,11 +173,10 @@ def test_stateless_follow_up_without_clarification_does_not_search(
         client, isolate_to_test_vault):
     """Positive control for the test above: without the clarification turn
     the same message routes to default and searches nothing."""
-    from src.context.policies import ContextPolicy
     _, _, _, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
                          query="the eagles game", session_id="sess_test_stateless_b2_ctl",
                          vault_enabled=False,
-                         request_policy=ContextPolicy(name="default"))
+                         request_policy=DEFAULT)
     assert get.call_count == 0
 
 
@@ -199,18 +197,17 @@ def _stateless_offer(client, vault, sid):
 
 
 def test_vault_on_turn_drops_the_stateless_offer(client, isolate_to_test_vault, caplog):
-    from src.context.policies import ContextPolicy
     sid = "sess_test_vault_on_drop"
     _stateless_offer(client, isolate_to_test_vault, sid)
     with caplog.at_level(logging.INFO):
         _turn(client, isolate_to_test_vault, [], query="something else",
-              session_id=sid, request_policy=ContextPolicy(name="default"))
+              session_id=sid, request_policy=DEFAULT)
     assert "[CONFIRM] Dropped stateless entry on a vault-on turn" in caplog.text
     assert len(_store()) == 0
     _, _, _, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
                          query="ok", session_id=sid,
                          vault_enabled=False,
-                         request_policy=ContextPolicy(name="default"))
+                         request_policy=DEFAULT)
     assert get.call_count == 0
 
 
@@ -222,20 +219,19 @@ def test_vault_on_clarification_turn_also_drops_the_stateless_offer(
     _stateless_offer(client, isolate_to_test_vault, sid)
     _, text, _, _ = _turn(client, isolate_to_test_vault, [], query="google please",
                           session_id=sid, real_classifier=True)
-    assert text == "What would you like me to search for?"
+    assert text == SCRIPTED_CLARIFICATION_RESPONSE
     assert len(_store()) == 0
 
 
 def test_without_a_vault_on_turn_the_stateless_offer_confirms(
         client, isolate_to_test_vault):
     """Positive control for the test above."""
-    from src.context.policies import ContextPolicy
     sid = "sess_test_vault_on_drop_ctl"
     _stateless_offer(client, isolate_to_test_vault, sid)
     _, _, _, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
                          query="ok", session_id=sid,
                          vault_enabled=False,
-                         request_policy=ContextPolicy(name="default"))
+                         request_policy=DEFAULT)
     assert get.call_count == 1
 
 
@@ -249,17 +245,10 @@ def _ask_first_offer():
 
 def _write_concurrently(sid, queries):
     from src.api.openai_adapter import _write_pending_confirmation
-    barrier = threading.Barrier(len(queries))
-
-    def run(query):
-        barrier.wait()
-        _write_pending_confirmation(_ask_first_offer(), query, sid)
-
-    threads = [threading.Thread(target=run, args=(q,)) for q in queries]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    _, errors = run_in_threads(
+        lambda i: _write_pending_confirmation(_ask_first_offer(), queries[i], sid),
+        len(queries))
+    assert errors == []
 
 
 def test_concurrent_writes_for_one_query_leave_one_pending():
@@ -326,7 +315,7 @@ def _clarify(client, vault, sid):
     """Vault off: "google please" holds the clarification in process."""
     _, text, _, _ = _turn(client, vault, [], query="google please", session_id=sid,
                           vault_enabled=False, real_classifier=True)
-    assert text == "What would you like me to search for?"
+    assert text == SCRIPTED_CLARIFICATION_RESPONSE
 
 
 @pytest.mark.parametrize("failure", ["generation", "vision"])

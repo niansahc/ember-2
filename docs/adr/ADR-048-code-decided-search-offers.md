@@ -88,7 +88,7 @@ when it is None.
 - **A post-generation guard removes the model's offers.** On an exchange where
   the code made no offer, every search-offer sentence is removed from the
   reply (`remove_unbacked_offers`). `OFFER_PATTERNS` is the guard's detector
-  (`find_offer_sentences`) and decides nothing else.
+  and decides nothing else.
   When nothing remains, the reply becomes S4. The guard never touches a
   refusal, and it does not run on an exchange with a code offer, so it never
   removes S1, S2 or S3. It also removes offers to search the user's own notes:
@@ -226,7 +226,7 @@ nothing else.
 - `CONTEXT.md` -- Search offer, Repeat-search offer, Pending search,
   Confirmation, Follow-up, Search clarification.
 - `src/llm/ask_first_validator.py` -- the fixed offer texts, `OFFER_PATTERNS`,
-  `find_offer_sentences`, `remove_unbacked_offers`, `has_first_person_marker`.
+  `remove_unbacked_offers`, `has_first_person_marker`.
 - `src/llm/post_gen_pipeline.py` -- `CodeOffer`, `PostGenResult.code_offer`,
   the order of the offers and the guard.
 - `src/api/openai_adapter.py` -- `_store_reply`, the confirmation grammar,

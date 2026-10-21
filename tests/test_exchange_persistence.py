@@ -84,7 +84,7 @@ def client(vault):
 @pytest.fixture(scope="module")
 def ask_first_policy():
     """A web-search policy the classifier did not mark explicit: with
-    autonomous search off (_ASK_FIRST_PREFS) the exchange is ask-first and
+    autonomous search off (_ask_first_prefs) the exchange is ask-first and
     the code makes its search offer (ADR-048)."""
     from src.context.policies import _web_search_policy
 

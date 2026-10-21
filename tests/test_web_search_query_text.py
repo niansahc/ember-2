@@ -15,6 +15,7 @@ throwaway test vault. Synthetic text only.
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock, patch
 
 from src.context.policies import _web_search_policy
@@ -23,7 +24,9 @@ from tests.conftest import seed_pending
 from tests.test_ask_first_routing import (  # noqa: F401  (client is a fixture)
     CLEAN_HIT,
     QUERY,
+    _model_message,
     _searxng,
+    _sent_queries,
     _turn,
     client,
 )
@@ -33,19 +36,9 @@ UPLOAD_NOTE = ("[I just uploaded notes.pdf to my vault. The content is now "
                "available in your memory.] ")
 
 
-def _sent_queries(get) -> list[str]:
-    """The q param of every request made to SearXNG."""
-    return [call.kwargs["params"]["q"] for call in get.call_args_list]
-
-
-def _model_message(llm) -> str:
-    """The message the model received (the context packet's user_message)."""
-    return llm.generate_response.call_args.args[0].user_message
-
-
-def _autonomous_turn(client, vault, query, **kwargs):
+def _autonomous_turn(client, vault, query, responses=None, **kwargs):
     """An autonomous turn whose context assembly searches."""
-    return _turn(client, vault, [_searxng([CLEAN_HIT])] * 3, query=query,
+    return _turn(client, vault, responses or [_searxng([CLEAN_HIT])] * 3, query=query,
                  autonomous=True, assembly_policy=_web_search_policy(explicit=False),
                  **kwargs)
 
@@ -76,15 +69,32 @@ def test_timer_note_never_reaches_searxng(client, isolate_to_test_vault):
 
 def test_follow_up_never_reaches_searxng(client, isolate_to_test_vault):
     """A confirmation's follow-up goes to the model, never to the search.
-    With autonomous on, both the confirm search and context assembly run."""
+    With autonomous on and a confirm search that kept nothing, both the
+    confirm search and context assembly run."""
     sid = "sess_test_follow_up_search"
     seed_pending(sid, QUERY)
     _, _, llm, get = _autonomous_turn(client, isolate_to_test_vault,
                                       "yes, but what about the forecast?",
+                                      responses=[_searxng([]), _searxng([CLEAN_HIT])],
                                       session_id=sid)
     assert "forecast" in _model_message(llm)
     assert get.call_count == 2
     assert _sent_queries(get) == [QUERY, QUERY]
+
+
+def test_assembly_does_not_repeat_a_confirm_search_that_kept_results(
+        client, isolate_to_test_vault, caplog):
+    """The confirm search's results win the merge, so context assembly does
+    not send the same text again. The control is the test above: when the
+    confirm search kept nothing, assembly searched."""
+    sid = "sess_test_confirm_kept_results"
+    seed_pending(sid, QUERY)
+    with caplog.at_level(logging.INFO):
+        _, _, _, get = _autonomous_turn(client, isolate_to_test_vault, "yes",
+                                        session_id=sid)
+    assert _sent_queries(get) == [QUERY]
+    assert ("[WEB_SEARCH] path=assembly skipped: the confirm search kept "
+            "1 result(s)") in caplog.text
 
 
 def test_upload_note_never_reaches_searxng(client, isolate_to_test_vault):

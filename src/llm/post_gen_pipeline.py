@@ -8,7 +8,8 @@ Runs five validators in a fixed order against a completed response:
   1. source allowlist (strip fabricated citations)
   2. web search refusal (deterministic fallback when model ignores web results)
   3. vision refusal (substitute when vision fired but model refused)
-  4. ask-first (substitute when web_search intent skipped the confirmation)
+  4. ask-first (the code's search offer replaces the draft on an ask-first
+     exchange)
   5. URL validator (B-MEM-005: strip fabricated https?:// URLs against a
      per-turn allowlist; runs last so it sees the final returned text)
 
@@ -52,7 +53,6 @@ from src.llm.ask_first_validator import (
     RETRY_OFFER_RESPONSE,
     SCRIPTED_ASK_FIRST_RESPONSE,
     remove_unbacked_offers,
-    validate_ask_first_response,
 )
 from src.llm.refusal import is_refusal_response
 from src.tools.web_search import NO_REPEAT_OFFER_REASONS
@@ -177,18 +177,20 @@ def run_post_gen_pipeline(
     if vision_substituted:
         logger.info("[POSTGEN] vision refusal substituted")
 
+    # The code's offer on an ask-first exchange (ADR-048): the reply is
+    # always SCRIPTED_ASK_FIRST_RESPONSE, whatever the model drafted, since
+    # its own offer wording could leave the user unsure that the search goes
+    # to the web. A refusal is kept as written and gets no offer (CLAUDE.md
+    # implementation standard 2).
     code_offer: CodeOffer | None = None
-    reply, ask_first_substituted = validate_ask_first_response(
-        reply,
-        intent_class=intent_class,
-        ask_first_mode=ask_first_active,
-        is_refusal=is_refusal,
-    )
-    if ask_first_substituted:
-        code_offer = CodeOffer("ask_first", SCRIPTED_ASK_FIRST_RESPONSE)
-        logger.info("[POSTGEN] ask-first response substituted")
-    elif ask_first_active and intent_class == "web_search" and is_refusal:
-        logger.info("[POSTGEN] refusal kept on an ask-first exchange: no offer")
+    if ask_first_active and intent_class == "web_search":
+        if is_refusal:
+            logger.info("[POSTGEN] refusal kept on an ask-first exchange: no offer")
+        else:
+            reply = SCRIPTED_ASK_FIRST_RESPONSE
+            ask_first_substituted = True
+            code_offer = CodeOffer("ask_first", SCRIPTED_ASK_FIRST_RESPONSE)
+            logger.info("[POSTGEN] ask-first response substituted")
 
     # Search failure on a confirmation exchange: substitute the repeat-search
     # offer instead of letting the model narrate or re-offer from scratch.

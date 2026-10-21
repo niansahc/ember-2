@@ -584,7 +584,7 @@ def _confirmation_grammar(user_message: str) -> tuple[str, str]:
         return ("confirmed", "") if _is_filler(words[i:]) else ("unmatched", "")
     while i < len(words) and words[i] in _CONFIRM_CONNECTORS:
         i += 1
-    if i == len(words) or _is_filler(words[i:]):
+    if _is_filler(words[i:]):
         return "confirmed", ""
     return "confirmed", user_message[tokens[i].start():].strip()
 
@@ -754,7 +754,7 @@ class _PendingGuard:
         self._lock = threading.Lock()
 
     def arm(self, consumed: dict | None) -> None:
-        """Remember the consumed pending ({query, offer_text, stateless})."""
+        """Remember the consumed pending ({query, offer_text, offer, stateless})."""
         with self._lock:
             self._consumed = consumed
 
@@ -835,18 +835,9 @@ def _check_stateless_pending(
                                 "image" if has_image else None)
 
 
-def _prior_turn_is_clarification(session_id: str) -> bool:
-    """_prior_turn_awaits_search_content, with a read failure as False."""
-    try:
-        return _prior_turn_awaits_search_content(session_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[CONFIRM] Clarification check failed (non-fatal): %s",
-                       type(exc).__name__)
-        return False
-
-
 def _check_pending_confirmation(
     session_id: str, user_message: str, *, has_image: bool = False,
+    after_clarification: bool = False,
 ) -> dict | None:
     """Check for a pending_confirmation state record and interpret the user's response.
 
@@ -856,8 +847,9 @@ def _check_pending_confirmation(
     reply carries, "" otherwise) and offer_text (the pending's stored offer
     sentence, so _PendingGuard can put it back); confirmed=False on a decline
     or an unrelated message. None if no pending confirmation exists. An
-    image exchange, or a reply to a search clarification, ends the pending
-    without reading the reply (ADR-048).
+    image exchange, or a reply to a search clarification (after_clarification:
+    the session's last assistant turn asked for the search content), ends the
+    pending without reading the reply (ADR-048).
     """
     try:
         # Read pending_confirmation records directly, filtered to this
@@ -902,9 +894,8 @@ def _check_pending_confirmation(
         # that ends unanswered puts a confirmed pending back (_PendingGuard).
         _resolve_original_pending(pending)
 
-        superseded_by = "image" if has_image else None
-        if superseded_by is None and _prior_turn_is_clarification(session_id):
-            superseded_by = "clarification"
+        superseded_by = ("image" if has_image
+                         else "clarification" if after_clarification else None)
         result = _confirmation_result(action, action_query, user_message, superseded_by)
         result["offer_text"] = pending.text
         result["offer"] = (pending.metadata or {}).get("offer")
@@ -1612,7 +1603,9 @@ def _build_generation_context(
 # the clean pre-prefix snapshot the exchange's web-search text comes from.
 # ---------------------------------------------------------------------------
 
-def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> None:
+def _apply_confirmation(
+    gen_ctx: GenerationContext, work: GenerationWork, *, after_clarification: bool = False,
+) -> None:
     """Pending-confirmation check (pre-generation).
 
     If Ember previously offered to search and the user is now responding,
@@ -1632,7 +1625,9 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
 
     A confirmed pending is recorded in work.consumed_pending before the
     search runs, so the handler's _PendingGuard can put it back if the
-    exchange ends unanswered.
+    exchange ends unanswered. after_clarification is the handler's read of
+    the session's last assistant turn: a search clarification there ends a
+    vault pending without reading the reply.
     """
     has_image = gen_ctx.image_count > 0
     if gen_ctx.is_test:
@@ -1642,10 +1637,10 @@ def _apply_confirmation(gen_ctx: GenerationContext, work: GenerationWork) -> Non
                                           has_image=has_image)
     else:
         result = _check_pending_confirmation(gen_ctx.session_id, work.message,
-                                             has_image=has_image)
+                                             has_image=has_image,
+                                             after_clarification=after_clarification)
     if result is not None:
         if result["confirmed"] and result["action"] == "web_search":
-            work.confirmation_confirmed = True
             _original_query = result["query"]
             work.consumed_pending = {
                 "query": _original_query,
@@ -2005,6 +2000,12 @@ async def _complete_exchange(
     _exchange = exchange
     _turn_vault = exchange.vault
 
+    def _abort_exchange(outcome: str, reason: str | None) -> None:
+        """End the exchange unanswered: put back what it consumed, then
+        record the outcome."""
+        pending_guard.restore(outcome, reason)
+        _exchange.record_outcome(outcome, reason)
+
     # A vault-on turn drops whatever this session holds in process (a
     # stateless offer or B2 clarification), so it cannot fire after the vault
     # was switched back on. First, so a terminal reply below drops it too.
@@ -2061,22 +2062,34 @@ async def _complete_exchange(
     # next-turn dispatch and relational suppression remain inline below - they
     # are retrieval-gating policy, not message prep; see ADR-042.)
     work = GenerationWork(message=latest_user_message)
+    # The session's last assistant turn, read once for two decisions: a
+    # search clarification there ends an older search offer (ADR-048) and
+    # makes this message the search content (the B2 next-turn dispatch
+    # below). A vault-off turn holds its clarification in process instead.
+    _after_clarification = False
+    if not _skip_vault_read:
+        try:
+            with vault_binding(_turn_vault):
+                _after_clarification = _prior_turn_awaits_search_content(session_id)
+        except Exception as exc:
+            logger.warning(
+                "[CLARIFY] Next-turn check failed (non-fatal): %s", type(exc).__name__,
+            )
     # Phase B reads and writes (pending confirmation, tasks, timers) belong to
     # the vault this turn started in, not whichever is active by then. The
     # guard is armed even when Phase B raises after consuming a pending.
     try:
         with vault_binding(_turn_vault):
-            _apply_confirmation(gen_ctx, work)
+            _apply_confirmation(gen_ctx, work, after_clarification=_after_clarification)
             _apply_tasks(gen_ctx, work)
             _apply_timers(gen_ctx, work)
     finally:
         pending_guard.arm(work.consumed_pending)
     latest_user_message = work.message
-    _raw_user_message = work.raw_message
     # What a web search may send this exchange: the user's own words. Never
     # latest_user_message, which can carry Ember's task and timer notes or a
     # confirmation's follow-up, and never the UI's upload note.
-    _search_text = search_text_from(_raw_user_message)
+    _search_text = search_text_from(work.raw_message)
     _confirmation_web_items = work.confirmation_web_items
     _confirmation_confirmed = work.confirmation_confirmed
     _confirmation_search_failed = work.confirmation_search_failed
@@ -2175,20 +2188,14 @@ async def _complete_exchange(
         # AND is passed to build_context, which would otherwise re-classify
         # the bare follow-up in isolation, route it to default and skip the
         # search. Explicit, so ask-first does not apply.
-        _b2_dispatch = False
-        try:
-            if _prior_turn_awaits_search_content(session_id):
-                logger.info(
-                    "[CLARIFY] Next-turn dispatch: prior assistant turn "
-                    "carried awaiting_search_content; bypassing classifier "
-                    "and routing user message to web_search"
-                )
-                _early_policy = _force_web_search_policy(explicit=True)
-                _b2_dispatch = True
-        except Exception as exc:
-            logger.warning(
-                "[CLARIFY] Next-turn check failed (non-fatal): %s", type(exc).__name__,
+        _b2_dispatch = _after_clarification
+        if _b2_dispatch:
+            logger.info(
+                "[CLARIFY] Next-turn dispatch: prior assistant turn "
+                "carried awaiting_search_content; bypassing classifier "
+                "and routing user message to web_search"
             )
+            _early_policy = _force_web_search_policy(explicit=True)
 
         # Explicit search request bypass: "search the web", "google that",
         # "look it up", or the B2 follow-up above. The user's own words ARE
@@ -2197,11 +2204,11 @@ async def _complete_exchange(
         # Gate bypass: skip_web_search is False when autonomous is on OR
         # the user explicitly requested a search. Confirmation-confirmed
         # is NOT a bypass: the deferred search (_apply_confirmation) already
-        # ran with the stored original query. latest_user_message starts with
-        # that original query on a confirmed turn, so when a bypass does apply
-        # (autonomous switched on while the offer was pending) context_service
-        # searches the same text a second time; _merge_confirmation_search
-        # reconciles the two outcomes.
+        # ran with the stored original query, the same text assembly would
+        # send. So when a bypass does apply (autonomous on, as after a
+        # repeat-search offer), assembly searches that text again only when
+        # the confirm search kept no results, as a second attempt: results it
+        # kept win the merge (_merge_confirmation_search) anyway.
         # Vision turns never trigger web search. Image-bearing queries are
         # served by the VL preprocessor; mixing in unrelated web hits wastes
         # tokens, pollutes attribution, and contradicts what the user asked
@@ -2211,6 +2218,10 @@ async def _complete_exchange(
             _has_image
             or (not _web_autonomous_early and not _explicit_search)
         )
+        if not _skip_search and _confirmation_web_items:
+            _skip_search = True
+            logger.info("[WEB_SEARCH] path=assembly skipped: the confirm search "
+                        "kept %d result(s)", len(_confirmation_web_items))
         context_packet = context_service.build_context(
             latest_user_message,
             image_data=image_data,
@@ -2387,8 +2398,7 @@ async def _complete_exchange(
         # The canned text is not Ember's reply, so it is not stored; the
         # exchange ends with a `failed` outcome instead (ADR-047), and a
         # pending it consumed is put back.
-        pending_guard.restore(OUTCOME_FAILED, "vision_unavailable")
-        _exchange.record_outcome(OUTCOME_FAILED, "vision_unavailable")
+        _abort_exchange(OUTCOME_FAILED, "vision_unavailable")
         return early_return_response(
             VISION_UNAVAILABLE_RESPONSE,
             gen_ctx.completion_id,
@@ -2536,6 +2546,30 @@ async def _complete_exchange(
         stateless_pending=_skip_vault_write and not gen_ctx.is_test,
         pending_guard=pending_guard,
     )
+
+    def _run_postgen(reply: str):
+        """run_post_gen_pipeline with the arguments every path passes, read
+        at call time (src/llm/post_gen_pipeline.py)."""
+        from src.llm.post_gen_pipeline import run_post_gen_pipeline
+        return run_post_gen_pipeline(
+            reply,
+            intent_class=_intent_class,
+            web_search_autonomous=_web_autonomous,
+            used_web_search=used_web_search,
+            used_vault=used_vault,
+            used_vision=used_vision,
+            web_items=getattr(context_packet, "web_items", None),
+            vault_sources=vault_sources,
+            vision_description=_vision_description,
+            confirmation_search_failed=_confirmation_search_failed,
+            explicit_search_request=_explicit_search,
+            ask_first_active=_ask_first_active,
+            user_message=latest_user_message,
+            memory_items=getattr(context_packet, "memory_items", None),
+            state_items=getattr(context_packet, "state_items", None),
+            web_search_status=context_packet.web_search_status,
+            web_search_reason=context_packet.web_search_reason,
+        )
 
     # A search ran this turn (assembly, the confirm path or the backstop):
     # every one of them finishes before generation starts. Gates the
@@ -2742,26 +2776,7 @@ async def _complete_exchange(
                 # empty-guard). Grounded streaming path - this runs before
                 # the word-by-word re-stream, so the client sees the
                 # validated text.
-                from src.llm.post_gen_pipeline import run_post_gen_pipeline
-                _postgen = run_post_gen_pipeline(
-                    full_reply,
-                    intent_class=_intent_class,
-                    web_search_autonomous=_web_autonomous,
-                    used_web_search=used_web_search,
-                    used_vault=used_vault,
-                    used_vision=used_vision,
-                    web_items=getattr(context_packet, "web_items", None),
-                    vault_sources=vault_sources,
-                    vision_description=_vision_description,
-                    confirmation_search_failed=_confirmation_search_failed,
-                    explicit_search_request=_explicit_search,
-                    ask_first_active=_ask_first_active,
-                    user_message=latest_user_message,
-                    memory_items=getattr(context_packet, "memory_items", None),
-                    state_items=getattr(context_packet, "state_items", None),
-                    web_search_status=context_packet.web_search_status,
-                    web_search_reason=context_packet.web_search_reason,
-                )
+                _postgen = _run_postgen(full_reply)
                 full_reply = _postgen.reply
                 # When the post-gen pipeline substituted the response
                 # (ask-first or web-refusal), the vault badge is stale -
@@ -2853,26 +2868,7 @@ async def _complete_exchange(
                 # already seen the raw stream; this cleans the memory
                 # copy so fabricated sources, vision refusals, and empty
                 # replies don't re-emerge on retrieval.
-                from src.llm.post_gen_pipeline import run_post_gen_pipeline
-                _postgen = run_post_gen_pipeline(
-                    full_reply,
-                    intent_class=_intent_class,
-                    web_search_autonomous=_web_autonomous,
-                    used_web_search=used_web_search,
-                    used_vault=used_vault,
-                    used_vision=used_vision,
-                    web_items=getattr(context_packet, "web_items", None),
-                    vault_sources=vault_sources,
-                    vision_description=_vision_description,
-                    confirmation_search_failed=_confirmation_search_failed,
-                    explicit_search_request=_explicit_search,
-                    ask_first_active=_ask_first_active,
-                    user_message=latest_user_message,
-                    memory_items=getattr(context_packet, "memory_items", None),
-                    state_items=getattr(context_packet, "state_items", None),
-                    web_search_status=context_packet.web_search_status,
-                    web_search_reason=context_packet.web_search_reason,
-                )
+                _postgen = _run_postgen(full_reply)
                 full_reply = _postgen.reply
 
                 # Store before [DONE] (ADR-047). Partial tokens are never
@@ -2905,11 +2901,6 @@ async def _complete_exchange(
         # is emitted only after generation succeeds.
         if used_vision:
             response_headers["X-Ember-Vision-Used"] = "true"
-
-        def _abort_exchange(outcome: str, reason: str | None) -> None:
-            """Put back a consumed pending, then record the outcome."""
-            pending_guard.restore(outcome, reason)
-            _exchange.record_outcome(outcome, reason)
 
         return StreamingResponse(
             # on_abort ends the exchange with a `failed` or `interrupted`
@@ -2947,25 +2938,7 @@ async def _complete_exchange(
 
     # Post-gen validators (source / vision / ask-first / empty-guard).
     # Non-streaming path: runs before final JSONResponse return.
-    from src.llm.post_gen_pipeline import run_post_gen_pipeline as _run_postgen
-    _postgen_ns = _run_postgen(
-        reply,
-        intent_class=_intent_class,
-        web_search_autonomous=_web_autonomous,
-        used_web_search=used_web_search,
-        used_vault=used_vault,
-        used_vision=used_vision,
-        web_items=getattr(context_packet, "web_items", None),
-        vault_sources=vault_sources,
-        vision_description=_vision_description,
-        confirmation_search_failed=_confirmation_search_failed,
-        ask_first_active=_ask_first_active,
-        user_message=latest_user_message,
-        memory_items=getattr(context_packet, "memory_items", None),
-        state_items=getattr(context_packet, "state_items", None),
-        web_search_status=context_packet.web_search_status,
-        web_search_reason=context_packet.web_search_reason,
-    )
+    _postgen_ns = _run_postgen(reply)
     reply = _postgen_ns.reply
     if _postgen_ns.ask_first_substituted or _postgen_ns.web_refusal_substituted:
         used_vault = False

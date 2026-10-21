@@ -129,13 +129,13 @@ class GenerationWork:
     and raw_message with the original deferred query on a confirmed web search;
     the task and timer builders prefix only message, leaving raw_message clean
     for the web-search text. confirmation_* / consumed_pending carry the
-    confirmation builder's outputs to the generation handler.
+    confirmation builder's outputs to the generation handler;
+    confirmation_confirmed is derived from consumed_pending.
     """
 
     message: str
     raw_message: str = ""
     confirmation_web_items: list = field(default_factory=list)
-    confirmation_confirmed: bool = False
     confirmation_search_failed: bool = False
     # Status and reason of the deferred search after the AI-doc quarantine
     # (resolve_search_outcome): "unavailable" / "filtered" when the search
@@ -143,14 +143,20 @@ class GenerationWork:
     confirmation_search_status: str | None = None
     confirmation_search_reason: str | None = None
     # The pending offer a confirmed reply took this turn ({query, offer_text,
-    # stateless}), which the adapter's _PendingGuard puts back if the exchange
-    # ends unanswered. None when nothing was confirmed.
+    # offer, stateless}), which the adapter's _PendingGuard puts back if the
+    # exchange ends unanswered. None when nothing was confirmed.
     consumed_pending: dict | None = None
 
     def __post_init__(self):
         # Snapshot the clean message when a caller does not pass raw_message.
         if not self.raw_message:
             self.raw_message = self.message
+
+    @property
+    def confirmation_confirmed(self) -> bool:
+        """True when the user confirmed a pending web search this turn: the
+        confirmation builder then records the pending it consumed."""
+        return self.consumed_pending is not None
 
 
 @dataclass(frozen=True)

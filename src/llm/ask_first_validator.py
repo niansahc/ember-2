@@ -13,10 +13,10 @@ Finance / Google Finance"), sometimes with fabricated source citations.
 UAT-130 and UAT-131 both failed this way.
 
 Fix: on an ask-first exchange the reply is always the code's offer,
-SCRIPTED_ASK_FIRST_RESPONSE. The model's draft is discarded: it may be a
-trained-in wrong answer, and its own offer wording could leave the user
-unsure that the search goes to the web. A constitutional refusal is kept
-and gets no offer.
+SCRIPTED_ASK_FIRST_RESPONSE (src/llm/post_gen_pipeline substitutes it). The
+model's draft is discarded: it may be a trained-in wrong answer, and its own
+offer wording could leave the user unsure that the search goes to the web.
+A constitutional refusal is kept and gets no offer.
 
 First-person guard (v0.18.0): the intent classifier occasionally misroutes
 clearly first-person/conversational queries to web_search (B-CTX-001
@@ -29,10 +29,10 @@ prompt, no fixed offer, and the model answers.
 Search offers come only from Ember's code. RETRY_OFFER_RESPONSE and
 REPEAT_SEARCH_OFFER are the repeat-search offers after a failed search. The
 adapter writes a pending confirmation for the code's offers and nothing
-else. OFFER_PATTERNS detects the offers the model writes itself
-(find_offer_sentences); the post-generation guard removes them with
-remove_unbacked_offers on an exchange where the code made no offer, since
-nothing would honour the user's "yes" to them.
+else. OFFER_PATTERNS detects the offers the model writes itself; the
+post-generation guard, remove_unbacked_offers, removes them on an exchange
+where the code made no offer, since nothing would honour the user's "yes"
+to them.
 """
 
 from __future__ import annotations
@@ -97,14 +97,13 @@ _WEB_LOOKUP = (
 )
 
 # Phrasings of an offer to search, as the model writes them. They decide
-# nothing on their own: find_offer_sentences uses them to find the model's
-# own offers, which the post-generation guard removes on an exchange where
-# the code made no offer (ADR-048). Case-insensitive, matched after curly
-# apostrophes are straightened. The "?" check is loose because the model
-# sometimes drops terminal punctuation, except for the "I can / I could"
-# forms: those need a question mark or an "if you like / want" in the same
-# sentence, so a statement such as "I can search but I won't." is not an
-# offer.
+# nothing on their own: remove_unbacked_offers uses them to find the model's
+# own offers and remove them on an exchange where the code made no offer
+# (ADR-048). Case-insensitive, matched after curly apostrophes are
+# straightened. The "?" check is loose because the model sometimes drops
+# terminal punctuation, except for the "I can / I could" forms: those need a
+# question mark or an "if you like / want" in the same sentence, so a
+# statement such as "I can search but I won't." is not an offer.
 OFFER_PATTERNS: tuple[re.Pattern, ...] = (
     # Also covers "do you want me to ..." and "let me know if you want me to ...".
     re.compile(r"\bwant\s+me\s+to\s+" + _WEB_LOOKUP, re.IGNORECASE),
@@ -133,24 +132,14 @@ def _is_offer_sentence(sentence: str) -> bool:
     return any(pattern.search(sentence) for pattern in OFFER_PATTERNS)
 
 
-def find_offer_sentences(text: str) -> list[str]:
-    """The sentences in `text` that offer a search, as written.
-
-    No pattern spans terminal punctuation, so an offer anywhere in the text
-    is always inside one sentence.
-    """
-    if not text:
-        return []
-    return [s.strip() for s in _SENTENCE_SPLIT.split(text)[::2] if _is_offer_sentence(s)]
-
-
 def remove_unbacked_offers(reply: str) -> tuple[str, int]:
     """Remove the search offers the model wrote itself (ADR-048).
 
     Returns (reply, number of offer sentences removed). The rest of the reply
     is kept as written. When nothing else is left, the reply becomes
     UNBACKED_OFFER_FALLBACK. Callers run this only on an exchange where the
-    code made no offer, and never on a refusal.
+    code made no offer, and never on a refusal. No pattern spans terminal
+    punctuation, so an offer anywhere in the reply is inside one sentence.
     """
     if not reply:
         return reply, 0
@@ -165,24 +154,3 @@ def remove_unbacked_offers(reply: str) -> tuple[str, int]:
     if not removed:
         return reply, 0
     return "".join(kept).strip() or UNBACKED_OFFER_FALLBACK, removed
-
-
-def validate_ask_first_response(
-    response: str,
-    intent_class: str,
-    ask_first_mode: bool,
-    is_refusal: bool = False,
-) -> tuple[str, bool]:
-    """Put the code's offer on an ask-first exchange.
-
-    Returns (final_response, was_substituted). On an ask-first exchange
-    (intent_class == "web_search" and ask_first_mode) the reply is always
-    SCRIPTED_ASK_FIRST_RESPONSE, whatever the model drafted: its own offer
-    wording could leave the user unsure that the search goes to the web. A
-    constitutional refusal is the one exception: it is kept as written and
-    gets no offer (CLAUDE.md implementation standard 2). Anywhere else the
-    response passes through unchanged.
-    """
-    if intent_class != "web_search" or not ask_first_mode or is_refusal:
-        return response, False
-    return SCRIPTED_ASK_FIRST_RESPONSE, True

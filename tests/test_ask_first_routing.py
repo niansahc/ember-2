@@ -31,6 +31,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import src.tools.web_search as web_search_mod
+from src.context.policies import ContextPolicy
 from src.llm.ask_first_validator import RETRY_OFFER_RESPONSE, SCRIPTED_ASK_FIRST_RESPONSE
 from src.tools.web_search import WebSearchResult
 from tests.conftest import active_pendings as _active_pendings
@@ -41,6 +42,8 @@ OFFER_REPLY = "I don't have that. Want me to search?"
 QUERY = "latest bitcoin price"
 CLEAN_HIT = {"title": "Bitcoin price", "url": "https://example.com/btc",
              "content": "bitcoin price today"}
+# The request classifier's verdict pinned to the default route (no search).
+DEFAULT = ContextPolicy(name="default")
 
 
 # --- helpers -------------------------------------------------------------------
@@ -88,10 +91,11 @@ def _turn(client, test_vault, responses, *, query, session_id, stream=False,
     and text "".
     Returns (resp, text, llm mock, requests.get mock)."""
     adapter = _adapter()
-    from src.context.policies import ContextPolicy, _web_search_policy
+    from src.context.policies import _web_search_policy
 
+    failing = fail is not None or record_reply_error is not None
     if assembly_policy is None:
-        assembly_policy = ContextPolicy(name="default")
+        assembly_policy = DEFAULT
     with ExitStack() as stack:
         get = stack.enter_context(
             patch.object(web_search_mod.requests, "get", side_effect=responses))
@@ -154,10 +158,10 @@ def _turn(client, test_vault, responses, *, query, session_id, stream=False,
                 headers={"X-Session-ID": session_id},
             )
         except Exception:
-            if fail is None and record_reply_error is None:
+            if not failing:
                 raise
             resp = None
-    if fail is not None or record_reply_error is not None or image:
+    if failing or image:
         return resp, "", llm, get
     assert resp.status_code == 200
     if stream:
@@ -173,6 +177,16 @@ def _turn(client, test_vault, responses, *, query, session_id, stream=False,
 
 def _searched_query(get) -> str:
     return get.call_args.kwargs["params"]["q"]
+
+
+def _sent_queries(get) -> list[str]:
+    """The q param of every request made to SearXNG."""
+    return [call.kwargs["params"]["q"] for call in get.call_args_list]
+
+
+def _model_message(llm) -> str:
+    """The message the model received (the context packet's user_message)."""
+    return llm.generate_response.call_args.args[0].user_message
 
 
 # --- 1. Declines win -------------------------------------------------------------
@@ -216,13 +230,12 @@ def test_decline_resolves_the_pending_and_runs_no_search(client, isolate_to_test
     the offer is resolved. The request classifier is pinned to default: the
     real one routes none of these declines to web_search, so no new offer
     follows."""
-    from src.context.policies import ContextPolicy
     sid = f"sess_test_decline_{abs(hash(message)) % 100000}"
     seeded = _seed_pending(sid)
     _, text, llm, get = _turn(client, isolate_to_test_vault, [], query=message,
-                              session_id=sid, request_policy=ContextPolicy(name="default"))
+                              session_id=sid, request_policy=DEFAULT)
     assert get.call_count == 0
-    assert llm.generate_response.call_args.args[0].user_message == message
+    assert _model_message(llm) == message
     svc = _adapter().state_service
     assert seeded.id in svc.resolved_ids(svc.read_by_category("pending_confirmation"))
     assert _active_pendings(sid) == []
@@ -327,14 +340,13 @@ def test_confirmation_grammar(message, expected):
 def test_unrelated_request_after_an_offer_runs_as_itself(client, isolate_to_test_vault):
     """The old search does not run and the user's request reaches the model.
     The control is test_confirm_runs_the_stored_query."""
-    from src.context.policies import ContextPolicy
     sid = "sess_test_unrelated_request"
     _seed_pending(sid)
     message = "Please rewrite my draft paragraph"
     _, _, llm, get = _turn(client, isolate_to_test_vault, [], query=message, session_id=sid,
-                           request_policy=ContextPolicy(name="default"))
+                           request_policy=DEFAULT)
     assert get.call_count == 0
-    assert llm.generate_response.call_args.args[0].user_message == message
+    assert _model_message(llm) == message
     assert _active_pendings(sid) == []
 
 
@@ -345,7 +357,7 @@ def test_yes_with_a_question_searches_and_keeps_the_question(client, isolate_to_
                            query="yes, what about the weather in Paris", session_id=sid)
     assert get.call_count == 1
     assert _searched_query(get) == QUERY
-    assert (llm.generate_response.call_args.args[0].user_message
+    assert (_model_message(llm)
             == f"{QUERY}\n\nwhat about the weather in Paris")
 
 
@@ -369,7 +381,7 @@ def test_clarification_ends_an_older_offer(client, isolate_to_test_vault):
     content = "sure, what's the score?"
     _, _, _, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])] * 2,
                          query=content, session_id=sid, awaiting_search=True)
-    assert [call.kwargs["params"]["q"] for call in get.call_args_list] == [content]
+    assert _sent_queries(get) == [content]
     assert _active_pendings(sid) == []
 
 
@@ -392,18 +404,17 @@ def test_non_web_offer_then_yes_never_sends_the_draft_to_searxng(
     """A reply offering to look over the draft is not a search offer: no
     pending is written, and the user's "yes" searches nothing, so the draft
     text never reaches SearXNG."""
-    from src.context.policies import ContextPolicy
     sid = "sess_test_non_web_offer"
     _turn(client, isolate_to_test_vault, [], query=DRAFT, session_id=sid,
-          request_policy=ContextPolicy(name="default"),
+          request_policy=DEFAULT,
           reply="Would you like me to look over the draft for typos?")
     assert _active_pendings(sid) == []
     _, _, llm, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
                            query="yes", session_id=sid,
-                           request_policy=ContextPolicy(name="default"))
+                           request_policy=DEFAULT)
     assert get.call_count == 0
     assert all(DRAFT not in str(call) for call in get.call_args_list)
-    assert llm.generate_response.call_args.args[0].user_message == "yes"
+    assert _model_message(llm) == "yes"
 
 
 def test_code_offer_then_yes_searches_the_stored_message(client, isolate_to_test_vault):
@@ -540,7 +551,7 @@ def test_ask_first_prompt_turn_does_not_search_and_gets_a_clean_message(
     _, _, llm, get = _turn(client, isolate_to_test_vault, [], query=QUERY,
                            session_id=sid, reply=OFFER_REPLY)
     assert get.call_count == 0
-    assert llm.generate_response.call_args.args[0].user_message == QUERY
+    assert _model_message(llm) == QUERY
     assert llm.generate_response.call_args.kwargs["ask_first_active"] is True
     assert len(_active_pendings(sid)) == 1
 

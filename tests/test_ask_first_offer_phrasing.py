@@ -8,9 +8,9 @@ A model offer on any other exchange writes nothing, whatever its wording, so a
 constitutional refusal is never turned into an offer, and a first-person
 exchange (the query looks personal) is not an ask-first exchange.
 
-OFFER_PATTERNS no longer decides pendings. It detects the model's own offers
-(find_offer_sentences) so the post-generation guard can remove them: the
-model never offers a search, and the prompt never tells it to.
+OFFER_PATTERNS no longer decides pendings. It is the detector of the
+post-generation guard (remove_unbacked_offers), which removes the model's own
+offers: the model never offers a search, and the prompt never tells it to.
 
 End-to-end cases run through /v1/chat/completions with the helpers from
 tests/test_ask_first_routing.py against the conftest throwaway test vault.
@@ -21,32 +21,29 @@ from __future__ import annotations
 
 import pytest
 
-from src.context.policies import ContextPolicy
 from src.llm.ask_first_validator import (
     REPEAT_SEARCH_OFFER,
     RETRY_OFFER_RESPONSE,
     SCRIPTED_ASK_FIRST_RESPONSE,
     UNBACKED_OFFER_FALLBACK,
-    find_offer_sentences,
+    remove_unbacked_offers,
 )
 from src.llm.post_gen_pipeline import WEB_SEARCH_UNAVAILABLE_DISCLOSURE, run_post_gen_pipeline
 from tests.conftest import active_pendings as _active_pendings
 from tests.test_ask_first_routing import (  # noqa: F401  (client is a fixture)
     CLEAN_HIT,
+    DEFAULT,
     MODEL_REPLY,
     OFFER_REPLY,
     _adapter,
+    _model_message,
     _searxng,
+    _sent_queries,
     _turn,
     client,
 )
 
 QUERY = "latest widget price"
-DEFAULT = ContextPolicy(name="default")
-
-
-def _model_message(llm) -> str:
-    return llm.generate_response.call_args.args[0].user_message
 
 
 # --- Pendings come only from the code's offers ---------------------------------
@@ -144,7 +141,7 @@ def test_failed_autonomous_search_offers_a_repeat(client, isolate_to_test_vault)
         (QUERY, REPEAT_SEARCH_OFFER)]
     _, _, _, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
                          query="yes", session_id=sid, autonomous=True)
-    assert [call.kwargs["params"]["q"] for call in get.call_args_list] == [QUERY]
+    assert _sent_queries(get) == [QUERY]
 
 
 def test_search_that_found_nothing_offers_no_repeat(client, isolate_to_test_vault):
@@ -185,6 +182,14 @@ def test_failed_stateless_search_holds_the_repeat_offer(client, isolate_to_test_
     assert store.take("sess_test_repeat_stateless") == {"action": "web_search", "query": QUERY}
 
 
+def _postgen(reply, intent_class="default", **kw):
+    """The post-gen pipeline alone, on an exchange with no vault or vision."""
+    return run_post_gen_pipeline(
+        reply, intent_class=intent_class, web_search_autonomous=True,
+        used_web_search=False, used_vault=False, used_vision=False, **kw,
+    )
+
+
 @pytest.mark.parametrize("status,reason,offered", [
     ("unavailable", "engines_blocked", True),
     ("unavailable", "timeout", True),
@@ -194,34 +199,21 @@ def test_failed_stateless_search_holds_the_repeat_offer(client, isolate_to_test_
     ("empty", "no_results", False),
 ])
 def test_repeat_offer_follows_the_failure_reason(status, reason, offered):
-    result = run_post_gen_pipeline(
-        MODEL_REPLY, intent_class="web_search", web_search_autonomous=True,
-        used_web_search=False, used_vault=False, used_vision=False,
-        web_search_status=status, web_search_reason=reason,
-    )
+    result = _postgen(MODEL_REPLY, intent_class="web_search",
+                      web_search_status=status, web_search_reason=reason)
     assert result.reply.endswith(REPEAT_SEARCH_OFFER) is offered
     assert (result.code_offer is not None) is offered
 
 
 def test_refusal_after_a_failed_search_gets_no_repeat_offer():
     refusal = "I can't help with that."
-    result = run_post_gen_pipeline(
-        refusal, intent_class="web_search", web_search_autonomous=True,
-        used_web_search=False, used_vault=False, used_vision=False,
-        web_search_status="unavailable", web_search_reason="engines_blocked",
-    )
+    result = _postgen(refusal, intent_class="web_search",
+                      web_search_status="unavailable", web_search_reason="engines_blocked")
     assert result.reply == refusal
     assert result.code_offer is None
 
 
 # --- The model never offers a search -------------------------------------------
-
-def _postgen(reply, **kw):
-    return run_post_gen_pipeline(
-        reply, intent_class="default", web_search_autonomous=True,
-        used_web_search=False, used_vault=False, used_vision=False, **kw,
-    )
-
 
 def test_model_offer_on_a_default_exchange_is_removed(client, isolate_to_test_vault):
     sid = "sess_test_guard_e2e"
@@ -257,11 +249,8 @@ def test_refusal_is_never_rewritten_by_the_guard():
 
 
 def test_the_code_offers_survive_the_guard():
-    ask = run_post_gen_pipeline(
-        "Want me to look it up?", intent_class="web_search",
-        web_search_autonomous=False, used_web_search=False, used_vault=False,
-        used_vision=False, ask_first_active=True,
-    )
+    ask = _postgen("Want me to look it up?", intent_class="web_search",
+                   ask_first_active=True)
     assert ask.reply == SCRIPTED_ASK_FIRST_RESPONSE
     repeat = _postgen("Here is what I know. Want me to search again?",
                       web_search_status="unavailable", web_search_reason="engines_blocked")
@@ -303,32 +292,30 @@ NON_OFFERS = [
 
 @pytest.mark.parametrize("offer", OFFERS)
 def test_model_offers_are_detected(offer):
-    assert find_offer_sentences(offer) == [offer]
+    assert remove_unbacked_offers(offer) == (UNBACKED_OFFER_FALLBACK, 1)
 
 
 @pytest.mark.parametrize("text", NON_OFFERS)
 def test_non_offers_are_not_detected(text):
     """Control for the test above: the patterns are not a match-all."""
-    assert find_offer_sentences(text) == []
+    assert remove_unbacked_offers(text) == (text, 0)
 
 
-def test_curly_offer_sentence_is_returned_as_written():
+def test_curly_offer_sentence_is_removed():
     reply = "I don't have it. I could search for that if you\u2019d like."
-    assert find_offer_sentences(reply) == ["I could search for that if you\u2019d like."]
+    assert remove_unbacked_offers(reply) == ("I don't have it.", 1)
 
 
-def test_offer_sentences_are_the_sentences_with_an_offer():
+def test_offer_sentences_are_removed_and_the_rest_kept():
     reply = "Prices change daily. I don't have today's. Want me to search for it? Happy to."
-    assert find_offer_sentences(reply) == ["Want me to search for it?"]
-    assert find_offer_sentences("No offer here.") == []
+    assert remove_unbacked_offers(reply) == (
+        "Prices change daily. I don't have today's. Happy to.", 1)
+    assert remove_unbacked_offers("No offer here.") == ("No offer here.", 0)
 
 
 def test_post_gen_retry_offer_is_the_shared_constant():
-    result = run_post_gen_pipeline(
-        "I'm working on it.", intent_class="web_search",
-        web_search_autonomous=False, used_web_search=False, used_vault=False,
-        used_vision=False, confirmation_search_failed=True,
-    )
+    result = _postgen("I'm working on it.", intent_class="web_search",
+                      confirmation_search_failed=True)
     assert result.reply == RETRY_OFFER_RESPONSE
 
 

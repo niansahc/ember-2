@@ -310,7 +310,7 @@ class ContextService:
         skip_web_search: bool,
         read_only: bool,
         policy,
-        search_text: str | None = None,
+        search_text: str | None,
     ) -> ContextPacket:
         """Assembly proper. Split out so the counter scope wraps all of it."""
 
@@ -322,8 +322,9 @@ class ContextService:
         # the context service fetches results during assembly and the SSE
         # stream shows sources alongside the "want me to search?" question.
         if policy.use_web_search and not skip_web_search:
-            query = user_message if search_text is None else search_text
+            query = user_message
             if search_text is not None:
+                query = search_text
                 logger.info("[WEB_SEARCH] path=assembly: searching the user's text "
                             "(%d chars)", len(query))
             search = run_web_search(query)

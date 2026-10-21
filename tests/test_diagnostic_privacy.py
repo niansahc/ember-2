@@ -8,7 +8,9 @@ vault-adjacent content never enter stdout by default. This file asserts:
 
   * EMBER_DEBUG gates the [PAYLOAD] block in openai_adapter,
     the [CLASSIFY] normalized-query log in policies, and the
-    [INTENT_CLASSIFY] warning lines in intent_classifier.
+    [INTENT_CLASSIFY] Stage 2 failure and Stage 3 unknown-label
+    warnings in intent_classifier. A Stage 3 failure always logs,
+    with the exception type only (tests/test_log_exception_types.py).
   * EMBER_CLASSIFIER_TELEMETRY (separate flag) gates the per-call
     [INTENT_CLASSIFY] stage=... query=... structured log used by the
     ADR-034 SetFit training pipeline.

@@ -104,6 +104,23 @@ def test_web_search_failure_logs_type_only(caplog):
     assert SENTINEL not in text
 
 
+def test_intent_stage3_failure_logs_type_only(caplog):
+    from ollama import ResponseError
+
+    from src.llm import intent_classifier
+
+    # The query is the sentinel too: neither may reach the log.
+    with patch.object(intent_classifier.ollama, "chat",
+                      side_effect=ResponseError(SENTINEL, 404)), \
+         caplog.at_level(logging.INFO):
+        label = intent_classifier._stage3_llm_call(SENTINEL)
+
+    text = _messages(caplog)
+    assert label == intent_classifier.VAULT_ANSWERABLE
+    assert "ResponseError" in text    # control: the site logged
+    assert SENTINEL not in text
+
+
 def test_generation_failure_line_is_the_one_that_keeps_its_traceback():
     # The only intended exceptions: guard_sse in sse.py keeps exc_info on its
     # [GENERATION] failed and post-terminal lines (the file log redacts the

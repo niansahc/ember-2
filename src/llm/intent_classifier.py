@@ -292,23 +292,11 @@ def _stage3_llm_call(query: str) -> str:
             logger.warning(
                 "[INTENT_CLASSIFY] Stage 3 returned unknown label: %r", label
             )
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        # Always logged, with the type name only: the exception text can
-        # echo the query in the raw LLM output.
-        logger.warning(
-            "[INTENT_CLASSIFY] Stage 3 JSON parse failed: %s; using %s",
-            type(exc).__name__, _SAFE_DEFAULT,
-        )
     except Exception as exc:
-        # Always logged, so a missing or unreachable auxiliary model shows:
-        # every query that reaches Stage 3 would otherwise fall back to the
-        # safe default, unsearched, with nothing in the log. The type name
-        # only: the exception text can carry the request payload, query
-        # included.
-        logger.warning(
-            "[INTENT_CLASSIFY] Stage 3 LLM call failed: %s; using %s",
-            type(exc).__name__, _SAFE_DEFAULT,
-        )
+        # Always logged, so a missing or unreachable auxiliary model shows.
+        # The type name only: the exception text can carry the query.
+        logger.warning("[INTENT_CLASSIFY] Stage 3 failed: %s; using %s",
+                       type(exc).__name__, _SAFE_DEFAULT)
     return _SAFE_DEFAULT
 
 

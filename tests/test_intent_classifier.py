@@ -507,13 +507,24 @@ class FakeOllama:
         return {"message": {"content": self._content}}
 
 
+def _stage3_warnings(caplog) -> list[str]:
+    """The Stage 3 failure warnings in the captured log."""
+    return [
+        r.getMessage() for r in caplog.records
+        if r.levelname == "WARNING" and "[INTENT_CLASSIFY] Stage 3" in r.getMessage()
+    ]
+
+
 class TestStage3LlmCall:
     """The raw Stage 3 LLM call — no timeout wrapping."""
 
-    def test_returns_needs_internet_on_valid_json(self, monkeypatch):
+    def test_returns_needs_internet_on_valid_json(self, caplog, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "needs_internet"}))
         monkeypatch.setattr(intent_classifier, "ollama", fake)
-        assert _stage3_llm_call("some query") == "needs_internet"
+        with caplog.at_level("INFO", logger="ember.intent_classifier"):
+            assert _stage3_llm_call("some query") == "needs_internet"
+        # No failure warning on success. Control: the two failure tests below.
+        assert _stage3_warnings(caplog) == []
 
     def test_returns_vault_answerable_on_valid_json(self, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
@@ -535,20 +546,28 @@ class TestStage3LlmCall:
         user_content = fake.chat_calls[0]["messages"][1]["content"]
         assert len(user_content) == 500
 
-    def test_invalid_json_returns_safe_default(self, monkeypatch):
+    def test_invalid_json_returns_safe_default_and_warns(self, caplog, monkeypatch):
         fake = FakeOllama(content="not JSON at all")
         monkeypatch.setattr(intent_classifier, "ollama", fake)
-        assert _stage3_llm_call("any query") == "vault_answerable"
+        with caplog.at_level("INFO", logger="ember.intent_classifier"):
+            assert _stage3_llm_call("any query") == "vault_answerable"
+        warnings = _stage3_warnings(caplog)
+        assert len(warnings) == 1 and "JSONDecodeError" in warnings[0]
 
     def test_unknown_label_returns_safe_default(self, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "maybe_internet"}))
         monkeypatch.setattr(intent_classifier, "ollama", fake)
         assert _stage3_llm_call("any query") == "vault_answerable"
 
-    def test_ollama_exception_returns_safe_default(self, monkeypatch):
+    def test_ollama_exception_returns_safe_default_and_warns(self, caplog, monkeypatch):
         fake = FakeOllama(exc=ConnectionError("Ollama unreachable"))
         monkeypatch.setattr(intent_classifier, "ollama", fake)
-        assert _stage3_llm_call("any query") == "vault_answerable"
+        with caplog.at_level("INFO", logger="ember.intent_classifier"):
+            assert _stage3_llm_call("any query") == "vault_answerable"
+        # Logged by default, so a missing auxiliary model shows. Type name
+        # only: tests/test_log_exception_types.py.
+        warnings = _stage3_warnings(caplog)
+        assert len(warnings) == 1 and "ConnectionError" in warnings[0]
 
 
 class TestStage3Timeout:

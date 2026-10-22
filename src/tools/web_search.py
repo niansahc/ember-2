@@ -95,12 +95,14 @@ REASON_REQUEST_ERROR = "request_error"
 REASON_NO_RESULTS = "no_results"
 REASON_LOW_RELEVANCE = "low_relevance"
 REASON_FILTERED = "filtered"
-# Reasons a repeat of the same search returns the same result: the hits came
-# back and were dropped here (low_relevance) or by the AI-doc quarantine
-# (filtered). An offer to search again would only repeat the failure, so the
-# search note tells the model not to make one and the adapter writes no
-# ask-first pending_confirmation on such a turn.
-NO_REPEAT_OFFER_REASONS = frozenset({REASON_LOW_RELEVANCE, REASON_FILTERED})
+# Reasons a repeat of the same search returns the same result: every engine
+# answered with nothing (no_results), or the hits came back and were dropped
+# here (low_relevance) or by the AI-doc quarantine (filtered). An offer to
+# search again would only repeat the failure, so the search note tells the
+# model not to make one and the code makes no repeat-search offer (ADR-048).
+NO_REPEAT_OFFER_REASONS = frozenset(
+    {REASON_NO_RESULTS, REASON_LOW_RELEVANCE, REASON_FILTERED}
+)
 
 _STOPWORDS = frozenset(
     "the and for are but not you your was were with that this from have has "
@@ -161,6 +163,27 @@ class WebSearchResult:
     items: list[dict] = field(default_factory=list)
     status: WebSearchStatus = "ok"
     reason: str | None = None
+
+
+# The note the UI prepends when the user attaches documents
+# (ember-2-ui src/hooks/useChat.js). It is part of what the client sends, so
+# the user turn keeps it, but it names the uploaded files and is not the
+# user's question: it never goes to the search engines.
+_UI_UPLOAD_NOTE = re.compile(
+    r"^\[I just uploaded .+? to my vault\. "
+    r"The content is now available in your memory\.\]\s*"
+)
+
+
+def search_text_from(user_text: str) -> str:
+    """The text a web search may send for this user text: the user's own
+    words, without the UI's leading upload note. Ember's own notes (task,
+    timer) are never part of it; callers pass the clean pre-prefix message."""
+    text = user_text or ""
+    stripped = _UI_UPLOAD_NOTE.sub("", text, count=1)
+    if stripped != text:
+        logger.info("[WEB_SEARCH] upload note removed from the search text")
+    return stripped
 
 
 def run_web_search(query) -> WebSearchResult:

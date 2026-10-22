@@ -123,7 +123,7 @@ def _confirm(items, query=_QUERY):
     work = GenerationWork(message="yes")
     pending = {"confirmed": True, "action": "web_search", "query": query}
     with patch("src.api.openai_adapter._check_pending_confirmation",
-               return_value=(pending, [])), \
+               return_value=pending), \
          patch("src.tools.web_search.run_web_search",
                return_value=WebSearchResult(items=list(items), status="ok")):
         _apply_confirmation(ctx, work)
@@ -142,6 +142,7 @@ def _confirm_postgen(work, packet):
         used_vision=False,
         confirmation_search_failed=work.confirmation_search_failed,
         web_search_status=packet.web_search_status,
+        web_search_reason=packet.web_search_reason,
     )
 
 
@@ -272,7 +273,7 @@ def _turn(client, responses, *, query=_QUERY, stream=False, autonomous=True,
             pending = {"confirmed": True, "action": "web_search", "query": query}
             stack.enter_context(patch(
                 "src.api.openai_adapter._check_pending_confirmation",
-                return_value=(pending if confirm else None, [])))
+                return_value=pending if confirm else None))
         stack.enter_context(patch("src.llm.coaching_filter.filter_coaching_frame",
                                   side_effect=lambda reply, *a, **kw: reply))
         stack.enter_context(patch("src.safety.grounding_check.should_short_circuit_grounding",
@@ -381,7 +382,8 @@ def test_search_note_engines_blocked_keeps_the_offer_open():
 @pytest.mark.parametrize("reason", ["filtered", "low_relevance"])
 def test_autonomous_no_pending_after_unrepeatable_failure(client, reason, stream, caplog):
     response, min_hits = _failing_search(reason)
-    with caplog.at_level("INFO", logger="ember.openai_adapter"):
+    with caplog.at_level("INFO", logger="ember.openai_adapter"), \
+            caplog.at_level("INFO", logger="src.llm.post_gen_pipeline"):
         resp, _, packet, write_pending = _turn(
             client, [response], min_term_hits=min_hits, reply=_OFFER_REPLY,
             stream=stream)
@@ -390,7 +392,7 @@ def test_autonomous_no_pending_after_unrepeatable_failure(client, reason, stream
         assert packet.web_search_reason == reason
         assert _NO_REPEAT in _search_section(packet)
     write_pending.assert_not_called()
-    assert f"pending_confirmation not written: search reason={reason}" in caplog.text
+    assert f"no repeat-search offer: reason={reason} repeats on retry" in caplog.text
     assert (f"path=autonomous: 0 of {_RETURNED[reason]} results kept, status=unavailable reason={reason}"
             in caplog.text)
 
@@ -398,21 +400,24 @@ def test_autonomous_no_pending_after_unrepeatable_failure(client, reason, stream
 @pytest.mark.parametrize("stream", [False, True])
 def test_autonomous_engines_blocked_still_offers(client, stream):
     """Positive control for the test above: a blocked search can succeed on
-    retry, so the model's offer reaches the pending writer."""
+    retry, so the code offers to repeat it and writes the pending for it."""
+    from src.llm.ask_first_validator import REPEAT_SEARCH_OFFER
+    from src.llm.post_gen_pipeline import CodeOffer
     response, _ = _failing_search("engines_blocked")
-    _, _, packet, write_pending = _turn(client, [response], reply=_OFFER_REPLY,
-                                        stream=stream)
+    _, text, packet, write_pending = _turn(client, [response], stream=stream)
     if packet is not None:
         assert packet.web_search_reason == "engines_blocked"
         assert _NO_REPEAT not in _search_section(packet)
+    assert text.endswith(REPEAT_SEARCH_OFFER)
     write_pending.assert_called_once()
-    assert write_pending.call_args.args[0].endswith("Want me to search again?")
+    assert write_pending.call_args.args[0] == CodeOffer("repeat_search", REPEAT_SEARCH_OFFER)
 
 
 @pytest.mark.parametrize("reason", ["filtered", "low_relevance"])
 def test_confirm_no_pending_after_unrepeatable_failure(client, reason, caplog):
-    """No canned retry offer either: the model's reply stands, behind the
-    disclosure line."""
+    """No repeat-search offer either: the model's answer stands behind the
+    disclosure line, and its own offer to search again is removed (ADR-048):
+    nothing would honour a "yes" to it."""
     response, min_hits = _failing_search(reason)
     with caplog.at_level("INFO", logger="ember.openai_adapter"):
         _, text, packet, write_pending = _turn(
@@ -420,7 +425,7 @@ def test_confirm_no_pending_after_unrepeatable_failure(client, reason, caplog):
             min_term_hits=min_hits, reply=_OFFER_REPLY)
     assert packet.web_search_reason == reason
     assert _NO_REPEAT in _search_section(packet)
-    assert text == f"{WEB_SEARCH_UNAVAILABLE_DISCLOSURE}\n\n{_OFFER_REPLY}"
+    assert text == f"{WEB_SEARCH_UNAVAILABLE_DISCLOSURE}\n\nI could not find that."
     write_pending.assert_not_called()
     assert (f"path=confirm: 0 of {_RETURNED[reason]} results kept, status=unavailable reason={reason}"
             in caplog.text)

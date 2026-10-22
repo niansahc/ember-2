@@ -11,11 +11,10 @@ import pytest
 
 from src.llm.ask_first_validator import (
     SCRIPTED_ASK_FIRST_RESPONSE,
-    has_search_offer,
-    _has_first_person_marker,
-    validate_ask_first_response,
+    has_first_person_marker,
+    remove_unbacked_offers,
 )
-from src.llm.post_gen_pipeline import run_post_gen_pipeline
+from src.llm.post_gen_pipeline import CodeOffer, run_post_gen_pipeline
 
 
 # ---------------------------------------------------------------------------
@@ -29,9 +28,8 @@ class TestDeterministicKeywordMatch:
     affirmatives), not a local copy of its logic."""
 
     def _is_affirmed(self, msg: str) -> bool:
-        from src.api.openai_adapter import _interpret_confirmation_reply
-        confirmed, _ = _interpret_confirmation_reply(msg)
-        return confirmed
+        from src.api.openai_adapter import _confirmation_result
+        return _confirmation_result("web_search", "q", msg)["confirmed"]
 
     @pytest.mark.parametrize("msg", [
         "Yes", "yes", "YES", "Yeah", "Sure", "Please", "Go ahead",
@@ -67,54 +65,50 @@ class TestDeterministicKeywordMatch:
 
 
 # ---------------------------------------------------------------------------
-# 2. Ask-first validator
+# 2. Ask-first substitution (post-gen pipeline)
 # ---------------------------------------------------------------------------
 
 
-class TestAskFirstValidator:
+def _ask_first(reply, *, intent_class="web_search", ask_first_active=True):
+    """The post-gen pipeline on an exchange the adapter made ask-first (or not)."""
+    return run_post_gen_pipeline(
+        reply, intent_class=intent_class, web_search_autonomous=not ask_first_active,
+        used_web_search=False, used_vault=False, used_vision=False,
+        ask_first_active=ask_first_active,
+    )
+
+
+class TestAskFirstSubstitution:
 
     def test_substitutes_when_no_confirmation_question(self):
-        resp, sub = validate_ask_first_response(
-            "I don't have access to live data. Check Google.",
-            intent_class="web_search",
-            ask_first_mode=True,
-        )
-        assert sub is True
-        assert resp == SCRIPTED_ASK_FIRST_RESPONSE
+        result = _ask_first("I don't have access to live data. Check Google.")
+        assert result.ask_first_substituted is True
+        assert result.reply == SCRIPTED_ASK_FIRST_RESPONSE
 
-    def test_preserves_when_confirmation_present(self):
-        resp, sub = validate_ask_first_response(
-            "I don't have that — want me to search for it?",
-            intent_class="web_search",
-            ask_first_mode=True,
-        )
-        assert sub is False
-        assert "want me to search" in resp.lower()
+    def test_replaces_the_model_offer_with_the_fixed_offer(self):
+        """The model's own offer wording never reaches the user on an
+        ask-first exchange (ADR-048)."""
+        result = _ask_first("I don't have that, want me to search for it?")
+        assert result.ask_first_substituted is True
+        assert result.reply == SCRIPTED_ASK_FIRST_RESPONSE
+
+    def test_refusal_is_kept(self):
+        result = _ask_first("I can't help with that.")
+        assert result.ask_first_substituted is False
+        assert result.reply == "I can't help with that."
 
     def test_no_op_when_not_web_search(self):
-        resp, sub = validate_ask_first_response(
-            "Some response without search offer.",
-            intent_class="default",
-            ask_first_mode=True,
-        )
-        assert sub is False
+        result = _ask_first("Some response without search offer.", intent_class="default")
+        assert result.ask_first_substituted is False
 
     def test_no_op_when_autonomous(self):
-        resp, sub = validate_ask_first_response(
-            "I don't have live data.",
-            intent_class="web_search",
-            ask_first_mode=False,
-        )
-        assert sub is False
+        result = _ask_first("I don't have live data.", ask_first_active=False)
+        assert result.ask_first_substituted is False
 
-    def test_empty_passes_through(self):
-        resp, sub = validate_ask_first_response(
-            "",
-            intent_class="web_search",
-            ask_first_mode=True,
-        )
-        assert sub is False
-        assert resp == ""
+    def test_empty_draft_gets_the_fixed_offer(self):
+        result = _ask_first("")
+        assert result.ask_first_substituted is True
+        assert result.reply == SCRIPTED_ASK_FIRST_RESPONSE
 
 
 # ---------------------------------------------------------------------------
@@ -123,8 +117,9 @@ class TestAskFirstValidator:
 
 
 class TestFirstPersonMarkerDetection:
-    """The _has_first_person_marker helper identifies conversational /
-    personal queries so the ask-first substitution can be skipped."""
+    """has_first_person_marker identifies conversational / personal queries,
+    which the adapter does not treat as ask-first exchanges (the end-to-end
+    cases are in tests/test_ask_first_offer_phrasing.py)."""
 
     @pytest.mark.parametrize("msg", [
         "What was I nervous about for this weekend?",
@@ -135,7 +130,7 @@ class TestFirstPersonMarkerDetection:
         "tell me about myself",
     ])
     def test_first_person_detected(self, msg):
-        assert _has_first_person_marker(msg) is True
+        assert has_first_person_marker(msg) is True
 
     @pytest.mark.parametrize("msg", [
         "current price of bitcoin",
@@ -150,97 +145,13 @@ class TestFirstPersonMarkerDetection:
         "",
     ])
     def test_no_first_person_in_external_queries(self, msg):
-        assert _has_first_person_marker(msg) is False
+        assert has_first_person_marker(msg) is False
 
     def test_common_word_substrings_do_not_false_match(self):
         # Word-boundary guard: substring 'i' in "welcome" or "remembered"
         # must not trigger the pattern.
-        assert _has_first_person_marker("welcome to the briefing") is False
-        assert _has_first_person_marker("she remembered to write") is False
-
-
-class TestAskFirstFirstPersonGuard:
-    """When the user message is clearly first-person/conversational, the
-    ask-first substitution is suppressed even if intent_class=web_search.
-
-    This protects against the B-CTX-001 family failure mode where Stage 2
-    misroutes conversational/recall queries to needs_internet and the
-    user would otherwise receive a canned 61-char 'want me to search?'
-    response on personal questions.
-    """
-
-    def test_guard_blocks_substitution_on_first_person_query(self):
-        # All three conditions for substitution hold (web_search intent,
-        # ask-first mode, no confirmation in draft) — guard should still fire.
-        draft = "I don't have access to that information."
-        resp, sub = validate_ask_first_response(
-            draft,
-            intent_class="web_search",
-            ask_first_mode=True,
-            user_message="What was I nervous about for this weekend?",
-        )
-        assert sub is False
-        assert resp == draft  # original draft preserved
-
-    def test_guard_blocks_on_we_pronoun(self):
-        draft = "I'll need to search for that."
-        resp, sub = validate_ask_first_response(
-            draft,
-            intent_class="web_search",
-            ask_first_mode=True,
-            user_message="What are we discussing right now?",
-        )
-        assert sub is False
-        assert resp == draft
-
-    def test_guard_blocks_on_possessive_my(self):
-        draft = "I'd need to look that up online."
-        resp, sub = validate_ask_first_response(
-            draft,
-            intent_class="web_search",
-            ask_first_mode=True,
-            user_message="remind me what I told you about my migration plan",
-        )
-        assert sub is False
-        assert resp == draft
-
-    def test_guard_does_not_block_dative_me_alone(self):
-        # 'me' as dative object in imperative construction. The user is
-        # asking the system to fetch external info — substitution should
-        # still fire. Turn 7 of B-CTX-001 is the analogue case; it routes
-        # vault via the classifier-side fix, not via this guard.
-        draft = "I don't have that information."
-        resp, sub = validate_ask_first_response(
-            draft,
-            intent_class="web_search",
-            ask_first_mode=True,
-            user_message="tell me about quantum computing",
-        )
-        assert sub is True
-        assert resp == SCRIPTED_ASK_FIRST_RESPONSE
-
-    def test_guard_does_not_block_on_external_query(self):
-        # External-world query — substitution should still fire.
-        draft = "I don't have that information."
-        resp, sub = validate_ask_first_response(
-            draft,
-            intent_class="web_search",
-            ask_first_mode=True,
-            user_message="current price of bitcoin",
-        )
-        assert sub is True
-        assert resp == SCRIPTED_ASK_FIRST_RESPONSE
-
-    def test_no_user_message_defaults_to_old_behavior(self):
-        # Backward compatibility: callers that don't pass user_message
-        # still get the original substitution behavior.
-        resp, sub = validate_ask_first_response(
-            "I don't have access to live data. Check Google.",
-            intent_class="web_search",
-            ask_first_mode=True,
-        )
-        assert sub is True
-        assert resp == SCRIPTED_ASK_FIRST_RESPONSE
+        assert has_first_person_marker("welcome to the briefing") is False
+        assert has_first_person_marker("she remembered to write") is False
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +171,7 @@ class TestConfirmationPatterns:
         "I can look that up for you?",
     ])
     def test_patterns_detected(self, text):
-        assert has_search_offer(text) is True
+        assert remove_unbacked_offers(text)[1] == 1
 
     @pytest.mark.parametrize("text", [
         "I don't have access to live data.",
@@ -270,7 +181,7 @@ class TestConfirmationPatterns:
         "",
     ])
     def test_patterns_not_detected(self, text):
-        assert has_search_offer(text) is False
+        assert remove_unbacked_offers(text) == (text, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +201,7 @@ class TestConfirmationSearchFailed:
             used_vision=False,
             confirmation_search_failed=True,
         )
-        assert "try again" in result.reply.lower()
+        assert "try the search again" in result.reply.lower()
         assert result.ask_first_substituted is True
 
     def test_no_substitution_when_not_failed(self):
@@ -303,7 +214,7 @@ class TestConfirmationSearchFailed:
             used_vision=False,
             confirmation_search_failed=False,
         )
-        assert "try again" not in result.reply.lower()
+        assert "try the search again" not in result.reply.lower()
         assert "Tokyo" in result.reply
 
 
@@ -361,7 +272,7 @@ class TestDuplicateWriteGuard:
         with patch("src.api.openai_adapter.state_service", svc):
             from src.api.openai_adapter import _write_pending_confirmation
             _write_pending_confirmation(
-                "I don't have that — want me to search?",
+                CodeOffer("ask_first", SCRIPTED_ASK_FIRST_RESPONSE),
                 "population of Tokyo",
                 "sess_dup_test",
             )
@@ -388,7 +299,7 @@ class TestDuplicateWriteGuard:
         with patch("src.api.openai_adapter.state_service", svc):
             from src.api.openai_adapter import _write_pending_confirmation
             _write_pending_confirmation(
-                "I don't have that — want me to search?",
+                CodeOffer("ask_first", SCRIPTED_ASK_FIRST_RESPONSE),
                 "weather in London",
                 "sess_dup_test2",
             )

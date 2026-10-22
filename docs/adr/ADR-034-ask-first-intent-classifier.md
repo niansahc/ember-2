@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-04-20
 **Version:** v0.17.0 (planned)
+**Amended:** 2026-10-19 (ADR-048: the code makes every search offer; the model never offers)
 
 ## Context
 
@@ -131,3 +132,25 @@ First Principles analysis suggests Stages 2+3 alone may outperform the full thre
 - "REIC: Retrieval-Augmented Intent Classification." arXiv:2506.00210, 2025.
 - aurelio-labs/semantic-router — https://github.com/aurelio-labs/semantic-router
 - CLINC150 dataset (Larson et al., 2019) — personal assistant intents, secondary bootstrap source only
+
+## Amendment (2026-10-19, ADR-048)
+
+- **Rule 2 is carried out by the code.** "Ember must ask before searching"
+  still holds, but Ember's code does the asking, not the model. On an
+  ask-first exchange the reply is always the fixed text "I don't have current
+  information on that. Want me to search the web for it?", whatever the model
+  drafted. A constitutional refusal is kept and gets no offer.
+- **The model never offers a search.** The always-on prompt text no longer
+  tells it to, and a post-generation guard removes any search offer it writes
+  on an exchange where the code made none.
+- **Offers are of two kinds:** the ask-first offer, and the repeat-search
+  offer after a web search that failed for a reason a repeat could fix. Only
+  these write a pending search (ADR-038 amendment).
+- **The first-person guard gates ask-first.** The validator's first-person
+  guard (`has_first_person_marker` in `src/llm/ask_first_validator.py`, not
+  Stage 1's compound guard) applies to the ask-first decision itself: a
+  message with a first-person marker is not an ask-first exchange, even when
+  the classifier returns `needs_internet`. It gets no ask block and no offer,
+  and the model answers.
+
+Rules 1, 3 and 4 are unchanged.

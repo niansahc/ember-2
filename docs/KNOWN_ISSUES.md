@@ -80,6 +80,8 @@ Active as of v0.18.0. Open issues are listed first; resolved-in-place entries ar
 
 - **B1 prompt fix step 2 is dead code at current hardware ceiling** — Stage 3 INTENT_CLASSIFIER_TIMEOUT_MS raised to 1500ms in PR #76, but re-measurement showed 0/5 B1 fixtures completing within the new cap on warm qwen3:8b. The Variant C prompt sentence added as step 2 is never evaluated. Status: deferred until hardware throughput improves.
 
+- **B-WS-003: The follow-up after a confirmed search offer gets no search of its own** - When the user answers a search offer with "yes, but <new question>", the confirmed search runs on the original query (the user's own text stored with the offer), and the new question reaches the model as a follow-up. The follow-up is answered from what the model has (the results for the original query and its training data), with no search or search offer of its own, so a follow-up that needs current information can get an out-of-date answer. By design: the user's yes covered the original query only, so the follow-up is never sent to the search engines (decided 2026-10-19, ADR-048). Workaround: send the new question as its own message. Status: open. Version found: v0.18.1.
+
 ---
 
 ## Resolved (v0.17.1 - v0.18.0 boundary)

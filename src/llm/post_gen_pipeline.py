@@ -8,7 +8,8 @@ Runs five validators in a fixed order against a completed response:
   1. source allowlist (strip fabricated citations)
   2. web search refusal (deterministic fallback when model ignores web results)
   3. vision refusal (substitute when vision fired but model refused)
-  4. ask-first (substitute when web_search intent skipped the confirmation)
+  4. ask-first (the code's search offer replaces the draft on an ask-first
+     exchange)
   5. URL validator (B-MEM-005: strip fabricated https?:// URLs against a
      per-turn allowlist; runs last so it sees the final returned text)
 
@@ -45,12 +46,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 from src.llm.ask_first_validator import (
+    REPEAT_SEARCH_OFFER,
     RETRY_OFFER_RESPONSE,
-    validate_ask_first_response,
+    SCRIPTED_ASK_FIRST_RESPONSE,
+    remove_unbacked_offers,
 )
 from src.llm.refusal import is_refusal_response
+from src.tools.web_search import NO_REPEAT_OFFER_REASONS
 from src.llm.source_validator import (
     extract_web_domains,
     validate_and_strip_sources,
@@ -77,6 +82,15 @@ _EMPTY_FALLBACK = (
 )
 
 
+class CodeOffer(NamedTuple):
+    """A search offer Ember's code made on this exchange (ADR-048): the only
+    kind of offer the adapter writes a pending confirmation for. kind is
+    "ask_first" or "repeat_search"; text is the offer as the user sees it."""
+
+    kind: str
+    text: str
+
+
 @dataclass
 class PostGenResult:
     reply: str
@@ -87,6 +101,8 @@ class PostGenResult:
     empty_fallback_fired: bool
     stripped_urls: list[dict] = field(default_factory=list)
     kept_urls: list[str] = field(default_factory=list)
+    # The code's search offer on this exchange, if it made one.
+    code_offer: CodeOffer | None = None
 
 
 def run_post_gen_pipeline(
@@ -107,12 +123,13 @@ def run_post_gen_pipeline(
     memory_items: list | None = None,
     state_items: list | None = None,
     web_search_status: str | None = None,
+    web_search_reason: str | None = None,
 ) -> PostGenResult:
-    """Run source → vision → ask-first → empty-guard against a full reply.
+    """Run source -> vision -> ask-first -> empty-guard against a full reply.
 
-    ask_first_mode is computed internally as (intent == web_search AND
-    web_search_autonomous is False). Callers pass the raw signals and this
-    function applies the routing rule.
+    ask_first_active is the adapter's ask-first decision for this exchange.
+    The result's code_offer names the search offer the code made, if any:
+    the adapter writes a pending confirmation for it and for nothing else.
     """
 
     # Judged on the reply as generated, before any substitution below.
@@ -160,24 +177,41 @@ def run_post_gen_pipeline(
     if vision_substituted:
         logger.info("[POSTGEN] vision refusal substituted")
 
-    ask_first_mode = ask_first_active
-    reply, ask_first_substituted = validate_ask_first_response(
-        reply,
-        intent_class=intent_class,
-        ask_first_mode=ask_first_mode,
-        user_message=user_message or "",
-    )
-    if ask_first_substituted:
-        logger.info("[POSTGEN] ask-first response substituted")
+    # The code's offer on an ask-first exchange (ADR-048): the reply is
+    # always SCRIPTED_ASK_FIRST_RESPONSE, whatever the model drafted, since
+    # its own offer wording could leave the user unsure that the search goes
+    # to the web. A refusal is kept as written and gets no offer (CLAUDE.md
+    # implementation standard 2).
+    code_offer: CodeOffer | None = None
+    if ask_first_active and intent_class == "web_search":
+        if is_refusal:
+            logger.info("[POSTGEN] refusal kept on an ask-first exchange: no offer")
+        else:
+            reply = SCRIPTED_ASK_FIRST_RESPONSE
+            ask_first_substituted = True
+            code_offer = CodeOffer("ask_first", SCRIPTED_ASK_FIRST_RESPONSE)
+            logger.info("[POSTGEN] ask-first response substituted")
 
-    # Search failure on confirmation turn — substitute with a retry offer
-    # instead of letting the model narrate or re-offer from scratch. The
-    # retry offer matches OFFER_PATTERNS, so the adapter writes a pending
-    # confirmation for it and the user's next "yes" re-runs the search.
+    # Search failure on a confirmation exchange: substitute the repeat-search
+    # offer instead of letting the model narrate or re-offer from scratch.
+    # The adapter writes a pending confirmation for it, so the user's next
+    # "yes" re-runs the search. A refusal is kept and gets no offer.
     if confirmation_search_failed:
-        reply = RETRY_OFFER_RESPONSE
-        ask_first_substituted = True
-        logger.warning("[POSTGEN] confirmation search failed - retry offer substituted")
+        if is_refusal:
+            logger.info("[POSTGEN] refusal kept on a failed confirm search: no offer")
+        else:
+            reply = RETRY_OFFER_RESPONSE
+            ask_first_substituted = True
+            code_offer = CodeOffer("repeat_search", RETRY_OFFER_RESPONSE)
+            logger.warning("[POSTGEN] confirmation search failed - retry offer substituted")
+
+    # The model never offers a search (ADR-048): on an exchange where the
+    # code made no offer, nothing would honour a "yes" to one, so every
+    # offer sentence the model wrote is removed. A refusal is never rewritten.
+    if code_offer is None and not is_refusal:
+        reply, removed = remove_unbacked_offers(reply)
+        if removed:
+            logger.info("[POSTGEN] removed %d unbacked search offer(s)", removed)
 
     if not reply or not reply.strip():
         reply = _EMPTY_FALLBACK
@@ -192,6 +226,20 @@ def run_post_gen_pipeline(
     ):
         reply = f"{WEB_SEARCH_UNAVAILABLE_DISCLOSURE}\n\n{reply}"
         logger.info("[POSTGEN] web search unavailable - disclosure line prepended")
+
+    # Repeat-search offer (ADR-048): a search ran on this exchange and failed
+    # for a reason a repeat could fix, so the code offers to repeat it. A
+    # confirmation exchange already got its substituted offer above, and a
+    # refusal gets none.
+    if web_search_status == "unavailable" and code_offer is None and not is_refusal:
+        if web_search_reason in NO_REPEAT_OFFER_REASONS:
+            logger.info("[POSTGEN] no repeat-search offer: reason=%s repeats on retry",
+                        web_search_reason)
+        else:
+            reply = f"{reply}\n\n{REPEAT_SEARCH_OFFER}"
+            code_offer = CodeOffer("repeat_search", REPEAT_SEARCH_OFFER)
+            logger.info("[POSTGEN] repeat-search offer added (reason=%s)",
+                        web_search_reason)
 
     stripped_urls: list[dict] = []
     kept_urls: list[str] = []
@@ -228,4 +276,5 @@ def run_post_gen_pipeline(
         empty_fallback_fired=empty_fallback_fired,
         stripped_urls=stripped_urls,
         kept_urls=kept_urls,
+        code_offer=code_offer,
     )

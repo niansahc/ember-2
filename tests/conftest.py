@@ -380,9 +380,17 @@ def restore_process_state():
 
     prior_path, prior_label = get_vault_override()
     prior_block = vault_writes_blocked()
+    # tools/eval_helpers.require_test_vault() pins an eval process by
+    # rewriting this variable; a test that reaches it must not move the
+    # session's throwaway vault for the tests after it.
+    prior_env_vault = os.environ.get("PRIVATE_VAULT_PATH")
 
     yield
 
+    if prior_env_vault is None:
+        os.environ.pop("PRIVATE_VAULT_PATH", None)
+    else:
+        os.environ["PRIVATE_VAULT_PATH"] = prior_env_vault
     clear_store_cache()
     clear_index_cache()
     if prior_path is None:

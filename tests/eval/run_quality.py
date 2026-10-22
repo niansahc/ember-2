@@ -10,7 +10,9 @@ scalar metrics to its baseline (a >max-drop regression fails the gate). This run
 ONLY where Ollama + a live Ember API exist (dev box / self-hosted runner) - it is
 not part of GitHub CI (which stays `-m "not eval"`). Run it OUTSIDE Claude Code:
 it produces vault-grounded response text that must not enter a session log
-(CLAUDE.md); the report it writes carries no response text.
+(CLAUDE.md); the report it writes carries no response text. main() refuses to
+run unless VAULT_PATH_TEST names a vault other than PRIVATE_VAULT_PATH, and
+pins this process to it before the grounding corpus is seeded.
 
 The per-eval run_* functions take injected dependencies (driver, judge, generate)
 so the orchestration is unit-testable with fakes without Ollama/Anthropic. main()
@@ -23,6 +25,14 @@ import argparse
 import logging
 import statistics
 import sys
+
+# Process entrypoint: load .env before any src import (see load_env_file).
+# main() needs VAULT_PATH_TEST and PRIVATE_VAULT_PATH from it to refuse a
+# run that would seed the live vault.
+if __name__ == "__main__":
+    from src.core.config import load_env_file
+
+    load_env_file()
 
 from tests.eval.eval_grounding import grounding_verdict
 from tests.eval.eval_drift import drift_verdict, DRIFT_DIMENSIONS
@@ -290,6 +300,13 @@ def _gate(report: dict, baseline: dict, max_drop: float) -> dict:
 
 
 def main(argv=None) -> int:
+    # The grounding seeder writes in-process through write_memory, so this
+    # process's vault is where the corpus lands. Pin it to the test vault, or
+    # exit, before anything below can resolve a vault.
+    from tools.eval_helpers import require_test_vault
+
+    require_test_vault()
+
     parser = argparse.ArgumentParser(description="Response-quality eval release gate")
     parser.add_argument("--evals", default="register,grounding,drift",
                         help="comma list: register,grounding,drift,user_expectations")
@@ -354,8 +371,9 @@ def main(argv=None) -> int:
         if rep.get("vault_misaligned"):
             print(f"[eval] {name}: VAULT MISALIGNED - the seeded corpus is not "
                   "retrievable through the API, so it is not serving the seeded "
-                  "test vault. Point the API at PRIVATE_VAULT_PATH="
-                  "<test vault> (the same path this eval seeds into) and re-run. "
+                  "test vault. Swap the API to the test vault (POST "
+                  "/v1/developer/vault/swap {\"vault_label\": \"test\"}, the "
+                  "VAULT_PATH_TEST this eval seeds into) and re-run. "
                   "NOT writing a baseline.")
             overall_ok = False
             reports.append(rep)

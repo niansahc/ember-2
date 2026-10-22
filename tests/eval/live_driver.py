@@ -4,11 +4,12 @@ tests/eval/live_driver.py
 Drives turns through the REAL Ember pipeline (live API) for the grounding and
 drift evals, and fetches the retrieval packet a query actually produced.
 
-Isolation is by VAULT SWAP, not the test-session header: the caller runs
-tools/eval_helpers.py::swap_to_test_vault first so the seeded corpus is the
-active vault, then drives turns WITHOUT X-Test-Session (which would set
-skip_vault and disable retrieval - defeating a grounding eval). Mirrors the
-live+swap pattern in tests/eval/test_context_coherence.py.
+Isolation is by VAULT SWAP, not the test-session header: the API must be
+serving the test vault the corpus was seeded into (run_quality pins its own
+process to VAULT_PATH_TEST; the API is swapped separately), and turns are
+driven WITHOUT X-Test-Session (which would set skip_vault and disable
+retrieval - defeating a grounding eval). Mirrors the live+swap pattern in
+tests/eval/test_context_coherence.py.
 
 requests is imported lazily inside the network methods so the pure
 extract_retrieved_texts helper runs in the default Tier-1 suite.

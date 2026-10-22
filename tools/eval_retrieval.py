@@ -3,17 +3,23 @@ tools/eval_retrieval.py
 
 Retrieval evaluation harness for Ember-2.
 
-Runs 15 benchmark queries against the real vault covering all query
+Runs 15 benchmark queries against the test vault covering all query
 intent classes, plus 5 contextual integrity cases using synthetic
 fixtures to test type gating behavior.
 
+Test vault only: the packets are built in this process, so main() pins
+the process to VAULT_PATH_TEST through tools/eval_helpers.require_test_vault
+and refuses to run when it is unset, missing, or the same path as
+PRIVATE_VAULT_PATH.
+
 Usage:
     python tools/eval_retrieval.py              # summary only
-    python tools/eval_retrieval.py --verbose    # full content of top 3 results
+    python tools/eval_retrieval.py --verbose    # also previews the top 3 results
 
 Output:
-    - stdout: pass/warn/fail per query + summary
-    - logs/retrieval_eval/eval_{timestamp}.log: full log
+    - stdout: pass/warn/fail per query + summary (+ --verbose previews)
+    - logs/retrieval_eval/eval_{timestamp}.log: the summary, never the
+      --verbose previews (retrieved content stays off disk)
 
 Scoring per query (top result):
     - memory_type_present: the result has a non-empty memory_type field
@@ -49,8 +55,6 @@ if __name__ == "__main__":
     from src.core.config import load_env_file
 
     load_env_file()
-
-from src.context.service import ContextService  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +157,14 @@ def clean_context_packet(packet_dict: dict) -> dict:
 def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
     """
     Run all benchmark cases and return (results, summary_text).
+
+    --verbose previews of retrieved content go to stdout only, never into
+    summary_text, which main() writes to logs/.
     """
+    # Imported here, not at module top, so nothing resolves a vault before
+    # main() has pinned the process to the test vault.
+    from src.context.service import ContextService
+
     context_service = ContextService()
     results: list[dict] = []
     lines: list[str] = []
@@ -203,12 +214,13 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
             lines.append(f"   Failed criteria: {', '.join(failed)}")
 
         if verbose and all_items:
-            lines.append(f"   Top 3 results:")
+            # stdout only: retrieved content never reaches the log file.
+            print(f"[{case.name}] Top 3 results:")
             for i, item in enumerate(all_items[:3]):
                 content_preview = (item.get("content", "") or "")[:120].replace("\n", " ")
                 mem_type = item.get("memory_type") or item.get("item_type", "?")
                 score_val = item.get("score", 0)
-                lines.append(f"     {i+1}. [{mem_type}] score={score_val:.3f} — {content_preview}")
+                print(f"     {i+1}. [{mem_type}] score={score_val:.3f} - {content_preview}")
 
         lines.append("")
 
@@ -357,6 +369,7 @@ def run_integrity_eval() -> tuple[list[dict], str]:
     """
     from unittest.mock import patch, MagicMock
     from src.context.models import ContextItem
+    from src.context.service import ContextService
 
     def _dict_to_item(d: dict) -> ContextItem:
         return ContextItem(
@@ -455,8 +468,14 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8")
     verbose = "--verbose" in sys.argv
 
+    # Before the pin: the ablation runner applies the same refusal itself
+    # and would refuse a process already pinned to VAULT_PATH_TEST.
     if "--ablation" in sys.argv:
         sys.exit(run_ablation(verbose=verbose))
+
+    from tools.eval_helpers import require_test_vault
+
+    require_test_vault()
 
     print("Running retrieval evaluation...\n")
     results, summary = run_eval(verbose=verbose)

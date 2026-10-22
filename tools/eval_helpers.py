@@ -3,6 +3,10 @@ tools/eval_helpers.py
 
 Shared helpers for eval tools: test vault isolation and model pinning.
 
+- require_test_vault: refuse to run unless VAULT_PATH_TEST names a
+  directory that is not PRIVATE_VAULT_PATH, then pin this process to
+  it. Evals that resolve the vault in-process call it directly.
+
 - swap_to_test_vault / restore_vault: switch the running API process to
   the test vault for eval isolation. Calls POST /v1/developer/vault/swap
   on the live API so the swap reaches the API process. Setting only an
@@ -19,9 +23,9 @@ Shared helpers for eval tools: test vault isolation and model pinning.
   skipped" from "swap succeeded," so any None path is treated as a
   privacy regression and made fatal.
 
-- Nothing here calls get_private_vault_path(). The swap moves only the
-  API process, so in this process it still resolves PRIVATE_VAULT_PATH,
-  the live vault.
+- Nothing here calls get_private_vault_path(). The swap moves the API
+  process; require_test_vault() pins this one, so both resolve the test
+  vault.
 """
 
 from __future__ import annotations
@@ -61,22 +65,26 @@ def _swap_headers() -> dict:
     return headers
 
 
-def swap_to_test_vault() -> str:
-    """Switch the running API to the test vault for eval isolation.
+def require_test_vault() -> Path:
+    """Pin this process to the test vault, or exit.
 
-    Returns "test" on successful swap. On any failure path - missing
-    VAULT_PATH_TEST env var, missing test-vault directory, or a failed
-    swap call - prints a fatal message and exits the process. This
-    prevents the caller from proceeding against the live vault.
+    The refusal rule every eval process runs before it touches a vault,
+    the same rule as tools/retrieval_ablation/runner.py and the
+    post-commit hook: VAULT_PATH_TEST must be set, must name an existing
+    directory, and must not resolve to the same path as
+    PRIVATE_VAULT_PATH. Any failure prints a FATAL line and exits 1.
 
-    Missing env / missing dir are configuration errors, not "graceful
-    skip" conditions. The PR #37 design intent is that no eval ever
-    runs against the live vault by accident; any None return from this
-    helper would re-open that hole.
+    On success PRIVATE_VAULT_PATH is set to the test vault in os.environ,
+    so get_private_vault_path() in this process, and any child process,
+    resolves only the test vault. An environment value rather than the
+    runtime override: nothing in an eval process can clear it.
+
+    Call it once per process. A second call sees PRIVATE_VAULT_PATH equal
+    to VAULT_PATH_TEST and refuses, which fails closed.
     """
     # The rule the API swaps by; unset, empty and whitespace fail closed.
-    resolved = resolve_vault_path(os.getenv("VAULT_PATH_TEST"))
-    if resolved is None:
+    test_vault = resolve_vault_path(os.getenv("VAULT_PATH_TEST"))
+    if test_vault is None:
         print(
             "FATAL: VAULT_PATH_TEST is not set. Eval tools require an "
             "explicit test vault to fail closed against the live vault. "
@@ -85,13 +93,40 @@ def swap_to_test_vault() -> str:
         )
         sys.exit(1)
 
-    if not resolved.is_dir():
+    if not test_vault.is_dir():
         print(
-            f"FATAL: VAULT_PATH_TEST ({resolved}) does not exist or is "
+            f"FATAL: VAULT_PATH_TEST ({test_vault}) does not exist or is "
             "not a directory. Refusing to proceed against the live vault. "
             "Create the test vault directory or correct VAULT_PATH_TEST."
         )
         sys.exit(1)
+
+    if test_vault == resolve_vault_path(os.getenv("PRIVATE_VAULT_PATH")):
+        print(
+            "FATAL: VAULT_PATH_TEST resolves to the same path as "
+            "PRIVATE_VAULT_PATH. Refusing to proceed against the live "
+            "vault. Point VAULT_PATH_TEST at a separate test vault."
+        )
+        sys.exit(1)
+
+    os.environ["PRIVATE_VAULT_PATH"] = str(test_vault)
+    return test_vault
+
+
+def swap_to_test_vault() -> str:
+    """Switch the running API, and pin this process, to the test vault.
+
+    Returns "test" on successful swap. On any failure path - the
+    require_test_vault() refusals, or a failed swap call - prints a
+    fatal message and exits the process. This prevents the caller from
+    proceeding against the live vault.
+
+    Missing env / missing dir are configuration errors, not "graceful
+    skip" conditions. The PR #37 design intent is that no eval ever
+    runs against the live vault by accident; any None return from this
+    helper would re-open that hole.
+    """
+    require_test_vault()
 
     url = f"{_api_base()}{_VAULT_SWAP_PATH}"
     try:

@@ -78,6 +78,30 @@ def test_post_commit_runs_eval_in_project_from_another_cwd(tmp_path, elsewhere):
     assert f"EVAL STUB cwd={project}" in result.stdout, result.stdout
 
 
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git for a synthetic repo")
+def test_post_commit_leaves_the_vault_pin_to_eval_retrieval(tmp_path, elsewhere):
+    """The hook passes PRIVATE_VAULT_PATH through unchanged. eval_retrieval.py
+    pins itself to VAULT_PATH_TEST and refuses when the two are the same
+    path, so a hook that forced PRIVATE_VAULT_PATH=VAULT_PATH_TEST would
+    make every run refuse."""
+    project = _synthetic_commit_project(
+        tmp_path,
+        "import os\nprint('EVAL STUB vault=' + os.environ.get('PRIVATE_VAULT_PATH', ''))\n",
+    )
+    test_vault = tmp_path / "test_vault"
+    test_vault.mkdir()
+    live = tmp_path / "live_vault_placeholder"
+    env = {
+        "CLAUDE_PROJECT_DIR": str(project),
+        "VAULT_PATH_TEST": str(test_vault),
+        "PRIVATE_VAULT_PATH": str(live),
+    }
+    payload = {"tool_name": "Bash", "tool_input": {"command": 'git commit -m "x"'}}
+    result = run_hook(POST_COMMIT, payload, cwd=elsewhere, env=env)
+    assert result.returncode == 0
+    assert f"EVAL STUB vault={live}" in result.stdout, result.stdout
+
+
 @pytest.mark.parametrize("hook", [POST_EDIT, POST_COMMIT])
 def test_repo_root_falls_back_to_hook_location(hook, monkeypatch):
     """Without CLAUDE_PROJECT_DIR (a manual run), the anchor is the

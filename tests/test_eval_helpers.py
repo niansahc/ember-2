@@ -1,7 +1,8 @@
 """
 tests/test_eval_helpers.py
 
-Tests for eval helper functions: test vault isolation and cleanup.
+Tests for eval helper functions: test vault isolation, and no post-run
+cleanup in the eval process.
 
 The vault swap helpers must call POST /v1/developer/vault/swap on the
 running API process. Setting only an in-process global (the prior
@@ -20,10 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.core.config import (
-    set_vault_path_override,
-    clear_vault_path_override,
-)
+import scripts.cleanup_test_artifacts as cleanup_script
 
 
 def _make_response(status_code: int = 200, payload: dict | None = None) -> MagicMock:
@@ -192,82 +190,121 @@ class TestRestoreVault:
             restore_vault("test")
 
 
-class TestRunCleanup:
+class TestNoPostRunCleanup:
+    """An eval run never resolves the vault in its own process.
 
-    def test_cleanup_succeeds_on_empty_vault(self, tmp_path):
-        """Cleanup on a vault with no matching records should succeed silently."""
-        vault = tmp_path / "vault"
-        (vault / "memory" / "conversation").mkdir(parents=True)
-        set_vault_path_override(str(vault), "test")
-        try:
-            from tools.eval_helpers import run_cleanup
-            run_cleanup()  # should not raise
-        finally:
-            clear_vault_path_override()
+    These tests run eval_web_search end to end against a faked API, in the
+    condition of a real eval process: no vault override, and
+    PRIVATE_VAULT_PATH naming a stand-in live vault that holds a record
+    cleanup matched (April 2026, source "eval"). Every resolution through
+    get_private_vault_path() is recorded, copies bound at import included.
+    """
 
-    def test_cleanup_archives_matching_records(self, tmp_path):
-        """Cleanup should archive test artifacts."""
-        vault = tmp_path / "vault"
-        conv_dir = vault / "memory" / "conversation"
-        conv_dir.mkdir(parents=True)
-        (vault / "memory" / "archive").mkdir(parents=True)
+    def _run_eval(self, monkeypatch, tmp_path, cleanup_before_restore=False):
+        import httpx
+        import src.core.config as config
+        import tools.eval_helpers as eval_helpers
+        import tools.eval_web_search as eval_web_search
 
-        # Write a test artifact
-        record = {
+        live = tmp_path / "live_vault"
+        record_path = live / "memory" / "conversation" / "2026-04-12T10-00-00.json"
+        record_path.parent.mkdir(parents=True)
+        record_path.write_text(json.dumps({
             "id": "2026-04-12T10-00-00",
             "timestamp": "2026-04-12T10-00-00",
             "type": "conversation",
-            "text": "What do you know about me?",
+            "text": "A synthetic record.",
             "source": "eval",
             "tags": ["test"],
-        }
-        (conv_dir / "2026-04-12T10-00-00.json").write_text(
-            json.dumps(record), encoding="utf-8"
+        }), encoding="utf-8")
+        test_vault = tmp_path / "test_vault"
+        test_vault.mkdir()
+        monkeypatch.setenv("VAULT_PATH_TEST", str(test_vault))
+
+        # The swap moves only the API, so the eval process has no override.
+        # restore_process_state (tests/conftest.py) puts the session one back.
+        monkeypatch.setenv("PRIVATE_VAULT_PATH", str(live))
+        config.clear_vault_path_override()
+
+        # get_private_vault_path() resolves every branch through this module
+        # global, so a copy of it bound at import is recorded too.
+        resolved = []
+        real_resolve = config.resolve_vault_path
+
+        def _record(value):
+            path = real_resolve(value)
+            resolved.append(path)
+            return path
+
+        monkeypatch.setattr(config, "resolve_vault_path", _record)
+
+        monkeypatch.setattr(httpx, "post", lambda url, **kwargs: _make_response())
+        monkeypatch.setattr(httpx, "get", lambda url, **kwargs: _make_response())
+        monkeypatch.setattr(config, "get_ember_api_key", lambda: "test-api-key")
+        monkeypatch.setattr(eval_web_search, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(eval_web_search, "TEST_QUESTIONS", eval_web_search.TEST_QUESTIONS[:1])
+        monkeypatch.setattr(sys, "argv", ["eval_web_search.py"])
+
+        if cleanup_before_restore:
+            # The step the eval tools ran before restoring the vault, here
+            # through the script's own copy of the resolver, bound at import.
+            restore = eval_helpers.restore_vault
+
+            def _cleanup_then_restore(previous):
+                vault = cleanup_script.get_private_vault_path()
+                cleanup_script.archive_records(vault, cleanup_script.scan_vault(vault))
+                restore(previous)
+
+            monkeypatch.setattr(eval_helpers, "restore_vault", _cleanup_then_restore)
+
+        eval_web_search.main()
+        return resolved, record_path, live
+
+    def test_web_search_eval_never_resolves_the_vault(self, monkeypatch, tmp_path):
+        resolved, record_path, live = self._run_eval(monkeypatch, tmp_path)
+
+        assert resolved == []
+        assert record_path.exists()
+        assert not (live / "memory" / "archive").exists()
+
+    def test_control_a_post_run_cleanup_resolves_and_archives_the_live_vault(
+        self, monkeypatch, tmp_path
+    ):
+        """Positive control: the same run with the old cleanup step put back
+        resolves the stand-in live vault and moves its record to the
+        archive, so the assertions above can fail."""
+        resolved, record_path, live = self._run_eval(
+            monkeypatch, tmp_path, cleanup_before_restore=True
         )
 
-        set_vault_path_override(str(vault), "test")
-        try:
-            from tools.eval_helpers import run_cleanup
-            run_cleanup()
-            # Original should be moved
-            assert not (conv_dir / "2026-04-12T10-00-00.json").exists()
-            # Archive should have it
-            archive_dir = vault / "memory" / "archive"
-            assert len(list(archive_dir.glob("*.json"))) == 1
-        finally:
-            clear_vault_path_override()
+        assert resolved == [live.resolve()]
+        assert not record_path.exists()
+        assert (live / "memory" / "archive" / "conversation__2026-04-12T10-00-00.json").exists()
 
+    def test_eval_helpers_have_no_cleanup(self):
+        import tools.eval_helpers as eval_helpers
 
-class TestEvalManualCleanupPrompt:
-    """Verify that manual mode has the cleanup prompt string in the source."""
-
-    def test_cleanup_prompt_in_manual_mode(self):
-        source = (REPO_ROOT / "tools" / "eval_manual.py").read_text(encoding="utf-8")
-        assert "Clean up eval artifacts from vault?" in source
-        assert "run_cleanup" in source
-
-    def test_auto_mode_calls_cleanup_silently(self):
-        source = (REPO_ROOT / "tools" / "eval_manual.py").read_text(encoding="utf-8")
-        # Auto mode should call run_cleanup() without prompting
-        assert "run_cleanup()" in source
-
-    def test_web_search_eval_calls_cleanup(self):
-        source = (REPO_ROOT / "tools" / "eval_web_search.py").read_text(encoding="utf-8")
-        assert "run_cleanup()" in source
+        assert not hasattr(eval_helpers, "run_cleanup")
+        # Control: this is the module the eval tools import their helpers from.
+        assert hasattr(eval_helpers, "restore_vault")
 
 
 class TestVaultIsolation:
-    """Verify that both eval tools call swap_to_test_vault."""
+    """Each eval tool swaps the API to the test vault, restores it after,
+    and runs no cleanup in its own process. In each test the restore_vault
+    check is the control for the run_cleanup check."""
 
     def test_eval_manual_swaps_vault(self):
         source = (REPO_ROOT / "tools" / "eval_manual.py").read_text(encoding="utf-8")
         assert "swap_to_test_vault" in source
         assert "restore_vault" in source
+        assert "run_cleanup" not in source
 
     def test_eval_web_search_swaps_vault(self):
         source = (REPO_ROOT / "tools" / "eval_web_search.py").read_text(encoding="utf-8")
         assert "swap_to_test_vault" in source
         assert "restore_vault" in source
+        assert "run_cleanup" not in source
 
     def test_eval_local_models_swaps_vault(self):
         """eval_local_models was simplified to use the shared helpers
@@ -276,6 +313,7 @@ class TestVaultIsolation:
         source = (REPO_ROOT / "tools" / "eval_local_models.py").read_text(encoding="utf-8")
         assert "swap_to_test_vault" in source
         assert "restore_vault" in source
+        assert "run_cleanup" not in source
 
     def test_eval_conversations_swaps_vault(self):
         """Issue #146: eval_conversations.py ships response text to a
@@ -283,6 +321,7 @@ class TestVaultIsolation:
         source = (REPO_ROOT / "tools" / "eval_conversations.py").read_text(encoding="utf-8")
         assert "swap_to_test_vault" in source
         assert "restore_vault" in source
+        assert "run_cleanup" not in source
 
     def test_eval_probe_swaps_vault_standalone(self):
         """eval_probe.py's standalone main() has no caller to inherit
@@ -290,6 +329,7 @@ class TestVaultIsolation:
         source = (REPO_ROOT / "tools" / "eval_probe.py").read_text(encoding="utf-8")
         assert "swap_to_test_vault" in source
         assert "restore_vault" in source
+        assert "run_cleanup" not in source
 
 
 class TestModelPinning:

@@ -483,7 +483,7 @@ def main():
     )
     args = parser.parse_args()
 
-    from tools.eval_helpers import swap_to_test_vault, restore_vault, run_cleanup
+    from tools.eval_helpers import swap_to_test_vault, restore_vault
 
     api_key = _get_api_key()
     if not api_key:
@@ -515,7 +515,6 @@ def main():
             print(f"\nCompare Battery — {target_model} vs {COMPARE_CLOUD_MODEL}")
             print("=" * 60)
             _run_compare(api_key, target_model)
-            run_cleanup()
             print("\nDone.")
             return
 
@@ -530,7 +529,6 @@ def main():
                 probe=args.probe,
                 log_sentences=not args.no_log_sentences,
             )
-            run_cleanup()
             print("\nDone.")
             if flagged_count:
                 # Exit 2 distinguishes success-with-fabrication-flags
@@ -613,11 +611,6 @@ def main():
         if save == "y":
             _save_to_eval_history(target_model, results, counts)
             print("  Saved.")
-
-        # Cleanup prompt (manual mode only)
-        cleanup = input("  Clean up eval artifacts from vault? (y/n): ").strip().lower()
-        if cleanup == "y":
-            run_cleanup()
 
         print("\nDone.")
     finally:

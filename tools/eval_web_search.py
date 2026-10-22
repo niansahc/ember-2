@@ -210,7 +210,7 @@ def main():
                         help="Enable autonomous web search for the eval session")
     args = parser.parse_args()
 
-    from tools.eval_helpers import swap_to_test_vault, restore_vault, run_cleanup
+    from tools.eval_helpers import swap_to_test_vault, restore_vault
 
     api_key = _get_api_key()
     if not api_key:
@@ -343,8 +343,7 @@ def main():
     print(f"\nMetadata saved to: {log_path}")
     print("(Response previews shown above — full text not written to disk)")
 
-    # Post-run cleanup and vault restore
-    run_cleanup()
+    # Put the API back on its normal vault
     restore_vault(previous_vault)
 
 

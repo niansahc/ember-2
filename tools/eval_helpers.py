@@ -1,7 +1,7 @@
 """
 tools/eval_helpers.py
 
-Shared helpers for eval tools: test vault isolation and post-run cleanup.
+Shared helpers for eval tools: test vault isolation and model pinning.
 
 - swap_to_test_vault / restore_vault: switch the running API process to
   the test vault for eval isolation. Calls POST /v1/developer/vault/swap
@@ -19,8 +19,9 @@ Shared helpers for eval tools: test vault isolation and post-run cleanup.
   skipped" from "swap succeeded," so any None path is treated as a
   privacy regression and made fatal.
 
-- run_cleanup: invoke the same logic as cleanup_test_artifacts.py
-  --confirm to archive eval artifacts from the active vault silently.
+- Nothing here calls get_private_vault_path(). The swap moves only the
+  API process, so in this process it still resolves PRIVATE_VAULT_PATH,
+  the live vault.
 """
 
 from __future__ import annotations
@@ -143,30 +144,6 @@ def restore_vault(previous_path: str | None) -> None:
             "Manual restore: POST /v1/developer/vault/swap "
             "{'vault_label': 'default'} or restart the API."
         )
-
-
-def run_cleanup() -> None:
-    """Run artifact cleanup against the currently active vault.
-
-    Calls the same scan_vault + archive_records logic as
-    scripts/cleanup_test_artifacts.py --confirm. Silent: only prints
-    if records were archived.
-    """
-    try:
-        scripts_dir = REPO_ROOT / "scripts"
-        if str(scripts_dir) not in sys.path:
-            sys.path.insert(0, str(scripts_dir))
-
-        from cleanup_test_artifacts import scan_vault, archive_records
-        from src.core.config import get_private_vault_path
-
-        vault = get_private_vault_path()
-        matches = scan_vault(vault)
-        if matches:
-            moved = archive_records(vault, matches)
-            print(f"Cleaned up {moved} eval artifact(s) from vault.")
-    except Exception as exc:
-        print(f"WARNING: Cleanup failed (non-fatal): {exc}")
 
 
 # ---------------------------------------------------------------------------

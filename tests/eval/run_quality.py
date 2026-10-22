@@ -327,8 +327,6 @@ def main(argv=None) -> int:
     # Lazy live wiring - only imported when actually running the gate.
     import os
     from tests.eval.seeder import seed_corpus
-    from tests.eval.judge import ClaudeJudge
-    from tests.eval.harness import MultiRunResult
     from tests.eval.live_driver import EmberLiveDriver
     from tests.eval.quality_judges import (
         score_claims, score_turn, sonnet_judge_model, haiku_judge_model,
@@ -356,6 +354,10 @@ def main(argv=None) -> int:
         elif name == "drift":
             rep = run_drift_eval(driver, score_turn)
         elif name == "register":
+            # judge.py and harness.py import anthropic at module level; only
+            # the register eval needs them (CI has no anthropic).
+            from tests.eval.judge import ClaudeJudge
+            from tests.eval.harness import MultiRunResult
             rep = run_register_eval(ClaudeJudge(model=sonnet_judge_model()),
                                     _ollama_generate, MultiRunResult, runs=args.runs)
         elif name == "user_expectations":

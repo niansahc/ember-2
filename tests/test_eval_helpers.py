@@ -23,6 +23,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import scripts.cleanup_test_artifacts as cleanup_script
+from tests.conftest import pinned_vault, set_eval_vaults
 
 
 def _make_response(status_code: int = 200, payload: dict | None = None) -> MagicMock:
@@ -42,54 +43,36 @@ class TestRequireTestVault:
     VAULT_PATH_TEST must name an existing directory that is not
     PRIVATE_VAULT_PATH. On success the process is pinned to it."""
 
-    def _live(self, tmp_path, monkeypatch) -> Path:
-        live = tmp_path / "live_vault"
-        live.mkdir()
-        monkeypatch.setenv("PRIVATE_VAULT_PATH", str(live))
-        return live
-
-    def _assert_refused(self, live):
+    @pytest.mark.parametrize("test_vault", [
+        None,
+        "nonexistent",
+        "live_vault",
+        "other/../live_vault",
+    ], ids=["unset", "dir-missing", "same-path", "same-path-respelled"])
+    def test_refuses(self, tmp_path, monkeypatch, test_vault):
         from tools.eval_helpers import require_test_vault
+
+        (tmp_path / "other").mkdir()
+        live = set_eval_vaults(
+            tmp_path, monkeypatch, None if test_vault is None else tmp_path / test_vault,
+        )
         with pytest.raises(SystemExit) as exc_info:
             require_test_vault()
         assert exc_info.value.code == 1
         assert os.environ["PRIVATE_VAULT_PATH"] == str(live)
 
-    def test_refuses_when_unset(self, tmp_path, monkeypatch):
-        live = self._live(tmp_path, monkeypatch)
-        monkeypatch.delenv("VAULT_PATH_TEST", raising=False)
-        self._assert_refused(live)
-
-    def test_refuses_when_dir_missing(self, tmp_path, monkeypatch):
-        live = self._live(tmp_path, monkeypatch)
-        monkeypatch.setenv("VAULT_PATH_TEST", str(tmp_path / "nonexistent"))
-        self._assert_refused(live)
-
-    def test_refuses_when_same_as_private_vault(self, tmp_path, monkeypatch):
-        live = self._live(tmp_path, monkeypatch)
-        monkeypatch.setenv("VAULT_PATH_TEST", str(live))
-        self._assert_refused(live)
-
-    def test_refuses_same_vault_spelled_differently(self, tmp_path, monkeypatch):
-        live = self._live(tmp_path, monkeypatch)
-        (tmp_path / "other").mkdir()
-        monkeypatch.setenv("VAULT_PATH_TEST", str(tmp_path / "other" / ".." / "live_vault"))
-        self._assert_refused(live)
-
     def test_control_distinct_test_vault_pins_the_process(self, tmp_path, monkeypatch):
         """Positive control for the refusals: with a distinct test vault the
         call returns it and PRIVATE_VAULT_PATH changes to name it, so the
-        unchanged-env assertions above can fail."""
-        from src.core.config import resolve_vault_path
+        unchanged-env assertion above can fail."""
         from tools.eval_helpers import require_test_vault
 
-        self._live(tmp_path, monkeypatch)
         test_vault = tmp_path / "test_vault"
         test_vault.mkdir()
-        monkeypatch.setenv("VAULT_PATH_TEST", str(test_vault))
+        set_eval_vaults(tmp_path, monkeypatch, test_vault)
 
         assert require_test_vault() == test_vault.resolve()
-        assert resolve_vault_path(os.environ["PRIVATE_VAULT_PATH"]) == test_vault.resolve()
+        assert pinned_vault() == test_vault.resolve()
 
 
 class TestSwapToTestVault:
@@ -122,10 +105,7 @@ class TestSwapToTestVault:
         """VAULT_PATH_TEST equal to PRIVATE_VAULT_PATH: the swap would
         point the API at the live vault under the "test" label. Exit
         before the POST. Control: test_swap_calls_api_with_test_label."""
-        live = tmp_path / "live_vault"
-        live.mkdir()
-        monkeypatch.setenv("PRIVATE_VAULT_PATH", str(live))
-        monkeypatch.setenv("VAULT_PATH_TEST", str(live))
+        set_eval_vaults(tmp_path, monkeypatch, tmp_path / "live_vault")
         with patch("tools.eval_helpers.httpx.post") as mock_post:
             from tools.eval_helpers import swap_to_test_vault
             with pytest.raises(SystemExit) as exc_info:
@@ -136,21 +116,16 @@ class TestSwapToTestVault:
     def test_swap_pins_this_process_to_the_test_vault(self, tmp_path, monkeypatch):
         """The swap moves the API; the eval process must move with it, so
         an in-process resolution cannot land in the live vault."""
-        from src.core.config import resolve_vault_path
-
-        live = tmp_path / "live_vault"
-        live.mkdir()
         test_vault = tmp_path / "test_vault"
         test_vault.mkdir()
-        monkeypatch.setenv("PRIVATE_VAULT_PATH", str(live))
-        monkeypatch.setenv("VAULT_PATH_TEST", str(test_vault))
+        set_eval_vaults(tmp_path, monkeypatch, test_vault)
 
         with patch("tools.eval_helpers.httpx.post", return_value=_make_response()), \
              patch("src.core.config.get_ember_api_key", return_value=""):
             from tools.eval_helpers import swap_to_test_vault
             swap_to_test_vault()
 
-        assert resolve_vault_path(os.environ["PRIVATE_VAULT_PATH"]) == test_vault.resolve()
+        assert pinned_vault() == test_vault.resolve()
 
     def test_swap_calls_api_with_test_label(self, tmp_path, monkeypatch):
         """Privacy contract: swap_to_test_vault must POST to the API

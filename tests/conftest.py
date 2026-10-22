@@ -855,6 +855,28 @@ def make_vault_dirs(*roots: Path) -> None:
         (root / "vaults" / "live").mkdir(parents=True)
 
 
+def set_eval_vaults(tmp_path: Path, monkeypatch, test_vault: Path | None) -> Path:
+    """Env for an eval process under test: PRIVATE_VAULT_PATH at a tmp
+    stand-in live vault (returned), VAULT_PATH_TEST at `test_vault` or
+    unset when None. Pass the live vault itself to test the same-path
+    refusal (tools/eval_helpers.require_test_vault)."""
+    live = tmp_path / "live_vault"
+    live.mkdir(exist_ok=True)
+    monkeypatch.setenv("PRIVATE_VAULT_PATH", str(live))
+    if test_vault is None:
+        monkeypatch.delenv("VAULT_PATH_TEST", raising=False)
+    else:
+        monkeypatch.setenv("VAULT_PATH_TEST", str(test_vault))
+    return live
+
+
+def pinned_vault() -> Path:
+    """The vault this process now resolves through PRIVATE_VAULT_PATH."""
+    from src.core.config import resolve_vault_path
+
+    return resolve_vault_path(os.environ["PRIVATE_VAULT_PATH"])
+
+
 @pytest.fixture
 def hermetic_hook_project(tmp_path: Path, monkeypatch) -> Path:
     """An empty tmp project as CLAUDE_PROJECT_DIR and no inherited

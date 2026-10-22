@@ -9,6 +9,8 @@ and the load-bearing privacy guarantee: response text never reaches the report.
 import json
 import os
 
+import pytest
+
 from tests.eval.run_quality import (
     run_grounding_eval,
     run_drift_eval,
@@ -16,6 +18,7 @@ from tests.eval.run_quality import (
     run_user_expectations_eval,
     _judge_outage,
 )
+from tests.conftest import pinned_vault, set_eval_vaults
 
 SECRET = "SECRET_DIARY_TOKEN_do_not_leak"
 
@@ -333,18 +336,11 @@ def test_judge_outage_counts_turn_errors_toward_the_rate():
 # this process resolves is where the corpus lands. Synthetic tmp vaults only.
 # ---------------------------------------------------------------------------
 
-def _run_main(tmp_path, monkeypatch, test_vault_value):
+def _run_main(tmp_path, monkeypatch, test_vault):
     import tests.eval.seeder as seeder
     from tests.eval.run_quality import main
 
-    live = tmp_path / "live_vault"
-    live.mkdir(exist_ok=True)
-    monkeypatch.setenv("PRIVATE_VAULT_PATH", str(live))
-    if test_vault_value is None:
-        monkeypatch.delenv("VAULT_PATH_TEST", raising=False)
-    else:
-        monkeypatch.setenv("VAULT_PATH_TEST", str(test_vault_value))
-
+    live = set_eval_vaults(tmp_path, monkeypatch, test_vault)
     seeded = []
     monkeypatch.setattr(seeder, "seed_corpus", lambda: seeded.append(1) or [])
     report = tmp_path / "report.json"
@@ -357,31 +353,25 @@ def _run_main(tmp_path, monkeypatch, test_vault_value):
     return code, seeded, report, live
 
 
-def test_main_refuses_without_a_test_vault_before_seeding(tmp_path, monkeypatch):
-    code, seeded, report, live = _run_main(tmp_path, monkeypatch, None)
+@pytest.mark.parametrize("test_vault", [None, "live_vault"], ids=["unset", "same-path"])
+def test_main_refuses_before_seeding(tmp_path, monkeypatch, test_vault):
+    code, seeded, report, live = _run_main(
+        tmp_path, monkeypatch, None if test_vault is None else tmp_path / test_vault,
+    )
     assert code == 1
     assert seeded == []
     assert not report.exists()
     assert os.environ["PRIVATE_VAULT_PATH"] == str(live)
 
 
-def test_main_refuses_when_test_vault_is_the_private_vault(tmp_path, monkeypatch):
-    code, seeded, report, live = _run_main(tmp_path, monkeypatch, tmp_path / "live_vault")
-    assert code == 1
-    assert seeded == []
-    assert not report.exists()
-
-
 def test_control_main_seeds_into_the_pinned_test_vault(tmp_path, monkeypatch):
     """Positive control for the refusals: with a distinct test vault main()
     seeds, writes its report, and has pinned PRIVATE_VAULT_PATH to the test
     vault, so the seeded/report/env assertions above can fail."""
-    from src.core.config import resolve_vault_path
-
     test_vault = tmp_path / "test_vault"
     test_vault.mkdir()
     code, seeded, report, _ = _run_main(tmp_path, monkeypatch, test_vault)
     assert code == 0
     assert seeded == [1]
     assert report.exists()
-    assert resolve_vault_path(os.environ["PRIVATE_VAULT_PATH"]) == test_vault.resolve()
+    assert pinned_vault() == test_vault.resolve()

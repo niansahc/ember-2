@@ -56,6 +56,8 @@ if __name__ == "__main__":
 
     load_env_file()
 
+from src.context.service import ContextService  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Benchmark cases — 15 queries across 6 intent classes
@@ -161,10 +163,6 @@ def run_eval(verbose: bool = False) -> tuple[list[dict], str]:
     --verbose previews of retrieved content go to stdout only, never into
     summary_text, which main() writes to logs/.
     """
-    # Imported here, not at module top, so nothing resolves a vault before
-    # main() has pinned the process to the test vault.
-    from src.context.service import ContextService
-
     context_service = ContextService()
     results: list[dict] = []
     lines: list[str] = []
@@ -369,7 +367,6 @@ def run_integrity_eval() -> tuple[list[dict], str]:
     """
     from unittest.mock import patch, MagicMock
     from src.context.models import ContextItem
-    from src.context.service import ContextService
 
     def _dict_to_item(d: dict) -> ContextItem:
         return ContextItem(

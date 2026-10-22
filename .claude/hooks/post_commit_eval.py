@@ -15,9 +15,9 @@ which pins the process to VAULT_PATH_TEST and refuses to run when it is
 unset, missing, or the same path as PRIVATE_VAULT_PATH. CLAUDE.md
 requires all evals to run against the test vault only.
 
-This hook passes its environment through unchanged. An earlier version
-forced PRIVATE_VAULT_PATH=VAULT_PATH_TEST for the child; under the
-script's refusal rule that would make every run refuse.
+The child inherits this hook's environment unchanged. Do not set
+PRIVATE_VAULT_PATH to the test vault for it: the script refuses when the
+two name one path.
 
 Fails closed before spawning anything: if the test vault cannot be
 resolved, is not a directory, or resolves to the same path as the live
@@ -35,7 +35,6 @@ Exit code is always 0 - a failing eval is reported but does not block.
 """
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -129,11 +128,6 @@ def main():
     print("[HOOK] Commit touched context/retrieval/llm - running retrieval eval...")
     print(f"[HOOK] Vault: {test_vault}")
 
-    # PRIVATE_VAULT_PATH passes through unchanged: eval_retrieval.py pins
-    # itself to VAULT_PATH_TEST and refuses when the two name one path, so
-    # forcing it here would make every run refuse.
-    child_env = dict(os.environ)
-
     try:
         eval_result = subprocess.run(
             [sys.executable, str(REPO_ROOT / "tools" / "eval_retrieval.py")],
@@ -141,7 +135,6 @@ def main():
             capture_output=True,
             text=True,
             timeout=120,
-            env=child_env,
         )
         lines = eval_result.stdout.strip().splitlines()
         for line in lines[-5:]:

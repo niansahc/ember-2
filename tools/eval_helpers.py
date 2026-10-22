@@ -19,12 +19,9 @@ Shared helpers for eval tools: test vault isolation and model pinning.
   skipped" from "swap succeeded," so any None path is treated as a
   privacy regression and made fatal.
 
-- No post-run cleanup. The swap moves only the API process, so in the
-  eval process the vault resolves to PRIVATE_VAULT_PATH, the live vault:
-  the cleanup the eval tools used to run scanned live records and archived
-  the ones it matched. Evals write only to the test vault, so there is
-  nothing to clean. scripts/cleanup_test_artifacts.py stays a manual,
-  dry-run-by-default tool.
+- Nothing here calls get_private_vault_path(). The swap moves only the
+  API process, so in this process it still resolves PRIVATE_VAULT_PATH,
+  the live vault.
 """
 
 from __future__ import annotations

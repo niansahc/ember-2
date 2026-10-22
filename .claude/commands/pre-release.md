@@ -18,7 +18,7 @@ A release is not complete at commit. A release is not complete at tag. A release
 - [ ] Streaming SSE regression test passing: pytest tests/test_streaming_regression.py -v
 - [ ] Retrieval eval passing: `python tools/eval_retrieval.py`, no regression. It pins itself to VAULT_PATH_TEST and refuses to run if that is unset or the same path as PRIVATE_VAULT_PATH. Do not set PRIVATE_VAULT_PATH to the test vault by hand; the eval refuses that too
 - [ ] Web search eval run: python tools/eval_web_search.py --auto-search — document trigger rate (self-isolates via swap_to_test_vault)
-- [ ] Conversation eval run: python tools/eval_conversations.py — document results (Tier 4, minor/major only). Before running, confirm the API is on the test vault via GET /v1/developer/vault/status. This tool performs no swap of its own and sends vault-grounded response text to a cloud judge, so a live-vault run exfiltrates personal content (issue #146)
+- [ ] Conversation eval run: python tools/eval_conversations.py — document results (Tier 4, minor/major only). It calls swap_to_test_vault before any request: this pins its own process to VAULT_PATH_TEST, swaps the API to the test vault, and refuses to run if VAULT_PATH_TEST is unset, missing, or the same path as PRIVATE_VAULT_PATH. It sends response text to a cloud judge, so a live-vault run would exfiltrate personal content (issue #146)
 - [ ] CHANGELOG.md updated (release-please handles this via conventional commits)
 - [ ] version.json bumped (release-please handles this via conventional commits)
 - [ ] All changes committed and pushed to main: git push origin main

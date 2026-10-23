@@ -61,6 +61,18 @@ class TestRequireTestVault:
         assert exc_info.value.code == 1
         assert os.environ["PRIVATE_VAULT_PATH"] == str(live)
 
+    def test_same_path_message_names_the_by_hand_override(self, tmp_path, monkeypatch, capsys):
+        """The usual cause is PRIVATE_VAULT_PATH set to the test vault for
+        the run (an old pre-release habit); the message names that fix."""
+        from tools.eval_helpers import require_test_vault
+
+        set_eval_vaults(tmp_path, monkeypatch, tmp_path / "live_vault")
+        with pytest.raises(SystemExit):
+            require_test_vault()
+        out = capsys.readouterr().out
+        assert "unset that override" in out
+        assert "point VAULT_PATH_TEST at a separate test vault" in out
+
     def test_control_distinct_test_vault_pins_the_process(self, tmp_path, monkeypatch):
         """Positive control for the refusals: with a distinct test vault the
         call returns it and PRIVATE_VAULT_PATH changes to name it, so the
@@ -288,7 +300,8 @@ class TestNoPostRunCleanup:
         test_vault.mkdir()
         monkeypatch.setenv("VAULT_PATH_TEST", str(test_vault))
 
-        # The swap moves only the API, so the eval process has no override.
+        # No runtime override, and PRIVATE_VAULT_PATH names the stand-in live
+        # vault until swap_to_test_vault pins this process to the test vault.
         # restore_process_state (tests/conftest.py) puts the session one back.
         monkeypatch.setenv("PRIVATE_VAULT_PATH", str(live))
         config.clear_vault_path_override()

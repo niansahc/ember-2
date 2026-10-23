@@ -8,6 +8,8 @@ and the load-bearing privacy guarantee: response text never reaches the report.
 
 import json
 import os
+import sys
+import types
 
 import pytest
 
@@ -331,21 +333,67 @@ def test_judge_outage_counts_turn_errors_toward_the_rate():
 
 
 # ---------------------------------------------------------------------------
-# main(): the process is pinned to the test vault before anything is seeded.
+# main(): the process is pinned to the test vault before anything is seeded,
+# and no eval that talks to the API runs unless the API serves that vault.
 # The grounding seeder writes in-process through write_memory, so the vault
-# this process resolves is where the corpus lands. Synthetic tmp vaults only.
+# this process resolves is where the corpus lands. Synthetic tmp vaults and a
+# fake API driver only; nothing here reaches a live API.
 # ---------------------------------------------------------------------------
 
-def _run_main(tmp_path, monkeypatch, test_vault):
+PROBE_RECORD = {
+    "text": "Synthetic probe record: the alpha widget review meets on Mondays.",
+    "fact": "The alpha widget review meets on Mondays.",
+    "query": "When does the alpha widget review meet?",
+}
+
+
+class _FakeApi:
+    """Stands in for EmberLiveDriver. `serves` is what /debug-context returns:
+    the seeded text (API on the test vault), [] (another vault), or an
+    exception class (the probe itself fails). Every chat turn is recorded."""
+
+    serves = None
+    turns: list = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def new_session(self, prefix="sess_eval"):
+        return prefix
+
+    def fetch_retrieved_texts(self, message):
+        if isinstance(self.serves, type):
+            raise self.serves("probe failed")
+        return list(self.serves)
+
+    def send_turn(self, message):
+        type(self).turns.append(message)
+        return "A synthetic reply.", 0.01
+
+
+def _run_main(tmp_path, monkeypatch, test_vault, evals="grounding", serves=None):
+    import tests.eval.live_driver as live_driver
+    import tests.eval.quality_judges as quality_judges
     import tests.eval.seeder as seeder
+    from tests.eval.eval_drift import DRIFT_DIMENSIONS
     from tests.eval.run_quality import main
 
     live = set_eval_vaults(tmp_path, monkeypatch, test_vault)
     seeded = []
-    monkeypatch.setattr(seeder, "seed_corpus", lambda: seeded.append(1) or [])
+    monkeypatch.setattr(seeder, "seed_corpus",
+                        lambda: seeded.append(1) or [dict(PROBE_RECORD)])
+    monkeypatch.setattr(_FakeApi, "serves",
+                        [PROBE_RECORD["text"]] if serves is None else serves)
+    monkeypatch.setattr(_FakeApi, "turns", [])
+    monkeypatch.setattr(live_driver, "EmberLiveDriver", _FakeApi)
+    monkeypatch.setattr(quality_judges, "score_claims", lambda response, retrieved: [])
+    monkeypatch.setattr(quality_judges, "score_turn",
+                        lambda turn, response: {d: 3.0 for d in DRIFT_DIMENSIONS})
+    monkeypatch.setattr(quality_judges, "judge_expectation",
+                        lambda prompt, response, expectation:
+                        {"passed": True, "score": 3.0, "error": False})
     report = tmp_path / "report.json"
-    argv = ["--evals", "grounding", "--report", str(report),
-            "--baseline-dir", str(tmp_path)]
+    argv = ["--evals", evals, "--report", str(report), "--baseline-dir", str(tmp_path)]
     try:
         code = main(argv)
     except SystemExit as exc:
@@ -360,18 +408,81 @@ def test_main_refuses_before_seeding(tmp_path, monkeypatch, test_vault):
     )
     assert code == 1
     assert seeded == []
+    assert _FakeApi.turns == []
     assert not report.exists()
     assert os.environ["PRIVATE_VAULT_PATH"] == str(live)
 
 
 def test_control_main_seeds_into_the_pinned_test_vault(tmp_path, monkeypatch):
     """Positive control for the refusals: with a distinct test vault main()
-    seeds, writes its report, and has pinned PRIVATE_VAULT_PATH to the test
-    vault, so the seeded/report/env assertions above can fail."""
+    seeds, drives the API, writes its report, and has pinned
+    PRIVATE_VAULT_PATH to the test vault, so the seeded/turns/report/env
+    assertions above can fail."""
     test_vault = tmp_path / "test_vault"
     test_vault.mkdir()
     code, seeded, report, _ = _run_main(tmp_path, monkeypatch, test_vault)
     assert code == 0
     assert seeded == [1]
+    assert _FakeApi.turns
     assert report.exists()
     assert pinned_vault() == test_vault.resolve()
+
+
+API_EVALS = ["grounding", "drift", "user_expectations", "register,drift"]
+
+
+@pytest.mark.parametrize("evals", API_EVALS)
+@pytest.mark.parametrize("serves", [[], ConnectionError], ids=["other-vault", "probe-fails"])
+def test_api_not_on_the_test_vault_stops_before_any_chat_turn(
+        tmp_path, monkeypatch, capsys, evals, serves):
+    """Each eval that talks to the API, run alone or after register, stops
+    the whole run when the seeded record is not retrievable through the API
+    or the probe cannot run. Control: the test below."""
+    test_vault = tmp_path / "test_vault"
+    test_vault.mkdir()
+    code, _, report, _ = _run_main(tmp_path, monkeypatch, test_vault,
+                                   evals=evals, serves=serves)
+    assert code == 1
+    assert _FakeApi.turns == []
+    assert not report.exists()
+    assert "VAULT MISALIGNED" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("evals", API_EVALS[:3])
+def test_control_api_on_the_test_vault_runs_the_eval(tmp_path, monkeypatch, evals):
+    """Positive control: with the seeded record retrievable through the API,
+    the same eval sends chat turns, so `turns == []` above can fail."""
+    test_vault = tmp_path / "test_vault"
+    test_vault.mkdir()
+    code, _, report, _ = _run_main(tmp_path, monkeypatch, test_vault, evals=evals)
+    assert _FakeApi.turns
+    assert report.exists()
+
+
+def test_register_alone_needs_no_api_probe(tmp_path, monkeypatch):
+    """register calls Ollama directly, never the API: no seeding, no probe."""
+    import tests.eval.run_quality as rq
+
+    test_vault = tmp_path / "test_vault"
+    test_vault.mkdir()
+    monkeypatch.setattr(rq, "run_register_eval", lambda *a, **k: {
+        "eval": "register", "cases": [], "judge_errors": 0, "total_calls": 0,
+        "metrics": {}})
+    monkeypatch.setitem(sys.modules, "tests.eval.judge",
+                        types.SimpleNamespace(ClaudeJudge=lambda model: None))
+    monkeypatch.setitem(sys.modules, "tests.eval.harness",
+                        types.SimpleNamespace(MultiRunResult=object))
+    code, seeded, report, _ = _run_main(tmp_path, monkeypatch, test_vault,
+                                        evals="register", serves=[])
+    assert seeded == []
+    assert report.exists()
+
+
+def test_help_needs_no_test_vault(tmp_path, monkeypatch, capsys):
+    from tests.eval.run_quality import main
+
+    set_eval_vaults(tmp_path, monkeypatch, None)
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--help"])
+    assert exc_info.value.code == 0
+    assert "--evals" in capsys.readouterr().out

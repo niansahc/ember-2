@@ -270,13 +270,15 @@ When a UI change affects existing Playwright tests, M updates the tests in the s
 
 ### Test vault
 
-Evals must run against the test vault only. Not every tool isolates itself, so how you invoke one matters.
+Evals must run against the test vault only. Most eval tools share one refusal rule; the exceptions are listed below.
 
-Every eval process runs one refusal rule first, `eval_helpers.require_test_vault()`: `VAULT_PATH_TEST` must be set, must name an existing directory, and must not resolve to the same path as `PRIVATE_VAULT_PATH`. Otherwise the eval exits 1. On success it sets `PRIVATE_VAULT_PATH` to the test vault in the eval's own process, so anything that resolves the vault in-process gets the test vault.
+`eval_helpers.require_test_vault()` holds the rule: `VAULT_PATH_TEST` must be set, must name an existing directory, and must not resolve to the same path as `PRIVATE_VAULT_PATH`. Otherwise the eval exits 1. On success it sets `PRIVATE_VAULT_PATH` to the test vault in the eval's own process, so anything that resolves the vault in-process gets the test vault.
 
 `eval_manual.py`, `eval_web_search.py`, `eval_local_models.py`, `eval_conversations.py`, and `eval_probe.py` call `eval_helpers.swap_to_test_vault()`. It applies that rule, then swaps the API via `POST /v1/developer/vault/swap`, and fails closed with `sys.exit(1)` if the swap fails.
 
-`eval_retrieval.py` and `tests/eval/run_quality.py` build context or seed records in-process, so they call `require_test_vault()` directly. A plain `python tools/eval_retrieval.py` is test-vault only. Don't point `PRIVATE_VAULT_PATH` at the test vault by hand: the two paths match and the eval refuses. run_quality does not swap the API. Point the API at the test vault first, or its alignment probe aborts the grounding eval.
+`eval_retrieval.py` and `tests/eval/run_quality.py` build context or seed records in-process, so they call `require_test_vault()` directly. A plain `python tools/eval_retrieval.py` is test-vault only. Don't point `PRIVATE_VAULT_PATH` at the test vault by hand: the two paths match and the eval refuses. run_quality does not swap the API. Point the API at the test vault first: before any eval that talks to the API, run_quality checks that a seeded record is retrievable through it and stops the whole run otherwise.
+
+Exceptions. `tools/retrieval_ablation/runner.py` keeps its own copy of the rule; `eval_retrieval.py --ablation` hands off to it before the pin. The post-commit hook runs the same rule as a pre-check before it spawns `eval_retrieval.py`. `tests/eval/test_context_coherence.py`, an `eval`-marked pytest, swaps the API to the test vault itself without `require_test_vault()`.
 
 Synthetic fixtures only. No real vault content ever enters the test vault. The test vault is seeded with persona-consistent synthetic records. Run /humanizer on fixture content before writing.
 

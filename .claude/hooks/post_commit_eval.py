@@ -28,13 +28,14 @@ A relative VAULT_PATH_TEST or PRIVATE_VAULT_PATH resolves against the
 project root (hook_utils.project_path -> src/core/vault_path.py, the rule
 the app and vault_guard.py use), never against this process's cwd. Otherwise,
 from a session cwd'd elsewhere, a relative live vault and an absolute
-test vault naming the same directory compare unequal, and the eval runs
-against the live vault.
+test vault naming the same directory compare unequal, and the hook spawns
+a run that the script, resolving by the same rule, then refuses.
 
 Exit code is always 0 - a failing eval is reported but does not block.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -64,27 +65,37 @@ def _resolve_test_vault() -> tuple[Path | None, str | None]:
     """Resolve the test vault, or return a reason it cannot be used.
 
     Returns (path, None) on success and (None, reason) on failure. Every
-    failure path is a refusal, never a fallback to the live vault.
+    failure path is a refusal, never a fallback to the live vault, and
+    each reason names its own remedy.
     """
+    # read_env_value falls back to .env for an empty process value, but the
+    # script loads .env with override=False and keeps the empty value, then
+    # refuses. Refuse here instead of spawning that refusal.
+    exported = os.environ.get("VAULT_PATH_TEST")
+    if exported is not None and not exported.strip():
+        return None, "VAULT_PATH_TEST is exported but empty; unset it or give it a value"
     try:
         test_vault = read_env_value("VAULT_PATH_TEST", ENV_PATH)
     except ValueError:
-        return None, "VAULT_PATH_TEST cannot be read from .env"
+        return None, "VAULT_PATH_TEST cannot be read from .env; fix that line in .env"
     if not test_vault:
-        return None, "VAULT_PATH_TEST is not set"
+        return None, "VAULT_PATH_TEST is not set; set it in .env to re-enable this hook"
 
     test_path = _configured_path(test_vault)
     if not test_path.is_dir():
         # A missing directory would let SqliteVectorStore.__init__ mkdir a
         # new empty vault and report a meaningless all-FAIL eval.
-        return None, "VAULT_PATH_TEST does not point at an existing directory"
+        return None, ("VAULT_PATH_TEST does not point at an existing directory; "
+                      "create it or correct the path")
 
     try:
         live_vault = read_env_value("PRIVATE_VAULT_PATH", ENV_PATH)
     except ValueError:
-        return None, "PRIVATE_VAULT_PATH cannot be read from .env"
+        return None, "PRIVATE_VAULT_PATH cannot be read from .env; fix that line in .env"
     if live_vault and _configured_path(live_vault) == test_path:
-        return None, "VAULT_PATH_TEST resolves to the same path as PRIVATE_VAULT_PATH"
+        return None, ("VAULT_PATH_TEST resolves to the same path as PRIVATE_VAULT_PATH; "
+                      "point it at a separate test vault, and do not set "
+                      "PRIVATE_VAULT_PATH to the test vault")
 
     return test_path, None
 
@@ -121,7 +132,7 @@ def main():
         print(
             f"[HOOK] Skipping retrieval eval: {reason}. "
             "Refusing to run against the live vault (CLAUDE.md: evals are "
-            "test-vault only). Set VAULT_PATH_TEST to re-enable this hook."
+            "test-vault only)."
         )
         return
 

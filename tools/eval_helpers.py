@@ -17,7 +17,8 @@ Shared helpers for eval tools: test vault isolation and model pinning.
 - Privacy posture: swap_to_test_vault fails closed via sys.exit(1) on
   any path that would let the eval proceed against the live vault.
   This includes: missing VAULT_PATH_TEST env var, missing test-vault
-  directory, and any swap-call failure (connection refused, 403
+  directory, VAULT_PATH_TEST resolving to PRIVATE_VAULT_PATH (so a second
+  call in one process refuses too), and any swap-call failure (connection refused, 403
   dev-mode disabled, 400 unknown label, 5xx). Silent-return-None was
   the original 2026-04-30 leak: callers cannot distinguish "swap
   skipped" from "swap succeeded," so any None path is treated as a
@@ -105,7 +106,9 @@ def require_test_vault() -> Path:
         print(
             "FATAL: VAULT_PATH_TEST resolves to the same path as "
             "PRIVATE_VAULT_PATH. Refusing to proceed against the live "
-            "vault. Point VAULT_PATH_TEST at a separate test vault."
+            "vault. If PRIVATE_VAULT_PATH was set to the test vault for "
+            "this run, unset that override: the eval pins itself. "
+            "Otherwise point VAULT_PATH_TEST at a separate test vault."
         )
         sys.exit(1)
 

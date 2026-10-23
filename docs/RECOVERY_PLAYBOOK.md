@@ -107,17 +107,17 @@ Step-by-step fixes for common Ember-2 problems. Start with the scenario that mat
    ```
    If empty, Ember has no profile data. Run the onboarding flow or seed with `scripts/seed_identity_template.py`.
 
-3. Run the retrieval eval:
-   ```
-   python tools/eval_retrieval.py
-   ```
-   Scores below 5/10 indicate a retrieval problem.
-
-4. Check embedding indexes exist:
+3. Check embedding indexes exist:
    ```
    dir C:\EmberVault\embeddings\
    ```
    You should see `profile_index.json`, `conversation_index.json`, `reflection_index.json`, and `ingested.db`. If any are missing, delete all index files and restart the API. They rebuild on first startup (slow but automatic).
+
+4. Check what retrieval returns from your vault:
+   ```
+   python scripts/test_context_retrieval.py --query "What have I been working on recently?"
+   ```
+   This reads your vault and writes nothing to it: no records, no retrieval stats. It prints the records retrieval picked for each query. If FINAL MEMORY shows `(none)` for a question your vault should answer, retrieval is not reaching your records. Use your own questions with more `--query` flags.
 
 5. If indexes are present but retrieval is bad, the indexes may be stale. Delete them and restart:
    ```
@@ -179,9 +179,9 @@ Step-by-step fixes for common Ember-2 problems. Start with the scenario that mat
    python scripts/set_api_key.py
    ```
 
-5. Restart the API and run the retrieval eval to confirm:
+5. Restart the API, then confirm retrieval reaches your records (reads your vault, writes nothing to it):
    ```
-   python tools/eval_retrieval.py
+   python scripts/test_context_retrieval.py --query "What have I been working on recently?"
    ```
 
 ---

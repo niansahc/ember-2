@@ -17,8 +17,8 @@ real names, no real vault content). In-process unit tests run under the conftest
 main()) calls tools/eval_helpers.py::require_test_vault first, which pins the
 process to VAULT_PATH_TEST and refuses to run when it is unset, missing, or the
 same path as PRIVATE_VAULT_PATH, so the corpus lands in the test vault. The API
-must serve that vault too; run_grounding_eval's alignment probe aborts if it
-does not. A fixture written to any other vault is not indexed
+must serve that vault too; main() probes for a seeded record through the API
+and stops the whole run, before any chat turn, if it is not there. A fixture written to any other vault is not indexed
 (src/memory/eval_fixtures.py, #211).
 """
 

@@ -501,15 +501,17 @@ def main():
     target_model = args.model or current_model
     original_model = None
 
-    if args.model:
-        original_model = _switch_model(args.model)
-        if original_model:
-            print(f"Switched to: {args.model}")
-
-    # Swap to test vault for eval isolation
+    # Swap to test vault for eval isolation. Before the model switch: a
+    # refused swap exits here, outside the finally below, and must not
+    # leave the API on --model.
     previous_vault = swap_to_test_vault()
 
     try:
+        if args.model:
+            original_model = _switch_model(args.model)
+            if original_model:
+                print(f"Switched to: {args.model}")
+
         # --- COMPARE MODE: run battery against local model then Haiku ---
         if args.compare:
             print(f"\nCompare Battery — {target_model} vs {COMPARE_CLOUD_MODEL}")

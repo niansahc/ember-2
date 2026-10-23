@@ -71,3 +71,6 @@ docs/design/
 *.trace.json
 retrieval_trace_*.json
 traces/
+
+# Local code-review reports (/lean-review); never committed.
+reviews/

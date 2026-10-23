@@ -78,6 +78,30 @@ def test_post_commit_runs_eval_in_project_from_another_cwd(tmp_path, elsewhere):
     assert f"EVAL STUB cwd={project}" in result.stdout, result.stdout
 
 
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git for a synthetic repo")
+def test_post_commit_leaves_the_vault_pin_to_eval_retrieval(tmp_path, elsewhere):
+    """The hook passes PRIVATE_VAULT_PATH through unchanged. eval_retrieval.py
+    pins itself to VAULT_PATH_TEST and refuses when the two are the same
+    path, so a hook that forced PRIVATE_VAULT_PATH=VAULT_PATH_TEST would
+    make every run refuse."""
+    project = _synthetic_commit_project(
+        tmp_path,
+        "import os\nprint('EVAL STUB vault=' + os.environ.get('PRIVATE_VAULT_PATH', ''))\n",
+    )
+    test_vault = tmp_path / "test_vault"
+    test_vault.mkdir()
+    live = tmp_path / "live_vault_placeholder"
+    env = {
+        "CLAUDE_PROJECT_DIR": str(project),
+        "VAULT_PATH_TEST": str(test_vault),
+        "PRIVATE_VAULT_PATH": str(live),
+    }
+    payload = {"tool_name": "Bash", "tool_input": {"command": 'git commit -m "x"'}}
+    result = run_hook(POST_COMMIT, payload, cwd=elsewhere, env=env)
+    assert result.returncode == 0
+    assert f"EVAL STUB vault={live}" in result.stdout, result.stdout
+
+
 @pytest.mark.parametrize("hook", [POST_EDIT, POST_COMMIT])
 def test_repo_root_falls_back_to_hook_location(hook, monkeypatch):
     """Without CLAUDE_PROJECT_DIR (a manual run), the anchor is the
@@ -206,3 +230,42 @@ def test_an_unreadable_env_value_is_a_skip_reason_not_a_traceback(rel_project, m
     monkeypatch.setattr(hook, "read_env_value", reader("PRIVATE_VAULT_PATH"))
     vault, reason = hook._resolve_test_vault()
     assert vault is None and "PRIVATE_VAULT_PATH cannot be read" in reason
+
+
+@pytest.mark.parametrize("exported", [None, ""], ids=["not-exported", "exported-empty"])
+def test_an_exported_empty_test_vault_is_refused_as_the_script_would(
+        rel_project, monkeypatch, exported):
+    """eval_retrieval.py loads .env with override=False, so an exported empty
+    VAULT_PATH_TEST stays empty there and require_test_vault refuses. The
+    hook must not fall back to the .env value and spawn that refusal.
+    Control: not exported, the .env value resolves."""
+    test_vault = rel_project / "vaults" / "test"
+    (rel_project / ".env").write_text(f"VAULT_PATH_TEST={test_vault}\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(rel_project))
+    monkeypatch.delenv("PRIVATE_VAULT_PATH", raising=False)
+    if exported is None:
+        monkeypatch.delenv("VAULT_PATH_TEST", raising=False)
+    else:
+        monkeypatch.setenv("VAULT_PATH_TEST", exported)
+    hook = load_hook(POST_COMMIT)
+
+    vault, reason = hook._resolve_test_vault()
+
+    if exported is None:
+        assert reason is None and vault == test_vault.resolve()
+    else:
+        assert vault is None and "exported but empty" in reason
+
+
+@pytest.mark.parametrize("value,remedy", [
+    (None, "set it in .env"),
+    ("missing_dir", "create it or correct the path"),
+    ("vaults/live", "point it at a separate test vault"),
+], ids=["unset", "missing-dir", "same-path"])
+def test_each_skip_reason_names_its_own_remedy(rel_project, elsewhere, monkeypatch, value, remedy):
+    values = {"PRIVATE_VAULT_PATH": "vaults/live"}
+    if value is not None:
+        values["VAULT_PATH_TEST"] = value
+    vault, reason = _resolve_in(rel_project, elsewhere, monkeypatch, **values)
+    assert vault is None
+    assert remedy in reason

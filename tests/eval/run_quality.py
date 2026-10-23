@@ -10,7 +10,11 @@ scalar metrics to its baseline (a >max-drop regression fails the gate). This run
 ONLY where Ollama + a live Ember API exist (dev box / self-hosted runner) - it is
 not part of GitHub CI (which stays `-m "not eval"`). Run it OUTSIDE Claude Code:
 it produces vault-grounded response text that must not enter a session log
-(CLAUDE.md); the report it writes carries no response text.
+(CLAUDE.md); the report it writes carries no response text. main() refuses to
+run unless VAULT_PATH_TEST names a vault other than PRIVATE_VAULT_PATH, and
+pins this process to it before the grounding corpus is seeded. Before any eval
+that talks to the API (API_EVALS) it confirms a seeded record is retrievable
+through the API, and stops the whole run with exit 1 if not.
 
 The per-eval run_* functions take injected dependencies (driver, judge, generate)
 so the orchestration is unit-testable with fakes without Ollama/Anthropic. main()
@@ -23,6 +27,14 @@ import argparse
 import logging
 import statistics
 import sys
+
+# Process entrypoint: load .env before any src import (see load_env_file).
+# main() needs VAULT_PATH_TEST and PRIVATE_VAULT_PATH from it to refuse a
+# run that would seed the live vault.
+if __name__ == "__main__":
+    from src.core.config import load_env_file
+
+    load_env_file()
 
 from tests.eval.eval_grounding import grounding_verdict
 from tests.eval.eval_drift import drift_verdict, DRIFT_DIMENSIONS
@@ -108,6 +120,36 @@ def _seed_visible(rec: dict, retrieved_texts: list) -> bool:
     return any(needle in (t or "").lower() for t in retrieved_texts)
 
 
+def _corpus_visible(driver, corpus: list) -> bool:
+    """True if the first seeded record is retrievable through the live API,
+    i.e. the API serves the vault the corpus was seeded into."""
+    probe = corpus[0]
+    return _seed_visible(probe, driver.fetch_retrieved_texts(probe["query"]))
+
+
+def api_vault_problem(driver, corpus: list) -> str | None:
+    """None when the API serves the vault `corpus` was seeded into; otherwise
+    why that could not be confirmed. Every failure is a reason to stop."""
+    if not corpus:
+        return "nothing was seeded to probe with"
+    try:
+        visible = _corpus_visible(driver, corpus)
+    except Exception as exc:  # noqa: BLE001 - a probe that cannot run confirms nothing
+        return f"the alignment probe failed ({type(exc).__name__})"
+    if not visible:
+        return "a seeded record is not retrievable through the API"
+    return None
+
+
+def _vault_misaligned_message(reason: str) -> str:
+    return (f"[eval] VAULT MISALIGNED - {reason}, so the API is not confirmed to "
+            "serve the test vault this eval seeded (VAULT_PATH_TEST). Stopping "
+            "the run. Swap the API to the test vault and re-run: POST "
+            "/v1/developer/vault/swap {\"vault_label\": \"test\"} with the API "
+            "key; the route needs EMBER_DEV_MODE=true on the API. NOT writing a "
+            "baseline.")
+
+
 def run_grounding_eval(driver, seed_fn, judge_claims, ratio_threshold=0.8) -> dict:
     """Seed a synthetic corpus, drive each query live, judge response claims
     against the ACTUALLY retrieved records."""
@@ -119,11 +161,9 @@ def run_grounding_eval(driver, seed_fn, judge_claims, ratio_threshold=0.8) -> di
     # the seeded test vault), grounding would silently test the wrong corpus - or
     # the real vault. Verify a seeded record is retrievable through the API and
     # abort loudly if not, instead of reporting garbage.
-    if corpus:
-        probe = corpus[0]
-        if not _seed_visible(probe, driver.fetch_retrieved_texts(probe["query"])):
-            return {"eval": "grounding", "cases": [], "judge_errors": 0,
-                    "total_calls": 0, "metrics": {}, "vault_misaligned": True}
+    if corpus and not _corpus_visible(driver, corpus):
+        return {"eval": "grounding", "cases": [], "judge_errors": 0,
+                "total_calls": 0, "metrics": {}, "vault_misaligned": True}
 
     cases, ratios, passes = [], [], []
     judge_errors = 0
@@ -289,6 +329,12 @@ def _gate(report: dict, baseline: dict, max_drop: float) -> dict:
     return report
 
 
+# Evals that drive turns through the live API. None runs until the API is
+# confirmed to serve the test vault: its turns are written into whatever
+# vault the API serves, and the replies go to a cloud judge.
+API_EVALS = ("grounding", "drift", "user_expectations")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Response-quality eval release gate")
     parser.add_argument("--evals", default="register,grounding,drift",
@@ -305,13 +351,18 @@ def main(argv=None) -> int:
                         help="write current metrics as the new baseline (calibration)")
     args = parser.parse_args(argv)
 
+    # The grounding seeder writes in-process through write_memory, so this
+    # process's vault is where the corpus lands. Pin it to the test vault, or
+    # exit, before anything below can resolve a vault.
+    from tools.eval_helpers import require_test_vault
+
+    require_test_vault()
+
     requested = [e.strip() for e in args.evals.split(",") if e.strip()]
 
     # Lazy live wiring - only imported when actually running the gate.
     import os
     from tests.eval.seeder import seed_corpus
-    from tests.eval.judge import ClaudeJudge
-    from tests.eval.harness import MultiRunResult
     from tests.eval.live_driver import EmberLiveDriver
     from tests.eval.quality_judges import (
         score_claims, score_turn, sonnet_judge_model, haiku_judge_model,
@@ -332,13 +383,28 @@ def main(argv=None) -> int:
         r.raise_for_status()
         return r.json()["message"]["content"]
 
+    # Vault-alignment gate, once, before any eval runs: seed the synthetic
+    # corpus into this (pinned) process's vault and confirm a seeded record
+    # is retrievable through the API. Anything else stops the whole run.
+    corpus = []
+    if any(name in API_EVALS for name in requested):
+        corpus = seed_corpus()
+        problem = api_vault_problem(driver, corpus)
+        if problem:
+            print(_vault_misaligned_message(problem))
+            return 1
+
     reports, overall_ok = [], True
     for name in requested:
         if name == "grounding":
-            rep = run_grounding_eval(driver, seed_corpus, score_claims)
+            rep = run_grounding_eval(driver, lambda: corpus, score_claims)
         elif name == "drift":
             rep = run_drift_eval(driver, score_turn)
         elif name == "register":
+            # judge.py and harness.py import anthropic at module level; only
+            # the register eval needs them (CI has no anthropic).
+            from tests.eval.judge import ClaudeJudge
+            from tests.eval.harness import MultiRunResult
             rep = run_register_eval(ClaudeJudge(model=sonnet_judge_model()),
                                     _ollama_generate, MultiRunResult, runs=args.runs)
         elif name == "user_expectations":
@@ -348,18 +414,12 @@ def main(argv=None) -> int:
             print(f"[eval] unknown eval '{name}', skipping")
             continue
 
-        # Vault-alignment guard (grounding): the seeded corpus was not retrievable
-        # through the API, so it is serving a different vault. Abort loudly rather
-        # than report garbage or touch the real vault.
+        # The API moved off the test vault after the gate above: stop the run
+        # rather than report garbage or drive later evals against it.
         if rep.get("vault_misaligned"):
-            print(f"[eval] {name}: VAULT MISALIGNED - the seeded corpus is not "
-                  "retrievable through the API, so it is not serving the seeded "
-                  "test vault. Point the API at PRIVATE_VAULT_PATH="
-                  "<test vault> (the same path this eval seeds into) and re-run. "
-                  "NOT writing a baseline.")
-            overall_ok = False
-            reports.append(rep)
-            continue
+            print(_vault_misaligned_message(
+                f"{name}: a seeded record stopped being retrievable through the API"))
+            return 1
 
         # Judge-health guard. A handful of judge calls fail transiently; those
         # are dropped from the aggregate inside the run_* functions, so the

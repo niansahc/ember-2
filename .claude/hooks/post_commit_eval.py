@@ -9,31 +9,27 @@ git log, etc.). Checks `git diff HEAD~1 --name-only` for changed files
 and runs `python tools/eval_retrieval.py` if any match the trigger
 paths. Silent no-op otherwise.
 
-Vault isolation: tools/eval_retrieval.py does NOT self-isolate. It
-imports ContextService in-process, which resolves the vault through
-get_private_vault_path() -> PRIVATE_VAULT_PATH from .env. The API's
-in-memory _vault_path_override lives in the uvicorn process and cannot
-reach a subprocess, so without an explicit environment override this
-hook would run 15 benchmark queries against the user's live personal
-vault on every qualifying commit. CLAUDE.md requires all evals to run
-against the test vault only.
+Vault isolation: tools/eval_retrieval.py builds context in-process, so
+it isolates itself. Its main() calls tools/eval_helpers.require_test_vault,
+which pins the process to VAULT_PATH_TEST and refuses to run when it is
+unset, missing, or the same path as PRIVATE_VAULT_PATH. CLAUDE.md
+requires all evals to run against the test vault only.
 
-This hook therefore forces PRIVATE_VAULT_PATH=VAULT_PATH_TEST for the
-child process only. It never mutates its own environment or .env. The
-override survives eval_retrieval.py's own .env load at startup
-(load_env_file(), override=False), so a pre-existing environment
-variable wins over the .env value.
+The child inherits this hook's environment unchanged. Do not set
+PRIVATE_VAULT_PATH to the test vault for it: the script refuses when the
+two name one path.
 
-Fails closed: if the test vault cannot be resolved, is not a directory,
-or resolves to the same path as the live vault, the eval is skipped with
-a printed reason rather than falling back to the live vault.
+Fails closed before spawning anything: if the test vault cannot be
+resolved, is not a directory, or resolves to the same path as the live
+vault, the eval is skipped with a printed reason (the same rule the
+script applies) rather than run.
 
 A relative VAULT_PATH_TEST or PRIVATE_VAULT_PATH resolves against the
 project root (hook_utils.project_path -> src/core/vault_path.py, the rule
 the app and vault_guard.py use), never against this process's cwd. Otherwise,
 from a session cwd'd elsewhere, a relative live vault and an absolute
-test vault naming the same directory compare unequal, and the eval runs
-against the live vault.
+test vault naming the same directory compare unequal, and the hook spawns
+a run that the script, resolving by the same rule, then refuses.
 
 Exit code is always 0 - a failing eval is reported but does not block.
 """
@@ -69,27 +65,37 @@ def _resolve_test_vault() -> tuple[Path | None, str | None]:
     """Resolve the test vault, or return a reason it cannot be used.
 
     Returns (path, None) on success and (None, reason) on failure. Every
-    failure path is a refusal, never a fallback to the live vault.
+    failure path is a refusal, never a fallback to the live vault, and
+    each reason names its own remedy.
     """
+    # read_env_value falls back to .env for an empty process value, but the
+    # script loads .env with override=False and keeps the empty value, then
+    # refuses. Refuse here instead of spawning that refusal.
+    exported = os.environ.get("VAULT_PATH_TEST")
+    if exported is not None and not exported.strip():
+        return None, "VAULT_PATH_TEST is exported but empty; unset it or give it a value"
     try:
         test_vault = read_env_value("VAULT_PATH_TEST", ENV_PATH)
     except ValueError:
-        return None, "VAULT_PATH_TEST cannot be read from .env"
+        return None, "VAULT_PATH_TEST cannot be read from .env; fix that line in .env"
     if not test_vault:
-        return None, "VAULT_PATH_TEST is not set"
+        return None, "VAULT_PATH_TEST is not set; set it in .env to re-enable this hook"
 
     test_path = _configured_path(test_vault)
     if not test_path.is_dir():
         # A missing directory would let SqliteVectorStore.__init__ mkdir a
         # new empty vault and report a meaningless all-FAIL eval.
-        return None, "VAULT_PATH_TEST does not point at an existing directory"
+        return None, ("VAULT_PATH_TEST does not point at an existing directory; "
+                      "create it or correct the path")
 
     try:
         live_vault = read_env_value("PRIVATE_VAULT_PATH", ENV_PATH)
     except ValueError:
-        return None, "PRIVATE_VAULT_PATH cannot be read from .env"
+        return None, "PRIVATE_VAULT_PATH cannot be read from .env; fix that line in .env"
     if live_vault and _configured_path(live_vault) == test_path:
-        return None, "VAULT_PATH_TEST resolves to the same path as PRIVATE_VAULT_PATH"
+        return None, ("VAULT_PATH_TEST resolves to the same path as PRIVATE_VAULT_PATH; "
+                      "point it at a separate test vault, and do not set "
+                      "PRIVATE_VAULT_PATH to the test vault")
 
     return test_path, None
 
@@ -126,14 +132,12 @@ def main():
         print(
             f"[HOOK] Skipping retrieval eval: {reason}. "
             "Refusing to run against the live vault (CLAUDE.md: evals are "
-            "test-vault only). Set VAULT_PATH_TEST to re-enable this hook."
+            "test-vault only)."
         )
         return
 
     print("[HOOK] Commit touched context/retrieval/llm - running retrieval eval...")
     print(f"[HOOK] Vault: {test_vault}")
-
-    child_env = {**os.environ, "PRIVATE_VAULT_PATH": str(test_vault)}
 
     try:
         eval_result = subprocess.run(
@@ -142,7 +146,6 @@ def main():
             capture_output=True,
             text=True,
             timeout=120,
-            env=child_env,
         )
         lines = eval_result.stdout.strip().splitlines()
         for line in lines[-5:]:

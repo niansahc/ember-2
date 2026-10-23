@@ -13,9 +13,13 @@ context string.
 
 Vault safety: all content here is synthetic (generic project/schedule facts, no
 real names, no real vault content). In-process unit tests run under the conftest
-`isolate_to_test_vault` override; the live eval calls
-tools/eval_helpers.py::swap_to_test_vault first so the corpus lands in the
-configured test vault, never the real one.
+`isolate_to_test_vault` override. The live eval (tests/eval/run_quality.py
+main()) calls tools/eval_helpers.py::require_test_vault first, which pins the
+process to VAULT_PATH_TEST and refuses to run when it is unset, missing, or the
+same path as PRIVATE_VAULT_PATH, so the corpus lands in the test vault. The API
+must serve that vault too; main() probes for a seeded record through the API
+and stops the whole run, before any chat turn, if it is not there. A fixture written to any other vault is not indexed
+(src/memory/eval_fixtures.py, #211).
 """
 
 from __future__ import annotations

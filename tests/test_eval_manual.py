@@ -5,6 +5,7 @@ Tests for interactive manual eval CLI (tools/eval_manual.py).
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -280,3 +281,47 @@ def test_run_compare_no_direct_anthropic_imports():
     source = (REPO_ROOT / "tools" / "eval_manual.py").read_text(encoding="utf-8")
     assert "import anthropic" not in source
     assert "Anthropic(" not in source
+
+
+# ---------------------------------------------------------------------------
+# --model is applied only after the vault swap succeeds, so a refused swap
+# leaves the API on its own model. Fakes only: no API, no vault.
+# ---------------------------------------------------------------------------
+
+def _run_main_with_model(monkeypatch, swap):
+    import tools.eval_helpers as eval_helpers
+    import tools.eval_manual as eval_manual
+
+    switched = []
+    monkeypatch.setattr(eval_manual, "_get_api_key", lambda: "test-key")
+    monkeypatch.setattr(eval_manual.httpx, "get", lambda *a, **k: MagicMock(
+        json=lambda: {"model": "original-model"}))
+    monkeypatch.setattr(eval_manual, "_switch_model",
+                        lambda model: switched.append(model) or "original-model")
+    monkeypatch.setattr(eval_manual, "_run_auto_battery", lambda *a, **k: 0)
+    monkeypatch.setattr(eval_helpers, "swap_to_test_vault", swap)
+    monkeypatch.setattr(eval_helpers, "restore_vault", lambda previous: None)
+    monkeypatch.setattr(sys, "argv", ["eval_manual.py", "--auto", "--model", "candidate"])
+    try:
+        eval_manual.main()
+        code = 0
+    except SystemExit as exc:
+        code = exc.code
+    return code, switched
+
+
+def test_refused_swap_never_switches_the_model(monkeypatch):
+    def refuse():
+        sys.exit(1)
+
+    code, switched = _run_main_with_model(monkeypatch, refuse)
+    assert code == 1
+    assert switched == []
+
+
+def test_control_swap_then_switch_and_restore(monkeypatch):
+    """Positive control: after a successful swap the model is switched and
+    restored, so `switched == []` above can fail."""
+    code, switched = _run_main_with_model(monkeypatch, lambda: "default")
+    assert code == 0
+    assert switched == ["candidate", "original-model"]

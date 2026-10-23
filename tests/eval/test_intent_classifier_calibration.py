@@ -79,14 +79,26 @@ _VAULT_ANSWERABLE_QUERIES = [
 # ---------------------------------------------------------------------------
 
 
+def _classify(query):
+    """_stage2_classify, failing when nothing was measured. A confidence of
+    None means an embedding call failed (Ollama down, model missing, or the
+    test guard's stub), and the drift checks below would pass vacuously."""
+    label, confidence = _stage2_classify(query)
+    assert confidence is not None, (
+        f"Stage 2 could not embed {query!r}: is Ollama running with "
+        f"nomic-embed-text? The drift check measured nothing."
+    )
+    return label, confidence
+
+
 @pytest.mark.parametrize("query", _NEEDS_INTERNET_QUERIES)
 def test_needs_internet_query_not_routed_to_vault_with_high_confidence(query):
     """A known-needs-internet query may classify correctly, OR escalate
     via low-confidence return. It must NOT return vault_answerable with
     confidence at or above the threshold -- that would mean Stage 2
     confidently sends an external-world query to the vault path."""
-    label, confidence = _stage2_classify(query)
-    if label == VAULT_ANSWERABLE and confidence is not None:
+    label, confidence = _classify(query)
+    if label == VAULT_ANSWERABLE:
         assert confidence < _STAGE2_CONFIDENCE_THRESHOLD, (
             f"Drift detected: {query!r} routed to vault_answerable "
             f"with confidence {confidence:.4f} >= "
@@ -101,8 +113,8 @@ def test_vault_answerable_query_not_routed_to_internet_with_high_confidence(quer
     escalate. It must NOT return needs_internet with confidence at or
     above the threshold -- that would mean Stage 2 confidently sends a
     personal-state query through web search."""
-    label, confidence = _stage2_classify(query)
-    if label == NEEDS_INTERNET and confidence is not None:
+    label, confidence = _classify(query)
+    if label == NEEDS_INTERNET:
         assert confidence < _STAGE2_CONFIDENCE_THRESHOLD, (
             f"Drift detected: {query!r} routed to needs_internet "
             f"with confidence {confidence:.4f} >= "

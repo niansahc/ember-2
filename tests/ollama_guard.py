@@ -16,10 +16,14 @@ Two layers:
      and opens a connection to port 11434 is refused with
      OllamaConnectionBlocked and recorded, and the test fails, even when the
      code under test swallowed the exception (Stage 3 catches everything).
+     A test that skips, xfails or fails after the attempt keeps its own
+     outcome, and the attempt is reported as a teardown error.
 
-Tests marked live_ollama are the exception: both layers stand down for them.
-They are deselected by default (tests/pytest.ini addopts) and run with
-`pytest -m live_ollama` against a running Ollama.
+Tests marked live_ollama or eval are the exception: both layers stand down
+for them. Both markers are deselected by default (tests/pytest.ini addopts),
+so the guard is on for every test a default run selects. They run against a
+running Ollama with `pytest -m live_ollama` or `pytest tests/eval/ -m eval`
+(the Tier 3/4 evals, which need the real model).
 
 Limit: child processes (tests/conftest.py::run_fresh_python) do not load this
 plugin, so a connection made in a child is neither stubbed nor caught.
@@ -38,6 +42,7 @@ import httpx
 import pytest
 
 OLLAMA_PORT = 11434
+LIVE_MARKERS = ("live_ollama", "eval")  # the guard stands down for these
 
 
 class OllamaConnectionBlocked(ConnectionRefusedError):
@@ -46,7 +51,9 @@ class OllamaConnectionBlocked(ConnectionRefusedError):
 
 _lock = threading.Lock()
 _violations: list[str] = []
-_allowed = False  # True while a live_ollama test runs
+_allowed = False  # True while a live_ollama or eval test runs
+_DEFERRED = pytest.StashKey[list]()  # attempts left for teardown to report
+_REPORTED = pytest.StashKey[bool]()  # teardown failed on the guard's account
 
 
 def _blocked(port) -> bool:
@@ -73,7 +80,7 @@ def take_violations() -> list[str]:
 
 
 def is_allowed() -> bool:
-    """True while a live_ollama test runs."""
+    """True while a live_ollama or eval test runs."""
     return _allowed
 
 
@@ -151,8 +158,9 @@ def pytest_configure(config):
     )
 
 
-def _fail_on_violations(phase: str) -> None:
-    taken = take_violations()
+def _fail_on_violations(phase: str, taken: list[str] | None = None) -> None:
+    if taken is None:
+        taken = take_violations()
     if taken:
         pytest.fail(
             f"opened a connection to Ollama port {OLLAMA_PORT} during {phase} "
@@ -165,17 +173,23 @@ def _fail_on_violations(phase: str) -> None:
 def pytest_runtest_setup(item):
     global _allowed
     take_violations()
-    _allowed = item.get_closest_marker("live_ollama") is not None
+    _allowed = any(item.get_closest_marker(name) for name in LIVE_MARKERS)
 
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_call(item):
+    # A failure raised here would replace a test's own failure, and a skip,
+    # an xfail or an xfail marker absorbs it. Those cases go to teardown,
+    # where the attempt is reported as an error none of them can absorb.
     try:
         result = yield
     except BaseException:
-        take_violations()
+        item.stash[_DEFERRED] = take_violations()
         raise
-    _fail_on_violations("the test")
+    if item.get_closest_marker("xfail"):
+        item.stash[_DEFERRED] = take_violations()
+    else:
+        _fail_on_violations("the test")
     return result
 
 
@@ -186,5 +200,21 @@ def pytest_runtest_teardown(item, nextitem):
         result = yield
     finally:
         _allowed = False
-    _fail_on_violations("teardown")
+    deferred = item.stash.get(_DEFERRED, [])
+    in_teardown = take_violations()
+    item.stash[_REPORTED] = bool(deferred or in_teardown)
+    _fail_on_violations("the test", deferred)
+    _fail_on_violations("teardown", in_teardown)
     return result
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    # Outermost wrapper, so it runs after the xfail marker has turned the
+    # guard's teardown failure into an xfail; it turns it back.
+    report = yield
+    if call.when == "teardown" and item.stash.get(_REPORTED, False):
+        report.outcome = "failed"
+        if hasattr(report, "wasxfail"):
+            del report.wasxfail
+    return report

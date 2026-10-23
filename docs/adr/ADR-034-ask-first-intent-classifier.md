@@ -4,6 +4,14 @@
 **Date:** 2026-04-20
 **Version:** v0.17.0 (planned)
 
+## Amendment (2026-10-23)
+
+The implementation has moved on from some figures below, which are kept as the original record:
+
+- Stage 2 embeds with `nomic-embed-text` through Ollama (`src/retrieval/embedding_model.py`), not `all-MiniLM-L6-v2` through `semantic-router`.
+- The Stage 3 timeout default is 1500ms (`INTENT_CLASSIFIER_TIMEOUT_MS`, `src/core/config.py`), not 800ms.
+- Non-thinking mode is `think=False` as a top-level Ollama chat argument. Inside `options` it is ignored and qwen3:8b thinks. With it set correctly, warm Stage 3 latency measured a median of about 170ms over 20 runs, and 257-306ms on the B1 audit fixtures (`docs/audits/b1_stage2_confidence_v018.md`), against the ~300-500ms estimate below.
+
 ## Context
 
 Ember's ask-first feature requires classifying every user message as either:

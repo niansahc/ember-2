@@ -74,7 +74,9 @@ def test_the_stub_leaves_other_ports_alone():
     thread.start()
     try:
         port = server.server_address[1]
-        resp = httpx.get(f"http://127.0.0.1:{port}/", timeout=5.0)
+        # trust_env=False: an HTTP_PROXY in the shell would carry loopback
+        # traffic to the proxy instead of this server.
+        resp = httpx.get(f"http://127.0.0.1:{port}/", timeout=5.0, trust_env=False)
         assert resp.status_code == 200 and resp.text == "ok"
     finally:
         thread.join(timeout=5.0)
@@ -104,6 +106,49 @@ def test_a_swallowed_connection_attempt_still_fails_its_test(pytester):
     result.stdout.fnmatch_lines(["*opened a connection to Ollama port 11434*"])
 
 
+_CONNECT_THEN_OTHER_OUTCOME = """
+import socket
+
+import pytest
+
+def _connect():
+    try:
+        socket.create_connection(("127.0.0.1", 11434), timeout=1)
+    except OSError:
+        pass
+
+def test_connects_then_skips():
+    _connect()
+    pytest.skip("skipped after connecting")
+
+def test_connects_then_xfails():
+    _connect()
+    pytest.xfail("xfailed after connecting")
+
+@pytest.mark.xfail(reason="marker")
+def test_connects_and_fails_under_an_xfail_marker():
+    _connect()
+    assert False
+
+@pytest.mark.xfail(reason="marker")
+def test_connects_and_passes_under_an_xfail_marker():
+    _connect()
+
+def test_skips_without_connecting():
+    pytest.skip("control")
+"""
+
+
+def test_a_connection_is_reported_whatever_the_test_outcome(pytester):
+    """A skip, an xfail or an xfail marker cannot absorb the attempt: it is
+    reported as a teardown error. The test that skips without connecting is
+    the control (skipped, no error)."""
+    pytester.makepyfile(test_outcomes=_CONNECT_THEN_OTHER_OUTCOME)
+    result = pytester.runpytest("-p", "tests.ollama_guard", "-p", "no:cacheprovider")
+    result.assert_outcomes(skipped=2, xfailed=2, xpassed=1, errors=4)
+    result.stdout.fnmatch_lines(["*opened a connection to Ollama port 11434 during the test*"])
+
+
 _LIVE_TEST = """
 import pytest
 from tests import ollama_guard
@@ -112,20 +157,26 @@ from tests import ollama_guard
 def test_live():
     assert ollama_guard.is_allowed()
 
+@pytest.mark.eval
+def test_eval():
+    assert ollama_guard.is_allowed()
+
 def test_offline():
     assert not ollama_guard.is_allowed()
 """
 
 
-def test_live_ollama_tests_run_with_the_guard_stood_down(pytester):
-    """Selected, the live test runs with the guard allowing it, while the
-    offline test in the same session still has the guard on."""
+def test_live_ollama_and_eval_tests_run_with_the_guard_stood_down(pytester):
+    """Selected, the live and eval tests run with the guard allowing them,
+    while the offline test in the same session still has the guard on."""
     pytester.makepyfile(test_live=_LIVE_TEST)
     result = pytester.runpytest("-p", "tests.ollama_guard", "-p", "no:cacheprovider")
-    result.assert_outcomes(passed=2)
+    result.assert_outcomes(passed=3)
 
 
-def test_the_suite_deselects_live_ollama_by_default(pytestconfig):
-    """The suite's own addopts carry the deselection (tests/pytest.ini)."""
+def test_the_suite_deselects_live_ollama_and_eval_by_default(pytestconfig):
+    """The suite's own addopts carry the deselection (tests/pytest.ini), so
+    the guard is on for every test a default run selects."""
     addopts = " ".join(pytestconfig.getini("addopts"))
+    assert "not eval" in addopts
     assert "not live_ollama" in addopts

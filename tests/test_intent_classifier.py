@@ -510,15 +510,14 @@ def _telemetry(caplog) -> list[tuple[str, str]]:
 
 
 class TestStage3LlmCall:
-    """The raw Stage 3 LLM call — no timeout wrapping."""
+    """The raw Stage 3 LLM call, no timeout wrapping. It returns a label or
+    raises; the timeout wrapper turns a failure into the safe default and
+    logs the warning (TestStage3Timeout)."""
 
-    def test_returns_needs_internet_on_valid_json(self, caplog, monkeypatch):
+    def test_returns_needs_internet_on_valid_json(self, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "needs_internet"}))
         monkeypatch.setattr(intent_classifier, "ollama", fake)
-        with caplog.at_level("INFO", logger="ember.intent_classifier"):
-            assert _stage3_llm_call("some query") == "needs_internet"
-        # No failure warning on success. Control: the two failure tests below.
-        assert _stage3_warnings(caplog) == []
+        assert _stage3_llm_call("some query") == "needs_internet"
 
     def test_returns_vault_answerable_on_valid_json(self, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
@@ -548,28 +547,62 @@ class TestStage3LlmCall:
         user_content = fake.chat_calls[0]["messages"][1]["content"]
         assert len(user_content) == 500
 
-    def test_invalid_json_returns_none_and_warns(self, caplog, monkeypatch):
+    def test_invalid_json_raises(self, monkeypatch):
         fake = FakeOllama(content="not JSON at all")
         monkeypatch.setattr(intent_classifier, "ollama", fake)
-        with caplog.at_level("INFO", logger="ember.intent_classifier"):
-            assert _stage3_llm_call("any query") is None
-        warnings = _stage3_warnings(caplog)
-        assert len(warnings) == 1 and "JSONDecodeError" in warnings[0]
+        with pytest.raises(json.JSONDecodeError):
+            _stage3_llm_call("any query")
 
-    def test_unknown_label_returns_none(self, monkeypatch):
+    def test_unknown_label_raises(self, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "maybe_internet"}))
         monkeypatch.setattr(intent_classifier, "ollama", fake)
-        assert _stage3_llm_call("any query") is None
+        with pytest.raises(intent_classifier.UnknownLabelError):
+            _stage3_llm_call("any query")
 
-    def test_ollama_exception_returns_none_and_warns(self, caplog, monkeypatch):
+    def test_ollama_exception_raises(self, monkeypatch):
         fake = FakeOllama(exc=ConnectionError("Ollama unreachable"))
         monkeypatch.setattr(intent_classifier, "ollama", fake)
+        with pytest.raises(ConnectionError):
+            _stage3_llm_call("any query")
+
+
+class TestStage3Failure:
+    """A failed call is the safe default with outcome stage3_failed, and one
+    WARNING carrying the failure type only (never the query or the model's
+    output). Logged by default, so a missing auxiliary model shows."""
+
+    @pytest.mark.parametrize("fake,failure", [
+        (FakeOllama(content="not JSON at all"), "JSONDecodeError"),
+        (FakeOllama(exc=ConnectionError("Ollama unreachable")), "ConnectionError"),
+        # A call that raises TimeoutError itself, inside the budget, is a
+        # failure: outcome stage3_failed, not timeout.
+        (FakeOllama(exc=TimeoutError("socket timed out")), "TimeoutError"),
+    ], ids=["invalid-json", "ollama-exception", "call-raises-timeout"])
+    def test_failure_is_the_safe_default_with_one_warning(
+        self, caplog, monkeypatch, fake, failure
+    ):
+        monkeypatch.setattr(intent_classifier, "ollama", fake)
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
-            assert _stage3_llm_call("any query") is None
-        # Logged by default, so a missing auxiliary model shows. Type name
-        # only: tests/test_log_exception_types.py.
+            result = _stage3_classify_with_timeout("any query")
+        assert result == ("vault_answerable", "stage3_failed")
         warnings = _stage3_warnings(caplog)
-        assert len(warnings) == 1 and "ConnectionError" in warnings[0]
+        assert len(warnings) == 1 and failure in warnings[0]
+
+    def test_unknown_label_warns_without_debug_and_without_the_label(
+        self, caplog, monkeypatch
+    ):
+        monkeypatch.delenv("EMBER_DEBUG", raising=False)
+        label_text = "maybe_internet sentinel 4417"
+        fake = FakeOllama(content=json.dumps({"label": label_text}))
+        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        with caplog.at_level("INFO", logger="ember.intent_classifier"):
+            result = _stage3_classify_with_timeout("unknown label query 9023")
+        assert result == ("vault_answerable", "stage3_failed")
+        # The warning's presence is the control for the two absences.
+        warnings = _stage3_warnings(caplog)
+        assert len(warnings) == 1 and "UnknownLabelError" in warnings[0]
+        assert label_text not in warnings[0]
+        assert "unknown label query 9023" not in warnings[0]
 
 
 class TestStage3Timeout:
@@ -589,7 +622,10 @@ class TestStage3Timeout:
         assert _stage3_warnings(caplog) == []
 
     def test_failed_llm_call_returns_safe_default_with_outcome_failed(self, monkeypatch):
-        monkeypatch.setattr(intent_classifier, "_stage3_llm_call", lambda q: None)
+        def failing_call(query):
+            raise RuntimeError("model failed")
+
+        monkeypatch.setattr(intent_classifier, "_stage3_llm_call", failing_call)
         label, outcome = _stage3_classify_with_timeout("any query")
         assert label == "vault_answerable"
         assert outcome == "stage3_failed"
@@ -618,6 +654,34 @@ class TestStage3Timeout:
         warnings = _stage3_warnings(caplog)
         assert len(warnings) == 1 and "TimeoutError" in warnings[0]
         assert query not in warnings[0]
+
+    def test_a_call_that_fails_after_the_timeout_warns_once(self, caplog, monkeypatch):
+        """The abandoned call failing later adds no second warning. Control:
+        TestStage3Failure, where the same failure inside the budget warns."""
+        import threading
+
+        release = threading.Event()
+
+        class LateFailingOllama(FakeOllama):
+            def chat(self, **kwargs):
+                release.wait(5.0)
+                return super().chat(**kwargs)
+
+        fake = LateFailingOllama(exc=ConnectionError("Ollama unreachable"))
+        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setattr(
+            intent_classifier, "get_intent_classifier_timeout_ms", lambda: 50
+        )
+        before = set(threading.enumerate())
+        with caplog.at_level("INFO", logger="ember.intent_classifier"):
+            result = _stage3_classify_with_timeout("any query")
+            # Let the abandoned call fail, and wait until its thread is done.
+            release.set()
+            for worker in set(threading.enumerate()) - before:
+                worker.join(timeout=5.0)
+        assert result == ("vault_answerable", "timeout")
+        warnings = _stage3_warnings(caplog)
+        assert len(warnings) == 1 and "TimeoutError" in warnings[0]
 
 
 class TestStage3TimeoutDefault:

@@ -346,12 +346,19 @@ def test_stateless_store_is_bounded():
 # --- 5. B2 next-turn dispatch and the dead prefix (findings 5, 5b) ---------------
 
 def test_b2_follow_up_under_ask_first_searches(client, isolate_to_test_vault):
-    """Assembly's classifier is patched to default (it would re-classify the
-    bare follow-up); the forced explicit policy must reach build_context."""
+    """The bare follow-up searches under ask-first. The request classifier
+    says web_search but not explicit; the forced explicit policy replaces it
+    and is the one build_context receives (checked directly below: the
+    adapter backstop would search even if assembly got another policy)."""
     sid = "sess_test_b2"
-    resp, _, llm, get = _turn(
-        client, isolate_to_test_vault, [_searxng([CLEAN_HIT])], query="the eagles game",
-        session_id=sid, awaiting_search=True)
+    service = _adapter().context_service
+    with patch.object(service, "build_context", wraps=service.build_context) as spy:
+        resp, _, llm, get = _turn(
+            client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
+            query="the eagles game", session_id=sid, awaiting_search=True)
+    policy = spy.call_args.kwargs["policy"]
+    assert policy.name == "web_search"
+    assert policy.explicit_search_request is True
     assert get.call_count == 1
     assert _searched_query(get) == "the eagles game"
     packet = llm.generate_response.call_args.args[0]

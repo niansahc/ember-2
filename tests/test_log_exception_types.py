@@ -113,10 +113,11 @@ def test_intent_stage3_failure_logs_type_only(caplog):
     with patch.object(intent_classifier.ollama, "chat",
                       side_effect=ResponseError(SENTINEL, 404)), \
          caplog.at_level(logging.INFO):
-        label = intent_classifier._stage3_llm_call(SENTINEL)
+        result = intent_classifier._stage3_classify_with_timeout(SENTINEL)
 
     text = _messages(caplog)
-    assert label is None              # a failure, not an answer
+    # A failure, not an answer.
+    assert result == (intent_classifier.VAULT_ANSWERABLE, "stage3_failed")
     assert "ResponseError" in text    # control: the site logged
     assert SENTINEL not in text
 

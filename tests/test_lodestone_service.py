@@ -227,3 +227,74 @@ class TestUpdateIsAppendOnly:
         assert len(matching) == 1
         assert matching[0]["metadata"]["user_note"] == "first note"
         assert matching[0]["metadata"]["flagged_as_noise"] is True
+
+
+def _set_mtimes(lodestone_dir, mtime_by_name):
+    """Pin file mtimes so ordering cannot depend on filesystem timestamp
+    granularity, vault copies or restores."""
+    import os
+
+    for path in lodestone_dir.glob("*.json"):
+        stamp = mtime_by_name(path)
+        os.utime(path, (stamp, stamp))
+
+
+class TestLatestVersionDoesNotDependOnMtime:
+    """The latest version of a record is decided by its own version counter,
+    not by file mtime: a tie (coarse timestamps, rapid double PATCH) or a
+    reset (vault copy, restore, unzip) must not resurrect an older version."""
+
+    def test_tied_mtimes_resolve_to_the_latest_version(self, vault_dir):
+        lodestone_dir = vault_dir / "memory" / "lodestone"
+        created = write("honesty", "character", confirmed=False)
+        update(created["id"], {"user_note": "first note"})
+        update(created["id"], {"confirmed": True})
+
+        _set_mtimes(lodestone_dir, lambda p: 1_700_000_000)
+
+        current = [r for r in read_all() if r["id"] == created["id"]]
+        assert len(current) == 1
+        assert current[0]["confirmed"] is True
+        assert current[0]["metadata"]["user_note"] == "first note"
+
+    def test_inverted_mtimes_still_resolve_to_the_latest_version(self, vault_dir):
+        lodestone_dir = vault_dir / "memory" / "lodestone"
+        created = write("honesty", "character", confirmed=False)
+        update(created["id"], {"user_note": "first note"})
+        latest = update(created["id"], {"confirmed": True})
+
+        # Newest version gets the oldest mtime, as after a copy that
+        # touches files in an arbitrary order.
+        order = sorted(p.name for p in lodestone_dir.glob("*.json"))
+        _set_mtimes(
+            lodestone_dir,
+            lambda p: 1_700_000_000 + (len(order) - order.index(p.name)),
+        )
+
+        current = [r for r in read_all() if r["id"] == created["id"]]
+        assert len(current) == 1
+        assert current[0]["version"] == latest["version"]
+        assert current[0]["confirmed"] is True
+
+    def test_versions_increase_by_one_per_update(self, vault_dir):
+        created = write("honesty", "character")
+        first = update(created["id"], {"user_note": "a"})
+        second = update(created["id"], {"user_note": "b"})
+        assert (created["version"], first["version"], second["version"]) == (0, 1, 2)
+
+    def test_control_unversioned_legacy_files_still_order_by_mtime(self, vault_dir):
+        """Positive control: records written before the version field exist
+        keep the old mtime ordering, so the version path above is what
+        decides in the tests that pass, not a lucky mtime."""
+        lodestone_dir = vault_dir / "memory" / "lodestone"
+        newer = _write_record(vault_dir, "rec-1", value="new text")
+        # Same logical id, two physical files, no version field on either.
+        (lodestone_dir / "rec-1-older.json").write_text(
+            json.dumps(dict(newer, value="old text")), encoding="utf-8"
+        )
+        _set_mtimes(
+            lodestone_dir,
+            lambda p: 1_700_000_100 if p.name == "rec-1.json" else 1_700_000_000,
+        )
+
+        assert [r["value"] for r in read_all()] == ["new text"]

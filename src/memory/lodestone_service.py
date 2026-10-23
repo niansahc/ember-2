@@ -55,28 +55,36 @@ def _all_records() -> list[dict[str, Any]]:
     physical version per logical id, newest first.
 
     update() writes a new file per edit rather than mutating the original
-    (append-only, Rule 3). Sorted by file mtime rather than filename: id
-    and timestamp are caller-controlled strings (tests write synthetic
-    ids like "rec-1" as filenames, which do not sort correctly against
-    real timestamp-named files), while mtime always reflects real write
-    order regardless of what the filename or record fields contain.
-    Mirrors StateResolver._latest_per_category's latest-wins pattern,
-    keyed on id instead of category.
+    (append-only, Rule 3). The latest version per id is the one with the
+    highest "version" counter, which update() increments from the version
+    it built on. File mtime is only the tie-break for records written
+    before the counter existed (they all read as version 0): mtime ties
+    when two writes land inside one filesystem timestamp tick, and is
+    reset when a vault is copied, restored or unzipped, so on its own it
+    can resurrect an older version. Filename is never the order: id and
+    timestamp are caller-controlled strings (tests use synthetic ids like
+    "rec-1"). Mirrors StateResolver._latest_per_category's latest-wins
+    pattern, keyed on id instead of category.
     """
     ldir = _lodestone_dir()
-    files = sorted(ldir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
-    records = []
-    seen_ids: set[str] = set()
-    for f in files:
+    latest: dict[Any, tuple[tuple[int, float, str], dict[str, Any]]] = {}
+    for f in ldir.glob("*.json"):
         rec = _load_record(f)
         if not rec or rec.get("type") != "lodestone":
             continue
+        rank = (_version_of(rec), f.stat().st_mtime, f.name)
         rec_id = rec.get("id")
-        if rec_id in seen_ids:
-            continue
-        seen_ids.add(rec_id)
-        records.append(rec)
-    return records
+        if rec_id not in latest or rank > latest[rec_id][0]:
+            latest[rec_id] = (rank, rec)
+    # Newest first across ids, by the winning file's mtime.
+    ordered = sorted(latest.values(), key=lambda item: item[0][1:], reverse=True)
+    return [rec for _, rec in ordered]
+
+
+def _version_of(record: dict[str, Any]) -> int:
+    """The record's version counter; 0 for records that predate it."""
+    version = record.get("version", 0)
+    return version if isinstance(version, int) else 0
 
 
 def read_active() -> list[dict[str, Any]]:
@@ -128,6 +136,8 @@ def write(
         "supporting_evidence": supporting_evidence,
         "recurrence_count": 1,
         "confirmed": confirmed,
+        # Incremented by each update(); decides the latest version on read.
+        "version": 0,
         "conflict_resolution": False,
         "metadata": {
             "user_note": extra_meta.get("user_note"),
@@ -169,9 +179,10 @@ def update(record_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
     Append-only (Rule 3): writes a NEW file carrying a new timestamp,
     built from the current (already-deduped) version of the record.
     The "id" field is left unchanged -- it is the stable identifier
-    callers PATCH against across repeated updates. The original file is
-    never mutated or removed; _all_records() dedups to the newest
-    physical version per id on read.
+    callers PATCH against across repeated updates. "version" is one more
+    than the version it was built from. The original file is never
+    mutated or removed; _all_records() dedups to the highest version per
+    id on read.
     """
     target_record = None
     for rec in _all_records():
@@ -204,10 +215,14 @@ def update(record_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
 
     new_timestamp = _timestamps.next()
     updated_record["timestamp"] = new_timestamp
+    updated_record["version"] = _version_of(target_record) + 1
 
     ldir = _lodestone_dir()
     file_path = ldir / f"{new_timestamp}.json"
     storage.create_json(file_path, updated_record)
 
-    logger.info("[LODESTONE] Updated record %s (append-only, new version %s)", record_id, new_timestamp)
+    logger.info(
+        "[LODESTONE] Updated record %s (append-only, version %d, file %s)",
+        record_id, updated_record["version"], new_timestamp,
+    )
     return updated_record

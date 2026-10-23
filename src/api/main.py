@@ -497,11 +497,16 @@ def health_check():
 
 
 def _check_docker_status() -> str:
-    """Ping SearXNG to determine if Docker services are up. Bounded to 1 s
-    because every /api/health call waits on it."""
+    """Ping SearXNG to determine if Docker services are up. Waits at most
+    1 s per phase (connect, read) because every /api/health call waits on
+    it. httpx timeouts are per phase, not a total deadline: a server that
+    answers but trickles its body can hold the probe longer."""
     try:
         import httpx as _httpx
-        resp = _httpx.get(f"{SEARXNG_BASE_URL}/", timeout=1.0)
+        # SEARXNG_BASE_URL is plain-http loopback, so TLS never applies.
+        # verify=False skips building a verifying SSL context, which loads
+        # the CA bundle (~0.25 s of CPU) on every call.
+        resp = _httpx.get(f"{SEARXNG_BASE_URL}/", timeout=1.0, verify=False)
         return "ok" if resp.status_code < 500 else "down"
     except Exception:
         return "down"

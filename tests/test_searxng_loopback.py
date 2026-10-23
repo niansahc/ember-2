@@ -63,7 +63,10 @@ def test_health_probe_gives_up_within_its_bound(monkeypatch, silent_listener):
     elapsed = time.perf_counter() - start
 
     assert status == "down"
-    assert elapsed < 2.0
+    # Lower bound: the 1 s timeout ended the wait, not a refused connection.
+    # Upper bound: 2x the timeout; the probe adds no fixed cost of its own
+    # (verify=False skips the CA-bundle load an http:// probe never needs).
+    assert 0.9 <= elapsed < 2.0
 
 
 def test_control_silent_listener_really_hangs(silent_listener):

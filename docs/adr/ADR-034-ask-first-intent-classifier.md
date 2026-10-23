@@ -76,7 +76,7 @@ The classifier technically has three states: definitely vault, definitely intern
 
 Every classification decision must be logged with:
 - The normalized query (truncated to 200 chars)
-- Which stage resolved it (`stage1`, `stage2`, `stage3`, `timeout`)
+- Which stage resolved it (`stage1`, `stage2`, `stage3`, `stage3_failed`, `timeout`). `stage3_failed` and `timeout` carry the safe-default label, not a model answer.
 - The label assigned (`needs_internet`, `vault_answerable`)
 - The confidence score (Stage 2 only)
 - Whether the result was later confirmed or corrected (post-hoc feedback, if available)

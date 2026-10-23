@@ -267,13 +267,16 @@ _STAGE3_SYSTEM_PROMPT: str = (
 )
 
 
-def _stage3_llm_call(query: str) -> str:
-    """Single LLM call for Stage 3. Returns a label or the safe default.
+def _stage3_llm_call(query: str) -> str | None:
+    """Single LLM call for Stage 3. Returns a label, or None on failure.
 
-    Must not raise — all exceptions are caught and converted to the safe
-    default so the caller's timeout wrapper sees a clean return.
+    Must not raise -- all exceptions are caught and reported as None so the
+    caller's timeout wrapper sees a clean return and can tell a real answer
+    from a failure.
     """
     try:
+        # think is a top-level chat argument. Inside options Ollama ignores
+        # it, qwen3:8b thinks, and the call overruns the 1500ms budget.
         response = ollama.chat(
             model=get_ember_auxiliary_model(),
             messages=[
@@ -281,7 +284,7 @@ def _stage3_llm_call(query: str) -> str:
                 {"role": "user", "content": query[:500]},
             ],
             format="json",
-            options={"think": False},
+            think=False,
         )
         content = response["message"]["content"]
         data = json.loads(content)
@@ -297,24 +300,33 @@ def _stage3_llm_call(query: str) -> str:
         # The type name only: the exception text can carry the query.
         logger.warning("[INTENT_CLASSIFY] Stage 3 failed: %s; using %s",
                        type(exc).__name__, _SAFE_DEFAULT)
-    return _SAFE_DEFAULT
+    return None
 
 
-def _stage3_classify_with_timeout(query: str) -> tuple[str, bool]:
+def _stage3_classify_with_timeout(query: str) -> tuple[str, str]:
     """Stage 3 with a hard timeout from INTENT_CLASSIFIER_TIMEOUT_MS.
 
-    Returns (label, timed_out). On timeout the label is the safe default.
+    Returns (label, outcome). outcome is the telemetry stage: "stage3" for
+    a real answer, "stage3_failed" when the call failed, "timeout" when it
+    overran the budget. The label is the safe default for the last two.
     """
     timeout_s = get_intent_classifier_timeout_ms() / 1000.0
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
         future = executor.submit(_stage3_llm_call, query)
         try:
-            return future.result(timeout=timeout_s), False
-        except concurrent.futures.TimeoutError:
-            return _SAFE_DEFAULT, True
+            label = future.result(timeout=timeout_s)
+        except concurrent.futures.TimeoutError as exc:
+            # Same form as the failure warning in _stage3_llm_call: the
+            # type name only, never the query.
+            logger.warning("[INTENT_CLASSIFY] Stage 3 failed: %s; using %s",
+                           type(exc).__name__, _SAFE_DEFAULT)
+            return _SAFE_DEFAULT, "timeout"
     finally:
         executor.shutdown(wait=False)
+    if label is None:
+        return _SAFE_DEFAULT, "stage3_failed"
+    return label, "stage3"
 
 
 # ---------------------------------------------------------------------------
@@ -340,13 +352,11 @@ def classify_intent(query: str) -> str:
         _log(stage="stage2", label=stage2_label, confidence=stage2_conf, query=query)
         return stage2_label
 
-    stage3_label, timed_out = _stage3_classify_with_timeout(query)
-    _log(
-        stage="timeout" if timed_out else "stage3",
-        label=stage3_label,
-        confidence=None,
-        query=query,
-    )
+    # A failed or timed-out Stage 3 still returns the safe default, but its
+    # telemetry stage says so: the log is SetFit training data (ADR-034),
+    # and a fallback recorded as stage=stage3 would read as a model answer.
+    stage3_label, outcome = _stage3_classify_with_timeout(query)
+    _log(stage=outcome, label=stage3_label, confidence=None, query=query)
     return stage3_label
 
 

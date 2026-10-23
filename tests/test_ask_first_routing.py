@@ -77,24 +77,20 @@ def _seed_pending(session_id, query=QUERY):
 
 def _turn(client, test_vault, responses, *, query, session_id, stream=False,
           autonomous=False, vault_enabled=True, real_classifier=False,
-          assembly_policy=None, request_policy=None, awaiting_search=False,
-          reply=MODEL_REPLY):
+          request_policy=None, awaiting_search=False, reply=MODEL_REPLY):
     """One /v1/chat/completions turn. _check_pending_confirmation and
     _write_pending_confirmation are REAL and run against the test vault.
-    request_policy replaces the request classifier's web_search verdict.
+    request_policy replaces the request classifier's web_search verdict;
+    context assembly receives the same policy (one classification per turn).
     Returns (resp, text, llm mock, requests.get mock)."""
     adapter = _adapter()
-    from src.context.policies import ContextPolicy, _web_search_policy
+    from src.context.policies import _web_search_policy
 
-    if assembly_policy is None:
-        assembly_policy = ContextPolicy(name="default")
     with ExitStack() as stack:
         get = stack.enter_context(
             patch.object(web_search_mod.requests, "get", side_effect=responses))
         stack.enter_context(patch.object(
             web_search_mod, "get_web_search_min_term_hits", return_value=0))
-        stack.enter_context(patch("src.context.service.classify_query",
-                                  return_value=assembly_policy))
         if not real_classifier:
             stack.enter_context(patch("src.context.policies.classify_query",
                                       return_value=request_policy
@@ -287,12 +283,11 @@ def test_stateless_explicit_request_searches(client, isolate_to_test_vault):
 
 def test_vault_on_explicit_request_searches(client, isolate_to_test_vault):
     """Control: the same request with the vault on, as before."""
-    from src.context.policies import _web_search_policy
     sid = "sess_test_vault_explicit"
     resp, text, _, get = _turn(
         client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
         query="search the web for the latest bitcoin price", session_id=sid,
-        real_classifier=True, assembly_policy=_web_search_policy(explicit=True))
+        real_classifier=True)
     assert get.call_count == 1
     assert resp.headers.get("x-ember-web-search") == "true"
 

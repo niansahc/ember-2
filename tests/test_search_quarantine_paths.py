@@ -209,38 +209,37 @@ def _searxng_response(items, unresponsive=()):
 
 
 def _autonomous(client, items, *, query=_QUERY, stream=False):
-    """One autonomous turn where context assembly does not search (its policy
-    is patched to default) and the request classifier routes to web_search,
-    so the backstop in _complete_exchange runs the search. Only SearXNG,
-    retrieval and the model are stubbed."""
+    """One autonomous turn that reaches the backstop in _complete_exchange.
+    Assembly receives the turn's own web_search policy (one classification
+    per turn), so on a vault-on turn it would run the search itself. The
+    backstop runs the search when assembly is skipped: a stateless turn
+    (vault toggle off). Only SearXNG, retrieval and the model are stubbed."""
     resp, text, packet, _ = _turn(client, [_searxng_response(items)],
-                                  query=query, stream=stream)
+                                  query=query, stream=stream, vault_enabled=False)
     return resp, text, packet
 
 
 def _turn(client, responses, *, query=_QUERY, stream=False, autonomous=True,
-          confirm=False, assembly_searches=False, min_term_hits=0,
+          confirm=False, vault_enabled=True, min_term_hits=0,
           reply=_MODEL_REPLY, real_pending=None):
     """One /v1/chat/completions turn with SearXNG answering `responses` in
-    order, one per search. confirm=True makes this the "yes" turn of an
-    ask-first offer for `query`. assembly_searches=True lets context assembly
-    search too (autonomous switched on while the offer was pending).
+    order, one per search. The request classifier routes to web_search and
+    assembly receives that policy, so assembly searches when autonomous is
+    on (or the request is explicit). confirm=True makes this the "yes" turn
+    of an ask-first offer for `query`. vault_enabled=False makes the turn
+    stateless: assembly is skipped and the backstop searches instead.
     real_pending=(test_vault, session_id) runs the REAL pending checker and
     writer against the throwaway test vault for that synthetic session
     instead of mocking them; the caller seeds the pending.
     Returns (resp, text, packet, _write_pending_confirmation mock or None)."""
     import src.api.openai_adapter as adapter
-    from src.context.policies import ContextPolicy, _web_search_policy
+    from src.context.policies import _web_search_policy
 
-    assembly_policy = (_web_search_policy(explicit=False) if assembly_searches
-                       else ContextPolicy(name="default"))
     with ExitStack() as stack:
         get = stack.enter_context(
             patch.object(web_search_mod.requests, "get", side_effect=responses))
         stack.enter_context(patch.object(web_search_mod, "get_web_search_min_term_hits",
                                          return_value=min_term_hits))
-        stack.enter_context(patch("src.context.service.classify_query",
-                                  return_value=assembly_policy))
         stack.enter_context(patch("src.context.policies.classify_query",
                                   return_value=_web_search_policy(explicit=False)))
         stack.enter_context(patch.object(adapter.context_service.retriever, "retrieve",
@@ -286,6 +285,7 @@ def _turn(client, responses, *, query=_QUERY, stream=False, autonomous=True,
             "model": "ember",
             "messages": [{"role": "user", "content": "yes" if confirm else query}],
             "stream": stream,
+            "vault_enabled": vault_enabled,
         }, headers=headers)
     assert resp.status_code == 200
     # Every scripted search ran (the backstop or the confirm path, plus
@@ -391,6 +391,16 @@ def test_autonomous_no_pending_after_unrepeatable_failure(client, reason, stream
         assert _NO_REPEAT in _search_section(packet)
     write_pending.assert_not_called()
     assert f"pending_confirmation not written: search reason={reason}" in caplog.text
+
+
+@pytest.mark.parametrize("reason", ["filtered", "low_relevance"])
+def test_backstop_logs_an_unrepeatable_failure_with_its_path(client, reason, caplog):
+    """The backstop logs every outcome with its path. It searches only when
+    assembly is skipped, so the turn is stateless."""
+    response, min_hits = _failing_search(reason)
+    with caplog.at_level("INFO", logger="ember.openai_adapter"):
+        _turn(client, [response], min_term_hits=min_hits, reply=_OFFER_REPLY,
+              vault_enabled=False)
     assert (f"path=autonomous: 0 of {_RETURNED[reason]} results kept, status=unavailable reason={reason}"
             in caplog.text)
 
@@ -454,7 +464,7 @@ def test_confirm_engines_blocked_still_gets_the_retry_offer(client, isolate_to_t
 
 def test_autonomous_empty_search_logs_its_path(client, caplog):
     with caplog.at_level("INFO", logger="ember.openai_adapter"):
-        _turn(client, [_searxng_response([])])
+        _turn(client, [_searxng_response([])], vault_enabled=False)
     assert ("path=autonomous: 0 of 0 results kept, status=empty reason=no_results"
             in caplog.text)
 
@@ -474,7 +484,7 @@ def test_confirm_failure_with_merged_items_is_not_a_retry(client, assembly_items
     second = (_searxng_response(assembly_items) if assembly_items
               else _searxng_response([], unresponsive=["brave"]))
     resp, text, packet, _ = _turn(
-        client, [blocked, second], confirm=True, assembly_searches=True)
+        client, [blocked, second], confirm=True)
     if expect_retry:
         assert text == RETRY_OFFER_RESPONSE
     else:

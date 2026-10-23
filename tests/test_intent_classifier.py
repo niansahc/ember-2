@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import re
 
-import httpx
 import numpy as np
 import pytest
 
@@ -31,26 +31,6 @@ from src.llm.intent_classifier import (
     _stage3_classify_with_timeout,
     _stage3_llm_call,
     classify_intent,
-)
-
-
-def _ollama_reachable() -> bool:
-    """Return True if a local Ollama instance responds to /api/version.
-
-    Stage 2 (nomic-embed-text) and Stage 3 (qwen3:8b) both require a
-    running Ollama. Tests that exercise the live classifier path skip
-    when it is not reachable (e.g. CI without an Ollama service).
-    """
-    try:
-        httpx.get("http://localhost:11434/api/version", timeout=1.0)
-        return True
-    except Exception:
-        return False
-
-
-_NEEDS_OLLAMA = pytest.mark.skipif(
-    not _ollama_reachable(),
-    reason="stage 2/3 classifier needs Ollama (nomic-embed-text + qwen3:8b)",
 )
 
 
@@ -475,7 +455,7 @@ class TestClassifyIntentStage2Flow:
         monkeypatch.setattr(
             intent_classifier,
             "_stage3_classify_with_timeout",
-            lambda q: ("needs_internet", False),
+            lambda q: ("needs_internet", "stage3"),
         )
         monkeypatch.setenv("EMBER_CLASSIFIER_TELEMETRY", "true")
         query = "genuinely ambiguous external question with no keyword signals"
@@ -515,6 +495,28 @@ def _stage3_warnings(caplog) -> list[str]:
     ]
 
 
+def _think_sent_top_level(call: dict) -> bool:
+    """True when a chat call disables thinking the way Ollama honors it.
+
+    think is a top-level chat argument; inside options Ollama ignores it
+    and qwen3:8b thinks anyway.
+    """
+    return call.get("think") is False and "think" not in call.get("options", {})
+
+
+def _telemetry_stages(caplog) -> list[str]:
+    """The exact stage= value of each [INTENT_CLASSIFY] telemetry line.
+
+    Parsed rather than substring-matched: "stage=stage3" is a substring
+    of "stage=stage3_failed".
+    """
+    return [
+        re.search(r"stage=(\S+)", r.getMessage()).group(1)
+        for r in caplog.records
+        if "[INTENT_CLASSIFY] stage=" in r.getMessage()
+    ]
+
+
 class TestStage3LlmCall:
     """The raw Stage 3 LLM call — no timeout wrapping."""
 
@@ -536,8 +538,17 @@ class TestStage3LlmCall:
         monkeypatch.setattr(intent_classifier, "ollama", fake)
         _stage3_llm_call("anything")
         call = fake.chat_calls[0]
-        assert call.get("options", {}).get("think") is False
+        assert call["think"] is False
+        assert _think_sent_top_level(call)
         assert call.get("format") == "json"
+
+    def test_think_inside_options_is_not_top_level(self):
+        # Positive control for the absence half of _think_sent_top_level:
+        # the pre-fix call form (think only inside options) must fail it.
+        old_call = {"format": "json", "options": {"think": False}}
+        assert not _think_sent_top_level(old_call)
+        both = {"think": False, "options": {"think": False}}
+        assert not _think_sent_top_level(both)
 
     def test_query_is_truncated_at_500_chars(self, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
@@ -546,24 +557,24 @@ class TestStage3LlmCall:
         user_content = fake.chat_calls[0]["messages"][1]["content"]
         assert len(user_content) == 500
 
-    def test_invalid_json_returns_safe_default_and_warns(self, caplog, monkeypatch):
+    def test_invalid_json_returns_none_and_warns(self, caplog, monkeypatch):
         fake = FakeOllama(content="not JSON at all")
         monkeypatch.setattr(intent_classifier, "ollama", fake)
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
-            assert _stage3_llm_call("any query") == "vault_answerable"
+            assert _stage3_llm_call("any query") is None
         warnings = _stage3_warnings(caplog)
         assert len(warnings) == 1 and "JSONDecodeError" in warnings[0]
 
-    def test_unknown_label_returns_safe_default(self, monkeypatch):
+    def test_unknown_label_returns_none(self, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "maybe_internet"}))
         monkeypatch.setattr(intent_classifier, "ollama", fake)
-        assert _stage3_llm_call("any query") == "vault_answerable"
+        assert _stage3_llm_call("any query") is None
 
-    def test_ollama_exception_returns_safe_default_and_warns(self, caplog, monkeypatch):
+    def test_ollama_exception_returns_none_and_warns(self, caplog, monkeypatch):
         fake = FakeOllama(exc=ConnectionError("Ollama unreachable"))
         monkeypatch.setattr(intent_classifier, "ollama", fake)
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
-            assert _stage3_llm_call("any query") == "vault_answerable"
+            assert _stage3_llm_call("any query") is None
         # Logged by default, so a missing auxiliary model shows. Type name
         # only: tests/test_log_exception_types.py.
         warnings = _stage3_warnings(caplog)
@@ -573,17 +584,26 @@ class TestStage3LlmCall:
 class TestStage3Timeout:
     """Stage 3 must honor the configured hard timeout."""
 
-    def test_fast_llm_returns_label_with_timed_out_false(self, monkeypatch):
+    def test_fast_llm_returns_label_with_outcome_stage3(self, caplog, monkeypatch):
         monkeypatch.setattr(
             intent_classifier,
             "_stage3_llm_call",
             lambda q: "needs_internet",
         )
-        label, timed_out = _stage3_classify_with_timeout("any query")
+        with caplog.at_level("INFO", logger="ember.intent_classifier"):
+            label, outcome = _stage3_classify_with_timeout("any query")
         assert label == "needs_internet"
-        assert timed_out is False
+        assert outcome == "stage3"
+        # No failure warning on an answer. Control: the timeout test below.
+        assert _stage3_warnings(caplog) == []
 
-    def test_slow_llm_times_out_with_safe_default(self, monkeypatch):
+    def test_failed_llm_call_returns_safe_default_with_outcome_failed(self, monkeypatch):
+        monkeypatch.setattr(intent_classifier, "_stage3_llm_call", lambda q: None)
+        label, outcome = _stage3_classify_with_timeout("any query")
+        assert label == "vault_answerable"
+        assert outcome == "stage3_failed"
+
+    def test_slow_llm_times_out_with_safe_default_and_warns(self, caplog, monkeypatch):
         import time
 
         def slow_call(query):
@@ -597,9 +617,16 @@ class TestStage3Timeout:
             "get_intent_classifier_timeout_ms",
             lambda: 100,
         )
-        label, timed_out = _stage3_classify_with_timeout("any query")
+        query = "timeout sentinel query 7731"
+        with caplog.at_level("INFO", logger="ember.intent_classifier"):
+            label, outcome = _stage3_classify_with_timeout(query)
         assert label == "vault_answerable"
-        assert timed_out is True
+        assert outcome == "timeout"
+        # Logged by default, type name only, like the #304 failure warning.
+        # The warning's presence is the control for the query's absence.
+        warnings = _stage3_warnings(caplog)
+        assert len(warnings) == 1 and "TimeoutError" in warnings[0]
+        assert query not in warnings[0]
 
 
 class TestStage3TimeoutDefault:
@@ -640,19 +667,21 @@ class TestClassifyIntentStage3Flow:
         monkeypatch.setattr(
             intent_classifier,
             "_stage3_classify_with_timeout",
-            lambda q: ("vault_answerable", True),
+            lambda q: ("vault_answerable", "timeout"),
         )
         monkeypatch.setenv("EMBER_CLASSIFIER_TELEMETRY", "true")
         query = "intentionally hard to classify without signal"
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
             label = classify_intent(query)
         assert label == "vault_answerable"
-        matches = [r for r in caplog.records if "[INTENT_CLASSIFY]" in r.message]
+        matches = [r for r in caplog.records if "[INTENT_CLASSIFY] stage=" in r.message]
         assert len(matches) == 1
-        assert "stage=timeout" in matches[0].message
+        assert _telemetry_stages(caplog) == ["timeout"]
         assert "label=vault_answerable" in matches[0].message
 
     def test_stage3_resolution_logs_stage_stage3(self, caplog, monkeypatch):
+        # Real path below the timeout wrapper: a valid model answer.
+        # Positive control for the stage3_failed test that follows.
         _inject_stage2_cache(
             [
                 ("needs_internet", [1.0, 0.0, 0.0]),
@@ -660,19 +689,35 @@ class TestClassifyIntentStage3Flow:
             ]
         )
         monkeypatch.setattr(intent_classifier, "embed_text", lambda q: [0.3, 0.3, 0.9])
-        monkeypatch.setattr(
-            intent_classifier,
-            "_stage3_classify_with_timeout",
-            lambda q: ("needs_internet", False),
-        )
+        fake = FakeOllama(content=json.dumps({"label": "needs_internet"}))
+        monkeypatch.setattr(intent_classifier, "ollama", fake)
         monkeypatch.setenv("EMBER_CLASSIFIER_TELEMETRY", "true")
         query = "something that only the LLM can resolve cleanly"
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
             label = classify_intent(query)
         assert label == "needs_internet"
-        matches = [r for r in caplog.records if "[INTENT_CLASSIFY]" in r.message]
-        assert len(matches) == 1
-        assert "stage=stage3" in matches[0].message
+        assert _telemetry_stages(caplog) == ["stage3"]
+
+    def test_failed_stage3_is_not_recorded_as_a_stage3_answer(self, caplog, monkeypatch):
+        _inject_stage2_cache(
+            [
+                ("needs_internet", [1.0, 0.0, 0.0]),
+                ("vault_answerable", [0.0, 1.0, 0.0]),
+            ]
+        )
+        monkeypatch.setattr(intent_classifier, "embed_text", lambda q: [0.3, 0.3, 0.9])
+        fake = FakeOllama(exc=ConnectionError("Ollama unreachable"))
+        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setenv("EMBER_CLASSIFIER_TELEMETRY", "true")
+        query = "something the LLM never gets to answer"
+        with caplog.at_level("INFO", logger="ember.intent_classifier"):
+            label = classify_intent(query)
+        # The caller still gets the ADR-034 safe default...
+        assert label == "vault_answerable"
+        # ...but telemetry marks it a failure, not a stage3 answer.
+        stages = _telemetry_stages(caplog)
+        assert stages == ["stage3_failed"]
+        assert "stage3" not in stages
 
 
 # ---------------------------------------------------------------------------
@@ -710,7 +755,7 @@ class TestIntrospectiveUncertaintyPoolInclusion:
         assert match["label"] == "vault_answerable"
 
 
-@_NEEDS_OLLAMA
+@pytest.mark.live_ollama
 class TestStage2IntrospectiveUncertainty:
     """End-to-end: the live classifier path must route introspective-
     uncertainty phrases to vault_answerable. Exercises Stage 2 via the
@@ -723,7 +768,7 @@ class TestStage2IntrospectiveUncertainty:
         assert classify_intent(phrase) == VAULT_ANSWERABLE
 
 
-@_NEEDS_OLLAMA
+@pytest.mark.live_ollama
 class TestBWS001Regression:
     """Direct regression coverage for the B-WS-001 observed cases.
 
@@ -751,7 +796,7 @@ class TestBWS001Regression:
 # ---------------------------------------------------------------------------
 
 
-@_NEEDS_OLLAMA
+@pytest.mark.live_ollama
 class TestBCTX001FirstPersonRecall:
     """B-CTX-001 surfaced three personal/conversational queries that Stage 2
     confidently misrouted to needs_internet on the Alex persona transcript:

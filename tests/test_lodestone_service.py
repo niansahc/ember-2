@@ -3,6 +3,7 @@ Tests for LodestoneService — lodestone living layer read/write (ADR-017).
 """
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -229,20 +230,15 @@ class TestUpdateIsAppendOnly:
         assert matching[0]["metadata"]["flagged_as_noise"] is True
 
 
-def _set_mtimes(lodestone_dir, mtime_by_name):
-    """Pin file mtimes so ordering cannot depend on filesystem timestamp
+def _set_mtime(path, stamp):
+    """Pin a file's mtime so ordering cannot depend on filesystem timestamp
     granularity, vault copies or restores."""
-    import os
-
-    for path in lodestone_dir.glob("*.json"):
-        stamp = mtime_by_name(path)
-        os.utime(path, (stamp, stamp))
+    os.utime(path, (stamp, stamp))
 
 
 class TestLatestVersionDoesNotDependOnMtime:
-    """The latest version of a record is decided by its own version counter,
-    not by file mtime: a tie (coarse timestamps, rapid double PATCH) or a
-    reset (vault copy, restore, unzip) must not resurrect an older version."""
+    """A tied or reset mtime (coarse timestamps, vault copy or restore)
+    must not resurrect an older version."""
 
     def test_tied_mtimes_resolve_to_the_latest_version(self, vault_dir):
         lodestone_dir = vault_dir / "memory" / "lodestone"
@@ -250,7 +246,8 @@ class TestLatestVersionDoesNotDependOnMtime:
         update(created["id"], {"user_note": "first note"})
         update(created["id"], {"confirmed": True})
 
-        _set_mtimes(lodestone_dir, lambda p: 1_700_000_000)
+        for path in lodestone_dir.glob("*.json"):
+            _set_mtime(path, 1_700_000_000)
 
         current = [r for r in read_all() if r["id"] == created["id"]]
         assert len(current) == 1
@@ -265,11 +262,9 @@ class TestLatestVersionDoesNotDependOnMtime:
 
         # Newest version gets the oldest mtime, as after a copy that
         # touches files in an arbitrary order.
-        order = sorted(p.name for p in lodestone_dir.glob("*.json"))
-        _set_mtimes(
-            lodestone_dir,
-            lambda p: 1_700_000_000 + (len(order) - order.index(p.name)),
-        )
+        newest_first = sorted(lodestone_dir.glob("*.json"), reverse=True)
+        for i, path in enumerate(newest_first):
+            _set_mtime(path, 1_700_000_000 + i)
 
         current = [r for r in read_all() if r["id"] == created["id"]]
         assert len(current) == 1
@@ -292,9 +287,7 @@ class TestLatestVersionDoesNotDependOnMtime:
         (lodestone_dir / "rec-1-older.json").write_text(
             json.dumps(dict(newer, value="old text")), encoding="utf-8"
         )
-        _set_mtimes(
-            lodestone_dir,
-            lambda p: 1_700_000_100 if p.name == "rec-1.json" else 1_700_000_000,
-        )
+        _set_mtime(lodestone_dir / "rec-1.json", 1_700_000_100)
+        _set_mtime(lodestone_dir / "rec-1-older.json", 1_700_000_000)
 
         assert [r["value"] for r in read_all()] == ["new text"]

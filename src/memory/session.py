@@ -5,7 +5,8 @@ Session management for conversation grouping.
 
 Sessions are stored as append-only records in memory/session/.
 Multiple records can exist per session_id (after renames, deletes).
-Resolution: latest timestamp wins per session_id.
+Resolution: highest metadata.version wins per session_id (see
+_resolve_sessions).
 
 Conversation turns reference their session via metadata.session_id.
 updated_at and turn_count are derived from conversation records at
@@ -66,15 +67,29 @@ def _read_all_session_records() -> list[dict]:
 def _resolve_sessions(records: list[dict]) -> dict[str, dict]:
     """
     Given all session records, return a dict of session_id -> latest record.
-    Latest = highest timestamp wins.
+
+    Latest = highest metadata.version. Each write sets it one above the
+    version it built on, so the order holds when the wall clock repeats a
+    reading or steps backward. The timestamp only orders records that
+    predate the counter (all version 0).
     """
     resolved: dict[str, dict] = {}
     for rec in records:
         sid = rec.get("metadata", {}).get("session_id", rec.get("id", ""))
         existing = resolved.get(sid)
-        if existing is None or rec.get("timestamp", "") > existing.get("timestamp", ""):
+        if existing is None or _rank(rec) > _rank(existing):
             resolved[sid] = rec
     return resolved
+
+
+def _version_of(record: dict) -> int:
+    """The record's version counter; 0 for records that predate it."""
+    version = record.get("metadata", {}).get("version", 0)
+    return version if isinstance(version, int) else 0
+
+
+def _rank(record: dict) -> tuple[int, str]:
+    return _version_of(record), record.get("timestamp", "")
 
 
 def _scan_conversation_turns() -> dict[str, list[dict]]:
@@ -215,6 +230,7 @@ def create_session(session_id: str, title: str, *, test: bool = False) -> Path:
         "session_id": session_id,
         "created_at": now.isoformat(),
         "deleted": False,
+        "version": 0,
     }
     if test:
         meta["test"] = True
@@ -258,6 +274,7 @@ def update_session(
         "session_id": session_id,
         "created_at": meta.get("created_at", now.isoformat()),
         "deleted": False,
+        "version": _version_of(existing) + 1,
     }
     if new_project_id is not None:
         new_meta["project_id"] = new_project_id
@@ -285,8 +302,8 @@ def update_session(
     file_path = _session_dir() / f"{record['id']}.json"
     storage.create_json(file_path, record)
     logger.info(
-        "Updated session %s: title_changed=%s project_id=%s",
-        session_id, title is not None, new_project_id,
+        "Updated session %s: title_changed=%s project_id=%s version=%d",
+        session_id, title is not None, new_project_id, new_meta["version"],
     )
     return file_path
 
@@ -324,9 +341,10 @@ def delete_session(session_id: str) -> Optional[Path]:
             "session_id": session_id,
             "created_at": existing.get("metadata", {}).get("created_at", now.isoformat()),
             "deleted": True,
+            "version": _version_of(existing) + 1,
         },
     }
     file_path = _session_dir() / f"{record['id']}.json"
     storage.create_json(file_path, record)
-    logger.info("Soft-deleted session %s", session_id)
+    logger.info("Soft-deleted session %s (version %d)", session_id, record["metadata"]["version"])
     return file_path

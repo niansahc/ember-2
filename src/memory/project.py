@@ -5,7 +5,8 @@ Project management for conversation grouping.
 
 Projects are stored as append-only records in memory/project/.
 Multiple records can exist per project_id (after renames, recolors, deletes).
-Resolution: latest timestamp wins per project_id.
+Resolution: highest metadata.version wins per project_id (see
+_resolve_projects).
 
 A project record looks like:
 {
@@ -18,7 +19,8 @@ A project record looks like:
   "metadata": {
     "project_id": "proj_abc123",
     "color": "#ff8c00",
-    "deleted": false
+    "deleted": false,
+    "version": 0
   }
 }
 """
@@ -75,7 +77,11 @@ def _read_all_project_records() -> list[dict]:
 def _resolve_projects(records: list[dict]) -> dict[str, dict]:
     """
     Given all project records, return a dict of project_id -> latest record.
-    Latest = highest timestamp wins.
+
+    Latest = highest metadata.version. Each write sets it one above the
+    version it built on, so the order holds when the wall clock repeats a
+    reading or steps backward. The timestamp only orders records that
+    predate the counter (all version 0).
     """
     resolved: dict[str, dict] = {}
     for rec in records:
@@ -83,9 +89,19 @@ def _resolve_projects(records: list[dict]) -> dict[str, dict]:
         if not pid:
             continue
         existing = resolved.get(pid)
-        if existing is None or rec.get("timestamp", "") > existing.get("timestamp", ""):
+        if existing is None or _rank(rec) > _rank(existing):
             resolved[pid] = rec
     return resolved
+
+
+def _version_of(record: dict) -> int:
+    """The record's version counter; 0 for records that predate it."""
+    version = record.get("metadata", {}).get("version", 0)
+    return version if isinstance(version, int) else 0
+
+
+def _rank(record: dict) -> tuple[int, str]:
+    return _version_of(record), record.get("timestamp", "")
 
 
 def list_projects() -> list[dict]:
@@ -140,6 +156,7 @@ def create_project(name: str, color: str = "#ff8c00") -> dict:
             "color": color,
             "created_at": now.isoformat(),
             "deleted": False,
+            "version": 0,
         },
     }
     file_path = _project_dir() / f"{record['id']}.json"
@@ -173,13 +190,14 @@ def update_project(project_id: str, name: Optional[str] = None, color: Optional[
             "color": new_color,
             "created_at": existing.get("metadata", {}).get("created_at", now.isoformat()),
             "deleted": False,
+            "version": _version_of(existing) + 1,
         },
     }
     file_path = _project_dir() / f"{record['id']}.json"
     storage.create_json(file_path, record)
     logger.info(
-        "Updated project %s: name_changed=%s color=%s",
-        project_id, name is not None, new_color,
+        "Updated project %s: name_changed=%s color=%s version=%d",
+        project_id, name is not None, new_color, record["metadata"]["version"],
     )
     return file_path
 
@@ -206,9 +224,10 @@ def delete_project(project_id: str) -> Optional[Path]:
             "color": existing.get("metadata", {}).get("color", "#ff8c00"),
             "created_at": existing.get("metadata", {}).get("created_at", now.isoformat()),
             "deleted": True,
+            "version": _version_of(existing) + 1,
         },
     }
     file_path = _project_dir() / f"{record['id']}.json"
     storage.create_json(file_path, record)
-    logger.info("Soft-deleted project %s", project_id)
+    logger.info("Soft-deleted project %s (version %d)", project_id, record["metadata"]["version"])
     return file_path

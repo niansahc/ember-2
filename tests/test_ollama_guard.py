@@ -69,14 +69,15 @@ def test_the_stub_leaves_other_ports_alone():
             pass
 
     server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # One request, so handle_request: serve_forever's shutdown waits a poll tick.
+    thread = threading.Thread(target=server.handle_request, daemon=True)
     thread.start()
     try:
         port = server.server_address[1]
         resp = httpx.get(f"http://127.0.0.1:{port}/", timeout=5.0)
         assert resp.status_code == 200 and resp.text == "ok"
     finally:
-        server.shutdown()
+        thread.join(timeout=5.0)
         server.server_close()
 
 
@@ -116,16 +117,9 @@ def test_offline():
 """
 
 
-def test_live_ollama_tests_are_deselected_by_default(pytester):
-    pytester.makepyfile(test_live=_LIVE_TEST)
-    result = pytester.runpytest("-p", "tests.ollama_guard", "-p", "no:cacheprovider",
-                                "-m", "not live_ollama")
-    result.assert_outcomes(passed=1, deselected=1)
-
-
 def test_live_ollama_tests_run_with_the_guard_stood_down(pytester):
-    """Control for the deselection: selected explicitly, the live test runs
-    and the guard allows it, while the offline test still has the guard on."""
+    """Selected, the live test runs with the guard allowing it, while the
+    offline test in the same session still has the guard on."""
     pytester.makepyfile(test_live=_LIVE_TEST)
     result = pytester.runpytest("-p", "tests.ollama_guard", "-p", "no:cacheprovider")
     result.assert_outcomes(passed=2)

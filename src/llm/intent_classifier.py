@@ -296,11 +296,15 @@ def _stage3_llm_call(query: str) -> str | None:
                 "[INTENT_CLASSIFY] Stage 3 returned unknown label: %r", label
             )
     except Exception as exc:
-        # Always logged, so a missing or unreachable auxiliary model shows.
-        # The type name only: the exception text can carry the query.
-        logger.warning("[INTENT_CLASSIFY] Stage 3 failed: %s; using %s",
-                       type(exc).__name__, _SAFE_DEFAULT)
+        _warn_stage3_failed(exc)
     return None
+
+
+def _warn_stage3_failed(exc: BaseException) -> None:
+    """Always logged, so a missing, unreachable or slow auxiliary model shows.
+    The type name only: the exception text can carry the query."""
+    logger.warning("[INTENT_CLASSIFY] Stage 3 failed: %s; using %s",
+                   type(exc).__name__, _SAFE_DEFAULT)
 
 
 def _stage3_classify_with_timeout(query: str) -> tuple[str, str]:
@@ -317,10 +321,7 @@ def _stage3_classify_with_timeout(query: str) -> tuple[str, str]:
         try:
             label = future.result(timeout=timeout_s)
         except concurrent.futures.TimeoutError as exc:
-            # Same form as the failure warning in _stage3_llm_call: the
-            # type name only, never the query.
-            logger.warning("[INTENT_CLASSIFY] Stage 3 failed: %s; using %s",
-                           type(exc).__name__, _SAFE_DEFAULT)
+            _warn_stage3_failed(exc)
             return _SAFE_DEFAULT, "timeout"
     finally:
         executor.shutdown(wait=False)

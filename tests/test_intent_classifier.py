@@ -313,6 +313,19 @@ def _inject_stage2_cache(
     intent_classifier._example_embeddings = (labels, matrix / norms)
 
 
+@pytest.fixture
+def stage2_escalates(monkeypatch):
+    """Stage 2 below its 0.65 threshold: the query embeds roughly
+    equidistant-but-weak to both labels, mostly along a neutral axis."""
+    _inject_stage2_cache(
+        [
+            ("needs_internet", [1.0, 0.0, 0.0]),
+            ("vault_answerable", [0.0, 1.0, 0.0]),
+        ]
+    )
+    monkeypatch.setattr(intent_classifier, "embed_text", lambda q: [0.3, 0.3, 0.9])
+
+
 class TestStage2HighConfidence:
     """Stage 2 returns the matching label when top-1 similarity >= 0.65."""
 
@@ -344,18 +357,7 @@ class TestStage2HighConfidence:
 class TestStage2LowConfidenceEscalates:
     """Stage 2 returns (None, top_confidence) when below threshold."""
 
-    def test_ambiguous_query_escalates(self, monkeypatch):
-        # Use a vector whose top cosine similarity to either class is
-        # below 0.65. [0.4, 0.9] has ~0.406 similarity to [1,0] and
-        # ~0.913 to [0,1] — so swap to a case where neither is close.
-        _inject_stage2_cache(
-            [
-                ("needs_internet", [1.0, 0.0, 0.0]),
-                ("vault_answerable", [0.0, 1.0, 0.0]),
-            ]
-        )
-        # Roughly equidistant-but-weak: mostly aligned with a neutral axis.
-        monkeypatch.setattr(intent_classifier, "embed_text", lambda q: [0.3, 0.3, 0.9])
+    def test_ambiguous_query_escalates(self, stage2_escalates):
         label, confidence = _stage2_classify("something truly ambiguous")
         assert label is None
         assert confidence is not None
@@ -441,15 +443,8 @@ class TestClassifyIntentStage2Flow:
         assert label == "needs_internet"
 
     def test_stage3_is_reached_when_stages_1_and_2_escalate(
-        self, caplog, monkeypatch
+        self, caplog, monkeypatch, stage2_escalates
     ):
-        _inject_stage2_cache(
-            [
-                ("needs_internet", [1.0, 0.0, 0.0]),
-                ("vault_answerable", [0.0, 1.0, 0.0]),
-            ]
-        )
-        monkeypatch.setattr(intent_classifier, "embed_text", lambda q: [0.3, 0.3, 0.9])
         # Force Stage 3 to decisively return needs_internet so the log
         # line tags stage=stage3, not fallback or stage2.
         monkeypatch.setattr(
@@ -462,10 +457,7 @@ class TestClassifyIntentStage2Flow:
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
             label = classify_intent(query)
         assert label == "needs_internet"
-        matches = [r for r in caplog.records if "[INTENT_CLASSIFY]" in r.message]
-        assert len(matches) == 1
-        assert "stage=stage3" in matches[0].message
-        assert "label=needs_internet" in matches[0].message
+        assert _telemetry(caplog) == [("stage3", "needs_internet")]
 
 
 # ---------------------------------------------------------------------------
@@ -504,14 +496,14 @@ def _think_sent_top_level(call: dict) -> bool:
     return call.get("think") is False and "think" not in call.get("options", {})
 
 
-def _telemetry_stages(caplog) -> list[str]:
-    """The exact stage= value of each [INTENT_CLASSIFY] telemetry line.
+def _telemetry(caplog) -> list[tuple[str, str]]:
+    """(stage, label) of each [INTENT_CLASSIFY] telemetry line.
 
     Parsed rather than substring-matched: "stage=stage3" is a substring
     of "stage=stage3_failed".
     """
     return [
-        re.search(r"stage=(\S+)", r.getMessage()).group(1)
+        re.search(r"stage=(\S+) label=(\S+)", r.getMessage()).groups()
         for r in caplog.records
         if "[INTENT_CLASSIFY] stage=" in r.getMessage()
     ]
@@ -538,7 +530,6 @@ class TestStage3LlmCall:
         monkeypatch.setattr(intent_classifier, "ollama", fake)
         _stage3_llm_call("anything")
         call = fake.chat_calls[0]
-        assert call["think"] is False
         assert _think_sent_top_level(call)
         assert call.get("format") == "json"
 
@@ -654,15 +645,7 @@ class TestStage3TimeoutDefault:
 class TestClassifyIntentStage3Flow:
     """Stage 3 result flows through classify_intent's top-level log line."""
 
-    def test_timeout_path_logs_stage_timeout(self, caplog, monkeypatch):
-        # Force both earlier stages to escalate.
-        _inject_stage2_cache(
-            [
-                ("needs_internet", [1.0, 0.0, 0.0]),
-                ("vault_answerable", [0.0, 1.0, 0.0]),
-            ]
-        )
-        monkeypatch.setattr(intent_classifier, "embed_text", lambda q: [0.3, 0.3, 0.9])
+    def test_timeout_path_logs_stage_timeout(self, caplog, monkeypatch, stage2_escalates):
         # Simulate a Stage 3 timeout.
         monkeypatch.setattr(
             intent_classifier,
@@ -674,21 +657,11 @@ class TestClassifyIntentStage3Flow:
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
             label = classify_intent(query)
         assert label == "vault_answerable"
-        matches = [r for r in caplog.records if "[INTENT_CLASSIFY] stage=" in r.message]
-        assert len(matches) == 1
-        assert _telemetry_stages(caplog) == ["timeout"]
-        assert "label=vault_answerable" in matches[0].message
+        assert _telemetry(caplog) == [("timeout", "vault_answerable")]
 
-    def test_stage3_resolution_logs_stage_stage3(self, caplog, monkeypatch):
+    def test_stage3_resolution_logs_stage_stage3(self, caplog, monkeypatch, stage2_escalates):
         # Real path below the timeout wrapper: a valid model answer.
         # Positive control for the stage3_failed test that follows.
-        _inject_stage2_cache(
-            [
-                ("needs_internet", [1.0, 0.0, 0.0]),
-                ("vault_answerable", [0.0, 1.0, 0.0]),
-            ]
-        )
-        monkeypatch.setattr(intent_classifier, "embed_text", lambda q: [0.3, 0.3, 0.9])
         fake = FakeOllama(content=json.dumps({"label": "needs_internet"}))
         monkeypatch.setattr(intent_classifier, "ollama", fake)
         monkeypatch.setenv("EMBER_CLASSIFIER_TELEMETRY", "true")
@@ -696,16 +669,11 @@ class TestClassifyIntentStage3Flow:
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
             label = classify_intent(query)
         assert label == "needs_internet"
-        assert _telemetry_stages(caplog) == ["stage3"]
+        assert _telemetry(caplog) == [("stage3", "needs_internet")]
 
-    def test_failed_stage3_is_not_recorded_as_a_stage3_answer(self, caplog, monkeypatch):
-        _inject_stage2_cache(
-            [
-                ("needs_internet", [1.0, 0.0, 0.0]),
-                ("vault_answerable", [0.0, 1.0, 0.0]),
-            ]
-        )
-        monkeypatch.setattr(intent_classifier, "embed_text", lambda q: [0.3, 0.3, 0.9])
+    def test_failed_stage3_is_not_recorded_as_a_stage3_answer(
+        self, caplog, monkeypatch, stage2_escalates
+    ):
         fake = FakeOllama(exc=ConnectionError("Ollama unreachable"))
         monkeypatch.setattr(intent_classifier, "ollama", fake)
         monkeypatch.setenv("EMBER_CLASSIFIER_TELEMETRY", "true")
@@ -715,9 +683,7 @@ class TestClassifyIntentStage3Flow:
         # The caller still gets the ADR-034 safe default...
         assert label == "vault_answerable"
         # ...but telemetry marks it a failure, not a stage3 answer.
-        stages = _telemetry_stages(caplog)
-        assert stages == ["stage3_failed"]
-        assert "stage3" not in stages
+        assert _telemetry(caplog) == [("stage3_failed", "vault_answerable")]
 
 
 # ---------------------------------------------------------------------------

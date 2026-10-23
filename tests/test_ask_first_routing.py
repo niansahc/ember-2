@@ -13,6 +13,8 @@ CORRECT behaviour; the review repros asserted the defect.
     pendings live in process with a TTL, never in the vault.
   - B2 next-turn dispatch searches under ask-first.
   - The "searching" status frame fires only on turns that search.
+  - One intent classification per turn: assembly receives the adapter's
+    policy instead of classifying the message again.
 
 Mocks follow tests/test_search_quarantine_paths.py: SearXNG via
 src.tools.web_search.requests.get, the model via llm_adapter. The pending
@@ -402,3 +404,47 @@ def test_searching_status_on_a_turn_that_searches(client, isolate_to_test_vault)
                             stream=True, autonomous=True)
     assert get.call_count == 1
     assert "searching" in _statuses(resp)
+
+
+# --- 7. One classification per turn -------------------------------------------
+# Before the fix the adapter passed policy=None to build_context, which ran
+# classify_query again: a second ADR-034 cascade and a second Stage 3 model
+# call whose verdict could differ from the one the adapter acted on.
+
+class _CountingClassifier:
+    """Stands in for src.context.policies.classify_intent; no model."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, query: str) -> str:
+        self.calls += 1
+        return "vault_answerable"
+
+
+@pytest.fixture
+def intent_counter():
+    fake = _CountingClassifier()
+    with patch("src.context.policies.classify_intent", fake):
+        yield fake
+
+
+def test_a_chat_turn_classifies_intent_once(client, isolate_to_test_vault, intent_counter):
+    _turn(client, isolate_to_test_vault, [], query="what should I cook tonight",
+          session_id="sess_test_single_classify", real_classifier=True)
+    assert intent_counter.calls == 1
+
+
+@pytest.mark.parametrize("policy_name,expected", [(None, 1), ("default", 0)])
+def test_build_context_classifies_only_without_a_policy(intent_counter, policy_name, expected):
+    """Positive control for the test above: the counter sees an assembly-side
+    classification, so a return to policy=None in the adapter would read 2."""
+    from src.context.policies import ContextPolicy
+    adapter = _adapter()
+    policy = None if policy_name is None else ContextPolicy(name=policy_name)
+    with patch.object(adapter.context_service.retriever, "retrieve",
+                      return_value=([], [], [], [], None)):
+        adapter.context_service.build_context("what should I cook tonight",
+                                              skip_web_search=True, read_only=True,
+                                              policy=policy)
+    assert intent_counter.calls == expected

@@ -46,10 +46,13 @@ class OllamaConnectionBlocked(ConnectionRefusedError):
 
 _lock = threading.Lock()
 _violations: list[str] = []
-_state = {"allowed": False}
+_allowed = False  # True while a live_ollama test runs
 
 
-def _is_ollama_port(port) -> bool:
+def _blocked(port) -> bool:
+    """True when a request or connection to `port` must not go through."""
+    if _allowed or port is None:
+        return False
     try:
         return int(port) == OLLAMA_PORT
     except (TypeError, ValueError):
@@ -71,7 +74,7 @@ def take_violations() -> list[str]:
 
 def is_allowed() -> bool:
     """True while a live_ollama test runs."""
-    return _state["allowed"]
+    return _allowed
 
 
 # --- Layer 1: model stub at the httpx transport ----------------------------
@@ -87,13 +90,13 @@ def _stubbed_error(request: httpx.Request) -> httpx.ConnectError:
 
 
 def _handle_request(self, request):
-    if not _state["allowed"] and _is_ollama_port(request.url.port):
+    if _blocked(request.url.port):
         raise _stubbed_error(request)
     return _orig_handle_request(self, request)
 
 
 async def _handle_async_request(self, request):
-    if not _state["allowed"] and _is_ollama_port(request.url.port):
+    if _blocked(request.url.port):
         raise _stubbed_error(request)
     return await _orig_handle_async_request(self, request)
 
@@ -109,45 +112,33 @@ httpx.AsyncHTTPTransport.handle_async_request = _handle_async_request
 # socket aimed at a literal address.
 
 _orig_getaddrinfo = socket.getaddrinfo
-_orig_connect = socket.socket.connect
-_orig_connect_ex = socket.socket.connect_ex
 
 
-def _block(host, port):
+def _refuse(host, port):
     what = f"{host}:{port}"
     _record(what)
     raise OllamaConnectionBlocked(f"connection to Ollama port refused in tests: {what}")
 
 
 def _getaddrinfo(host, port, *args, **kwargs):
-    if not _state["allowed"] and _is_ollama_port(port):
-        _block(host, port)
+    if _blocked(port):
+        _refuse(host, port)
     return _orig_getaddrinfo(host, port, *args, **kwargs)
 
 
-def _target_port(address):
-    if isinstance(address, tuple) and len(address) >= 2:
-        return address[0], address[1]
-    return None, None
-
-
-def _connect(self, address):
-    host, port = _target_port(address)
-    if not _state["allowed"] and _is_ollama_port(port):
-        _block(host, port)
-    return _orig_connect(self, address)
-
-
-def _connect_ex(self, address):
-    host, port = _target_port(address)
-    if not _state["allowed"] and _is_ollama_port(port):
-        _block(host, port)
-    return _orig_connect_ex(self, address)
+def _guard_connect(orig):
+    """Wrap socket.connect / connect_ex. An AF_UNIX address is a str, not a
+    (host, port) tuple, and is never blocked."""
+    def connect(self, address):
+        if isinstance(address, tuple) and len(address) >= 2 and _blocked(address[1]):
+            _refuse(address[0], address[1])
+        return orig(self, address)
+    return connect
 
 
 socket.getaddrinfo = _getaddrinfo
-socket.socket.connect = _connect
-socket.socket.connect_ex = _connect_ex
+socket.socket.connect = _guard_connect(socket.socket.connect)
+socket.socket.connect_ex = _guard_connect(socket.socket.connect_ex)
 
 
 # --- pytest hooks ------------------------------------------------------------
@@ -172,8 +163,9 @@ def _fail_on_violations(phase: str) -> None:
 
 
 def pytest_runtest_setup(item):
+    global _allowed
     take_violations()
-    _state["allowed"] = item.get_closest_marker("live_ollama") is not None
+    _allowed = item.get_closest_marker("live_ollama") is not None
 
 
 @pytest.hookimpl(wrapper=True)
@@ -189,9 +181,10 @@ def pytest_runtest_call(item):
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_teardown(item, nextitem):
+    global _allowed
     try:
         result = yield
     finally:
-        _state["allowed"] = False
+        _allowed = False
     _fail_on_violations("teardown")
     return result

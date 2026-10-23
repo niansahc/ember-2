@@ -13,6 +13,8 @@ CORRECT behaviour; the review repros asserted the defect.
     pendings live in process with a TTL, never in the vault.
   - B2 next-turn dispatch searches under ask-first.
   - The "searching" status frame fires only on turns that search.
+  - One intent classification per turn: assembly receives the adapter's
+    policy instead of classifying the message again.
 
 Mocks follow tests/test_search_quarantine_paths.py: SearXNG via
 src.tools.web_search.requests.get, the model via llm_adapter. The pending
@@ -77,24 +79,20 @@ def _seed_pending(session_id, query=QUERY):
 
 def _turn(client, test_vault, responses, *, query, session_id, stream=False,
           autonomous=False, vault_enabled=True, real_classifier=False,
-          assembly_policy=None, request_policy=None, awaiting_search=False,
-          reply=MODEL_REPLY):
+          request_policy=None, awaiting_search=False, reply=MODEL_REPLY):
     """One /v1/chat/completions turn. _check_pending_confirmation and
     _write_pending_confirmation are REAL and run against the test vault.
-    request_policy replaces the request classifier's web_search verdict.
+    request_policy replaces the request classifier's web_search verdict;
+    context assembly receives the same policy (one classification per turn).
     Returns (resp, text, llm mock, requests.get mock)."""
     adapter = _adapter()
-    from src.context.policies import ContextPolicy, _web_search_policy
+    from src.context.policies import _web_search_policy
 
-    if assembly_policy is None:
-        assembly_policy = ContextPolicy(name="default")
     with ExitStack() as stack:
         get = stack.enter_context(
             patch.object(web_search_mod.requests, "get", side_effect=responses))
         stack.enter_context(patch.object(
             web_search_mod, "get_web_search_min_term_hits", return_value=0))
-        stack.enter_context(patch("src.context.service.classify_query",
-                                  return_value=assembly_policy))
         if not real_classifier:
             stack.enter_context(patch("src.context.policies.classify_query",
                                       return_value=request_policy
@@ -287,12 +285,11 @@ def test_stateless_explicit_request_searches(client, isolate_to_test_vault):
 
 def test_vault_on_explicit_request_searches(client, isolate_to_test_vault):
     """Control: the same request with the vault on, as before."""
-    from src.context.policies import _web_search_policy
     sid = "sess_test_vault_explicit"
     resp, text, _, get = _turn(
         client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
         query="search the web for the latest bitcoin price", session_id=sid,
-        real_classifier=True, assembly_policy=_web_search_policy(explicit=True))
+        real_classifier=True)
     assert get.call_count == 1
     assert resp.headers.get("x-ember-web-search") == "true"
 
@@ -349,12 +346,19 @@ def test_stateless_store_is_bounded():
 # --- 5. B2 next-turn dispatch and the dead prefix (findings 5, 5b) ---------------
 
 def test_b2_follow_up_under_ask_first_searches(client, isolate_to_test_vault):
-    """Assembly's classifier is patched to default (it would re-classify the
-    bare follow-up); the forced explicit policy must reach build_context."""
+    """The bare follow-up searches under ask-first. The request classifier
+    says web_search but not explicit; the forced explicit policy replaces it
+    and is the one build_context receives (checked directly below: the
+    adapter backstop would search even if assembly got another policy)."""
     sid = "sess_test_b2"
-    resp, _, llm, get = _turn(
-        client, isolate_to_test_vault, [_searxng([CLEAN_HIT])], query="the eagles game",
-        session_id=sid, awaiting_search=True)
+    service = _adapter().context_service
+    with patch.object(service, "build_context", wraps=service.build_context) as spy:
+        resp, _, llm, get = _turn(
+            client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
+            query="the eagles game", session_id=sid, awaiting_search=True)
+    policy = spy.call_args.kwargs["policy"]
+    assert policy.name == "web_search"
+    assert policy.explicit_search_request is True
     assert get.call_count == 1
     assert _searched_query(get) == "the eagles game"
     packet = llm.generate_response.call_args.args[0]
@@ -407,3 +411,47 @@ def test_searching_status_on_a_turn_that_searches(client, isolate_to_test_vault)
                             stream=True, autonomous=True)
     assert get.call_count == 1
     assert "searching" in _statuses(resp)
+
+
+# --- 7. One classification per turn -------------------------------------------
+# Before the fix the adapter passed policy=None to build_context, which ran
+# classify_query again: a second ADR-034 cascade and a second Stage 3 model
+# call whose verdict could differ from the one the adapter acted on.
+
+class _CountingClassifier:
+    """Stands in for src.context.policies.classify_intent; no model."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, query: str) -> str:
+        self.calls += 1
+        return "vault_answerable"
+
+
+@pytest.fixture
+def intent_counter():
+    fake = _CountingClassifier()
+    with patch("src.context.policies.classify_intent", fake):
+        yield fake
+
+
+def test_a_chat_turn_classifies_intent_once(client, isolate_to_test_vault, intent_counter):
+    _turn(client, isolate_to_test_vault, [], query="what should I cook tonight",
+          session_id="sess_test_single_classify", real_classifier=True)
+    assert intent_counter.calls == 1
+
+
+@pytest.mark.parametrize("policy_name,expected", [(None, 1), ("default", 0)])
+def test_build_context_classifies_only_without_a_policy(intent_counter, policy_name, expected):
+    """Positive control for the test above: the counter sees an assembly-side
+    classification, so a return to policy=None in the adapter would read 2."""
+    from src.context.policies import ContextPolicy
+    adapter = _adapter()
+    policy = None if policy_name is None else ContextPolicy(name=policy_name)
+    with patch.object(adapter.context_service.retriever, "retrieve",
+                      return_value=([], [], [], [], None)):
+        adapter.context_service.build_context("what should I cook tonight",
+                                              skip_web_search=True, read_only=True,
+                                              policy=policy)
+    assert intent_counter.calls == expected

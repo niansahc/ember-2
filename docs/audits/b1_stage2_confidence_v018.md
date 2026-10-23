@@ -103,3 +103,25 @@ The 800-to-1500ms raise still ships (step 1) on its own merit: it gives any futu
 
 Follow-up question (out of scope for PR #1): is the latency floor on these queries hardware-bound, model-config-bound (e.g. context length, options), or driven by Ollama warm/hot state? A separate measurement over 50+ queries with controlled warm-up would inform whether a higher cap (e.g. 2000ms) is worth the latency cost, or whether B1 step 2 is permanently unreachable on this hardware.
 
+### Re-measurement 2026-10-23 (after the top-level think=False fix, PR #306)
+
+The follow-up question above has an answer: model config, not hardware. Stage 3 sent `think` inside `options`, where Ollama ignores it, so qwen3:8b thought before answering. PR #306 sends `think=False` as a top-level chat argument.
+
+Environment: live `qwen3:8b`, `INTENT_CLASSIFIER_TIMEOUT_MS=1500`, warm, two runs through `_stage3_classify_with_timeout`. Both runs returned the same labels.
+
+| Query | Outcome | Label | ms (run 1 / run 2) |
+|---|---|---|---:|
+| current job vs old job | stage3 | vault_answerable | 265 / 268 |
+| comparing my current job and old job | stage3 | vault_answerable | 275 / 291 |
+| differences between my current role and previous role | stage3 | vault_answerable | 280 / 285 |
+| current career vs previous career path | stage3 | needs_internet | 290 / 274 |
+| thoughts on my current job versus the old one | stage3 | vault_answerable | 296 / 266 |
+| current job market in tech | stage3 | needs_internet | 287 / 295 |
+| best career advice for engineers | stage3 | vault_answerable | 257 / 285 |
+| average salary for software engineers | stage3 | needs_internet | 275 / 306 |
+| current state of the labor market | stage3 | needs_internet | 286 / 287 |
+| history of remote work culture | stage3 | needs_internet | 288 / 289 |
+
+- Completions: B1 5/5, adjacent web 5/5. B1 `needs_internet` returns: 1/5.
+- Gate: 3+ complete and at least one returns `needs_internet`, so per the decision tree above step 2 (the Stage 3 prompt reframe) lands in a follow-up commit. It is not part of PR #306.
+- A cold model load (the first call after Ollama unloads qwen3:8b) still overran the cap.

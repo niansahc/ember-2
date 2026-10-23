@@ -60,7 +60,6 @@ margin above the floor.
 
 from __future__ import annotations
 
-import httpx
 import pytest
 
 import src.llm.intent_classifier as intent_classifier
@@ -73,21 +72,6 @@ from src.llm.intent_classifier import (
 
 
 pytestmark = pytest.mark.eval
-
-
-def _ollama_reachable() -> bool:
-    """Mirror tests/test_intent_classifier.py::_ollama_reachable."""
-    try:
-        httpx.get("http://localhost:11434/api/version", timeout=1.0)
-        return True
-    except Exception:
-        return False
-
-
-_NEEDS_OLLAMA = pytest.mark.skipif(
-    not _ollama_reachable(),
-    reason="adversarial eval needs Ollama (nomic-embed-text + qwen3:8b)",
-)
 
 
 @pytest.fixture(autouse=True)
@@ -178,7 +162,7 @@ _CATEGORY_1_FIRST_PERSON_RECALL = [
 ]
 
 
-@_NEEDS_OLLAMA
+@pytest.mark.live_ollama
 @pytest.mark.parametrize("query", _CATEGORY_1_FIRST_PERSON_RECALL)
 def test_category_1_first_person_recall_routes_to_vault(query):
     """First-person recall queries must route to vault_answerable. The
@@ -234,7 +218,7 @@ _CATEGORY_2_PERSONAL_COMPARISON = [
 ]
 
 
-@_NEEDS_OLLAMA
+@pytest.mark.live_ollama
 @pytest.mark.parametrize("query", _CATEGORY_2_PERSONAL_COMPARISON)
 def test_category_2_personal_comparison_routes_to_vault(query):
     """Personal-comparison queries must route to vault_answerable. On
@@ -289,7 +273,7 @@ _CATEGORY_3_INTROSPECTIVE_UNCERTAINTY = [
 ]
 
 
-@_NEEDS_OLLAMA
+@pytest.mark.live_ollama
 @pytest.mark.parametrize("query", _CATEGORY_3_INTROSPECTIVE_UNCERTAINTY)
 def test_category_3_introspective_uncertainty_routes_to_vault(query):
     """Introspective uncertainty queries must route to vault_answerable.

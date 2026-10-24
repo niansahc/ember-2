@@ -417,13 +417,15 @@ def get_search_failure_think_off() -> bool:
 def get_intent_classifier_timeout_ms() -> int:
     """Hard timeout for Stage 3 of the ADR-034 intent classifier.
 
-    Per ADR-034, Stage 3 calls qwen3:8b in non-thinking mode. The default
-    cap is 1500ms on target hardware: the B1 audit (docs/audits/b1_stage2_
-    confidence_v018.md) measured 5/5 Stage 3 timeouts at 830-857ms under
-    the prior 800ms cap, meaning the safe-default fired in place of any
-    real Stage 3 decision. Raising to 1500ms lets the prompt content
-    influence outcome on ambiguous queries while preserving the bounded
-    worst-case latency contribution.
+    Per ADR-034, Stage 3 calls qwen3:8b in non-thinking mode: think=False
+    as a top-level chat argument (src/llm/intent_classifier.py). The
+    default cap is 1500ms. It was raised from 800ms after the B1 audit
+    (docs/audits/b1_stage2_confidence_v018.md) measured 5/5 Stage 3
+    timeouts, but those timeouts predate the think fix: think was sent
+    inside options, where Ollama ignores it, so qwen3:8b thought before
+    answering. Re-measured 2026-10-23 with think at the top level, warm
+    Stage 3 answers in about 170-310ms, so the cap bounds a cold model load
+    or a stalled call rather than normal latency.
 
     On timeout the classifier still falls back to vault_answerable (the
     behavioral-contract-safe default).

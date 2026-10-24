@@ -31,6 +31,11 @@ import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+# tests.ollama_guard stubs the Ollama model and fails any test that opens a
+# connection to port 11434; loaded here so it is active before collection.
+# pytester drives the guard's own end-to-end tests (tests/test_ollama_guard.py).
+pytest_plugins = ("tests.ollama_guard", "pytester")
+
 
 # ---------------------------------------------------------------------------
 # Process environment isolation, applied at conftest import

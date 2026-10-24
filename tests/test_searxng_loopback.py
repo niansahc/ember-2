@@ -3,8 +3,9 @@ tests/test_searxng_loopback.py
 
 Web search and the /api/health probe reach SearXNG on IPv4 loopback
 (SEARXNG_BASE_URL in src/core/config.py explains why not "localhost"), and
-the health probe waits at most 1 s. The probe's exact URL and timeout are
-pinned in tests/test_service_endpoints.py TestHealthCheckDocker.
+the health probe's timeout is 1 s per phase (httpx timeouts are per phase,
+not a total deadline). The probe's exact URL and timeout are pinned in
+tests/test_service_endpoints.py TestHealthCheckDocker.
 """
 
 from __future__ import annotations
@@ -44,6 +45,13 @@ def test_searxng_url_matches_the_compose_port_binding():
     assert (parts.hostname, parts.port) == (host, int(port))
 
 
+def test_searxng_url_is_plain_http():
+    """The health probe passes verify=False (src/api/main.py
+    _check_docker_status), which is safe only while this URL is plain http
+    on loopback. An https URL must get certificate checks back."""
+    assert urlsplit(SEARXNG_BASE_URL).scheme == "http"
+
+
 @pytest.fixture
 def silent_listener():
     """A local TCP listener that accepts connections and never answers."""
@@ -69,7 +77,7 @@ def test_health_probe_gives_up_within_its_bound(monkeypatch, silent_listener):
 
 def test_control_silent_listener_really_hangs(silent_listener):
     """Positive control: the listener makes a client wait out its timeout,
-    so the fast "down" above comes from the 1 s bound, not a refused
+    so the "down" above comes from the 1 s timeout, not a refused
     connection."""
     start = time.perf_counter()
     with pytest.raises(httpx.TimeoutException):

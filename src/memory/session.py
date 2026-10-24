@@ -15,6 +15,7 @@ read time — never stored on the session record.
 
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -22,6 +23,7 @@ from typing import Optional
 from src.core.config import get_private_vault_path
 from src.core.timestamps import UniqueTimestampSource
 from src.memory.storage import MemoryStorage
+from src.memory.versioning import metadata_rank, metadata_version
 
 logger = logging.getLogger("ember.session")
 
@@ -35,6 +37,13 @@ storage = MemoryStorage()
 # (MemoryStorage.create_json) would refuse the second record with
 # RecordExistsError. See UniqueTimestampSource (BUG-005, ultrareview #280).
 _ids = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f", timezone.utc)
+
+# update_session and delete_session read the latest version and write the
+# next one. Sync API endpoints run on a thread pool, so two edits of one
+# session can overlap; without this lock both write the same version and
+# one edit is lost (a rename brings a deleted session back). In-process
+# only: a script writing to the vault while the API runs is not covered.
+_write_lock = threading.Lock()
 
 
 def _session_dir() -> Path:
@@ -77,19 +86,9 @@ def _resolve_sessions(records: list[dict]) -> dict[str, dict]:
     for rec in records:
         sid = rec.get("metadata", {}).get("session_id", rec.get("id", ""))
         existing = resolved.get(sid)
-        if existing is None or _rank(rec) > _rank(existing):
+        if existing is None or metadata_rank(rec) > metadata_rank(existing):
             resolved[sid] = rec
     return resolved
-
-
-def _version_of(record: dict) -> int:
-    """The record's version counter; 0 for records that predate it."""
-    version = record.get("metadata", {}).get("version", 0)
-    return version if isinstance(version, int) else 0
-
-
-def _rank(record: dict) -> tuple[int, str]:
-    return _version_of(record), record.get("timestamp", "")
 
 
 def _scan_conversation_turns() -> dict[str, list[dict]]:
@@ -261,51 +260,52 @@ def update_session(
     Pass project_id=None to remove from a project.
     Pass project_id="__unset__" (default) to leave unchanged.
     """
-    existing = get_session(session_id)
-    if existing is None:
-        return None
+    with _write_lock:
+        existing = get_session(session_id)
+        if existing is None:
+            return None
 
-    meta = existing.get("metadata", {})
-    new_title = title if title is not None else existing.get("text", "Untitled")
-    new_project_id = meta.get("project_id") if project_id == "__unset__" else project_id
+        meta = existing.get("metadata", {})
+        new_title = title if title is not None else existing.get("text", "Untitled")
+        new_project_id = meta.get("project_id") if project_id == "__unset__" else project_id
 
-    now = datetime.now(timezone.utc)
-    new_meta = {
-        "session_id": session_id,
-        "created_at": meta.get("created_at", now.isoformat()),
-        "deleted": False,
-        "version": _version_of(existing) + 1,
-    }
-    if new_project_id is not None:
-        new_meta["project_id"] = new_project_id
-    # The new record is the one _resolve_sessions picks, so an eval-harness
-    # session must stay flagged across renames and moves or it surfaces in
-    # list_sessions() (ultrareview #280).
-    if meta.get("test"):
-        new_meta["test"] = True
+        now = datetime.now(timezone.utc)
+        new_meta = {
+            "session_id": session_id,
+            "created_at": meta.get("created_at", now.isoformat()),
+            "deleted": False,
+            "version": metadata_version(existing) + 1,
+        }
+        if new_project_id is not None:
+            new_meta["project_id"] = new_project_id
+        # The new record is the one _resolve_sessions picks, so an eval-harness
+        # session must stay flagged across renames and moves or it surfaces in
+        # list_sessions() (ultrareview #280).
+        if meta.get("test"):
+            new_meta["test"] = True
 
-    tags = ["session"]
-    if title is not None:
-        tags.append("renamed")
-    if project_id != "__unset__":
-        tags.append("moved")
+        tags = ["session"]
+        if title is not None:
+            tags.append("renamed")
+        if project_id != "__unset__":
+            tags.append("moved")
 
-    record = {
-        "id": _now_id(),
-        "timestamp": now.isoformat(),
-        "type": "session",
-        "text": new_title,
-        "source": "api",
-        "tags": tags,
-        "metadata": new_meta,
-    }
-    file_path = _session_dir() / f"{record['id']}.json"
-    storage.create_json(file_path, record)
-    logger.info(
-        "Updated session %s: title_changed=%s project_id=%s version=%d",
-        session_id, title is not None, new_project_id, new_meta["version"],
-    )
-    return file_path
+        record = {
+            "id": _now_id(),
+            "timestamp": now.isoformat(),
+            "type": "session",
+            "text": new_title,
+            "source": "api",
+            "tags": tags,
+            "metadata": new_meta,
+        }
+        file_path = _session_dir() / f"{record['id']}.json"
+        storage.create_json(file_path, record)
+        logger.info(
+            "Updated session %s: title_changed=%s project_id=%s version=%d",
+            session_id, title is not None, new_project_id, new_meta["version"],
+        )
+        return file_path
 
 
 def rename_session(session_id: str, new_title: str) -> Optional[Path]:
@@ -320,31 +320,36 @@ def list_sessions_by_project(project_id: str, limit: int = 50) -> list[dict]:
     return matched[:limit]
 
 
-def delete_session(session_id: str) -> Optional[Path]:
+def delete_session(session_id: str, *, source: str = "api") -> Optional[Path]:
     """
     Soft-delete a session by writing a new record with deleted: true.
-    Append-only: the old record remains untouched.
+    Append-only: the old record remains untouched. `source` records who
+    deleted it (scripts/cleanup_test_sessions.py passes "cleanup_script").
     """
-    existing = get_session(session_id)
-    if existing is None:
-        return None
+    with _write_lock:
+        existing = get_session(session_id)
+        if existing is None:
+            return None
 
-    now = datetime.now(timezone.utc)
-    record = {
-        "id": _now_id(),
-        "timestamp": now.isoformat(),
-        "type": "session",
-        "text": existing.get("text", "Untitled"),
-        "source": "api",
-        "tags": ["session", "deleted"],
-        "metadata": {
-            "session_id": session_id,
-            "created_at": existing.get("metadata", {}).get("created_at", now.isoformat()),
-            "deleted": True,
-            "version": _version_of(existing) + 1,
-        },
-    }
-    file_path = _session_dir() / f"{record['id']}.json"
-    storage.create_json(file_path, record)
-    logger.info("Soft-deleted session %s (version %d)", session_id, record["metadata"]["version"])
-    return file_path
+        now = datetime.now(timezone.utc)
+        record = {
+            "id": _now_id(),
+            "timestamp": now.isoformat(),
+            "type": "session",
+            "text": existing.get("text", "Untitled"),
+            "source": source,
+            "tags": ["session", "deleted"],
+            "metadata": {
+                "session_id": session_id,
+                "created_at": existing.get("metadata", {}).get("created_at", now.isoformat()),
+                "deleted": True,
+                "version": metadata_version(existing) + 1,
+            },
+        }
+        file_path = _session_dir() / f"{record['id']}.json"
+        storage.create_json(file_path, record)
+        logger.info(
+            "Soft-deleted session %s (version %d, source %s)",
+            session_id, record["metadata"]["version"], source,
+        )
+        return file_path

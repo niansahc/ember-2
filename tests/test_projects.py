@@ -30,7 +30,8 @@ class TestProjectIdGeneration:
 class TestProjectResolution:
     """Test that latest record wins per project_id."""
 
-    def test_latest_timestamp_wins(self):
+    def test_unversioned_records_order_by_timestamp(self):
+        """Records without metadata.version (written before the counter) resolve by timestamp."""
         records = [
             {"timestamp": "2026-03-24T10:00:00", "text": "Old Name", "metadata": {"project_id": "proj_aaa"}},
             {"timestamp": "2026-03-24T12:00:00", "text": "New Name", "metadata": {"project_id": "proj_aaa"}},

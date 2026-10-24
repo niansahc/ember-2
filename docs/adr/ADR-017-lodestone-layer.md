@@ -60,6 +60,7 @@ Documented taxonomy gaps: Hedonism absorbs into Directional. Epistemic values ab
   "recurrence_count": 1,
   "confirmed": true,
   "conflict_resolution": false,
+  "version": 0,
   "metadata": {
     "user_note": null,
     "taxonomy_category": "character | relational | directional | ground | beyond",
@@ -67,6 +68,8 @@ Documented taxonomy gaps: Hedonism absorbs into Directional. Epistemic values ab
   }
 }
 ```
+
+Updates append a new file with version one above the record they build on, and the highest version per id wins; file mtime only breaks ties between records written before the counter existed, which read as version 0.
 
 ### Conflict Handling
 

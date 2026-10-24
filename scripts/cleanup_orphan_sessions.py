@@ -96,20 +96,14 @@ def find_orphan_sessions(vault: Path, cutoff: datetime) -> list[dict]:
         role = meta.get("role") or record.get("role") or "<unknown>"
         role_counts.setdefault(sid, Counter())[role] += 1
 
-    # Build the latest session record per session_id (append-only history).
-    latest_session: dict[str, dict] = {}
+    # Latest session record per session_id (append-only history), picked
+    # the way the app does: highest metadata.version.
+    session_records = []
     for path in sess_dir.glob("*.json"):
         record = _load_json(path)
-        if record is None:
-            continue
-        meta = record.get("metadata") or {}
-        sid = meta.get("session_id")
-        if not sid:
-            continue
-        # Newer record wins.
-        existing = latest_session.get(sid)
-        if existing is None or record.get("timestamp", "") > existing.get("timestamp", ""):
-            latest_session[sid] = record
+        if record is not None and (record.get("metadata") or {}).get("session_id"):
+            session_records.append(record)
+    latest_session = session_module._resolve_sessions(session_records)
 
     orphans: list[dict] = []
     for sid, sess_record in latest_session.items():

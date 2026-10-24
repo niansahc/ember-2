@@ -25,6 +25,7 @@ if __name__ == "__main__":
     load_env_file()
 
 from src.core.config import get_private_vault_path
+from src.memory import session as session_module
 from src.memory.storage import MemoryStorage
 
 storage = MemoryStorage()
@@ -38,19 +39,17 @@ def main():
     session_dir = vault / "memory" / "session"
     conv_dir = vault / "memory" / "conversation"
 
-    # Read all session records, resolve to latest per session_id
-    by_sid: dict[str, dict] = {}
+    # Read all session records, resolve to latest per session_id the way
+    # the app does (highest metadata.version)
+    records = []
     for f in storage.list_memory_files(session_dir):
         try:
             rec = storage.read_json(f)
         except (json.JSONDecodeError, OSError):
             continue
-        sid = rec.get("metadata", {}).get("session_id", "")
-        if not sid:
-            continue
-        existing = by_sid.get(sid)
-        if existing is None or rec.get("timestamp", "") > existing.get("timestamp", ""):
-            by_sid[sid] = rec
+        if rec.get("metadata", {}).get("session_id"):
+            records.append(rec)
+    by_sid = session_module._resolve_sessions(records)
 
     # Filter to today's sessions, exclude already-deleted and the keep title
     to_delete = []
@@ -115,25 +114,12 @@ def main():
         print("Cancelled.")
         return
 
-    # Soft-delete sessions
+    # Soft-delete sessions through the app's delete, so each delete record
+    # is one version above the record it deletes
     deleted_sessions = 0
-    for sid, title, orig_rec in to_delete:
-        now = datetime.now(timezone.utc)
-        ts = now.strftime("%Y-%m-%dT%H-%M-%S-%f")
-        meta = orig_rec.get("metadata", {}).copy()
-        meta["deleted"] = True
-        record = {
-            "id": ts,
-            "timestamp": now.isoformat(),
-            "type": "session",
-            "text": title,
-            "source": "cleanup_script",
-            "tags": ["session", "cleanup_today"],
-            "metadata": meta,
-        }
-        file_path = session_dir / f"{ts}.json"
-        storage.write_json(file_path, record)
-        deleted_sessions += 1
+    for sid, _, _ in to_delete:
+        if session_module.delete_session(sid, source="cleanup_script") is not None:
+            deleted_sessions += 1
 
     # Soft-delete conversation turns
     deleted_turns = 0

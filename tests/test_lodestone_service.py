@@ -271,6 +271,23 @@ class TestLatestVersionDoesNotDependOnMtime:
         assert current[0]["version"] == latest["version"]
         assert current[0]["confirmed"] is True
 
+    def test_listing_is_newest_first_by_the_winning_file(self, vault_dir):
+        """read_all() lists each id at its winning version's mtime, not at
+        the mtime of an older version that happens to be newer on disk."""
+        lodestone_dir = vault_dir / "memory" / "lodestone"
+        a = write("honesty", "character")
+        b = write("patience", "character")
+        update(a["id"], {"user_note": "edited"})
+
+        a0, b0, a1 = sorted(lodestone_dir.glob("*.json"))
+        _set_mtime(a0, 1_700_000_300)
+        _set_mtime(b0, 1_700_000_200)
+        _set_mtime(a1, 1_700_000_100)
+
+        listed = read_all()
+        assert [r["id"] for r in listed] == [b["id"], a["id"]]
+        assert listed[1]["version"] == 1
+
     def test_versions_increase_by_one_per_update(self, vault_dir):
         created = write("honesty", "character")
         first = update(created["id"], {"user_note": "a"})

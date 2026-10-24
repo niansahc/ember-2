@@ -43,6 +43,11 @@ Recorded baseline (2026-05-13, main at commit 594af1f):
     for all five queries (per PR #76 measurement) and the cap returns
     vault_answerable, which is the correct answer. The pass is
     structural, not via Stage 3 completion.
+    Update 2026-10-24: with think=False sent at the top level (PR #306)
+    Stage 3 answers in ~180ms, and "current career vs previous career
+    path" returned needs_internet. The B1 step 2 Stage 3 prompt reframe
+    routes it to vault_answerable; Category 2 now passes 5/5 on Stage 3
+    answers, not on the timeout.
   Category 3 (introspective uncertainty): 5/5 PASS via Stage 2
     exemplar anchoring (commit 4b702d3).
   Category 4 (bare-marker no content): 0/5 PASS. All five bare-marker
@@ -187,15 +192,14 @@ def test_category_1_first_person_recall_routes_to_vault(query):
 # Comparisons between two periods or roles in the user's own life. These
 # are the B1 fixtures from docs/audits/b1_stage2_confidence_v018.md.
 # Stage 2 confidence on these sits in the 0.51-0.58 band - below the
-# 0.65 threshold, so they escalate to Stage 3. Stage 3 currently times
-# out at ~1500ms on warm qwen3:8b (PR #76 measurement) and returns the
-# safe default vault_answerable. The structural pass is correct even
-# though Stage 3 never actually decides.
+# 0.65 threshold, so they escalate to Stage 3. Before PR #306 Stage 3
+# timed out at ~1500ms on warm qwen3:8b (PR #76 measurement) and the
+# safe default vault_answerable passed the category without Stage 3
+# deciding. Since PR #306 Stage 3 answers, and the B1 step 2 prompt
+# reframe is what routes these queries to vault_answerable.
 #
-# Threshold: >=4/5. The timeout-to-safe-default path is reliable for
-# this category; one slow run that does not hit the cap and returns
-# needs_internet from Stage 3 would still leave the test passing on
-# the other four.
+# Threshold: >=4/5 for the aggregate gate. Each case is a separate test
+# and must pass on its own.
 
 _CATEGORY_2_PERSONAL_COMPARISON = [
     pytest.param("current job vs old job", id="current_job_vs_old_job"),
@@ -221,14 +225,13 @@ _CATEGORY_2_PERSONAL_COMPARISON = [
 @pytest.mark.live_ollama
 @pytest.mark.parametrize("query", _CATEGORY_2_PERSONAL_COMPARISON)
 def test_category_2_personal_comparison_routes_to_vault(query):
-    """Personal-comparison queries must route to vault_answerable. On
-    main today the route is via Stage 3 timeout-to-safe-default; on a
-    hypothetical hardware where Stage 3 completes within the 1500ms
-    cap, the route should still land on vault_answerable because the
-    queries reference the user's own life history.
+    """Personal-comparison queries must route to vault_answerable,
+    because the queries reference the user's own life history.
 
     Baseline 2026-05-13 (main at 594af1f): >=4/5 PASS expected via the
-    timeout path."""
+    timeout path.
+    Baseline 2026-10-24 (PR #306 plus B1 step 2): 5/5 PASS on Stage 3
+    answers; current_career_vs_previous_career passed 5 of 5 warm runs."""
     assert classify_intent(query) == VAULT_ANSWERABLE, (
         f"{query!r} mis-routed to needs_internet. Personal comparisons "
         f"reference the user's life and must default to vault_"

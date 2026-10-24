@@ -258,11 +258,27 @@ def _stage2_classify(query: str) -> tuple[str | None, float | None]:
 # concurrent classify_intent calls attempt Stage 3 in parallel; the creation
 # overhead (~2-5ms) is noise next to the 1500ms budget.
 
+# B1 step 2 (docs/audits/b1_stage2_confidence_v018.md). needs_internet is
+# limited to information the model cannot know; everything else, the user's
+# own life included, is vault_answerable. The comparison sentence keeps
+# "current" in a comparison of the user's own past and present from reading
+# as a request for current events. The stable-fact sentence keeps general
+# knowledge on its pre-B1 label.
 _STAGE3_SYSTEM_PROMPT: str = (
-    "You are a binary intent classifier. Decide whether the user's query "
-    "requires current information from the internet, or can be answered "
-    "from the user's personal vault of memories and notes. Respond with "
-    'ONLY JSON in this exact form: {"label": "needs_internet"} or '
+    "You are a binary intent classifier. Decide whether answering the "
+    "user's query needs information from the internet. Use needs_internet "
+    "only when the answer depends on current, time-sensitive, or external "
+    "information you cannot know: news, prices, schedules, recent releases, "
+    "or the live status of something. A fact that stays the same from year "
+    "to year does not need the internet. Use vault_answerable for "
+    "everything else, including any query about the user's own life as "
+    "recorded in their personal vault of memories and notes: their own "
+    "work, roles, projects, plans, relationships, history, or decisions. "
+    "A comparison between two periods or versions of the user's own life "
+    "(now versus before, this one versus the previous one) is "
+    "vault_answerable, even when it uses words like current, old, latest, "
+    'or previous, and even when it does not say "my". Respond with ONLY '
+    'JSON in this exact form: {"label": "needs_internet"} or '
     '{"label": "vault_answerable"}. No other text.'
 )
 

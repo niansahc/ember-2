@@ -125,3 +125,45 @@ Environment: live `qwen3:8b`, `INTENT_CLASSIFIER_TIMEOUT_MS=1500`, warm, two run
 - Completions: B1 5/5, adjacent web 5/5. B1 `needs_internet` returns: 1/5.
 - Gate: 3+ complete and at least one returns `needs_internet`, so per the decision tree above step 2 (the Stage 3 prompt reframe) lands in a follow-up commit. It is not part of PR #306.
 - A cold model load (the first call after Ollama unloads qwen3:8b) still overran the cap.
+
+## Step 2 landed (2026-10-24)
+
+`_STAGE3_SYSTEM_PROMPT` in `src/llm/intent_classifier.py` was reframed. needs_internet is limited to current, time-sensitive or external information the model cannot know (news, prices, schedules, recent releases, live status). A fact that stays the same from year to year is not needs_internet. Everything else is vault_answerable, including the user's own life and a comparison of two periods of it, with or without "my" and whatever words like current, old or previous it uses. The Variant C sentence the earlier entries refer to was never recorded, so this wording was measured from scratch. One candidate without the stable-fact sentence was screened first and rejected: it sent "what is the capital of Australia" to needs_internet in 1 of 2 runs.
+
+Environment: live `qwen3:8b`, `INTENT_CLASSIFIER_TIMEOUT_MS=1500`, warm. Same session for before and after. Before: the PR #306 head, 2 measurements. After: the new prompt, 3 measurements. Cells count labels over all runs (VA vault_answerable, NI needs_internet). Every Stage 3 call answered (0 timeouts, 0 failures); median 182ms, max 296ms over 420 calls.
+
+### B1 audit fixtures (Stage 3 direct; rows 1-5 want VA, 6-10 want NI)
+
+| Query | Stage | Before | After |
+|---|---|---|---|
+| current job vs old job | stage3 | VA 4 | VA 6 |
+| comparing my current job and old job | stage3 | VA 4 | VA 6 |
+| differences between my current role and previous role | stage3 | VA 4 | VA 6 |
+| current career vs previous career path | stage3 | NI 4 | VA 6 **changed** |
+| thoughts on my current job versus the old one | stage3 | VA 4 | VA 6 |
+| current job market in tech | stage3 | NI 4 | NI 6 |
+| best career advice for engineers | stage3 | VA 4 | VA 6 |
+| average salary for software engineers | stage3 | NI 4 | NI 6 |
+| current state of the labor market | stage3 | NI 4 | NI 6 |
+| history of remote work culture | stage3 | NI 4 | NI 6 |
+
+Runs: before 4, after 6.
+
+### 20-query code-path set (5 queries x 4 runs per measurement; Stage 3 direct)
+
+| Query | Stage | Before | After |
+|---|---|---|---|
+| what changed in the latest release of the framework | stage3 | NI 8 | NI 12 |
+| remind me what we decided about the garden plan | stage3 | VA 8 | VA 12 |
+| is the conference still happening next month | stage3 | NI 8 | NI 12 |
+| how did the last sprint go for the backend work | stage3 | VA 8 | VA 12 |
+| what is the best laptop for programming right now | stage3 | NI 8 | NI 12 |
+
+Runs: before 8, after 12.
+
+Full-cascade sets, same runs (2 before, 3 after):
+
+- `tools/eval_web_search.py`, 30 questions: 30/30 needs_internet before and after, in every run (12 decided at Stage 3).
+- 10 synthetic general-knowledge and how-to questions: 10/10 vault_answerable before and after, in every run (all decided at Stage 3).
+
+Gates: the adversarial Category 2 case `current_career_vs_previous_career` passed 5/5 warm runs. The full adversarial file plus calibration passed under `-m eval` twice (30 passed each). No needs_internet label changed in any set.

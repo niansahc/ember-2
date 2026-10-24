@@ -540,6 +540,20 @@ class TestStage3LlmCall:
         both = {"think": False, "options": {"think": False}}
         assert not _think_sent_top_level(both)
 
+    def test_system_prompt_keeps_the_b1_rules(self, monkeypatch):
+        # B1 step 2. The live check is the Category 2 adversarial eval,
+        # which CI deselects; this keeps a revert of the prompt from
+        # passing CI silently.
+        fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
+        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        _stage3_llm_call("anything")
+        system = fake.chat_calls[0]["messages"][0]
+        assert system["role"] == "system"
+        assert system["content"] == intent_classifier._STAGE3_SYSTEM_PROMPT
+        assert "comparison between two periods" in system["content"]
+        assert "stays the same from year to year" in system["content"]
+        assert system["content"].isascii()
+
     def test_query_is_truncated_at_500_chars(self, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
         monkeypatch.setattr(intent_classifier, "ollama", fake)

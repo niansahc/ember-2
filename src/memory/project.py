@@ -5,7 +5,8 @@ Project management for conversation grouping.
 
 Projects are stored as append-only records in memory/project/.
 Multiple records can exist per project_id (after renames, recolors, deletes).
-Resolution: latest timestamp wins per project_id.
+Resolution: highest metadata.version wins per project_id (see
+_resolve_projects).
 
 A project record looks like:
 {
@@ -18,13 +19,15 @@ A project record looks like:
   "metadata": {
     "project_id": "proj_abc123",
     "color": "#ff8c00",
-    "deleted": false
+    "deleted": false,
+    "version": 0
   }
 }
 """
 
 import json
 import logging
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +36,7 @@ from typing import Optional
 from src.core.config import get_private_vault_path
 from src.core.timestamps import UniqueTimestampSource
 from src.memory.storage import MemoryStorage
+from src.memory.versioning import metadata_rank, metadata_version
 
 logger = logging.getLogger("ember.project")
 
@@ -43,6 +47,12 @@ storage = MemoryStorage()
 # requests at once) would overwrite each other. See UniqueTimestampSource
 # (BUG-005, ultrareview #280).
 _ids = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f", timezone.utc)
+
+# update_project and delete_project read the latest version and write the
+# next one. Sync API endpoints run on a thread pool, so two edits of one
+# project can overlap; without this lock both write the same version and
+# one edit is lost. In-process only.
+_write_lock = threading.Lock()
 
 
 def _project_dir() -> Path:
@@ -75,7 +85,11 @@ def _read_all_project_records() -> list[dict]:
 def _resolve_projects(records: list[dict]) -> dict[str, dict]:
     """
     Given all project records, return a dict of project_id -> latest record.
-    Latest = highest timestamp wins.
+
+    Latest = highest metadata.version. Each write sets it one above the
+    version it built on, so the order holds when the wall clock repeats a
+    reading or steps backward. The timestamp only orders records that
+    predate the counter (all version 0).
     """
     resolved: dict[str, dict] = {}
     for rec in records:
@@ -83,7 +97,7 @@ def _resolve_projects(records: list[dict]) -> dict[str, dict]:
         if not pid:
             continue
         existing = resolved.get(pid)
-        if existing is None or rec.get("timestamp", "") > existing.get("timestamp", ""):
+        if existing is None or metadata_rank(rec) > metadata_rank(existing):
             resolved[pid] = rec
     return resolved
 
@@ -140,6 +154,7 @@ def create_project(name: str, color: str = "#ff8c00") -> dict:
             "color": color,
             "created_at": now.isoformat(),
             "deleted": False,
+            "version": 0,
         },
     }
     file_path = _project_dir() / f"{record['id']}.json"
@@ -153,35 +168,37 @@ def update_project(project_id: str, name: Optional[str] = None, color: Optional[
     Update a project's name and/or color by writing a new record.
     Append-only: the old record remains untouched.
     """
-    existing = get_project(project_id)
-    if existing is None:
-        return None
+    with _write_lock:
+        existing = get_project(project_id)
+        if existing is None:
+            return None
 
-    new_name = name if name is not None else existing.get("text", "Untitled")
-    new_color = color if color is not None else existing.get("metadata", {}).get("color", "#ff8c00")
+        new_name = name if name is not None else existing.get("text", "Untitled")
+        new_color = color if color is not None else existing.get("metadata", {}).get("color", "#ff8c00")
 
-    now = datetime.now(timezone.utc)
-    record = {
-        "id": _now_id(),
-        "timestamp": now.isoformat(),
-        "type": "project",
-        "text": new_name,
-        "source": "api",
-        "tags": ["project", "updated"],
-        "metadata": {
-            "project_id": project_id,
-            "color": new_color,
-            "created_at": existing.get("metadata", {}).get("created_at", now.isoformat()),
-            "deleted": False,
-        },
-    }
-    file_path = _project_dir() / f"{record['id']}.json"
-    storage.create_json(file_path, record)
-    logger.info(
-        "Updated project %s: name_changed=%s color=%s",
-        project_id, name is not None, new_color,
-    )
-    return file_path
+        now = datetime.now(timezone.utc)
+        record = {
+            "id": _now_id(),
+            "timestamp": now.isoformat(),
+            "type": "project",
+            "text": new_name,
+            "source": "api",
+            "tags": ["project", "updated"],
+            "metadata": {
+                "project_id": project_id,
+                "color": new_color,
+                "created_at": existing.get("metadata", {}).get("created_at", now.isoformat()),
+                "deleted": False,
+                "version": metadata_version(existing) + 1,
+            },
+        }
+        file_path = _project_dir() / f"{record['id']}.json"
+        storage.create_json(file_path, record)
+        logger.info(
+            "Updated project %s: name_changed=%s color=%s version=%d",
+            project_id, name is not None, new_color, record["metadata"]["version"],
+        )
+        return file_path
 
 
 def delete_project(project_id: str) -> Optional[Path]:
@@ -189,26 +206,28 @@ def delete_project(project_id: str) -> Optional[Path]:
     Soft-delete a project by writing a new record with deleted: true.
     Append-only: the old record remains untouched.
     """
-    existing = get_project(project_id)
-    if existing is None:
-        return None
+    with _write_lock:
+        existing = get_project(project_id)
+        if existing is None:
+            return None
 
-    now = datetime.now(timezone.utc)
-    record = {
-        "id": _now_id(),
-        "timestamp": now.isoformat(),
-        "type": "project",
-        "text": existing.get("text", "Untitled"),
-        "source": "api",
-        "tags": ["project", "deleted"],
-        "metadata": {
-            "project_id": project_id,
-            "color": existing.get("metadata", {}).get("color", "#ff8c00"),
-            "created_at": existing.get("metadata", {}).get("created_at", now.isoformat()),
-            "deleted": True,
-        },
-    }
-    file_path = _project_dir() / f"{record['id']}.json"
-    storage.create_json(file_path, record)
-    logger.info("Soft-deleted project %s", project_id)
-    return file_path
+        now = datetime.now(timezone.utc)
+        record = {
+            "id": _now_id(),
+            "timestamp": now.isoformat(),
+            "type": "project",
+            "text": existing.get("text", "Untitled"),
+            "source": "api",
+            "tags": ["project", "deleted"],
+            "metadata": {
+                "project_id": project_id,
+                "color": existing.get("metadata", {}).get("color", "#ff8c00"),
+                "created_at": existing.get("metadata", {}).get("created_at", now.isoformat()),
+                "deleted": True,
+                "version": metadata_version(existing) + 1,
+            },
+        }
+        file_path = _project_dir() / f"{record['id']}.json"
+        storage.create_json(file_path, record)
+        logger.info("Soft-deleted project %s (version %d)", project_id, record["metadata"]["version"])
+        return file_path

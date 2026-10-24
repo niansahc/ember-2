@@ -3,6 +3,9 @@ scripts/cleanup_test_sessions.py
 
 Soft-delete test sessions (created by eval harness) and their conversation turns.
 Append-only: writes new records with deleted=True, never modifies existing files.
+Sessions resolve and delete through src.memory.session, so the script and
+the app agree on which record is latest (highest metadata.version) and each
+delete record is one version above the record it deletes.
 
 Detection uses two strategies:
   1. metadata.test == True (set by X-Test-Session header)
@@ -32,6 +35,7 @@ if __name__ == "__main__":
     load_env_file()
 
 from src.core.config import get_private_vault_path
+from src.memory import session as session_module
 from src.memory.storage import MemoryStorage
 
 storage = MemoryStorage()
@@ -119,8 +123,9 @@ def _matches_eval_title(title: str) -> bool:
 def find_test_sessions(vault: Path) -> list[dict]:
     """Find test/eval sessions by metadata flag OR title content matching.
 
-    Resolves to latest record per session_id. Returns sessions that are
-    not already deleted and match either:
+    Resolves to the latest record per session_id the way the app does
+    (session._resolve_sessions). Returns sessions that are not already
+    deleted and match either:
       - metadata.test == True (X-Test-Session header)
       - title matches eval fingerprint content
     """
@@ -128,19 +133,15 @@ def find_test_sessions(vault: Path) -> list[dict]:
     if not session_dir.exists():
         return []
 
-    # Read all session records, resolve to latest per session_id
-    by_sid: dict[str, dict] = {}
+    records = []
     for f in storage.list_memory_files(session_dir):
         try:
             rec = storage.read_json(f)
         except (json.JSONDecodeError, OSError):
             continue
-        sid = rec.get("metadata", {}).get("session_id", "")
-        if not sid:
-            continue
-        existing = by_sid.get(sid)
-        if existing is None or rec.get("timestamp", "") > existing.get("timestamp", ""):
-            by_sid[sid] = rec
+        if rec.get("metadata", {}).get("session_id"):
+            records.append(rec)
+    by_sid = session_module._resolve_sessions(records)
 
     # Filter to test sessions that aren't already deleted
     test_sessions = []
@@ -179,43 +180,14 @@ def find_conversation_turns(vault: Path, session_ids: set[str]) -> list[dict]:
     return turns
 
 
-_last_cleanup_ts: str = ""
+def soft_delete_session(session_id: str) -> Path | None:
+    """Soft-delete a session through session.delete_session. Append-only.
 
-
-def soft_delete_session(vault: Path, session_rec: dict) -> Path:
-    """Write a new session record with deleted=True. Append-only.
-
-    Uses microsecond-precision timestamps with collision guard to prevent
-    overwrites when deleting many sessions in rapid succession.
+    The delete record is one version above the latest record, so it wins
+    even when the clock repeated or stepped back since the last write.
+    Returns None when the session is already gone.
     """
-    global _last_cleanup_ts
-    session_dir = vault / "memory" / "session"
-    now = datetime.now(timezone.utc)
-
-    # Microsecond-precision timestamp with collision guard
-    while True:
-        ts = now.strftime("%Y-%m-%dT%H-%M-%S-%f")
-        if ts != _last_cleanup_ts:
-            _last_cleanup_ts = ts
-            break
-        # Spin until microsecond changes
-        now = datetime.now(timezone.utc)
-
-    meta = session_rec.get("metadata", {}).copy()
-    meta["deleted"] = True
-
-    record = {
-        "id": ts,
-        "timestamp": now.isoformat(),
-        "type": "session",
-        "text": session_rec.get("text", ""),
-        "source": "cleanup_script",
-        "tags": ["session", "test_cleanup"],
-        "metadata": meta,
-    }
-    file_path = session_dir / f"{ts}.json"
-    storage.write_json(file_path, record)
-    return file_path
+    return session_module.delete_session(session_id, source="cleanup_script")
 
 
 _last_turn_ts: str = ""
@@ -289,9 +261,9 @@ def main():
     deleted_sessions = 0
     deleted_turns = 0
 
-    for rec in test_sessions:
-        soft_delete_session(vault, rec)
-        deleted_sessions += 1
+    for sid in session_ids:
+        if soft_delete_session(sid) is not None:
+            deleted_sessions += 1
 
     for turn in turns:
         soft_delete_conversation_turn(vault, turn)

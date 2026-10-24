@@ -47,7 +47,7 @@ class TestHealthCheckDocker:
              patch("httpx.get", return_value=MagicMock(status_code=200)) as http_get:
             resp = self._client().get("/api/health")
         assert resp.status_code == 200
-        http_get.assert_called_once_with(f"{SEARXNG_BASE_URL}/", timeout=1.0)
+        http_get.assert_called_once_with(f"{SEARXNG_BASE_URL}/", timeout=1.0, verify=False)
 
     @pytest.mark.docker_probe
     def test_health_docker_ok_when_searxng_responds(self):

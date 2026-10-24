@@ -16,6 +16,7 @@ All records here are synthetic; every vault is a tmp_path.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sys
@@ -53,6 +54,15 @@ SOURCES = {
     "session": (session_mod, "_ids"),
     "project": (project_mod, "_ids"),
     "lodestone": (lodestone_service, "_timestamps"),
+}
+
+# Stores whose edits also serialize under an in-process write lock. That
+# lock does not reach a second process, so the concurrent test removes it
+# to reach the guard two processes meet: the exclusive create.
+WRITE_LOCKS = {
+    "session": session_mod,
+    "project": project_mod,
+    "lodestone": lodestone_service,
 }
 
 # Holds the taken name. Its type matches no writer's resolver, so it never
@@ -190,6 +200,8 @@ def test_concurrent_writers_to_one_name_exactly_one_succeeds(
 ):
     arg = setup()
     _pin(monkeypatch, subdir)
+    if subdir in WRITE_LOCKS:
+        monkeypatch.setattr(WRITE_LOCKS[subdir], "_write_lock", contextlib.nullcontext())
     files_before = set((vault / "memory" / subdir).glob("*.json"))
     # Slow temp files only for the race, not for setup's writes.
     request.getfixturevalue("slow_temp_files")

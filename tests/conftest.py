@@ -232,9 +232,9 @@ def disable_rate_limiter():
 @pytest.fixture(autouse=True)
 def stub_searxng_probe(request, monkeypatch):
     """GET /api/health requests SearXNG to report Docker status. In a test
-    that is a real network call (up to the probe's 1 s bound per health
-    request) and its result depends on the machine. Stubbed to "ok" unless
-    the test is marked `docker_probe` (tests/test_service_endpoints.py
+    that is a real network call (up to the probe's 1 s timeout per phase,
+    per health request) and its result depends on the machine. Stubbed to
+    "ok" unless the test is marked `docker_probe` (tests/test_service_endpoints.py
     TestHealthCheckDocker, tests/test_searxng_loopback.py)."""
     if request.node.get_closest_marker("docker_probe") is None:
         monkeypatch.setattr("src.api.main._check_docker_status", lambda: "ok")

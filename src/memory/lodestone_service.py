@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from src.core.config import get_private_vault_path
 from src.core.jsonio import safe_read_json
 from src.core.timestamps import UniqueTimestampSource
 from src.memory.storage import MemoryStorage
+from src.memory.versioning import coerce_version
 
 logger = logging.getLogger("ember.lodestone")
 
@@ -38,6 +40,13 @@ storage = MemoryStorage()
 # ultrareview #280).
 _timestamps = UniqueTimestampSource("%Y-%m-%dT%H-%M-%S-%f")
 
+# write() checks the active cap and update() reads the latest version
+# before writing the next. Sync API endpoints run on a thread pool, so
+# without this lock two overlapping updates both write the same version and
+# one update's change is lost, and two writes can both pass the cap.
+# In-process only.
+_write_lock = threading.Lock()
+
 
 def _lodestone_dir() -> Path:
     vault = get_private_vault_path()
@@ -52,31 +61,39 @@ def _load_record(file_path: Path) -> dict[str, Any] | None:
 
 def _all_records() -> list[dict[str, Any]]:
     """Load all lodestone records from vault, deduped to the latest
-    physical version per logical id, newest first.
+    physical version per logical id, newest first by the winning file's
+    mtime.
 
     update() writes a new file per edit rather than mutating the original
-    (append-only, Rule 3). Sorted by file mtime rather than filename: id
-    and timestamp are caller-controlled strings (tests write synthetic
-    ids like "rec-1" as filenames, which do not sort correctly against
-    real timestamp-named files), while mtime always reflects real write
-    order regardless of what the filename or record fields contain.
-    Mirrors StateResolver._latest_per_category's latest-wins pattern,
-    keyed on id instead of category.
+    (append-only, Rule 3). The highest "version" wins. File mtime only
+    breaks ties between records that predate the counter (all version 0):
+    mtime ties inside one filesystem timestamp tick and is reset when a
+    vault is copied, restored or unzipped, so alone it can resurrect an
+    older version. Filename is never the order: id and timestamp are
+    caller-controlled strings (tests use synthetic ids like "rec-1").
     """
     ldir = _lodestone_dir()
-    files = sorted(ldir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
-    records = []
-    seen_ids: set[str] = set()
-    for f in files:
+    files = sorted(
+        ((f.stat().st_mtime, f) for f in ldir.glob("*.json")),
+        key=lambda pair: pair[0],
+        reverse=True,
+    )
+    # id -> (winning file's mtime, record)
+    latest: dict[Any, tuple[float, dict[str, Any]]] = {}
+    for mtime, f in files:
         rec = _load_record(f)
         if not rec or rec.get("type") != "lodestone":
             continue
         rec_id = rec.get("id")
-        if rec_id in seen_ids:
-            continue
-        seen_ids.add(rec_id)
-        records.append(rec)
-    return records
+        if rec_id not in latest or _version_of(rec) > _version_of(latest[rec_id][1]):
+            latest[rec_id] = (mtime, rec)
+    winners = sorted(latest.values(), key=lambda pair: pair[0], reverse=True)
+    return [rec for _, rec in winners]
+
+
+def _version_of(record: dict[str, Any]) -> int:
+    """The record's version counter; 0 for records that predate it."""
+    return coerce_version(record.get("version"))
 
 
 def read_active() -> list[dict[str, Any]]:
@@ -109,57 +126,59 @@ def write(
     Enforces MAX_ACTIVE_RECORDS cap — raises ValueError if cap would be
     exceeded by a new confirmed record.
     """
-    if confirmed and len(read_active()) >= MAX_ACTIVE_RECORDS:
-        raise ValueError(
-            f"Lodestone cap reached ({MAX_ACTIVE_RECORDS} active records). "
-            "Confirm fewer records or dismiss existing ones before adding more."
+    with _write_lock:
+        if confirmed and len(read_active()) >= MAX_ACTIVE_RECORDS:
+            raise ValueError(
+                f"Lodestone cap reached ({MAX_ACTIVE_RECORDS} active records). "
+                "Confirm fewer records or dismiss existing ones before adding more."
+            )
+
+        timestamp = _timestamps.next()
+        extra_meta = metadata or {}
+
+        record = {
+            "id": timestamp,
+            "timestamp": timestamp,
+            "type": "lodestone",
+            "value": value,
+            "acquisition_path": acquisition_path,
+            "source": source,
+            "supporting_evidence": supporting_evidence,
+            "recurrence_count": 1,
+            "confirmed": confirmed,
+            "version": 0,
+            "conflict_resolution": False,
+            "metadata": {
+                "user_note": extra_meta.get("user_note"),
+                "taxonomy_category": taxonomy_category,
+                "flagged_as_noise": False,
+                # Recalling Too Well Phase 1, item 1: which reflection records
+                # this lodestone value was synthesized from, if any.
+                "source_record_ids": extra_meta.get("source_record_ids") or [],
+                # ADR-015 amendment (PR #180), implementation step 2: lodestone
+                # has no SQLite row and no nightly heat computation, so this is
+                # computed once by the caller at synthesis time (see
+                # lodestone_synthesis.py) and passed through here rather than
+                # assigned by TieringService, which never scans this store.
+                # Defaults to cold, not hot: unlike reflection's SQL-level
+                # backward-compat default, there is no legacy lodestone corpus
+                # to be lenient toward, and "no independent standing" argues
+                # for the conservative default when nothing was computed.
+                "tier": extra_meta.get("tier") or "cold",
+            },
+        }
+
+        ldir = _lodestone_dir()
+        file_path = ldir / f"{timestamp}.json"
+        storage.create_json(file_path, record)
+
+        logger.info(
+            "[LODESTONE] Wrote %s record: %d chars (%s)",
+            "confirmed" if confirmed else "proposed",
+            len(value),
+            taxonomy_category,
         )
-
-    timestamp = _timestamps.next()
-    extra_meta = metadata or {}
-
-    record = {
-        "id": timestamp,
-        "timestamp": timestamp,
-        "type": "lodestone",
-        "value": value,
-        "acquisition_path": acquisition_path,
-        "source": source,
-        "supporting_evidence": supporting_evidence,
-        "recurrence_count": 1,
-        "confirmed": confirmed,
-        "conflict_resolution": False,
-        "metadata": {
-            "user_note": extra_meta.get("user_note"),
-            "taxonomy_category": taxonomy_category,
-            "flagged_as_noise": False,
-            # Recalling Too Well Phase 1, item 1: which reflection records
-            # this lodestone value was synthesized from, if any.
-            "source_record_ids": extra_meta.get("source_record_ids") or [],
-            # ADR-015 amendment (PR #180), implementation step 2: lodestone
-            # has no SQLite row and no nightly heat computation, so this is
-            # computed once by the caller at synthesis time (see
-            # lodestone_synthesis.py) and passed through here rather than
-            # assigned by TieringService, which never scans this store.
-            # Defaults to cold, not hot: unlike reflection's SQL-level
-            # backward-compat default, there is no legacy lodestone corpus
-            # to be lenient toward, and "no independent standing" argues
-            # for the conservative default when nothing was computed.
-            "tier": extra_meta.get("tier") or "cold",
-        },
-    }
-
-    ldir = _lodestone_dir()
-    file_path = ldir / f"{timestamp}.json"
-    storage.create_json(file_path, record)
-
-    logger.info(
-        "[LODESTONE] Wrote %s record: %d chars (%s)",
-        "confirmed" if confirmed else "proposed",
-        len(value),
-        taxonomy_category,
-    )
-    return record
+        return record
 
 
 def update(record_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
@@ -169,45 +188,50 @@ def update(record_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
     Append-only (Rule 3): writes a NEW file carrying a new timestamp,
     built from the current (already-deduped) version of the record.
     The "id" field is left unchanged -- it is the stable identifier
-    callers PATCH against across repeated updates. The original file is
-    never mutated or removed; _all_records() dedups to the newest
-    physical version per id on read.
+    callers PATCH against across repeated updates; "version" goes up by
+    one. The original file is never mutated or removed; _all_records()
+    dedups to the highest version per id on read.
     """
-    target_record = None
-    for rec in _all_records():
-        if rec.get("id") == record_id:
-            target_record = rec
-            break
+    with _write_lock:
+        target_record = None
+        for rec in _all_records():
+            if rec.get("id") == record_id:
+                target_record = rec
+                break
 
-    if target_record is None:
-        return None
+        if target_record is None:
+            return None
 
-    updated_record = dict(target_record)
-    updated_record["metadata"] = dict(target_record.get("metadata") or {})
+        updated_record = dict(target_record)
+        updated_record["metadata"] = dict(target_record.get("metadata") or {})
 
-    # Apply allowed updates
-    if "confirmed" in updates:
-        new_confirmed = bool(updates["confirmed"])
-        # Check cap if confirming
-        if new_confirmed and not target_record.get("confirmed"):
-            if len(read_active()) >= MAX_ACTIVE_RECORDS:
-                raise ValueError(
-                    f"Lodestone cap reached ({MAX_ACTIVE_RECORDS} active records)."
-                )
-        updated_record["confirmed"] = new_confirmed
+        # Apply allowed updates
+        if "confirmed" in updates:
+            new_confirmed = bool(updates["confirmed"])
+            # Check cap if confirming
+            if new_confirmed and not target_record.get("confirmed"):
+                if len(read_active()) >= MAX_ACTIVE_RECORDS:
+                    raise ValueError(
+                        f"Lodestone cap reached ({MAX_ACTIVE_RECORDS} active records)."
+                    )
+            updated_record["confirmed"] = new_confirmed
 
-    if "user_note" in updates:
-        updated_record["metadata"]["user_note"] = updates["user_note"]
+        if "user_note" in updates:
+            updated_record["metadata"]["user_note"] = updates["user_note"]
 
-    if "flagged_as_noise" in updates:
-        updated_record["metadata"]["flagged_as_noise"] = bool(updates["flagged_as_noise"])
+        if "flagged_as_noise" in updates:
+            updated_record["metadata"]["flagged_as_noise"] = bool(updates["flagged_as_noise"])
 
-    new_timestamp = _timestamps.next()
-    updated_record["timestamp"] = new_timestamp
+        new_timestamp = _timestamps.next()
+        updated_record["timestamp"] = new_timestamp
+        updated_record["version"] = _version_of(target_record) + 1
 
-    ldir = _lodestone_dir()
-    file_path = ldir / f"{new_timestamp}.json"
-    storage.create_json(file_path, updated_record)
+        ldir = _lodestone_dir()
+        file_path = ldir / f"{new_timestamp}.json"
+        storage.create_json(file_path, updated_record)
 
-    logger.info("[LODESTONE] Updated record %s (append-only, new version %s)", record_id, new_timestamp)
-    return updated_record
+        logger.info(
+            "[LODESTONE] Updated record %s (append-only, version %d, file %s)",
+            record_id, updated_record["version"], new_timestamp,
+        )
+        return updated_record

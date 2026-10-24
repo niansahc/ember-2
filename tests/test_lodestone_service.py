@@ -3,6 +3,7 @@ Tests for LodestoneService — lodestone living layer read/write (ADR-017).
 """
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -227,3 +228,83 @@ class TestUpdateIsAppendOnly:
         assert len(matching) == 1
         assert matching[0]["metadata"]["user_note"] == "first note"
         assert matching[0]["metadata"]["flagged_as_noise"] is True
+
+
+def _set_mtime(path, stamp):
+    """Pin a file's mtime so ordering cannot depend on filesystem timestamp
+    granularity, vault copies or restores."""
+    os.utime(path, (stamp, stamp))
+
+
+class TestLatestVersionDoesNotDependOnMtime:
+    """A tied or reset mtime (coarse timestamps, vault copy or restore)
+    must not resurrect an older version."""
+
+    def test_tied_mtimes_resolve_to_the_latest_version(self, vault_dir):
+        lodestone_dir = vault_dir / "memory" / "lodestone"
+        created = write("honesty", "character", confirmed=False)
+        update(created["id"], {"user_note": "first note"})
+        update(created["id"], {"confirmed": True})
+
+        for path in lodestone_dir.glob("*.json"):
+            _set_mtime(path, 1_700_000_000)
+
+        current = [r for r in read_all() if r["id"] == created["id"]]
+        assert len(current) == 1
+        assert current[0]["confirmed"] is True
+        assert current[0]["metadata"]["user_note"] == "first note"
+
+    def test_inverted_mtimes_still_resolve_to_the_latest_version(self, vault_dir):
+        lodestone_dir = vault_dir / "memory" / "lodestone"
+        created = write("honesty", "character", confirmed=False)
+        update(created["id"], {"user_note": "first note"})
+        latest = update(created["id"], {"confirmed": True})
+
+        # Newest version gets the oldest mtime, as after a copy that
+        # touches files in an arbitrary order.
+        newest_first = sorted(lodestone_dir.glob("*.json"), reverse=True)
+        for i, path in enumerate(newest_first):
+            _set_mtime(path, 1_700_000_000 + i)
+
+        current = [r for r in read_all() if r["id"] == created["id"]]
+        assert len(current) == 1
+        assert current[0]["version"] == latest["version"]
+        assert current[0]["confirmed"] is True
+
+    def test_listing_is_newest_first_by_the_winning_file(self, vault_dir):
+        """read_all() lists each id at its winning version's mtime, not at
+        the mtime of an older version that happens to be newer on disk."""
+        lodestone_dir = vault_dir / "memory" / "lodestone"
+        a = write("honesty", "character")
+        b = write("patience", "character")
+        update(a["id"], {"user_note": "edited"})
+
+        a0, b0, a1 = sorted(lodestone_dir.glob("*.json"))
+        _set_mtime(a0, 1_700_000_300)
+        _set_mtime(b0, 1_700_000_200)
+        _set_mtime(a1, 1_700_000_100)
+
+        listed = read_all()
+        assert [r["id"] for r in listed] == [b["id"], a["id"]]
+        assert listed[1]["version"] == 1
+
+    def test_versions_increase_by_one_per_update(self, vault_dir):
+        created = write("honesty", "character")
+        first = update(created["id"], {"user_note": "a"})
+        second = update(created["id"], {"user_note": "b"})
+        assert (created["version"], first["version"], second["version"]) == (0, 1, 2)
+
+    def test_control_unversioned_legacy_files_still_order_by_mtime(self, vault_dir):
+        """Positive control: records written before the version field exist
+        keep the old mtime ordering, so the version path above is what
+        decides in the tests that pass, not a lucky mtime."""
+        lodestone_dir = vault_dir / "memory" / "lodestone"
+        newer = _write_record(vault_dir, "rec-1", value="new text")
+        # Same logical id, two physical files, no version field on either.
+        (lodestone_dir / "rec-1-older.json").write_text(
+            json.dumps(dict(newer, value="old text")), encoding="utf-8"
+        )
+        _set_mtime(lodestone_dir / "rec-1.json", 1_700_000_100)
+        _set_mtime(lodestone_dir / "rec-1-older.json", 1_700_000_000)
+
+        assert [r["value"] for r in read_all()] == ["new text"]

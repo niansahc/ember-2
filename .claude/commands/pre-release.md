@@ -44,6 +44,7 @@ A release is not complete at commit. A release is not complete at tag. A release
 - [ ] package.json version bumped
 - [ ] All changes committed and pushed to main: git push origin main
 - [ ] Frontend freshly built from pinned ember-2-ui tag before packaging
+- [ ] package.json `emberRelease` bumped to the coordinated version X.Y.Z in the installer's release-please PR, and only after tag vX.Y.Z exists on both ember-2 and ember-2-ui (`git ls-remote --tags`). `tests/e2e/release-pin.spec.cjs` stays red until it is bumped, and the `check-pinned-tags` job blocks a release that names a missing tag. Installer-only patch: leave `emberRelease` alone
 - [ ] Backend version pinned and documented in release notes
 - [ ] Installer built: npm run dist
 - [ ] app-update.yml present in dist/win-unpacked/resources/ — verify before publishing
@@ -114,10 +115,11 @@ Patch releases follow the same checklist. There are no shortcuts for patches. A 
 1. G, M, Y each complete documentation and quality gates
 2. Each reports green to manager
 3. Manager confirms all three green and gets human approval
-4. G coordinates the release — tags all three repos, creates GitHub Releases
-5. Y attaches installer artifacts (.exe, latest.yml)
-6. G verifies all three releases are publicly visible
-7. G reports release URLs — release is not done until this step
+4. G coordinates the release: tags ember-2 and ember-2-ui vX.Y.Z and creates their GitHub Releases
+5. G confirms both vX.Y.Z tags exist (`git ls-remote --tags`). Only then is the installer's package.json `emberRelease` bumped to X.Y.Z in its release-please PR; the human merges that PR and G tags the installer
+6. Y attaches installer artifacts (.exe, latest.yml)
+7. G verifies all three releases are publicly visible
+8. G reports release URLs — release is not done until this step
 
 ### Y independent releases
 

@@ -78,6 +78,8 @@ Active as of v0.18.0. Open issues are listed first; resolved-in-place entries ar
 
 - **B-WS-003: The follow-up after a confirmed search offer gets no search of its own** - When the user answers a search offer with "yes, but <new question>", the confirmed search runs on the original query (the user's own text stored with the offer), and the new question reaches the model as a follow-up. The follow-up is answered from what the model has (the results for the original query and its training data), with no search or search offer of its own, so a follow-up that needs current information can get an out-of-date answer. By design: the user's yes covered the original query only, so the follow-up is never sent to the search engines (decided 2026-10-19, ADR-048). Workaround: send the new question as its own message. Status: open. Version found: v0.18.1.
 
+- **B-WS-004: Two confirmations sent at once in one session can both run the search** - `_check_pending_confirmation` (`src/api/openai_adapter.py`) reads the active pending search and resolves it with no lock, and ignores `resolve_record`'s False return. Two "yes" replies sent at once in the same session (a double submit, or two tabs) can both read the pending as active and both confirm it: the web search runs twice and two replies are produced. Pre-existing on main; found in the PR #302 review. Deferred to Release B. Status: open. Version found: v0.18.1.
+
 ---
 
 ## Resolved (v0.17.1 - v0.18.0 boundary)

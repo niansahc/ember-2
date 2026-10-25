@@ -136,6 +136,7 @@ def _log_safety_review_path(log_path) -> None:
     logger.warning("[SAFETY] log written to: %s", log_path)
 from src.llm.prompt_builder import PromptBuilder
 from src.llm.prompt_guardrail import OLLAMA_NUM_PREDICT, trim_to_fit
+from src.llm.refusal import RefusalText, is_review_refusal
 from src.memory.service import MemoryService
 from src.reflection.session_summary import write_session_summary
 from src.safety.models import SafetyReviewContext
@@ -511,14 +512,17 @@ class LLMAdapter:
                 final_response = review_result.reviewed_text or draft_response
 
             elif review_result.outcome == "refuse_redirect":
-                final_response = (
+                # The type carries the outcome to the chat path, which keeps
+                # the refusal intact (src/llm/refusal.py).
+                final_response = RefusalText(
                     review_result.refusal_message or "I can't help with that."
                 )
 
         # BUG-008: strip trailing parenthetical questions when user has
         # objected to questions. Runs after safety review so the review
         # sees the unfiltered draft, but the user sees the cleaned output.
-        if buf.question_suppressed:
+        # A refusal is never rewritten (CLAUDE.md implementation standard 2).
+        if buf.question_suppressed and not is_review_refusal(final_response):
             final_response = strip_trailing_parenthetical_question(final_response)
 
         # Empty response guard — if the draft collapsed to nothing after

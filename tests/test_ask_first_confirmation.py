@@ -3,7 +3,8 @@ tests/test_ask_first_confirmation.py
 
 Tests for the ask-first confirmation routing feature:
   - _write_pending_confirmation (the record for an offer the code made)
-  - _check_pending_confirmation (LLM-based yes/no interpretation, resolution)
+  - _check_pending_confirmation (deterministic yes/no interpretation by
+    _confirmation_grammar, no model call; resolution)
   - pending_confirmation category membership in models, extractor, resolver
 """
 

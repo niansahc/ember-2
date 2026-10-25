@@ -46,10 +46,9 @@ from src.memory.session import get_session, list_sessions
 from src.context.service import ContextService, resolve_search_outcome
 from src.tools.web_search import NO_REPEAT_OFFER_REASONS, search_text_from
 from src.llm.adapter import LLMAdapter, StatusSignal
-from src.llm.ask_first_validator import has_first_person_marker
-# Shared with the post-gen pipeline, which skips the search-unavailable
-# disclosure on refusals.
-from src.llm.refusal import is_refusal_response as _is_refusal_response
+from src.llm.ask_first_validator import drop_code_offer, has_first_person_marker
+# The review's refuse_redirect outcome, read from the generated reply's type.
+from src.llm.refusal import is_review_refusal
 from src.onboarding.service import OnboardingService
 from src.state.state_extractor import StateExtractor
 from src.state.state_service import StateService
@@ -416,20 +415,28 @@ def _store_reply(
     stateless_pending: bool = False,
     pending_guard: "_PendingGuard",
     code_offer=None,
-) -> None:
+) -> str:
     """Store the reply, then the work that must exist before [DONE].
+
+    Returns the reply as stored: the caller sends that text, not its own.
 
     ADR-047 and decision D: the reply, its one deviation-detection run
     (ADR-026, issue #164, on the stored text) and the pending confirmation.
     A reply write failure raises ExchangeStorageError; the stream guard or the
-    handler turns it into storage_failed. _write_pending_confirmation catches
-    its own errors. Used by the streaming paths and the non-stream path alike.
+    handler turns it into storage_failed. Used by the streaming paths and the
+    non-stream path alike.
 
     code_offer is the search offer the code made on this exchange
     (post_gen_pipeline.CodeOffer), or None. A pending confirmation is written
     for it and for nothing else (ADR-048): an offer the model phrased itself
     never becomes one. pending_query is the user's own text the search will
     send.
+
+    The vault pending is written before the reply (ADR-048). When that write
+    fails, nothing would honour the user's "yes", so the offer sentence is
+    dropped from the reply before it is stored and sent. When the reply write
+    then fails, the pending just written is resolved: the user never saw the
+    offer, so a later "yes" must not fire it.
 
     stateless_pending is True on a stateless turn (vault toggle off, not a
     test session). Nothing is written to the vault then; the code's offer is
@@ -439,12 +446,32 @@ def _store_reply(
     pending_guard is settled once the reply is stored: the exchange is
     answered, so a pending this turn consumed is not put back.
     """
-    exchange.record_reply(reply)
+    pending_id = None
+    if code_offer is not None and not skip_vault_write:
+        with vault_binding(exchange.vault):
+            written, pending_id = _write_pending_confirmation(
+                code_offer, pending_query, exchange.session_id)
+        if not written:
+            reply, dropped = drop_code_offer(reply, code_offer.text)
+            if dropped:
+                logger.warning("[ASK_FIRST] Offer dropped from the reply: its "
+                               "pending was not written (offer=%s)", code_offer.kind)
+            else:
+                logger.warning("[ASK_FIRST] Pending not written and the offer was "
+                               "not found at the end of the reply (offer=%s)",
+                               code_offer.kind)
+    try:
+        exchange.record_reply(reply)
+    except Exception:
+        if pending_id is not None:
+            with vault_binding(exchange.vault):
+                _resolve_unsent_pending(pending_id)
+        raise
     pending_guard.settle()
     if skip_vault_write:
         if stateless_pending and code_offer is not None:
             _stateless_pending_store.hold(exchange.session_id, pending_query)
-        return
+        return reply
     _spawn_deviation_detection(
         reply=reply,
         intent_class=intent_class,
@@ -452,10 +479,19 @@ def _store_reply(
         vault=exchange.vault,
         session_id=exchange.session_id,
     )
-    if code_offer is None:
-        return
-    with vault_binding(exchange.vault):
-        _write_pending_confirmation(code_offer, pending_query, exchange.session_id)
+    return reply
+
+
+def _resolve_unsent_pending(pending_id: str) -> None:
+    """Resolve a pending written for a reply that was then not stored.
+    Non-fatal: the reply write error is the one the caller raises."""
+    try:
+        state_service.resolve_record(pending_id, resolution="reply_not_stored")
+        logger.info("[ASK_FIRST] Resolved pending %s: its reply was not stored",
+                    pending_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[ASK_FIRST] Unsent pending not resolved (non-fatal): %s",
+                       type(exc).__name__)
 
 
 def _resolve_original_pending(pending, reason: str = "user_response") -> None:
@@ -496,15 +532,30 @@ _CONFIRM_NEGATIONS = frozenset(
 # The one fixed carve-out: idioms that hold a negation word and mean yes.
 # They are removed from the normalised text before the negation check, so
 # "Sure, why not" and "no problem, go ahead" confirm while "why not search
-# later, no" still declines on its own "no". Nothing else is exempt.
-_CONFIRM_AFFIRMING_IDIOMS = re.compile(r"\b(?:why not|not a problem|no problem)\b")
+# later, no" still declines on its own "no". Nothing else is exempt. Built
+# from _CONFIRM_PHRASE_AFFIRM, so an affirmative phrase added there that holds
+# a negation word ("no worries") is exempt too and cannot drift out of step.
+def _affirming_idiom_pattern(phrases) -> re.Pattern:
+    """A regex matching every phrase in `phrases` that holds a negation word,
+    longest first, so "not a problem" is removed whole."""
+    return re.compile(r"\b(?:%s)\b" % "|".join(
+        re.escape(" ".join(phrase))
+        for phrase in sorted(phrases, key=len, reverse=True)
+        if set(phrase) & _CONFIRM_NEGATIONS
+    ))
+
+
+_CONFIRM_AFFIRMING_IDIOMS = _affirming_idiom_pattern(_CONFIRM_PHRASE_AFFIRM)
 # New content after the yes starts after a connector ("yes, but what about X").
 _CONFIRM_CONNECTORS = frozenset({"but", "and", "also", "then", "so"})
 # A remainder that asks something is new content: it holds a "?" or starts
-# with one of these words ("yes, what about the weather in Paris").
+# with one of these words ("yes, what about the weather in Paris"). The
+# contractions are listed as normalisation leaves them, with the apostrophe
+# dropped: "yes, what's the weather" arrives as "yes whats the weather".
 _CONFIRM_QUESTION_WORDS = frozenset({
     "what", "who", "when", "where", "why", "how", "which", "is", "are", "can",
     "could", "does", "do", "did", "will", "would", "should",
+    "whats", "whos", "wheres", "hows", "whens", "whys",
 })
 # Words that only elaborate the yes ("Yes, that would be great").
 _CONFIRM_ELABORATION = frozenset({
@@ -664,12 +715,18 @@ class _StatelessPendingStore:
         for sid in [s for s, (_, _, exp) in self._items.items() if exp <= now]:
             del self._items[sid]
 
-    def _put(self, session_id: str, kind: str, query: str) -> bool:
+    def _put(self, session_id: str, kind: str, query: str,
+             only_if_empty: bool = False) -> bool:
+        """Store the session's entry, replacing any older one. only_if_empty
+        (a restore) stores nothing when the session already holds a live
+        entry. True when stored."""
         if not session_id:
             return False
         with self._lock:
             now = self._clock()
             self._purge(now)
+            if only_if_empty and session_id in self._items:
+                return False
             self._items.pop(session_id, None)
             self._items[session_id] = (kind, query, now + self._ttl)
             while len(self._items) > self._max:
@@ -685,17 +742,17 @@ class _StatelessPendingStore:
             del self._items[session_id]
         return entry
 
-    def hold(self, session_id: str, query: str) -> bool:
+    def hold(self, session_id: str, query: str, only_if_empty: bool = False) -> bool:
         """Hold a search offer for `query`."""
-        if not self._put(session_id, _STATELESS_OFFER, query):
+        if not self._put(session_id, _STATELESS_OFFER, query, only_if_empty):
             return False
         logger.info("[ASK_FIRST] Held stateless pending in process (ttl %ds)",
                     int(self._ttl))
         return True
 
-    def hold_awaiting(self, session_id: str) -> bool:
+    def hold_awaiting(self, session_id: str, only_if_empty: bool = False) -> bool:
         """Hold the B2 clarification: the next turn is the search content."""
-        if not self._put(session_id, _STATELESS_AWAITING, ""):
+        if not self._put(session_id, _STATELESS_AWAITING, "", only_if_empty):
             return False
         logger.info("[CLARIFY] Held awaiting_search_content in process (ttl %ds)",
                     int(self._ttl))
@@ -781,25 +838,29 @@ class _PendingGuard:
         return restored
 
     def _restore_pending(self, consumed: dict, outcome: str, reason: str | None) -> bool:
+        """Put the consumed offer back, unless the session already holds a
+        newer offer or clarification: one made while this exchange was
+        still running answers the user's next reply, and restoring the old
+        one would let a "yes" search the query the user saw first."""
         try:
             if consumed["stateless"]:
-                written = _stateless_pending_store.hold(self._session_id, consumed["query"])
+                written = _stateless_pending_store.hold(
+                    self._session_id, consumed["query"], only_if_empty=True)
                 store = "process"
             else:
                 with vault_binding(self._vault):
                     written = _write_pending_record(
                         consumed["offer_text"], consumed["query"], self._session_id,
-                        offer_kind=consumed.get("offer"),
-                    )
+                        offer_kind=consumed.get("offer"), only_if_session_free=True,
+                    ) is not None
                 store = "vault"
         except Exception as exc:  # noqa: BLE001
             logger.warning("[CONFIRM] Pending restore failed (non-fatal): %s",
                            type(exc).__name__)
             return False
         if not written:
-            logger.info("[CONFIRM] Restore skipped: %s (store=%s)",
-                        "an active pending already exists" if store == "vault"
-                        else "nothing held for this session", store)
+            logger.info("[CONFIRM] Restore skipped: the session already holds an "
+                        "active entry (store=%s)", store)
             return False
         logger.info(
             "[CONFIRM] Restored pending after unanswered exchange: "
@@ -808,7 +869,11 @@ class _PendingGuard:
         return True
 
     def _restore_awaiting(self, outcome: str, reason: str | None) -> bool:
-        if not _stateless_pending_store.hold_awaiting(self._session_id):
+        """Put the search clarification back, unless the session already
+        holds a newer entry (as _restore_pending)."""
+        if not _stateless_pending_store.hold_awaiting(self._session_id, only_if_empty=True):
+            logger.info("[CLARIFY] Restore skipped: the session already holds an "
+                        "active entry (store=process)")
             return False
         logger.info(
             "[CLARIFY] Restored awaiting_search_content after an unanswered "
@@ -917,11 +982,18 @@ _pending_write_lock = threading.Lock()
 
 def _write_pending_record(
     offer_sentence: str, query: str, session_id: str, offer_kind: str | None = None,
-) -> bool:
+    *, only_if_session_free: bool = False,
+) -> str | None:
     """Write an active pending_confirmation for `query` unless this session
-    already holds one for it. True when a record was written. Raises on a
-    storage error; callers decide whether that is fatal. offer_kind is the
-    code offer's kind ("ask_first", "repeat_search"), kept for the logs.
+    already holds one for it. Returns the new record's id, or None when
+    nothing was written. Raises on a storage error; callers decide whether
+    that is fatal. offer_kind is the code offer's kind ("ask_first",
+    "repeat_search"), stored in the record's metadata so a restore
+    (_PendingGuard) writes it back with the same kind.
+
+    only_if_session_free (the restore) writes nothing when the session holds
+    any active pending, whatever its query: a newer offer was made while the
+    consumed one was out, and the user's next "yes" answers that one.
     """
     with _pending_write_lock:
         existing = state_service.read_by_category("pending_confirmation")
@@ -933,9 +1005,15 @@ def _write_pending_record(
             if er.id in _resolved:
                 continue
             em = er.metadata or {}
-            if em.get("session_id") == session_id and em.get("query") == query:
+            if em.get("session_id") != session_id:
+                continue
+            if only_if_session_free:
+                logger.info("[ASK_FIRST] Not written: session %s holds an active "
+                            "pending", session_id)
+                return None
+            if em.get("query") == query:
                 logger.info("[ASK_FIRST] Duplicate suppressed for session %s", session_id)
-                return False
+                return None
 
         record = state_service.make_record(
             state_type="pending_confirmation",
@@ -952,22 +1030,26 @@ def _write_pending_record(
         state_service.write(record)
     logger.info("[ASK_FIRST] Wrote pending_confirmation offer=%s (%d chars)",
                 offer_kind or "-", len(offer_sentence))
-    return True
+    return record.id
 
 
-def _write_pending_confirmation(offer, query: str, session_id: str) -> None:
+def _write_pending_confirmation(offer, query: str, session_id: str) -> tuple[bool, str | None]:
     """Write the pending_confirmation for a search offer the code made on
     this exchange (post_gen_pipeline.CodeOffer, ADR-048).
 
     The record text is the offer as the user saw it; `query` is the user's
-    own text the search will send. Non-fatal: the reply is already stored.
-    The duplicate guard (_write_pending_record) keeps one active pending per
-    query when the same offer is made again.
+    own text the search will send. Returns (ok, record_id). ok is False when
+    the write failed: the caller drops the offer from the reply, since
+    nothing would honour a "yes" to it. record_id is None when the duplicate
+    guard (_write_pending_record) found an active pending for the same query,
+    which still honours the offer.
     """
     try:
-        _write_pending_record(offer.text, query, session_id, offer_kind=offer.kind)
+        return True, _write_pending_record(offer.text, query, session_id,
+                                           offer_kind=offer.kind)
     except Exception as exc:
         logger.warning("[ASK_FIRST] Pending write failed (non-fatal): %s", type(exc).__name__)
+        return False, None
 
 
 # --- Override detection patterns (jailbreak-class) ---
@@ -2420,8 +2502,9 @@ async def _complete_exchange(
     # Ask-first mode is active when the classifier routed to web_search AND
     # the user has NOT opted into autonomous search. Passed into the prompt
     # builder so the per-turn <search_confirmation> block fires,
-    # and into the post-gen pipeline so the ask-first validator knows when
-    # to substitute a canned RLHF refusal with the scripted confirmation.
+    # and into the post-gen pipeline, which replaces the model's draft with
+    # the code's offer (SCRIPTED_ASK_FIRST_RESPONSE) on every ask-first
+    # exchange except a constitutional refusal (ADR-048).
     # Explicit search requests bypass ask-first - the user's words ARE
     # the confirmation. No need to ask "want me to search?" when they
     # literally said "search for X" or "google that". A query with a
@@ -2548,12 +2631,15 @@ async def _complete_exchange(
         pending_guard=pending_guard,
     )
 
-    def _run_postgen(reply: str):
+    def _run_postgen(reply: str, review_refused: bool = False):
         """run_post_gen_pipeline with the arguments every path passes, read
-        at call time (src/llm/post_gen_pipeline.py)."""
+        at call time (src/llm/post_gen_pipeline.py). review_refused is the
+        review's refuse_redirect outcome, read from the generated reply's
+        type before anything transformed it (src/llm/refusal.py)."""
         from src.llm.post_gen_pipeline import run_post_gen_pipeline
         return run_post_gen_pipeline(
             reply,
+            review_refused=review_refused,
             intent_class=_intent_class,
             web_search_autonomous=_web_autonomous,
             used_web_search=used_web_search,
@@ -2719,43 +2805,52 @@ async def _complete_exchange(
                         yield _status_event(_item.name)
                     else:
                         full_reply = _item
+                # The review's refuse_redirect outcome, read from the reply's
+                # type before any step below transforms the text. A refusal
+                # is never rewritten (CLAUDE.md implementation standard 2):
+                # no grounding revision, no coaching filter, no substitution
+                # or offer in the post-gen pipeline.
+                _review_refused = is_review_refusal(full_reply)
 
-                # 3. Grounding check
-                yield _status_event("verifying")
-                # B-QUAL-004: short-circuit on empty context. Helper lives in
-                # grounding_check.py for unit-testable wiring; rationale
-                # documented there.
-                if should_short_circuit_grounding(_retrieved_context):
-                    is_grounded = False
-                    unsupported = "no retrieved context to verify claims against"
-                    logger.warning(
-                        "[GROUNDING] empty_context_short_circuit intent=%s",
-                        _intent_class,
-                    )
+                # 3. Grounding check. Skipped on a refusal: the revision pass
+                # would rewrite it.
+                if _review_refused:
+                    logger.info("[GROUNDING] skipped: constitutional refusal")
                 else:
-                    is_grounded, unsupported = await run_grounding_check(
-                        full_reply, _retrieved_context,
+                    yield _status_event("verifying")
+                    # B-QUAL-004: short-circuit on empty context. Helper lives
+                    # in grounding_check.py for unit-testable wiring; rationale
+                    # documented there.
+                    if should_short_circuit_grounding(_retrieved_context):
+                        is_grounded = False
+                        unsupported = "no retrieved context to verify claims against"
+                        logger.warning(
+                            "[GROUNDING] empty_context_short_circuit intent=%s",
+                            _intent_class,
+                        )
+                    else:
+                        is_grounded, unsupported = await run_grounding_check(
+                            full_reply, _retrieved_context,
+                        )
+
+                    log_grounding_outcome(
+                        intent_class=_intent_class,
+                        triggered=True,
+                        grounded=is_grounded,
+                        revision_triggered=not is_grounded,
                     )
 
-                log_grounding_outcome(
-                    intent_class=_intent_class,
-                    triggered=True,
-                    grounded=is_grounded,
-                    revision_triggered=not is_grounded,
-                )
-
-                if not is_grounded:
-                    yield _status_event("refining")
-                    full_reply = await run_revision_pass(
-                        full_reply, unsupported or "",
-                    )
+                    if not is_grounded:
+                        yield _status_event("refining")
+                        full_reply = await run_revision_pass(
+                            full_reply, unsupported or "",
+                        )
 
                 # 3.6. Coaching-frame filter - post-generation, pre-stream.
-                # Skip when the response is a constitutional refusal - refusal
-                # text must not be rewritten or stripped by the filter. Short
-                # refusals like "I can't help with that." match coaching-closing
-                # patterns and get deleted, producing a blank response.
-                if not _is_refusal_response(full_reply):
+                # Skipped on a constitutional refusal: short refusals like
+                # "I can't help with that." match coaching-closing patterns
+                # and get deleted, producing a blank response.
+                if not _review_refused:
                     from src.llm.coaching_filter import filter_coaching_frame
                     full_reply = filter_coaching_frame(full_reply, _intent_class, _is_conversational)
                     # Post-coaching empty check - if coaching_filter
@@ -2777,7 +2872,7 @@ async def _complete_exchange(
                 # empty-guard). Grounded streaming path - this runs before
                 # the word-by-word re-stream, so the client sees the
                 # validated text.
-                _postgen = _run_postgen(full_reply)
+                _postgen = _run_postgen(full_reply, review_refused=_review_refused)
                 full_reply = _postgen.reply
                 # When the post-gen pipeline substituted the response
                 # (ask-first or web-refusal), the vault badge is stale -
@@ -2802,9 +2897,12 @@ async def _complete_exchange(
                     logger.warning("[EMPTY_GUARD] Final guard fired before re-stream")
 
                 # 3.8. Store the reply and the pending confirmation before any
-                # of the reply's text is sent (ADR-047, decision D).
-                _store_reply(_exchange, full_reply, code_offer=_postgen.code_offer,
-                             **_store_kwargs)
+                # of the reply's text is sent (ADR-047, decision D). The text
+                # sent is the text stored: an offer whose pending could not be
+                # written is dropped from it.
+                full_reply = _store_reply(_exchange, full_reply,
+                                          code_offer=_postgen.code_offer,
+                                          **_store_kwargs)
 
                 # 4. Re-stream verified response word by word
                 tokens = full_reply.split(" ")
@@ -2874,8 +2972,9 @@ async def _complete_exchange(
 
                 # Store before [DONE] (ADR-047). Partial tokens are never
                 # stored: a raise or disconnect mid-stream skips this line.
-                _store_reply(_exchange, full_reply, code_offer=_postgen.code_offer,
-                             **_store_kwargs)
+                full_reply = _store_reply(_exchange, full_reply,
+                                          code_offer=_postgen.code_offer,
+                                          **_store_kwargs)
 
                 # Vault sources event (if applicable)
                 if vault_sources:
@@ -2928,9 +3027,13 @@ async def _complete_exchange(
         skip_vault_write=_skip_vault_write,
     )
 
+    # The review's refuse_redirect outcome, read from the reply's type before
+    # anything transforms the text (src/llm/refusal.py).
+    _review_refused_ns = is_review_refusal(reply)
+
     # Coaching-frame filter - post-generation, pre-return.
-    # Skip on refusal responses to prevent stripping.
-    if not _is_refusal_response(reply):
+    # Skipped on a constitutional refusal, which is never rewritten.
+    if not _review_refused_ns:
         from src.llm.coaching_filter import filter_coaching_frame as _filter_cf
         reply = _filter_cf(reply, _intent_class, _is_conversational)
 
@@ -2939,7 +3042,7 @@ async def _complete_exchange(
 
     # Post-gen validators (source / vision / ask-first / empty-guard).
     # Non-streaming path: runs before final JSONResponse return.
-    _postgen_ns = _run_postgen(reply)
+    _postgen_ns = _run_postgen(reply, review_refused=_review_refused_ns)
     reply = _postgen_ns.reply
     if _postgen_ns.ask_first_substituted or _postgen_ns.web_refusal_substituted:
         used_vault = False
@@ -2963,11 +3066,12 @@ async def _complete_exchange(
             "[SELF_NARRATIVE] Audit pass failed (non-fatal): %s", type(exc).__name__,
         )
 
-    # Store the reply, then the pending confirmation, before the response
-    # (ADR-047). Every write belongs to the vault this exchange started in,
-    # whether it runs inline or in a spawned thread (issue #144).
-    _store_reply(_exchange, reply, code_offer=_postgen_ns.code_offer,
-                 **_store_kwargs)
+    # Store the pending confirmation and the reply before the response
+    # (ADR-047, ADR-048); the response carries the text stored. Every write
+    # belongs to the vault this exchange started in, whether it runs inline
+    # or in a spawned thread (issue #144).
+    reply = _store_reply(_exchange, reply, code_offer=_postgen_ns.code_offer,
+                         **_store_kwargs)
     if _skip_vault_write:
         logger.warning("[TASK] Skipped task detection (test session)")
     else:

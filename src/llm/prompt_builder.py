@@ -282,8 +282,11 @@ _SEARCH_NOTE_TAILS = {
     "empty": " The search ran and found nothing. Say that nothing was found.",
 }
 # Added for NO_REPEAT_OFFER_REASONS (src/tools/web_search.py): searching again
-# returns the same result, and a "want me to search?" would be taken up by the
-# ask-first flow as a real offer.
+# returns the same result. The code enforces this, not the prompt: the code
+# makes no repeat-search offer for these reasons, no pending is written for a
+# model's own offer, and the post-gen pipeline removes such an offer
+# (remove_unbacked_offers, ADR-048). The sentence only spares the model a
+# sentence that would be removed.
 _SEARCH_NOTE_NO_REPEAT_OFFER = (
     " Searching again would return the same result, so do not offer to "
     "search again."

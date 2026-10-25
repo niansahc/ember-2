@@ -83,7 +83,8 @@ def _seed_pending(session_id, query=QUERY):
 def _turn(client, test_vault, responses, *, query, session_id, stream=False,
           autonomous=False, vault_enabled=True, real_classifier=False,
           request_policy=None, awaiting_search=False, reply=MODEL_REPLY,
-          fail=None, record_reply_error=None, image=False):
+          fail=None, record_reply_error=None, image=False, coaching=None,
+          grounding=(True, None)):
     """One /v1/chat/completions turn. _check_pending_confirmation and
     _write_pending_confirmation are REAL and run against the test vault.
     request_policy replaces the request classifier's web_search verdict;
@@ -91,7 +92,9 @@ def _turn(client, test_vault, responses, *, query, session_id, stream=False,
     fail is raised by generation; record_reply_error by the reply write;
     image sends an image whose vision preprocessing fails. A failing turn
     returns resp None (a raise reached the test client) or the error stream,
-    and text "".
+    and text "". coaching replaces the coaching filter (default: returns the
+    reply unchanged); grounding is what the grounding check returns on the
+    streaming path.
     Returns (resp, text, llm mock, requests.get mock)."""
     adapter = _adapter()
     from src.context.policies import _web_search_policy
@@ -133,11 +136,12 @@ def _turn(client, test_vault, responses, *, query, session_id, stream=False,
             "src.api.openai_adapter._prior_turn_awaits_search_content",
             return_value=awaiting_search))
         stack.enter_context(patch("src.llm.coaching_filter.filter_coaching_frame",
-                                  side_effect=lambda reply, *a, **kw: reply))
+                                  new=coaching or MagicMock(
+                                      side_effect=lambda reply, *a, **kw: reply)))
         stack.enter_context(patch("src.safety.grounding_check.should_short_circuit_grounding",
                                   return_value=False))
         stack.enter_context(patch("src.safety.grounding_check.run_grounding_check",
-                                  new=AsyncMock(return_value=(True, None))))
+                                  new=AsyncMock(return_value=grounding)))
         llm.generate_response.return_value = reply
         llm.generate_response_iter.return_value = iter([reply])
         if fail is not None:
@@ -358,6 +362,49 @@ def test_yes_with_a_question_searches_and_keeps_the_question(client, isolate_to_
     assert _searched_query(get) == QUERY
     assert (_model_message(llm)
             == f"{QUERY}\n\nwhat about the weather in Paris")
+
+
+@pytest.mark.parametrize("word", ["what's", "who's", "where's", "how's", "when's",
+                                  "why's", "what\u2019s"])
+def test_contracted_question_word_keeps_the_follow_up(word):
+    """Normalisation drops the apostrophe (straight or curly), so "what's"
+    arrives as "whats": each contraction is a question word of its own. No
+    "?" in the reply, so the word alone makes the remainder a question."""
+    assert _interpret(f"yes, {word} the plan for Sunday") == (
+        True, f"{word} the plan for Sunday")
+
+
+def test_yes_with_a_contracted_question_searches_the_stored_query(
+        client, isolate_to_test_vault):
+    """End to end: before the contractions were question words this reply
+    was unmatched, so the pending was consumed and nothing searched. The
+    control is test_unrelated_request_after_an_offer_runs_as_itself."""
+    sid = "sess_test_yes_contraction"
+    _seed_pending(sid)
+    _, _, llm, get = _turn(client, isolate_to_test_vault, [_searxng([CLEAN_HIT])],
+                           query="yes, what's the weather in Paris", session_id=sid)
+    assert get.call_count == 1
+    assert _searched_query(get) == QUERY
+    assert _model_message(llm) == f"{QUERY}\n\nwhat's the weather in Paris"
+    assert _active_pendings(sid) == []
+
+
+def test_affirming_idioms_are_built_from_the_affirmative_phrases():
+    """Every affirmative phrase holding a negation word is exempt from the
+    negation check, so the two lists cannot drift: a phrase added to
+    _CONFIRM_PHRASE_AFFIRM is exempt too."""
+    adapter = _adapter()
+    with_negation = [p for p in adapter._CONFIRM_PHRASE_AFFIRM
+                     if set(p) & adapter._CONFIRM_NEGATIONS]
+    assert with_negation
+    for phrase in with_negation:
+        assert adapter._CONFIRM_AFFIRMING_IDIOMS.sub(" ", " ".join(phrase)).split() == []
+    extended = adapter._affirming_idiom_pattern(
+        adapter._CONFIRM_PHRASE_AFFIRM + (("no", "worries"),))
+    assert extended.sub(" ", "no worries").split() == []
+    # Control: a phrase without a negation word is not an idiom, and a lone
+    # negation word is never exempt.
+    assert extended.sub(" ", "go ahead no").split() == ["go", "ahead", "no"]
 
 
 def test_yes_with_an_image_is_not_a_confirmation(client, isolate_to_test_vault):

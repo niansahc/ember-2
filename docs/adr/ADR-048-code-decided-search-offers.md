@@ -19,7 +19,7 @@ sends to SearXNG if the user confirms. Before this change, the model's wording
 decided when one was written, and the text a web search sent was not always the
 user's own:
 
-- **Offers were read from the model's free text.** PR #301 and PR #302 wrote a
+- **Offers were read from the model's free text.** PR #301 (merged) wrote a
   pending search whenever the stored reply matched `OFFER_PATTERNS`
   (`src/llm/ask_first_validator.py`). Three review rounds found phrasings the
   patterns got wrong. Two of the holes were privacy leaks: the model offered
@@ -72,6 +72,31 @@ record in the vault, or an entry held in process on a vault-off exchange
 returns the offer as `PostGenResult.code_offer`; `_store_reply` writes nothing
 when it is None.
 
+When it is set, `_store_reply` writes the vault pending search before the
+reply. If that write fails, the offer's closing question is dropped from the
+end of the reply (`drop_code_offer`, matched by the offer's own text) before
+it is stored and sent, so the user never sees
+an offer nothing would honour. If the reply write then fails, the pending
+search just written is resolved (resolution `reply_not_stored`), so an offer
+the user never saw cannot fire. On a vault-off exchange the in-process entry is
+still held after the reply, since holding it cannot fail on storage.
+
+**A refusal is known by its type, not its wording.** A refusal here is the
+constitutional review's `refuse_redirect` outcome. `LLMAdapter` returns it as
+`RefusalText` (`src/llm/refusal.py`), a str subclass; the chat path reads it
+once, straight after generation (`is_review_refusal`), and passes the answer on
+as a flag. On a refusal there is no grounding revision pass and no coaching
+filter, BUG-008's trailing-question strip skips it, and the post-gen pipeline
+(`review_refused=True`) substitutes nothing (web-refusal snippets, vision text,
+S1, S2), removes nothing, and adds no search disclosure and no S3, so no
+pending search is written. Fabricated citations and URLs are still stripped.
+The model's own refusal wording ("I can't help with that") is an ordinary
+draft: on an ask-first exchange it is replaced by S1. The phrase list this
+replaced (`REFUSAL_PATTERNS`) matched neither the model-written refusal
+(`RefusalRedirect.as_text()`: reason plus safer alternative) nor the review's
+heuristic fallback, so a refused ask-first exchange got S1 and a pending
+search.
+
 ### 2. The model never offers
 
 - **The always-on prompt text no longer asks for offers.** The date section
@@ -100,7 +125,9 @@ A reply to a pending search is read deterministically, with no model call. The
 checks run in this order:
 
 1. A negation declines, as before. "why not", "no problem" and "not a problem"
-   are idioms, not negations.
+   are idioms, not negations: the idioms are every leading affirmative phrase
+   that holds a negation word (`_CONFIRM_AFFIRMING_IDIOMS` is built from
+   `_CONFIRM_PHRASE_AFFIRM`), so a phrase added there is exempt too.
 2. A reply that does not start with an affirmative is unmatched.
 3. Nothing after the affirmative: a plain yes.
 4. A connector, a "?" anywhere, or a question word as the first word after the
@@ -117,7 +144,7 @@ themselves, so "yes, and please search" is a plain yes.
 | Leading affirmatives | yes, yeah, yep, yup, sure, ok, okay, please, y, search |
 | Leading affirmative phrases | go ahead, do it, why not, no problem, not a problem, of course, go for it, sounds good, please do |
 | Connectors | but, and, also, then, so |
-| Question first words | what, who, when, where, why, how, which, is, are, can, could, does, do, did, will, would, should |
+| Question first words | what, who, when, where, why, how, which, is, are, can, could, does, do, did, will, would, should, whats, whos, wheres, hows, whens, whys |
 | Elaboration words | thanks, thank, you, ty, thx, now, for, that, this, the, a, it, web, online, them, look, up, find, again, try, great, good, fine, cool, perfect, awesome, nice, sounds, would, be, thats, thatd, id, i, appreciate, love, lot, much, thing, really, very |
 | Negations | no, not, dont, nope, skip, stop, never, nah |
 
@@ -125,7 +152,9 @@ The code holds the canonical lists. An unmatched reply resolves the pending
 search and runs as a new request; the stored text is not searched. "Yes, that
 would be great" is a plain yes. "Please rewrite my draft paragraph" is a new
 request. "yes, what about the weather in Paris" searches the stored text, and
-the model receives that text plus the follow-up.
+the model receives that text plus the follow-up. Normalisation drops
+apostrophes, so the contractions are listed without them: "yes, what's the
+weather in Paris", with no "?", is a confirmation with a follow-up.
 
 ### 4. Images, clarifications and unanswered exchanges
 
@@ -141,8 +170,12 @@ the model receives that text plus the follow-up.
   (ADR-038 amendment), or as the in-process entry on a vault-off exchange. On a
   vault-off exchange, a clarification's waiting state is put back the same way.
   A stored reply settles the exchange, so a failure after it puts nothing back.
-  When the conversation already holds an active pending search for the same
-  text, the restore writes nothing and logs that it was skipped.
+  The restore writes nothing, and logs that it was skipped, when the
+  conversation already holds another active entry: in the vault, any active
+  pending search for the session, whatever its text; on a vault-off exchange,
+  any in-process entry. A newer offer made while the exchange was running
+  answers the user's next reply; restoring the older one would let a "yes"
+  search the text the user saw offered first.
 
 ### 5. Every web search sends only the user's own text
 
@@ -157,10 +190,13 @@ pending search stores the same text. The stored user turn keeps the note
 ### 6. no_results is a no-repeat reason
 
 `NO_REPEAT_OFFER_REASONS` gains `no_results`, so it is now `no_results`,
-`low_relevance` and `filtered`. A search that found nothing would find nothing
-again, so it gets no repeat-search offer, and the search note for an empty
-result now ends: "Searching again would return the same result, so do not
-offer to search again."
+`low_relevance` and `filtered`. For `low_relevance` and `filtered` (status
+"unavailable") the set keeps its effect: no repeat-search offer. `no_results`
+arrives only with status "empty", and the code never makes a repeat-search
+offer after an empty search (both offer gates need status "unavailable"), so
+for `no_results` the change only adds a sentence to the "empty" search note
+(`render_search_note`): "Searching again would return the same result, so do
+not offer to search again."
 
 ### 7. User-facing texts
 
@@ -181,8 +217,9 @@ nothing else.
   the phrasings a model can produce are unbounded, and every hole is a leak,
   because a yes to a misread offer sends the user's text to the search engines.
   Privacy wins over honoring the model's offers.
-- **A local-source exclusion list.** PR #302 treated an offer that names the
-  user's own source ("your notes", "your files") as not a web offer. Rejected:
+- **A local-source exclusion list.** An earlier revision of PR #302 treated an
+  offer that names the user's own source ("your notes", "your files") as not a
+  web offer; the final version does not have it. Rejected:
   such a list cannot be complete; "search the vault for that?" was not on it.
 - **Validate the model's own offer text on ask-first exchanges**, keeping it
   when it reads as an offer. Rejected: the consent text must say the web
@@ -231,12 +268,13 @@ nothing else.
   the order of the offers and the guard.
 - `src/api/openai_adapter.py` -- `_store_reply`, the confirmation grammar,
   `_StatelessPendingStore`, `_PendingGuard`.
+- `src/llm/refusal.py` -- `RefusalText`, `is_review_refusal`.
 - `src/tools/web_search.py` -- `search_text_from`, `NO_REPEAT_OFFER_REASONS`.
 - `src/llm/prompt_builder.py`, `config/identity_rules.yaml` -- the always-on
   prompt text and the `<search_confirmation>` block.
 - `src/context/policies.py` -- explicit search markers,
   `SCRIPTED_CLARIFICATION_RESPONSE`.
-- `docs/KNOWN_ISSUES.md` -- B-WS-003.
+- `docs/KNOWN_ISSUES.md` -- B-WS-003, B-WS-004.
 - `tests/test_web_search_query_text.py`, `tests/test_ask_first_offer_phrasing.py`,
   `tests/test_ask_first_routing.py`, `tests/test_ask_first_pending_lifecycle.py`.
 - PR #301, PR #302.

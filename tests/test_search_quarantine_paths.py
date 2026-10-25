@@ -268,7 +268,8 @@ def _turn(client, responses, *, query=_QUERY, stream=False, autonomous=True,
             write_pending = None
         else:
             write_pending = stack.enter_context(
-                patch("src.api.openai_adapter._write_pending_confirmation"))
+                patch("src.api.openai_adapter._write_pending_confirmation",
+                      return_value=(True, None)))
             pending = {"confirmed": True, "action": "web_search", "query": query}
             stack.enter_context(patch(
                 "src.api.openai_adapter._check_pending_confirmation",

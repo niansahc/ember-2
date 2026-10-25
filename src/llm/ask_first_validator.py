@@ -154,3 +154,20 @@ def remove_unbacked_offers(reply: str) -> tuple[str, int]:
     if not removed:
         return reply, 0
     return "".join(kept).strip() or UNBACKED_OFFER_FALLBACK, removed
+
+
+def drop_code_offer(reply: str, offer_text: str) -> tuple[str, bool]:
+    """Remove the code's own offer from a reply whose pending could not be
+    written (ADR-048), so the user never sees an offer nothing would honour.
+
+    Every code offer ends the reply and closes with its question sentence
+    (SCRIPTED_ASK_FIRST_RESPONSE, RETRY_OFFER_RESPONSE, REPEAT_SEARCH_OFFER),
+    so that sentence is removed from the end of the reply; matched by text,
+    not by OFFER_PATTERNS. Returns (reply, removed). When nothing else is
+    left, the reply becomes UNBACKED_OFFER_FALLBACK.
+    """
+    question = _SENTENCE_SPLIT.split(offer_text.strip())[-1]
+    if not question or not reply.rstrip().endswith(question):
+        return reply, False
+    kept = reply.rstrip()[: -len(question)].strip()
+    return kept or UNBACKED_OFFER_FALLBACK, True

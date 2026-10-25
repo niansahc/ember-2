@@ -5,9 +5,12 @@ What happens to an ask-first pending across turns, end to end.
 
   - A confirmed pending is consumed before the search and generation run
     (resolve-first, the loop guard). When the exchange then ends without a
-    stored reply (a generation error, a storage error, a client disconnect,
-    the vision_unavailable return), _PendingGuard puts the same offer back,
-    so the user's next "yes" still searches. A decline is not put back.
+    stored reply (a generation error, a storage error, a client disconnect),
+    _PendingGuard puts the same offer back, so the user's next "yes" still
+    searches, unless the session already holds a newer offer or
+    clarification. A decline is not put back. An image exchange consumes no
+    offer (it ends one unread), so on the vision_unavailable return only a
+    vault-off search clarification can be put back.
   - Stateless (vault toggle off) B2: the clarification's awaiting flag is
     held in process, so the follow-up searches.
   - A vault-on turn drops whatever the session holds in process.
@@ -27,7 +30,7 @@ import logging
 
 import pytest
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from src.context.policies import SCRIPTED_CLARIFICATION_RESPONSE
 from src.memory.exchange import ExchangeStorageError
@@ -349,7 +352,8 @@ def test_restore_skips_and_says_so_when_an_active_pending_exists(caplog):
     guard.arm({"query": QUERY, "offer_text": "Want me to search?", "stateless": False})
     with caplog.at_level(logging.INFO):
         assert guard.restore("failed", "RuntimeError") is False
-    assert "Restore skipped: an active pending already exists" in caplog.text
+    assert ("Restore skipped: the session already holds an active entry "
+            "(store=vault)") in caplog.text
     assert "Restored pending" not in caplog.text
     assert len(active_pendings(sid)) == 1
 
@@ -432,3 +436,146 @@ def test_autonomous_search_logs_path_autonomous(client, isolate_to_test_vault, c
             autonomous=True)
     assert get.call_count == 1
     assert "[WEB_SEARCH] path=autonomous" in caplog.text
+
+
+# --- A failed pending write drops the offer (lean review of PR #302, finding 3) --
+
+_ASK_FIRST_TEXT_WITHOUT_OFFER = "I don't have current information on that."
+
+
+def _ask_first_offer_reply():
+    from src.llm.ask_first_validator import SCRIPTED_ASK_FIRST_RESPONSE
+    from src.llm.post_gen_pipeline import CodeOffer
+    return SCRIPTED_ASK_FIRST_RESPONSE, CodeOffer("ask_first", SCRIPTED_ASK_FIRST_RESPONSE)
+
+
+def _store_reply_with(reply, offer, sid, *, exchange=None):
+    """_store_reply on a vault-on exchange with a mocked recorder."""
+    adapter = _adapter()
+    exchange = exchange or MagicMock(vault=None, session_id=sid)
+    with patch.object(adapter, "_spawn_deviation_detection"):
+        sent = adapter._store_reply(
+            exchange, reply, skip_vault_write=False, intent_class="web_search",
+            user_turn_text=QUERY, pending_query=QUERY,
+            pending_guard=adapter._PendingGuard(sid, None), code_offer=offer)
+    return sent, exchange
+
+
+@pytest.mark.parametrize("which", ["ask_first", "repeat_search"])
+def test_failed_pending_write_drops_the_offer_before_it_is_stored(which, caplog):
+    from src.llm.ask_first_validator import REPEAT_SEARCH_OFFER
+    from src.llm.post_gen_pipeline import CodeOffer
+    sid = f"sess_test_write_fails_{which}"
+    if which == "ask_first":
+        reply, offer = _ask_first_offer_reply()
+        expected = _ASK_FIRST_TEXT_WITHOUT_OFFER
+    else:
+        reply = f"Here is what I know.\n\n{REPEAT_SEARCH_OFFER}"
+        offer = CodeOffer("repeat_search", REPEAT_SEARCH_OFFER)
+        expected = "Here is what I know."
+    with patch.object(_adapter(), "_write_pending_record", side_effect=OSError("disk")), \
+            caplog.at_level(logging.INFO):
+        sent, exchange = _store_reply_with(reply, offer, sid)
+    assert sent == expected
+    # The text stored is the text sent.
+    exchange.record_reply.assert_called_once_with(expected)
+    assert active_pendings(sid) == []
+    assert "Offer dropped from the reply" in caplog.text
+
+
+def test_written_pending_keeps_the_offer():
+    """Control for the test above: the same offer whose pending is written is
+    stored and sent whole."""
+    sid = "sess_test_write_ok"
+    reply, offer = _ask_first_offer_reply()
+    sent, exchange = _store_reply_with(reply, offer, sid)
+    assert sent == reply
+    exchange.record_reply.assert_called_once_with(reply)
+    assert [p.metadata["query"] for p in active_pendings(sid)] == [QUERY]
+
+
+def test_failed_reply_write_resolves_the_pending_just_written():
+    """The pending is written before the reply. When the reply write then
+    fails the user never sees the offer, so its pending must not stay active.
+    The control is test_written_pending_keeps_the_offer."""
+    sid = "sess_test_reply_write_fails"
+    reply, offer = _ask_first_offer_reply()
+    exchange = MagicMock(vault=None, session_id=sid)
+    exchange.record_reply.side_effect = ExchangeStorageError("reply", OSError())
+    with pytest.raises(ExchangeStorageError):
+        _store_reply_with(reply, offer, sid, exchange=exchange)
+    assert active_pendings(sid) == []
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_failed_pending_write_end_to_end_sends_no_offer(client, isolate_to_test_vault,
+                                                        stream):
+    """An ask-first exchange whose pending write fails: the user sees no
+    offer, so a "yes" is never left without a pending to honour."""
+    sid = f"sess_test_write_fails_e2e_{stream}"
+    with patch("src.api.openai_adapter._write_pending_record",
+               side_effect=OSError("disk")):
+        _, text, _, _ = _turn(client, isolate_to_test_vault, [], query=QUERY,
+                              session_id=sid, stream=stream)
+    assert text == _ASK_FIRST_TEXT_WITHOUT_OFFER
+    assert active_pendings(sid) == []
+
+
+# --- A restore never replaces a newer entry (lean review of PR #302, finding 4) --
+
+NEWER_QUERY = "latest ethereum price"
+
+
+def test_restore_skips_when_the_session_holds_a_newer_vault_offer():
+    """An offer made while the failed exchange ran answers the user's next
+    "yes"; the consumed one is not put back over it. The control is
+    test_restore_without_a_duplicate_writes_and_says_so."""
+    sid = "sess_test_restore_newer_vault"
+    seed_pending(sid, NEWER_QUERY)
+    guard = _adapter()._PendingGuard(sid, None)
+    guard.arm({"query": QUERY, "offer_text": "Want me to search?", "stateless": False})
+    assert guard.restore("failed", "RuntimeError") is False
+    assert [p.metadata["query"] for p in active_pendings(sid)] == [NEWER_QUERY]
+    assert _adapter()._check_pending_confirmation(sid, "yes")["query"] == NEWER_QUERY
+
+
+@pytest.mark.parametrize("newer", ["offer", "clarification"])
+def test_restore_skips_when_the_session_holds_a_newer_stateless_entry(newer):
+    sid = f"sess_test_restore_newer_stateless_{newer}"
+    if newer == "offer":
+        assert _store().hold(sid, NEWER_QUERY)
+    else:
+        assert _store().hold_awaiting(sid)
+    guard = _adapter()._PendingGuard(sid, None)
+    guard.arm({"query": QUERY, "offer_text": "", "stateless": True})
+    assert guard.restore("failed", "RuntimeError") is False
+    if newer == "offer":
+        assert _store().take(sid) == {"action": "web_search", "query": NEWER_QUERY}
+    else:
+        assert _store().take_awaiting(sid) is True
+
+
+def test_restore_of_a_clarification_skips_when_the_session_holds_a_newer_offer():
+    sid = "sess_test_restore_awaiting_newer"
+    assert _store().hold(sid, NEWER_QUERY)
+    guard = _adapter()._PendingGuard(sid, None)
+    guard.arm_awaiting()
+    assert guard.restore("failed", "RuntimeError") is False
+    assert _store().take(sid) == {"action": "web_search", "query": NEWER_QUERY}
+
+
+@pytest.mark.parametrize("consumed", ["offer", "clarification"])
+def test_stateless_restore_with_an_empty_store_puts_it_back(consumed):
+    """Control for the two tests above: with nothing newer held, the
+    consumed entry is put back."""
+    sid = f"sess_test_restore_stateless_empty_{consumed}"
+    guard = _adapter()._PendingGuard(sid, None)
+    if consumed == "offer":
+        guard.arm({"query": QUERY, "offer_text": "", "stateless": True})
+    else:
+        guard.arm_awaiting()
+    assert guard.restore("failed", "RuntimeError") is True
+    if consumed == "offer":
+        assert _store().take(sid) == {"action": "web_search", "query": QUERY}
+    else:
+        assert _store().take_awaiting(sid) is True

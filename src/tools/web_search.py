@@ -99,7 +99,10 @@ REASON_FILTERED = "filtered"
 # answered with nothing (no_results), or the hits came back and were dropped
 # here (low_relevance) or by the AI-doc quarantine (filtered). An offer to
 # search again would only repeat the failure, so the search note tells the
-# model not to make one and the code makes no repeat-search offer (ADR-048).
+# model not to make one. For low_relevance and filtered (status
+# "unavailable") the code also makes no repeat-search offer (ADR-048).
+# no_results arrives with status "empty", where the code never offers a
+# repeat, so for it the set changes only the "empty" search note.
 NO_REPEAT_OFFER_REASONS = frozenset(
     {REASON_NO_RESULTS, REASON_LOW_RELEVANCE, REASON_FILTERED}
 )

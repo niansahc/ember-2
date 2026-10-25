@@ -29,6 +29,7 @@ from src.llm.ask_first_validator import (
     remove_unbacked_offers,
 )
 from src.llm.post_gen_pipeline import WEB_SEARCH_UNAVAILABLE_DISCLOSURE, run_post_gen_pipeline
+from src.llm.refusal import RefusalText
 from tests.conftest import active_pendings as _active_pendings
 from tests.test_ask_first_routing import (  # noqa: F401  (client is a fixture)
     CLEAN_HIT,
@@ -86,7 +87,7 @@ def test_refusal_on_an_ask_first_exchange_is_kept_and_offers_nothing(
     """A constitutional refusal is never replaced by an offer (CLAUDE.md
     implementation standard 2). The control is the fixed-offer test above."""
     sid = "sess_test_ask_first_refusal"
-    refusal = "I can't help with that."
+    refusal = RefusalText("I can't help with that.")
     _, text, _, _ = _turn(client, isolate_to_test_vault, [], query=QUERY, session_id=sid,
                           reply=refusal)
     assert text == refusal
@@ -145,14 +146,27 @@ def test_failed_autonomous_search_offers_a_repeat(client, isolate_to_test_vault)
 
 
 def test_search_that_found_nothing_offers_no_repeat(client, isolate_to_test_vault):
-    """no_results is a no-repeat reason: a repeat finds nothing again. The
-    positive control is the engines-blocked test above."""
+    """An empty search gets no repeat offer: no_results arrives with status
+    "empty", and the code offers a repeat only after an unavailable search.
+    This holds whether or not no_results is in NO_REPEAT_OFFER_REASONS; the
+    set's effect for it is the search note (the test below). The positive
+    control is the engines-blocked test above."""
     sid = "sess_test_repeat_no_results"
     _, text, _, get = _turn(client, isolate_to_test_vault, [_searxng([])], query=QUERY,
                             session_id=sid, autonomous=True)
     assert get.call_count == 1
     assert REPEAT_SEARCH_OFFER not in text
     assert _active_pendings(sid) == []
+
+
+def test_empty_search_note_tells_the_model_not_to_offer_a_repeat():
+    """The one live effect of no_results in NO_REPEAT_OFFER_REASONS: the
+    "empty" search note gains the no-repeat sentence. Control: an empty note
+    with no reason does not carry it."""
+    from src.llm.prompt_builder import render_search_note
+    tail = "do not offer to search again"
+    assert tail in render_search_note("empty", "no_results")
+    assert tail not in render_search_note("empty", None)
 
 
 def test_failed_explicit_search_offers_a_repeat(client, isolate_to_test_vault):
@@ -207,7 +221,7 @@ def test_repeat_offer_follows_the_failure_reason(status, reason, offered):
 
 def test_refusal_after_a_failed_search_gets_no_repeat_offer():
     refusal = "I can't help with that."
-    result = _postgen(refusal, intent_class="web_search",
+    result = _postgen(refusal, intent_class="web_search", review_refused=True,
                       web_search_status="unavailable", web_search_reason="engines_blocked")
     assert result.reply == refusal
     assert result.code_offer is None
@@ -245,7 +259,7 @@ def test_replies_without_a_search_offer_are_untouched(reply):
 
 def test_refusal_is_never_rewritten_by_the_guard():
     refusal = "I can't help with that. Want me to search for something else?"
-    assert _postgen(refusal).reply == refusal
+    assert _postgen(refusal, review_refused=True).reply == refusal
 
 
 def test_the_code_offers_survive_the_guard():
@@ -363,3 +377,27 @@ def test_identity_rule_check_detects_an_offer_instruction(tmp_path):
     loader = IdentityRulesLoader(config_path=path)
     loader.load()
     assert _offer_instructions(loader.to_prompt_text()) == ["offer to search"]
+
+
+# --- Dropping the code's own offer (a pending that could not be written) --------
+
+@pytest.mark.parametrize("reply,offer,expected", [
+    (SCRIPTED_ASK_FIRST_RESPONSE, SCRIPTED_ASK_FIRST_RESPONSE,
+     "I don't have current information on that."),
+    ("I tried searching the web but hit an error. Want me to try the search again?",
+     "I tried searching the web but hit an error. Want me to try the search again?",
+     "I tried searching the web but hit an error."),
+    ("Here is what I know.\n\nWant me to try the web search again?",
+     "Want me to try the web search again?", "Here is what I know."),
+])
+def test_drop_code_offer_removes_the_closing_question(reply, offer, expected):
+    from src.llm.ask_first_validator import drop_code_offer
+    assert drop_code_offer(reply, offer) == (expected, True)
+
+
+def test_drop_code_offer_leaves_a_reply_without_that_offer():
+    """Control for the test above: nothing is removed when the reply does not
+    end with the offer's question."""
+    from src.llm.ask_first_validator import drop_code_offer
+    assert drop_code_offer("Here is the answer.", REPEAT_SEARCH_OFFER) == (
+        "Here is the answer.", False)

@@ -64,7 +64,7 @@ New content in a **Confirmation**, after a connector (but, and, also, then, so) 
 _Avoid_: remainder, add-on
 
 **Search clarification**:
-Ember's fixed reply "What would you like me to search for?" when the user asks for a web search without saying what to search ("google please", "look it up"). The user's next message is the search content and is searched. A clarification supersedes an older **Pending search**. If the exchange that carries the search content ends unanswered, the clarification still stands.
+Ember's fixed reply "What would you like me to search for?" when the user asks for a web search without saying what to search ("google please", "look it up"). The user's next message is the search content and is searched. A clarification supersedes an older **Pending search**. If the exchange that carries the search content ends unanswered, the clarification still stands, unless a newer offer or clarification was made in the conversation while that exchange ran.
 _Avoid_: B2, bare-marker reply
 
 ## Relationships

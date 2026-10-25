@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 import src.tools.web_search as web_search_mod
 from src.llm.post_gen_pipeline import WEB_SEARCH_UNAVAILABLE_DISCLOSURE
+from src.llm.refusal import RefusalText
 from src.tools.web_search import WebSearchResult, run_web_search, web_search
 from tests.conftest import sse_events
 
@@ -226,7 +227,7 @@ def test_empty_search_has_header_but_no_disclosure(client):
 
 def test_refusal_reply_gets_no_disclosure(client):
     resp, text, _ = _chat(client, _BLOCKED, stream=False,
-                          model_reply="I can't help with that.")
+                          model_reply=RefusalText("I can't help with that."))
     assert _DISCLOSURE not in text
     assert resp.headers.get("x-ember-web-search") == "unavailable"
 
@@ -302,6 +303,6 @@ def test_postgen_discloses_only_when_unavailable():
 
 def test_postgen_skips_disclosure_on_refusal_and_empty_fallback():
     refusal = "I can't help with that."
-    assert _postgen(refusal, "unavailable").reply == refusal
+    assert _postgen(refusal, "unavailable", review_refused=True).reply == refusal
     fallback = _postgen("", "unavailable")
     assert fallback.empty_fallback_fired and _DISCLOSURE not in fallback.reply

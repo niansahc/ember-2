@@ -18,10 +18,13 @@ These tests pin the contract:
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from src.context.models import ContextPacket
 from src.llm.adapter import LLMAdapter, StatusSignal
+from src.llm.refusal import is_review_refusal
 from src.safety.models import SafetyReviewResult, SafetyTriggerResult
 
 
@@ -215,3 +218,46 @@ def test_status_signal_is_frozen_dataclass() -> None:
     except dataclasses.FrozenInstanceError:
         raised = True
     assert raised, "StatusSignal must be frozen"
+
+
+# --- The refusal carries the review's outcome (src/llm/refusal.py) -------------
+
+def _reviewed(outcome: str, *, question_suppressed: bool = False) -> list:
+    """generate_response_iter with the review returning `outcome`. The reply
+    text ends in a parenthetical question, which BUG-008's strip removes."""
+    adapter = _bare_adapter()
+    adapter.policy_service.evaluate_trigger.return_value = SafetyTriggerResult(
+        triggered=True, triggered_by=["social_engineering"]
+    )
+    adapter.policy_service.get_active_principles.return_value = ["refuse_unsafe"]
+    text = "I can't help with that. (Want to talk about something else?)"
+    adapter.review_service.review.return_value = SafetyReviewResult(
+        triggered=True, outcome=outcome, reviewed_text=text, refusal_message=text,
+    )
+    buf = MagicMock(question_suppressed=question_suppressed)
+    adapter._prepare_turn_prompt = MagicMock(
+        return_value=(buf, "system prompt", ContextPacket(user_message="hi")))
+    with patch("src.llm.adapter.spawn_vault_bound_thread"):
+        return list(adapter.generate_response_iter(ContextPacket(user_message="hi")))
+
+
+def test_refuse_redirect_is_returned_as_refusal_text() -> None:
+    final = _reviewed("refuse_redirect")[-1]
+    assert is_review_refusal(final)
+    assert final == "I can't help with that. (Want to talk about something else?)"
+
+
+@pytest.mark.parametrize("outcome", ["allow", "revise"])
+def test_other_outcomes_are_plain_text(outcome) -> None:
+    """Control for the test above: only refuse_redirect marks the reply."""
+    assert not is_review_refusal(_reviewed(outcome)[-1])
+
+
+def test_trailing_question_strip_skips_a_refusal() -> None:
+    """BUG-008 removes a trailing parenthetical question when the user
+    objected to questions; a refusal is never rewritten. Control: a revised
+    reply in the same buffer state is stripped."""
+    refused = _reviewed("refuse_redirect", question_suppressed=True)[-1]
+    assert refused.endswith("(Want to talk about something else?)")
+    revised = _reviewed("revise", question_suppressed=True)[-1]
+    assert not revised.endswith("(Want to talk about something else?)")

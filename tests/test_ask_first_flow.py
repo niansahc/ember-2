@@ -69,12 +69,12 @@ class TestDeterministicKeywordMatch:
 # ---------------------------------------------------------------------------
 
 
-def _ask_first(reply, *, intent_class="web_search", ask_first_active=True):
+def _ask_first(reply, *, intent_class="web_search", ask_first_active=True, **kw):
     """The post-gen pipeline on an exchange the adapter made ask-first (or not)."""
     return run_post_gen_pipeline(
         reply, intent_class=intent_class, web_search_autonomous=not ask_first_active,
         used_web_search=False, used_vault=False, used_vision=False,
-        ask_first_active=ask_first_active,
+        ask_first_active=ask_first_active, **kw,
     )
 
 
@@ -93,9 +93,18 @@ class TestAskFirstSubstitution:
         assert result.reply == SCRIPTED_ASK_FIRST_RESPONSE
 
     def test_refusal_is_kept(self):
-        result = _ask_first("I can't help with that.")
+        result = _ask_first("I can't help with that.", review_refused=True)
         assert result.ask_first_substituted is False
         assert result.reply == "I can't help with that."
+        assert result.code_offer is None
+
+    def test_model_refusal_wording_alone_is_an_ordinary_draft(self):
+        """Control for the test above: the review's outcome keeps a refusal,
+        not its wording. The model's own "I can't help with that" on an
+        ask-first exchange is replaced by the offer like any other draft."""
+        result = _ask_first("I can't help with that.")
+        assert result.ask_first_substituted is True
+        assert result.reply == SCRIPTED_ASK_FIRST_RESPONSE
 
     def test_no_op_when_not_web_search(self):
         result = _ask_first("Some response without search offer.", intent_class="default")

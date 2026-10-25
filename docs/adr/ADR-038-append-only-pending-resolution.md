@@ -70,7 +70,9 @@ immediately can no longer arrive before the pending record exists.
   unanswered (failed or interrupted, ADR-047), the consumed pending is written
   back as a new record with the same offer text and query. The tombstoned
   original stays resolved, so the restore is append-only. Nothing is written
-  when the conversation already holds an active pending for the same query.
+  when the conversation already holds any active pending, whatever its query:
+  a newer offer answers the user's next reply.
 - **Other resolutions.** An unmatched reply still resolves the pending. An
   exchange with an image, and a search clarification, also resolve it, without
-  a search.
+  a search. A pending written for a reply that then failed to store is
+  resolved with resolution `reply_not_stored` (ADR-047 amendment).

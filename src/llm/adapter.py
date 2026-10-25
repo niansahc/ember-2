@@ -1354,6 +1354,8 @@ class LLMAdapter:
             options={
                 "temperature": 0.3,
             },
+            # think=False: same summaries, about a third of the latency.
+            think=False,
         )
         return response["message"]["content"]
 
@@ -1379,6 +1381,10 @@ class LLMAdapter:
             options={
                 "temperature": 0.2,
             },
+            # think=False: critique verdicts and JSON validity held or
+            # improved on synthetic drafts, and thinking added seconds to a
+            # call that sits on the response path.
+            think=False,
         )
 
         return response["message"]["content"]

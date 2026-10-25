@@ -174,6 +174,10 @@ def _llm_synthesize(selected: list[dict], prompt_template: str, source_label: st
             model=get_ember_auxiliary_model(),
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0.4, "num_predict": 800},
+            # think=False: thinking spent most of the 800 tokens and the
+            # synthesis came back truncated. The prompt's step-by-step
+            # instruction does not surface as reasoning text in the reply.
+            think=False,
         )
         return response["message"]["content"].strip()
     except Exception as exc:

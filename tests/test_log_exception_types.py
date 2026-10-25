@@ -113,11 +113,34 @@ def test_intent_stage3_failure_logs_type_only(caplog):
     with patch.object(intent_classifier.ollama, "chat",
                       side_effect=ResponseError(SENTINEL, 404)), \
          caplog.at_level(logging.INFO):
-        label = intent_classifier._stage3_llm_call(SENTINEL)
+        result = intent_classifier._stage3_classify_with_timeout(SENTINEL)
 
     text = _messages(caplog)
-    assert label == intent_classifier.VAULT_ANSWERABLE
+    # A failure, not an answer.
+    assert result == (intent_classifier.VAULT_ANSWERABLE, "stage3_failed")
     assert "ResponseError" in text    # control: the site logged
+    assert SENTINEL not in text
+
+
+def test_intent_stage3_timeout_logs_type_only(caplog):
+    import time
+
+    from src.llm import intent_classifier
+
+    def slow_call(query):
+        time.sleep(1.0)
+        return intent_classifier.NEEDS_INTERNET
+
+    # The query is the sentinel: the timeout warning must not carry it.
+    with patch.object(intent_classifier, "_stage3_llm_call", slow_call), \
+         patch.object(intent_classifier, "get_intent_classifier_timeout_ms",
+                      return_value=50), \
+         caplog.at_level(logging.INFO):
+        label, outcome = intent_classifier._stage3_classify_with_timeout(SENTINEL)
+
+    text = _messages(caplog)
+    assert (label, outcome) == (intent_classifier.VAULT_ANSWERABLE, "timeout")
+    assert "TimeoutError" in text     # control: the site logged
     assert SENTINEL not in text
 
 

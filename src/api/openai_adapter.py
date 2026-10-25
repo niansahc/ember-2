@@ -1932,11 +1932,9 @@ async def _complete_exchange(
         # B2 next-turn dispatch: if the immediately prior assistant turn
         # was a clarification ("What would you like me to search for?"),
         # treat this user message as the search content. The forced
-        # explicit web_search policy replaces the classifier's verdict here
-        # AND is passed to build_context, which would otherwise re-classify
-        # the bare follow-up in isolation, route it to default and skip the
-        # search. Explicit, so ask-first does not apply.
-        _b2_dispatch = False
+        # explicit web_search policy replaces the classifier's verdict here,
+        # and build_context receives it like any other turn policy (below).
+        # Explicit, so ask-first does not apply.
         try:
             if _prior_turn_awaits_search_content(session_id):
                 logger.info(
@@ -1945,7 +1943,6 @@ async def _complete_exchange(
                     "and routing user message to web_search"
                 )
                 _early_policy = _force_web_search_policy(explicit=True)
-                _b2_dispatch = True
         except Exception as exc:
             logger.warning(
                 "[CLARIFY] Next-turn check failed (non-fatal): %s", type(exc).__name__,
@@ -1969,12 +1966,15 @@ async def _complete_exchange(
             _has_image
             or (not _web_autonomous_early and not _explicit_search)
         )
+        # The turn's one classification goes to assembly too. With None,
+        # build_context would run classify_query again: a second intent
+        # cascade (and Stage 3 model call) whose verdict could differ.
         context_packet = context_service.build_context(
             latest_user_message,
             image_data=image_data,
             project_id=project_id,
             skip_web_search=_skip_search,
-            policy=_early_policy if _b2_dispatch else None,
+            policy=_early_policy,
         )
 
     # Retrieval for this exchange is done, so its own user turn can be indexed
@@ -2184,9 +2184,9 @@ async def _complete_exchange(
     # The classifier's _intent_class is the authoritative "should this
     # search?" signal. Do NOT add a conversational-marker outer gate here: on
     # a stateless turn (vault toggle off) the empty-packet branch above skips
-    # build_context and its search, and on an intent mismatch (assembly
-    # reclassifies the message as non-web_search) build_context does not
-    # search either, so this backstop is the only remaining trigger.
+    # build_context and its search, so this backstop is the only remaining
+    # trigger. (Assembly receives the turn's own policy, so on a vault-on
+    # turn it has already searched whenever this block would.)
     # X-Test-Session suppresses writes only, not reads, so it does not reach
     # this path. A substring keyword heuristic (CONVERSATIONAL_MARKERS)
     # used to gate this block, which suppressed web search on queries like

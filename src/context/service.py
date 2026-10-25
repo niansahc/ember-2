@@ -243,10 +243,14 @@ class ContextService:
         """Assemble the context packet for one turn.
 
         policy, when given, is used instead of classify_query(user_message).
-        Only the B2 next-turn dispatch in src/api/openai_adapter.py passes
-        it: its forced explicit web_search policy must reach assembly, and
-        re-classifying the bare follow-up ("the eagles game") would route it
-        to default and skip the search. Every other caller leaves it None.
+        The chat path in src/api/openai_adapter.py always passes its turn
+        policy, so a turn is classified once: classify_query runs the intent
+        cascade, whose Stage 3 is a model call, and a second run could reach
+        a different verdict. That includes the B2 next-turn dispatch, whose
+        forced explicit web_search policy must reach assembly; re-classifying
+        the bare follow-up ("the eagles game") would route it to default and
+        skip the search. Callers that leave it None (the debug-context
+        endpoint) get classify_query(user_message).
 
         read_only suppresses the retrieval-stats write at the end of
         assembly, and nothing else -- the packet returned is identical

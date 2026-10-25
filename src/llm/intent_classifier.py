@@ -10,7 +10,7 @@ Classifies each user query as either:
 Architecture (ADR-034):
   Stage 1  Structural rules with compound first-person guard   ~2ms
   Stage 2  Embedding similarity against labeled examples       ~30-50ms
-  Stage 3  qwen3:8b non-thinking with JSON grammar, 1500ms cap ~300-1500ms
+  Stage 3  qwen3:8b non-thinking with JSON grammar, 1500ms cap ~170ms warm
 
 Stage 3 runs qwen3:8b in a background thread with a hard timeout read
 from INTENT_CLASSIFIER_TIMEOUT_MS (default 1500ms). On timeout, the
@@ -258,63 +258,97 @@ def _stage2_classify(query: str) -> tuple[str | None, float | None]:
 # concurrent classify_intent calls attempt Stage 3 in parallel; the creation
 # overhead (~2-5ms) is noise next to the 1500ms budget.
 
+# B1 step 2 (docs/audits/b1_stage2_confidence_v018.md). needs_internet is
+# limited to information the model cannot know; everything else, the user's
+# own life included, is vault_answerable. The comparison sentence keeps
+# "current" in a comparison of the user's own past and present from reading
+# as a request for current events. The stable-fact sentence keeps general
+# knowledge on its pre-B1 label. The schedule sentence (PR #308) keeps the
+# user's own appointments, travel, orders and errands from reading as the
+# "schedules" and "live status" of the needs_internet list.
 _STAGE3_SYSTEM_PROMPT: str = (
-    "You are a binary intent classifier. Decide whether the user's query "
-    "requires current information from the internet, or can be answered "
-    "from the user's personal vault of memories and notes. Respond with "
+    "You are a binary intent classifier. Decide whether answering the "
+    "user's query needs information from the internet. Use needs_internet "
+    "only when the answer depends on current, time-sensitive, or external "
+    "information you cannot know: news, prices, schedules, recent releases, "
+    "or the live status of something. A fact that stays the same from year "
+    "to year does not need the internet. Use vault_answerable for "
+    "everything else, including any query about the user's own life as "
+    "recorded in their personal vault of memories and notes: their own "
+    "work, roles, projects, plans, relationships, history, or decisions. "
+    "A comparison between two periods or versions of the user's own life "
+    "(now versus before, this one versus the previous one) is "
+    "vault_answerable, even when it uses words like current, old, latest, "
+    'or previous, and even when it does not say "my". The user\'s own '
+    "schedule, appointments, travel, orders, deliveries, bills, and "
+    "errands are also vault_answerable, even when the query asks for a "
+    "time or a date or whether something has happened yet. Respond with "
     'ONLY JSON in this exact form: {"label": "needs_internet"} or '
     '{"label": "vault_answerable"}. No other text.'
 )
 
 
+class UnknownLabelError(ValueError):
+    """Stage 3 answered with a label outside _VALID_LABELS."""
+
+
 def _stage3_llm_call(query: str) -> str:
-    """Single LLM call for Stage 3. Returns a label or the safe default.
+    """Single LLM call for Stage 3. Returns a valid label or raises.
 
-    Must not raise — all exceptions are caught and converted to the safe
-    default so the caller's timeout wrapper sees a clean return.
+    It does not log. A failure reaches _stage3_classify_with_timeout through
+    the future, which warns once; a call abandoned after a timeout is never
+    read, so its later failure adds no second warning.
     """
-    try:
-        response = ollama.chat(
-            model=get_ember_auxiliary_model(),
-            messages=[
-                {"role": "system", "content": _STAGE3_SYSTEM_PROMPT},
-                {"role": "user", "content": query[:500]},
-            ],
-            format="json",
-            options={"think": False},
-        )
-        content = response["message"]["content"]
-        data = json.loads(content)
-        label = data.get("label")
-        if label in _VALID_LABELS:
-            return label
-        if get_ember_debug():
-            logger.warning(
-                "[INTENT_CLASSIFY] Stage 3 returned unknown label: %r", label
-            )
-    except Exception as exc:
-        # Always logged, so a missing or unreachable auxiliary model shows.
-        # The type name only: the exception text can carry the query.
-        logger.warning("[INTENT_CLASSIFY] Stage 3 failed: %s; using %s",
-                       type(exc).__name__, _SAFE_DEFAULT)
-    return _SAFE_DEFAULT
+    # think is a top-level chat argument. Inside options Ollama ignores
+    # it, qwen3:8b thinks, and the call overruns the 1500ms budget.
+    response = ollama.chat(
+        model=get_ember_auxiliary_model(),
+        messages=[
+            {"role": "system", "content": _STAGE3_SYSTEM_PROMPT},
+            {"role": "user", "content": query[:500]},
+        ],
+        format="json",
+        think=False,
+    )
+    label = json.loads(response["message"]["content"]).get("label")
+    if label not in _VALID_LABELS:
+        # Not in the message: the label is model output and can echo the query.
+        raise UnknownLabelError("Stage 3 answered with an unknown label")
+    return label
 
 
-def _stage3_classify_with_timeout(query: str) -> tuple[str, bool]:
+def _warn_stage3_failed(failure: str) -> None:
+    """Always logged, so a missing, unreachable or slow auxiliary model shows.
+    The failure type only: an exception's text can carry the query."""
+    logger.warning("[INTENT_CLASSIFY] Stage 3 failed: %s; using %s",
+                   failure, _SAFE_DEFAULT)
+
+
+def _stage3_classify_with_timeout(query: str) -> tuple[str, str]:
     """Stage 3 with a hard timeout from INTENT_CLASSIFIER_TIMEOUT_MS.
 
-    Returns (label, timed_out). On timeout the label is the safe default.
+    Returns (label, outcome). outcome is the telemetry stage: "stage3" for
+    a real answer, "stage3_failed" when the call failed, "timeout" when it
+    overran the budget. The label is the safe default for the last two,
+    which also log one WARNING.
     """
     timeout_s = get_intent_classifier_timeout_ms() / 1000.0
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
         future = executor.submit(_stage3_llm_call, query)
-        try:
-            return future.result(timeout=timeout_s), False
-        except concurrent.futures.TimeoutError:
-            return _SAFE_DEFAULT, True
+        # wait, not result(timeout=...): a call that itself raises
+        # TimeoutError (a socket timeout) is a failure, not a budget overrun.
+        done, _ = concurrent.futures.wait([future], timeout=timeout_s)
     finally:
         executor.shutdown(wait=False)
+    if not done:
+        _warn_stage3_failed("TimeoutError")
+        return _SAFE_DEFAULT, "timeout"
+    exc = future.exception()
+    if exc is not None:
+        _warn_stage3_failed(type(exc).__name__)
+        return _SAFE_DEFAULT, "stage3_failed"
+    return future.result(), "stage3"
 
 
 # ---------------------------------------------------------------------------
@@ -326,9 +360,11 @@ def classify_intent(query: str) -> str:
     """Classify a user query as NEEDS_INTERNET or VAULT_ANSWERABLE.
 
     Runs the full ADR-034 cascade. Always returns one of the two valid
-    labels — never raises, never returns None. Emits exactly one
-    [INTENT_CLASSIFY] log line per call for the training-data pipeline
-    described in ADR-034 Upgrade Path.
+    labels; never raises, never returns None. Emits exactly one
+    "[INTENT_CLASSIFY] stage=" telemetry line per call (when
+    EMBER_CLASSIFIER_TELEMETRY is set) for the training-data pipeline
+    described in ADR-034 Upgrade Path. A Stage 3 failure or timeout also
+    logs one "[INTENT_CLASSIFY] Stage 3 failed" WARNING.
     """
     stage1 = _stage1_classify(query)
     if stage1 is not None:
@@ -340,13 +376,11 @@ def classify_intent(query: str) -> str:
         _log(stage="stage2", label=stage2_label, confidence=stage2_conf, query=query)
         return stage2_label
 
-    stage3_label, timed_out = _stage3_classify_with_timeout(query)
-    _log(
-        stage="timeout" if timed_out else "stage3",
-        label=stage3_label,
-        confidence=None,
-        query=query,
-    )
+    # A failed or timed-out Stage 3 still returns the safe default, but its
+    # telemetry stage says so: the log is SetFit training data (ADR-034),
+    # and a fallback recorded as stage=stage3 would read as a model answer.
+    stage3_label, outcome = _stage3_classify_with_timeout(query)
+    _log(stage=outcome, label=stage3_label, confidence=None, query=query)
     return stage3_label
 
 

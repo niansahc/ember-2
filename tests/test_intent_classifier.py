@@ -540,19 +540,36 @@ class TestStage3LlmCall:
         both = {"think": False, "options": {"think": False}}
         assert not _think_sent_top_level(both)
 
-    def test_system_prompt_keeps_the_b1_rules(self, monkeypatch):
-        # B1 step 2. The live check is the Category 2 adversarial eval,
-        # which CI deselects; this keeps a revert of the prompt from
-        # passing CI silently.
+    @pytest.mark.parametrize("rule", [
+        # needs_internet is limited to what the model cannot know.
+        "only when the answer depends on current, time-sensitive, or "
+        "external information you cannot know",
+        # General knowledge keeps its pre-B1 label.
+        "stays the same from year to year",
+        # B1: a comparison of two periods of the user's own life.
+        "comparison between two periods",
+        # The user's own schedule and errands (PR #308).
+        "The user's own schedule, appointments, travel",
+    ])
+    def test_system_prompt_keeps_the_b1_rules(self, monkeypatch, rule):
+        # The live checks are the adversarial eval Categories 2 and 5,
+        # which CI deselects; this keeps a revert or loosening of a rule
+        # from passing CI silently.
         fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
         monkeypatch.setattr(intent_classifier, "ollama", fake)
         _stage3_llm_call("anything")
         system = fake.chat_calls[0]["messages"][0]
         assert system["role"] == "system"
-        assert system["content"] == intent_classifier._STAGE3_SYSTEM_PROMPT
-        assert "comparison between two periods" in system["content"]
-        assert "stays the same from year to year" in system["content"]
+        assert rule in system["content"]
         assert system["content"].isascii()
+
+    def test_system_prompt_names_exactly_the_valid_labels(self):
+        # A label in the prompt's JSON example that the parser does not
+        # accept turns every Stage 3 answer into stage3_failed and the
+        # safe default, with no other test failing.
+        prompt = intent_classifier._STAGE3_SYSTEM_PROMPT
+        named = set(re.findall(r'\{"label": "(\w+)"\}', prompt))
+        assert named == intent_classifier._VALID_LABELS
 
     def test_query_is_truncated_at_500_chars(self, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
@@ -702,11 +719,11 @@ class TestStage3TimeoutDefault:
     """The default Stage 3 timeout cap (B1 audit gating).
 
     The B1 audit (docs/audits/b1_stage2_confidence_v018.md) measured 5/5
-    Stage 3 timeouts at 830-857ms under the prior 800ms default cap on
-    qwen3:8b warm latency. The default was raised to 1500ms so Stage 3
-    can actually complete on target hardware and the prompt content
-    influences the outcome rather than the safe-default firing on every
-    ambiguous query.
+    Stage 3 timeouts at 830-857ms under the prior 800ms default cap, and
+    the default was raised to 1500ms. The raise alone did not let Stage 3
+    complete: the cause was think sent inside options, where Ollama
+    ignores it, so qwen3:8b thought before answering. PR #306 sends
+    think=False at the top level, and warm answers take ~150-300ms.
 
     This test pins the default at 1500ms to prevent silent regression.
     Operators may still override via INTENT_CLASSIFIER_TIMEOUT_MS env var.
@@ -797,6 +814,26 @@ class TestIntrospectiveUncertaintyPoolInclusion:
             f"introspective-uncertainty anchor missing from EXAMPLES: {phrase!r}"
         )
         assert match["label"] == "vault_answerable"
+
+
+class TestFirstPersonSchedulePoolInclusion:
+    """The first-person schedule and errand anchors (PR #308) and their
+    public-schedule counter-anchors must remain in the example pool. The
+    live check is adversarial eval Category 5, which CI deselects."""
+
+    @pytest.mark.parametrize("phrase, label", [
+        ("what do I have on my calendar today", "vault_answerable"),
+        ("when am I seeing the doctor again", "vault_answerable"),
+        ("has my order been delivered", "vault_answerable"),
+        ("what time do I leave for the airport", "vault_answerable"),
+        ("when is my car insurance payment due", "vault_answerable"),
+        ("what time does the game start tonight", "needs_internet"),
+        ("is the library open today", "needs_internet"),
+    ])
+    def test_phrase_present_with_label(self, phrase, label):
+        match = next((e for e in EXAMPLES if e["query"] == phrase), None)
+        assert match is not None, f"schedule anchor missing from EXAMPLES: {phrase!r}"
+        assert match["label"] == label
 
 
 @pytest.mark.live_ollama

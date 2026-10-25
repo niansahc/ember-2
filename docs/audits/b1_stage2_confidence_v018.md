@@ -132,7 +132,9 @@ Environment: live `qwen3:8b`, `INTENT_CLASSIFIER_TIMEOUT_MS=1500`, warm, two run
 
 Environment: live `qwen3:8b`, `INTENT_CLASSIFIER_TIMEOUT_MS=1500`, warm. Same session for before and after. Before: the PR #306 head, 2 measurements. After: the new prompt, 3 measurements. Cells count labels over all runs (VA vault_answerable, NI needs_internet). Every Stage 3 call answered (0 timeouts, 0 failures); median 182ms, max 296ms over 420 calls.
 
-### B1 audit fixtures, Stage 3 direct (rows 1-5 want VA, 6-10 want NI)
+### B1 audit fixtures, Stage 3 direct (rows 1-5 and 7 want VA, 6 and 8-10 want NI)
+
+Row 7, `best career advice for engineers`, was listed under "should route needs_internet" in the 2026-05-12 table. Under the step 2 policy, needs_internet is limited to current, time-sensitive or external information; general advice the model can give without a lookup is none of these, so its expected label is vault_answerable. It was VA in every run before and after, under both prompts.
 
 | Query | Before | After |
 |---|---|---|
@@ -163,3 +165,56 @@ Full-cascade sets, same runs (2 before, 3 after):
 - 10 synthetic general-knowledge and how-to questions: 10/10 vault_answerable before and after, in every run (all decided at Stage 3).
 
 Gates: the adversarial Category 2 case `current_career_vs_previous_career` passed 5/5 warm runs. The full adversarial file plus calibration passed under `-m eval` on every run (30 passed). No needs_internet label changed in any set.
+
+## First-person schedule and status (2026-10-24, PR #308 review)
+
+The PR #308 review found that first-person schedule and status queries, which carry the words of a live lookup, could route to needs_internet. `what is on my schedule tomorrow` was decided at Stage 2 (nearest exemplar: `will it rain tomorrow afternoon`, 0.667), so no Stage 3 wording could reach it. Three other queries were decided at Stage 3. Two changes:
+
+- Stage 2 (`src/llm/classifier_examples.py`): five first-person schedule and errand exemplars on the vault side, and two public-schedule counter-anchors on the needs_internet side. None of them is a fixture or a held-out query.
+- Stage 3 (`_STAGE3_SYSTEM_PROMPT`): one sentence after the comparison sentence: "The user's own schedule, appointments, travel, orders, deliveries, bills, and errands are also vault_answerable, even when the query asks for a time or a date or whether something has happened yet."
+
+Environment: live `qwen3:8b`, `INTENT_CLASSIFIER_TIMEOUT_MS=1500`, warm. Before: the PR #308 head before this change (ad27467), 2 measurements. After: 3 measurements. Another process used Ollama during part of the session; runs that overlapped it were discarded, and the measurement retries a timed-out call after a pause so labels come from real answers. The recorded runs needed no retry: 0 timeouts, 0 failures in 452 Stage 3 calls before and 624 after (after: median 186ms, max 215ms).
+
+### First-person schedule and status, full cascade (want VA; rows 11-15 held out)
+
+| Query | Stage before -> after | Before | After |
+|---|---|---|---|
+| what is on my schedule tomorrow | stage2 | NI 4 | VA 6 |
+| did my package arrive yet | stage3 -> stage2 | NI 4 | VA 6 |
+| what time is my flight on friday | stage3 -> stage2 | NI 4 | VA 6 |
+| when is my next appointment | stage3 -> stage2 | VA 4 | VA 6 |
+| what is the live status of my order | stage3 -> stage2 | VA 4 | VA 6 |
+| is my car repair done yet | stage3 -> stage2 | VA 4 | VA 6 |
+| what time is my dentist appointment next week | stage3 | NI 4 | VA 6 |
+| when is my rent due this month | stage3 -> stage2 | VA 4 | VA 6 |
+| has my refund come through yet | stage3 -> stage2 | VA 4 | VA 6 |
+| what do I have going on this weekend | stage2 | VA 4 | VA 6 |
+| is my prescription ready for pickup | stage3 -> stage2 | VA 4 | VA 6 |
+| did my paycheck clear yet | stage3 | VA 4 | VA 6 |
+| what time is my kid's soccer practice | stage3 | NI 4 | VA 6 |
+| when does my lease renewal come up | stage3 | VA 4 | VA 6 |
+| when is my next haircut | stage3 | VA 4 | VA 6 |
+
+### External schedule and status controls, full cascade (want NI; rows 11-15 held out)
+
+| Query | Stage before -> after | Before | After |
+|---|---|---|---|
+| what time does the super bowl kick off | stage3 -> stage2 | NI 4 | NI 6 |
+| is flight UA 245 on time today | stage3 | NI 4 | NI 6 |
+| when does the next train from Boston to New York leave | stage3 | NI 4 | NI 6 |
+| what time does the Apple event start tomorrow | stage3 | NI 4 | NI 6 |
+| is the DMV open on Saturday | stage3 | NI 4 | NI 6 |
+| what are the opening hours of the Louvre this week | stage3 | NI 4 | NI 6 |
+| is the subway running normally right now | stage3 | NI 4 | NI 6 |
+| when is the next SpaceX launch scheduled | stage2 | NI 4 | NI 6 |
+| what time does the Target near me close tonight | stage3 | NI 4 | NI 6 |
+| is Gmail down right now | stage3 | NI 4 | NI 6 |
+| what time does the pharmacy on Main Street close | stage3 | NI 4 | NI 6 |
+| is the Golden Gate Bridge closed today | stage3 | NI 4 | NI 6 |
+| when does the farmers market open this weekend | stage3 | NI 4 | NI 6 |
+| is the post office open on Veterans Day | stage3 | NI 4 | NI 6 |
+| what time is the Thanksgiving parade on TV | stage3 | NI 4 | NI 6 |
+
+The same runs repeated every earlier set. No label changed, before to after, in: the 10 B1 audit fixtures (Stage 3 direct and full cascade), the 5-query code-path set (Stage 3 direct x 4 and full cascade), the 30 `tools/eval_web_search.py` questions (30/30 needs_internet), and the 10 general-knowledge and how-to questions (10/10 vault_answerable). Through `classify_query` (one pass per measurement), the first-person queries that reached web_search before (schedule, package and flight in every pass; dentist and soccer practice in 1 of 2) reach a vault policy in every pass after, and the 15 external controls stay on web_search (3/3).
+
+Gates: adversarial Category 5 (8 fixtures) failed 4/8 on the old classifier and passes 8/8 after; `current_career_vs_previous_career` passed 5/5 warm runs; the adversarial file plus calibration passed twice under `-m eval` (39 passed). Categories 1-3 and 5 now also fail when Stage 3 times out or fails, with a positive control for that check.

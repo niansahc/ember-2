@@ -3,8 +3,9 @@ src/llm/classifier_examples.py
 
 Synthetic labeled example pool for the ADR-034 Stage 2 intent classifier.
 
-60 representative queries — 30 per class — matching the patterns surfaced
-in ADR-034 and the v0.17.0 kickoff test list. No vault content appears
+Representative queries (at least 30 per class, checked at import)
+matching the patterns surfaced in ADR-034, the v0.17.0 kickoff test list
+and later misroute fixes. No vault content appears
 here (CLAUDE.md Vault Privacy Rule): these are generic, pattern-level
 examples designed to span the classification failure modes Stage 2 must
 handle.
@@ -72,6 +73,11 @@ _NEEDS_INTERNET: list[LabeledExample] = [
     {"query": "is the senate in session today", "label": "needs_internet"},
     {"query": "did the bill get signed into law last week", "label": "needs_internet"},
     {"query": "any power outages in Richmond right now", "label": "needs_internet"},
+    # Public schedules and opening hours: counter-anchors for the
+    # first-person schedule exemplars in _VAULT_ANSWERABLE, so a time or
+    # opening question about the outside world stays on this side.
+    {"query": "what time does the game start tonight", "label": "needs_internet"},
+    {"query": "is the library open today", "label": "needs_internet"},
     # Explicit current state
     {"query": "what is the current state of the housing market", "label": "needs_internet"},
     {"query": "what is currently happening in Ukraine", "label": "needs_internet"},
@@ -142,6 +148,16 @@ _VAULT_ANSWERABLE: list[LabeledExample] = [
     # Personal health and energy
     {"query": "how has my sleep been lately", "label": "vault_answerable"},
     {"query": "what has my energy been like this month", "label": "vault_answerable"},
+    # First-person schedule, appointments and errands. These carry the
+    # words of a live lookup (today, what time, delivered, due), and
+    # without them "what is on my schedule tomorrow" matched the
+    # tomorrow-rain exemplar above the threshold and went to web search.
+    # Paired with the public-schedule counter-anchors in _NEEDS_INTERNET.
+    {"query": "what do I have on my calendar today", "label": "vault_answerable"},
+    {"query": "when am I seeing the doctor again", "label": "vault_answerable"},
+    {"query": "has my order been delivered", "label": "vault_answerable"},
+    {"query": "what time do I leave for the airport", "label": "vault_answerable"},
+    {"query": "when is my car insurance payment due", "label": "vault_answerable"},
     # Personal relationships
     {"query": "what did my partner and I discuss about finances", "label": "vault_answerable"},
     {"query": "what did my mom say last time we talked", "label": "vault_answerable"},

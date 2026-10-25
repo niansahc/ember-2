@@ -263,7 +263,9 @@ def _stage2_classify(query: str) -> tuple[str | None, float | None]:
 # own life included, is vault_answerable. The comparison sentence keeps
 # "current" in a comparison of the user's own past and present from reading
 # as a request for current events. The stable-fact sentence keeps general
-# knowledge on its pre-B1 label.
+# knowledge on its pre-B1 label. The schedule sentence (PR #308) keeps the
+# user's own appointments, travel, orders and errands from reading as the
+# "schedules" and "live status" of the needs_internet list.
 _STAGE3_SYSTEM_PROMPT: str = (
     "You are a binary intent classifier. Decide whether answering the "
     "user's query needs information from the internet. Use needs_internet "
@@ -277,8 +279,11 @@ _STAGE3_SYSTEM_PROMPT: str = (
     "A comparison between two periods or versions of the user's own life "
     "(now versus before, this one versus the previous one) is "
     "vault_answerable, even when it uses words like current, old, latest, "
-    'or previous, and even when it does not say "my". Respond with ONLY '
-    'JSON in this exact form: {"label": "needs_internet"} or '
+    'or previous, and even when it does not say "my". The user\'s own '
+    "schedule, appointments, travel, orders, deliveries, bills, and "
+    "errands are also vault_answerable, even when the query asks for a "
+    "time or a date or whether something has happened yet. Respond with "
+    'ONLY JSON in this exact form: {"label": "needs_internet"} or '
     '{"label": "vault_answerable"}. No other text.'
 )
 

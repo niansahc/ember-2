@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 from unittest.mock import MagicMock, patch
 
-from src.context.policies import _web_search_policy
 from src.tools.web_search import search_text_from
 from tests.conftest import seed_pending
 from tests.test_ask_first_routing import (  # noqa: F401  (client is a fixture)
@@ -37,10 +36,10 @@ UPLOAD_NOTE = ("[I just uploaded notes.pdf to my vault. The content is now "
 
 
 def _autonomous_turn(client, vault, query, responses=None, **kwargs):
-    """An autonomous turn whose context assembly searches."""
+    """An autonomous turn whose context assembly searches: _turn routes the
+    request to web_search, and assembly receives the turn's policy."""
     return _turn(client, vault, responses or [_searxng([CLEAN_HIT])] * 3, query=query,
-                 autonomous=True, assembly_policy=_web_search_policy(explicit=False),
-                 **kwargs)
+                 autonomous=True, **kwargs)
 
 
 def test_task_note_never_reaches_searxng(client, isolate_to_test_vault):

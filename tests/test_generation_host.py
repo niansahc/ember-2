@@ -11,6 +11,8 @@ box confirmed the consequence: generation worked, and the turn still died with
 it. These tests pin the split, and pin the unset default to today's behaviour.
 """
 
+import ast
+
 import ollama
 import pytest
 
@@ -120,7 +122,16 @@ class TestEverythingElseStaysLocal:
         # -- omitting model= entirely was never a safe fallback, it failed a
         # client-side validation error in 0.0s every time, independent of
         # any config. See TestAuxiliaryModelIndependentOfGeneration below.
-        assert source.count("_generation_client().chat(") == 2
+        # Each generation site may call the client more than once (the retry
+        # without thinking, src/llm/adapter.py _reasoning_used_budget), so
+        # the sites are named, not counted.
+        tree = ast.parse(source)
+        sites = {
+            node.name for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and "_generation_client().chat(" in ast.get_source_segment(source, node)
+        }
+        assert sites == {"_chat_ollama", "_chat_ollama_stream"}
         assert source.count("ollama.chat(") == 2
 
 

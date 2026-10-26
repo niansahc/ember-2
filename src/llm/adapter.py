@@ -54,29 +54,37 @@ def search_failure_think(context_packet) -> bool | None:
     return False
 
 
-def _reasoning_used_budget(response) -> bool:
-    """True when a thinking model's reasoning used the whole output budget.
+def _retry_without_thinking(response, think: bool | None) -> bool:
+    """True, and logged, when a thinking model's reasoning used the whole
+    output budget, so the caller repeats the call once with think=False.
 
     The reasoning arrives in message.thinking and counts against num_predict.
     When it reaches the cap first, Ollama stops with done_reason "length" and
     an empty reply, and the turn would end in the empty-reply fallback. Short
     emotional prompts on qwen3.6:35b-a3b did this on about one turn in eight
     (docs/KNOWN_ISSUES.md, B-GEN-001). A reply that has text, even one cut
-    short at the cap, is not this case. Read with .get: a mocked response may
-    carry no done_reason.
+    short at the cap, is not this case. A call already made with think=False
+    (the search-failure arm, or the retry itself) is never retried. Read with
+    .get: a mocked response may carry no done_reason.
     """
+    if think is False:
+        return False
     message = response.get("message") or {}
-    return (
-        response.get("done_reason") == "length"
-        and not (message.get("content") or "").strip()
-    )
-
-
-def _log_budget_retry(eval_count) -> None:
+    if response.get("done_reason") != "length" or (message.get("content") or "").strip():
+        return False
     logger.warning(
         "[GEN] reasoning used the whole output budget (eval=%s, num_predict=%d); "
-        "retrying with think=False", eval_count, OLLAMA_NUM_PREDICT,
+        "retrying with think=False", response.get("eval_count"), OLLAMA_NUM_PREDICT,
     )
+    return True
+
+
+def _text_chunks(stream):
+    """Yield the non-empty reply text of each chunk of an Ollama stream."""
+    for chunk in stream:
+        content = chunk.get("message", {}).get("content", "")
+        if content:
+            yield content
 
 
 def _generation_client():
@@ -941,11 +949,6 @@ class LLMAdapter:
         if assistant_prefix:
             messages.append({"role": "assistant", "content": assistant_prefix})
 
-        # think is added only when set (search-failure arm), so the default
-        # call is identical to before.
-        think_kwargs = {} if think is None else {"think": think}
-        if think is not None:
-            logger.info("[SEARCH_FAIL] think=%s passed to ollama answer turn", think)
         chat_kwargs = dict(
             model=model,
             messages=messages,
@@ -960,13 +963,17 @@ class LLMAdapter:
                 "num_predict": OLLAMA_NUM_PREDICT,
             },
         )
-        response = _generation_client().chat(**chat_kwargs, **think_kwargs)
+        # think is added only when set (search-failure arm), so the default
+        # call is identical to before.
+        if think is not None:
+            logger.info("[SEARCH_FAIL] think=%s passed to ollama answer turn", think)
+            chat_kwargs["think"] = think
+        response = _generation_client().chat(**chat_kwargs)
         # The reasoning used the whole budget and left no reply: the same
         # call once more without thinking. Once only; a second empty reply
         # reaches the empty-reply guard as before.
-        if think is not False and _reasoning_used_budget(response):
-            _log_budget_retry(response.get("eval_count"))
-            response = _generation_client().chat(**chat_kwargs, think=False)
+        if _retry_without_thinking(response, think):
+            response = _generation_client().chat(**{**chat_kwargs, "think": False})
         generated = response["message"]["content"]
         if assistant_prefix:
             return assistant_prefix + generated
@@ -993,9 +1000,6 @@ class LLMAdapter:
             messages.append({"role": "assistant", "content": assistant_prefix})
             yield assistant_prefix
 
-        think_kwargs = {} if think is None else {"think": think}
-        if think is not None:
-            logger.info("[SEARCH_FAIL] think=%s passed to ollama answer turn", think)
         chat_kwargs = dict(
             model=model,
             messages=messages,
@@ -1008,10 +1012,12 @@ class LLMAdapter:
             },
             stream=True,
         )
-        stream = _generation_client().chat(**chat_kwargs, **think_kwargs)
+        if think is not None:
+            logger.info("[SEARCH_FAIL] think=%s passed to ollama answer turn", think)
+            chat_kwargs["think"] = think
         yielded = False
         last = {}
-        for chunk in stream:
+        for chunk in _generation_client().chat(**chat_kwargs):
             last = chunk
             content = chunk.get("message", {}).get("content", "")
             if content:
@@ -1020,12 +1026,9 @@ class LLMAdapter:
         # Same rule as _chat_ollama: the reasoning used the whole budget and
         # nothing was streamed, so stream once more without thinking. The
         # final chunk carries done_reason. The prefix was already yielded.
-        if think is not False and not yielded and _reasoning_used_budget(last):
-            _log_budget_retry(last.get("eval_count"))
-            for chunk in _generation_client().chat(**chat_kwargs, think=False):
-                content = chunk.get("message", {}).get("content", "")
-                if content:
-                    yield content
+        if not yielded and _retry_without_thinking(last, think):
+            yield from _text_chunks(
+                _generation_client().chat(**{**chat_kwargs, "think": False}))
 
     # ------------------------------------------------------------------
     # Anthropic (cloud)

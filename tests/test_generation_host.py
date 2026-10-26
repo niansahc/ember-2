@@ -123,13 +123,21 @@ class TestEverythingElseStaysLocal:
         # client-side validation error in 0.0s every time, independent of
         # any config. See TestAuxiliaryModelIndependentOfGeneration below.
         # Each generation site may call the client more than once (the retry
-        # without thinking, src/llm/adapter.py _reasoning_used_budget), so
+        # without thinking, src/llm/adapter.py _retry_without_thinking), so
         # the sites are named, not counted.
-        tree = ast.parse(source)
+        def generation_chat(node):
+            return (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "chat"
+                and isinstance(node.func.value, ast.Call)
+                and getattr(node.func.value.func, "id", None) == "_generation_client"
+            )
+
         sites = {
-            node.name for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef)
-            and "_generation_client().chat(" in ast.get_source_segment(source, node)
+            fn.name for fn in ast.walk(ast.parse(source))
+            if isinstance(fn, ast.FunctionDef)
+            and any(generation_chat(node) for node in ast.walk(fn))
         }
         assert sites == {"_chat_ollama", "_chat_ollama_stream"}
         assert source.count("ollama.chat(") == 2

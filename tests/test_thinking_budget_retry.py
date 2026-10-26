@@ -9,10 +9,13 @@ repeats that one call with think=False. Everything is mocked: no Ollama.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from contextlib import contextmanager
+from unittest.mock import MagicMock, patch
 
+from src.context.models import ContextPacket
 from src.llm.adapter import LLMAdapter
 from src.llm.prompt_guardrail import OLLAMA_NUM_PREDICT
+from src.safety.models import SafetyTriggerResult
 
 
 def _bare_adapter():
@@ -46,9 +49,16 @@ def _scripted(*replies):
     return calls, fake_chat
 
 
-def _chat(adapter, fake_chat, **kwargs):
+@contextmanager
+def _ollama(adapter, fake_chat):
+    """ollama.chat replaced by fake_chat; no context-window lookup."""
     with patch("ollama.chat", side_effect=fake_chat), \
             patch.object(adapter, "_get_num_ctx", return_value=8192):
+        yield
+
+
+def _chat(adapter, fake_chat, **kwargs):
+    with _ollama(adapter, fake_chat):
         return adapter._chat_ollama("system", "user", **kwargs)
 
 
@@ -146,8 +156,7 @@ def _answer_stream(*parts):
 
 
 def _stream(adapter, fake_chat, **kwargs):
-    with patch("ollama.chat", side_effect=fake_chat), \
-            patch.object(adapter, "_get_num_ctx", return_value=8192):
+    with _ollama(adapter, fake_chat):
         return list(adapter._chat_ollama_stream("system", "user", **kwargs))
 
 
@@ -192,11 +201,6 @@ def test_stream_already_without_thinking_is_not_restreamed():
 def _turn(*replies):
     """Run one generate_response_iter turn on a scripted ollama.chat;
     review not triggered. Returns (final reply, calls)."""
-    from unittest.mock import MagicMock
-
-    from src.context.models import ContextPacket
-    from src.safety.models import SafetyTriggerResult
-
     adapter = _bare_adapter()
     adapter.policy_service = MagicMock()
     adapter.policy_service.evaluate_trigger.return_value = SafetyTriggerResult(
@@ -205,8 +209,7 @@ def _turn(*replies):
     buf = MagicMock(question_suppressed=False)
     packet = ContextPacket(user_message="That was a hard week.")
     calls, fake_chat = _scripted(*replies)
-    with patch("ollama.chat", side_effect=fake_chat), \
-            patch.object(adapter, "_get_num_ctx", return_value=8192), \
+    with _ollama(adapter, fake_chat), \
             patch.object(adapter, "_prepare_turn_prompt",
                          return_value=(buf, "system prompt", packet)):
         items = list(adapter.generate_response_iter(packet))

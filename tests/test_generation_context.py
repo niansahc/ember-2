@@ -135,9 +135,10 @@ def _gctx(is_test=False, skip_vault_write=False, session_id="sess_test_b", proje
 def test_apply_confirmation_confirmed_web_search_overwrites_message():
     ctx = _gctx()
     work = GenerationWork(message="yes")
-    result = {"confirmed": True, "action": "web_search", "query": "population of tokyo"}
+    result = {"confirmed": True, "action": "web_search", "query": "population of tokyo",
+              "offer_text": "Want me to search?"}
     with patch("src.api.openai_adapter._check_pending_confirmation",
-               return_value=(result, ["rec"])), \
+               return_value=result), \
          patch("src.tools.web_search.run_web_search",
                return_value=WebSearchResult(items=[{"title": "x"}])):
         _apply_confirmation(ctx, work)
@@ -146,7 +147,11 @@ def test_apply_confirmation_confirmed_web_search_overwrites_message():
     assert work.raw_message == "population of tokyo"
     assert work.confirmation_confirmed is True
     assert work.confirmation_web_items == [{"title": "x"}]
-    assert work.pending_records == ["rec"]
+    # The consumed pending is recorded for the handler's _PendingGuard.
+    assert work.consumed_pending == {"query": "population of tokyo",
+                                     "offer_text": "Want me to search?",
+                                     "offer": None,
+                                     "stateless": False}
 
 
 def test_apply_confirmation_is_test_is_noop():
@@ -156,7 +161,7 @@ def test_apply_confirmation_is_test_is_noop():
         _apply_confirmation(ctx, work)
     chk.assert_not_called()
     assert work.confirmation_confirmed is False
-    assert work.pending_records == []
+    assert work.consumed_pending is None
 
 
 def test_apply_tasks_explicit_request_prefixes_message():

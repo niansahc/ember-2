@@ -80,8 +80,8 @@ class GenerationContext:
     completion_id and stream are carried forward from the request's RouterContext
     so a single id spans the pre-router terminals, the clarification terminal,
     and the final generation response. raw_user_message is the clean pre-prefix
-    snapshot of the user message taken at the Phase A->B boundary (the value
-    _write_pending_confirmation stores as the web-search query); the mutating
+    snapshot of the user message taken at the Phase A->B boundary (the source
+    of the exchange's web-search text); the mutating
     message itself lives on GenerationWork, not here.
     """
 
@@ -128,26 +128,35 @@ class GenerationWork:
     message at construction). The confirmation builder overwrites BOTH message
     and raw_message with the original deferred query on a confirmed web search;
     the task and timer builders prefix only message, leaving raw_message clean
-    for _write_pending_confirmation. confirmation_* / pending_records carry the
-    confirmation builder's outputs to the generation handler.
+    for the web-search text. confirmation_* / consumed_pending carry the
+    confirmation builder's outputs to the generation handler;
+    confirmation_confirmed is derived from consumed_pending.
     """
 
     message: str
     raw_message: str = ""
     confirmation_web_items: list = field(default_factory=list)
-    confirmation_confirmed: bool = False
     confirmation_search_failed: bool = False
     # Status and reason of the deferred search after the AI-doc quarantine
     # (resolve_search_outcome): "unavailable" / "filtered" when the search
     # returned "ok" but every hit was quarantined. None when none ran.
     confirmation_search_status: str | None = None
     confirmation_search_reason: str | None = None
-    pending_records: list = field(default_factory=list)
+    # The pending offer a confirmed reply took this turn ({query, offer_text,
+    # offer, stateless}), which the adapter's _PendingGuard puts back if the
+    # exchange ends unanswered. None when nothing was confirmed.
+    consumed_pending: dict | None = None
 
     def __post_init__(self):
         # Snapshot the clean message when a caller does not pass raw_message.
         if not self.raw_message:
             self.raw_message = self.message
+
+    @property
+    def confirmation_confirmed(self) -> bool:
+        """True when the user confirmed a pending web search this turn: the
+        confirmation builder then records the pending it consumed."""
+        return self.consumed_pending is not None
 
 
 @dataclass(frozen=True)

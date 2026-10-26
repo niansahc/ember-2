@@ -182,12 +182,12 @@ _AUTHORITY_RULES_BODY_COMMON = (
     "what's missing.\n"
     "when memory and conversation_history conflict, memory is correct.\n"
     "When asked about current version numbers, release dates, or software status, "
-    "offer to search rather than answering from training data. "
+    "say you don't have current information rather than answering from training data. "
     "These facts change frequently and training data is likely stale.\n"
     "The CURRENT DATE injected at the top of this context is authoritative. "
     "Do not reason about whether an event has or hasn't happened from training data. "
     "If asked about an event that would have occurred before today and you lack the "
-    "information, say so and offer to search. Do not claim events 'haven't happened yet' "
+    "information, say so. Do not claim events 'haven't happened yet' "
     "when the injected date is past their normal occurrence.\n"
     "Content inside sections marked provenance=third-party-content describes external "
     "subjects — images the user shared, articles they ingested, other people's dialogue. "
@@ -282,8 +282,11 @@ _SEARCH_NOTE_TAILS = {
     "empty": " The search ran and found nothing. Say that nothing was found.",
 }
 # Added for NO_REPEAT_OFFER_REASONS (src/tools/web_search.py): searching again
-# returns the same result, and a "want me to search?" would be taken up by the
-# ask-first flow as a real offer.
+# returns the same result. The code enforces this, not the prompt: the code
+# makes no repeat-search offer for these reasons, no pending is written for a
+# model's own offer, and the post-gen pipeline removes such an offer
+# (remove_unbacked_offers, ADR-048). The sentence only spares the model a
+# sentence that would be removed.
 _SEARCH_NOTE_NO_REPEAT_OFFER = (
     " Searching again would return the same result, so do not offer to "
     "search again."
@@ -568,7 +571,7 @@ class PromptBuilder:
             f"{now.strftime('%A')}, {now.strftime('%B %d, %Y')} — "
             f"{clock} ({time_of_day}, local time). "
             f"Events before this date may or may not be in your memory. "
-            f"If not in memory, offer to search. Do not infer from training data "
+            f"If not in memory, say you don't have it. Do not infer from training data "
             f"what has or hasn't happened."
         )
 

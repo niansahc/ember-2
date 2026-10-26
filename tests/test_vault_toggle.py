@@ -111,7 +111,8 @@ def client(tmp_path):
          patch("src.api.openai_adapter._background_state_extraction", return_value=None), \
          patch("src.api.openai_adapter._detect_and_write_commitment", return_value=None), \
          patch("src.api.openai_adapter._detect_task_in_response", return_value=None), \
-         patch("src.api.openai_adapter._write_pending_confirmation", return_value=None):
+         patch("src.api.openai_adapter._write_pending_confirmation",
+               return_value=(True, None)):
 
         _client = TestClient(app)
 

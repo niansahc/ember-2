@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-09
 **Target:** v0.19.0
+**Amended:** 2026-10-19 (ADR-048: the pending is written only for a code offer, before the reply; a consumed pending is put back)
 **Amends:** ADR-015 (memory tiering), ADR-026 (deviation engine), ADR-038 (pending_confirmation), ADR-040 (SSE wire contract), ADR-042 (GenerationContext)
 **Related:** ADR-002 (append-only memory), ADR-021 (third-party flag), ADR-031 (vault toggle), ADR-033 (StateExtractor gating), ADR-039 (atomic JSON writes), issue #164, `CONTEXT.md`
 
@@ -105,7 +106,8 @@ of what the client sends and is kept.
 5. Generation; `_commit_delivery` on success (ADR-015, unchanged).
 6. Grounding, revision, coaching, post-gen, the final empty-reply check.
 7. `record_reply`, then the one deviation run (ADR-026, issue #164).
-8. The pending confirmation (ADR-038).
+8. The pending confirmation (ADR-038). Amended by ADR-048: written before
+   step 7's `record_reply` (see Amendment).
 9. Re-stream, `sources`, `vault_sources`, stop, `[DONE]`.
 10. After `[DONE]`: the self-narrative audit and the extractors (state, topic
     decline, commitment, task offer), each in its own try block.
@@ -209,3 +211,27 @@ user turn, the assistant turn and the outcome. Other records an exchange writes
 - `src/api/sse.py` -- `guard_sse(on_abort=...)`, `storage_failed`.
 - `src/memory/session.py` -- `get_turns`.
 - `tests/test_exchange_recorder.py`, `tests/test_exchange_persistence.py`.
+
+## Amendment (2026-10-19, ADR-048)
+
+- **Step 8 writes a pending only for a code offer.** In the ordering (section
+  4), step 8 writes the pending confirmation only when Ember's code made a
+  search offer on the exchange: the ask-first offer or the repeat-search offer.
+  A reply whose wording offers a search writes nothing. On a vault-off exchange
+  the offer is held in process instead (ADR-031 amendment).
+- **The pending is written before the reply.** Step 8 runs before step 7's
+  `record_reply`. If the pending write fails, the offer sentence is dropped
+  from the reply before it is stored and sent. If the reply write then fails
+  (the "Reply write fails" row of section 5), the pending just written is
+  resolved with resolution `reply_not_stored`, so an offer the user never saw
+  cannot fire. The vault-off in-process hold still follows the reply.
+- **A consumed pending is put back.** When an exchange that took a pending
+  search with a confirmation ends `failed` or `interrupted` (section 5), the
+  pending is put back as a new record (ADR-038 amendment), unless the
+  conversation already holds another active entry (ADR-048 section 4). A vault-off
+  exchange records no outcome, but the same failures put back its in-process
+  entry, and also a search clarification's waiting state. An exchange with an
+  image is never a confirmation, so `vision_unavailable` can only put back a
+  clarification's waiting state. `record_reply` settles the exchange: a failure after the reply is
+  stored puts nothing back, as in the row "Client disconnects after the reply
+  is stored".

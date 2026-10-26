@@ -364,6 +364,16 @@ def import_app_graph_before_any_patch(isolate_to_test_vault):
         importlib.import_module(module_name)
 
 
+def clear_adapter_process_stores() -> None:
+    """Empty the adapter's in-process stateless store (search offers and
+    search clarifications). They are keyed by session id and test files reuse
+    fixed ids, so an entry must not outlive the test that left it. Only when
+    the adapter was imported."""
+    adapter = sys.modules.get("src.api.openai_adapter")
+    if adapter is not None:
+        adapter._stateless_pending_store.clear()
+
+
 @pytest.fixture(autouse=True)
 def restore_process_state():
     """Snapshot and restore process-global vault state around every test.
@@ -398,6 +408,7 @@ def restore_process_state():
         os.environ["PRIVATE_VAULT_PATH"] = prior_env_vault
     clear_store_cache()
     clear_index_cache()
+    clear_adapter_process_stores()
     if prior_path is None:
         clear_vault_path_override()
     else:

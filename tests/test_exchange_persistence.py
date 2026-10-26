@@ -82,6 +82,22 @@ def client(vault):
 
 
 @pytest.fixture(scope="module")
+def ask_first_policy():
+    """A web-search policy the classifier did not mark explicit: with
+    autonomous search off (_ask_first_prefs) the exchange is ask-first and
+    the code makes its search offer (ADR-048)."""
+    from src.context.policies import _web_search_policy
+
+    return _web_search_policy(explicit=False)
+
+
+def _ask_first_prefs():
+    return patch("src.core.preferences.get",
+                 side_effect=lambda k, d=None, *a, **kw:
+                 False if k == "web_search_autonomous" else d)
+
+
+@pytest.fixture(scope="module")
 def casual_policy():
     """The real policy for a plain greeting (Stage 1, no model call)."""
     from src.context.policies import classify_query
@@ -265,7 +281,7 @@ def test_task_prefixed_turn_stores_the_sent_text(client, vault, casual_policy):
 
 
 def test_confirmed_yes_turn_stores_yes(client, vault, casual_policy):
-    pending = ({"confirmed": True, "action": "web_search", "query": "the original question"}, [])
+    pending = {"confirmed": True, "action": "web_search", "query": "the original question"}
     _chat(client, "yes", policy=casual_policy, extra=(
         patch("src.api.openai_adapter._check_pending_confirmation", return_value=pending),
         patch("src.tools.web_search.run_web_search",
@@ -403,7 +419,7 @@ def _pending(vault) -> list:
 
 
 @pytest.mark.parametrize("fast", [False, True], ids=["grounded", "fast"])
-def test_pending_confirmation_exists_when_done_is_sent(client, vault, casual_policy, fast):
+def test_pending_confirmation_exists_when_done_is_sent(client, vault, ask_first_policy, fast):
     from src.api.sse import sse_done as real_done
 
     seen: list[int] = []
@@ -412,25 +428,28 @@ def test_pending_confirmation_exists_when_done_is_sent(client, vault, casual_pol
         seen.append(len(_pending(vault)))
         return real_done()
 
-    _chat(client, policy=casual_policy, fast=fast, reply=OFFER_REPLY, extra=(
+    _chat(client, policy=ask_first_policy, fast=fast, extra=(
         patch("src.api.openai_adapter.sse_done", side_effect=_done),
+        _ask_first_prefs(),
     ))
     assert seen == [1]
 
 
 def test_no_pending_confirmation_without_an_offer(client, vault, casual_policy):
-    _chat(client, policy=casual_policy)
-    assert _pending(vault) == []
-
-
-def test_no_pending_confirmation_with_the_vault_off(client, vault, casual_policy):
-    _chat(client, policy=casual_policy, reply=OFFER_REPLY, vault_enabled=False)
-    assert _pending(vault) == []
-
-
-def test_offer_with_the_vault_on_writes_one_pending_confirmation(client, vault, casual_policy):
-    """Positive control for both pending-confirmation absences above."""
+    """The model's own offer is not an offer from the code: nothing pending."""
     _chat(client, policy=casual_policy, reply=OFFER_REPLY)
+    assert _pending(vault) == []
+
+
+def test_no_pending_confirmation_with_the_vault_off(client, vault, ask_first_policy):
+    _chat(client, policy=ask_first_policy, vault_enabled=False,
+          extra=(_ask_first_prefs(),))
+    assert _pending(vault) == []
+
+
+def test_offer_with_the_vault_on_writes_one_pending_confirmation(client, vault, ask_first_policy):
+    """Positive control for both pending-confirmation absences above."""
+    _chat(client, policy=ask_first_policy, extra=(_ask_first_prefs(),))
     assert len(_pending(vault)) == 1
 
 

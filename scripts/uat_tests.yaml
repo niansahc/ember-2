@@ -116,7 +116,7 @@ tests:
     expected:
       - "Classifier routes the query to needs_internet (visible in [INTENT_CLASSIFY] log)"
       - "_ask_first_active is True at the openai_adapter gate (no web search executes)"
-      - "Response matches the ask-first scripted phrasing: \"I don't have current information on that — want me to search?\" (or near-equivalent variant emitted by ask_first_validator)"
+      - "Response matches the ask-first scripted phrasing: \"I don't have current information on that. Want me to search the web for it?\" (the fixed text; the model's own wording is never shown)"
       - "X-Ember-Web-Search header is NOT set on this turn (search has not yet run)"
       - "On user follow-up of \"yes\", the deferred search executes and the next turn returns sourced content"
     verify_via: "GET /v1/preferences (confirm autonomous=false), uvicorn logs ([INTENT_CLASSIFY] + ask_first_active), response headers, response text"

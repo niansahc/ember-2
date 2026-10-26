@@ -3,25 +3,35 @@ src/llm/post_gen_pipeline.py
 
 Unified post-generation validator pipeline.
 
-Runs five validators in a fixed order against a completed response:
+Runs these steps in a fixed order against a completed response:
 
   1. source allowlist (strip fabricated citations)
   2. web search refusal (deterministic fallback when model ignores web results)
   3. vision refusal (substitute when vision fired but model refused)
-  4. ask-first (substitute when web_search intent skipped the confirmation)
-  5. URL validator (B-MEM-005: strip fabricated https?:// URLs against a
+  4. the code's search offers (ADR-048): SCRIPTED_ASK_FIRST_RESPONSE replaces
+     the draft on an ask-first exchange, RETRY_OFFER_RESPONSE replaces it
+     when a confirmation's search failed
+  5. unbacked-offer guard: on an exchange where the code made no offer,
+     every search offer the model wrote is removed (remove_unbacked_offers)
+  6. empty-response guard: fills a zero-byte reply with a fallback so the
+     streaming path never emits a blank message to the client
+  7. search disclosure: when this turn's web search was unavailable (every
+     engine blocked, the request failed, every hit was rejected as
+     irrelevant, or AI-document quarantine removed every hit), a fixed line
+     is prepended so the user knows the answer did not come from a search.
+     Skipped for substituted replies (the retry offer already says search
+     failed) and for the empty-guard fallback.
+  8. repeat-search offer: after an unavailable search a repeat could fix,
+     REPEAT_SEARCH_OFFER is appended after the disclosure, unless step 4
+     already made an offer
+  9. URL validator (B-MEM-005: strip fabricated https?:// URLs against a
      per-turn allowlist; runs last so it sees the final returned text)
 
-Followed by an empty-response guard that fills zero-byte replies with a
-fallback so the streaming path never emits a blank message to the client
-.
-
-Then, when this turn's web search was unavailable (every engine blocked, the
-request failed, every hit was rejected as irrelevant, or AI-document
-quarantine removed every hit), a fixed disclosure line is prepended so the
-user knows the answer did not come from a search. Skipped for refusals, for substituted
-replies (the confirm-path retry offer already says search failed), and for
-the empty-guard fallback.
+A constitutional refusal (review_refused, the refuse_redirect outcome the
+chat path reads from LLMAdapter, src/llm/refusal.py) is never replaced or
+added to: steps 2 to 5, 7 and 8 skip it, so it gets no offer and no pending
+(CLAUDE.md implementation standard 2). Steps 1 and 9 still strip fabricated
+citations and URLs from it.
 
 The ordering is deliberate:
   - Source stripping first so downstream validators see the cleaned text.
@@ -45,12 +55,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 from src.llm.ask_first_validator import (
+    REPEAT_SEARCH_OFFER,
     RETRY_OFFER_RESPONSE,
-    validate_ask_first_response,
+    SCRIPTED_ASK_FIRST_RESPONSE,
+    remove_unbacked_offers,
 )
-from src.llm.refusal import is_refusal_response
+from src.tools.web_search import NO_REPEAT_OFFER_REASONS
 from src.llm.source_validator import (
     extract_web_domains,
     validate_and_strip_sources,
@@ -77,6 +90,15 @@ _EMPTY_FALLBACK = (
 )
 
 
+class CodeOffer(NamedTuple):
+    """A search offer Ember's code made on this exchange (ADR-048): the only
+    kind of offer the adapter writes a pending confirmation for. kind is
+    "ask_first" or "repeat_search"; text is the offer as the user sees it."""
+
+    kind: str
+    text: str
+
+
 @dataclass
 class PostGenResult:
     reply: str
@@ -87,6 +109,8 @@ class PostGenResult:
     empty_fallback_fired: bool
     stripped_urls: list[dict] = field(default_factory=list)
     kept_urls: list[str] = field(default_factory=list)
+    # The code's search offer on this exchange, if it made one.
+    code_offer: CodeOffer | None = None
 
 
 def run_post_gen_pipeline(
@@ -107,16 +131,19 @@ def run_post_gen_pipeline(
     memory_items: list | None = None,
     state_items: list | None = None,
     web_search_status: str | None = None,
+    web_search_reason: str | None = None,
+    review_refused: bool = False,
 ) -> PostGenResult:
-    """Run source → vision → ask-first → empty-guard against a full reply.
+    """Run the steps in the module docstring against a full reply.
 
-    ask_first_mode is computed internally as (intent == web_search AND
-    web_search_autonomous is False). Callers pass the raw signals and this
-    function applies the routing rule.
+    ask_first_active is the adapter's ask-first decision for this exchange.
+    review_refused is True when the constitutional review refused this
+    exchange (src/llm/refusal.py): the refusal is kept as written. The
+    result's code_offer names the search offer the code made, if any: the
+    adapter writes a pending confirmation for it and for nothing else.
     """
 
-    # Judged on the reply as generated, before any substitution below.
-    is_refusal = is_refusal_response(reply)
+    is_refusal = review_refused
     stripped_sources: list[str] = []
     web_refusal_substituted = False
     vision_substituted = False
@@ -144,40 +171,57 @@ def run_post_gen_pipeline(
         stripped_sources = stripped
         logger.info("[POSTGEN] stripped fabricated sources: %s", stripped)
 
-    # Web search refusal: if web results were in context but the model
-    # still generated "I don't have real-time data" / "check CNN", build
-    # a response directly from the snippets. This is the deterministic
-    # fallback when prefix injection didn't fully prevent the RLHF refusal.
-    reply, web_refusal_substituted = validate_web_search_response(
-        reply, web_items=web_items
-    )
-    if web_refusal_substituted:
-        logger.info("[POSTGEN] web search refusal substituted with snippet response")
+    if is_refusal:
+        logger.info("[POSTGEN] constitutional refusal kept as written: "
+                    "no substitution, no offer")
+    else:
+        # Web search refusal: if web results were in context but the model
+        # still generated "I don't have real-time data" / "check CNN", build
+        # a response directly from the snippets. This is the deterministic
+        # fallback when prefix injection didn't fully prevent the RLHF
+        # refusal. Never on a constitutional refusal, whose safer alternative
+        # ("you could check ...") can match these patterns.
+        reply, web_refusal_substituted = validate_web_search_response(
+            reply, web_items=web_items
+        )
+        if web_refusal_substituted:
+            logger.info("[POSTGEN] web search refusal substituted with snippet response")
 
-    reply, vision_substituted = validate_vision_response(
-        reply, used_vision=used_vision, vision_description=vision_description
-    )
-    if vision_substituted:
-        logger.info("[POSTGEN] vision refusal substituted")
+        reply, vision_substituted = validate_vision_response(
+            reply, used_vision=used_vision, vision_description=vision_description
+        )
+        if vision_substituted:
+            logger.info("[POSTGEN] vision refusal substituted")
 
-    ask_first_mode = ask_first_active
-    reply, ask_first_substituted = validate_ask_first_response(
-        reply,
-        intent_class=intent_class,
-        ask_first_mode=ask_first_mode,
-        user_message=user_message or "",
-    )
-    if ask_first_substituted:
+    # The code's offer on an ask-first exchange (ADR-048): the reply is
+    # always SCRIPTED_ASK_FIRST_RESPONSE, whatever the model drafted, since
+    # its own offer wording could leave the user unsure that the search goes
+    # to the web. A refusal is kept as written and gets no offer (CLAUDE.md
+    # implementation standard 2).
+    code_offer: CodeOffer | None = None
+    if ask_first_active and intent_class == "web_search" and not is_refusal:
+        reply = SCRIPTED_ASK_FIRST_RESPONSE
+        ask_first_substituted = True
+        code_offer = CodeOffer("ask_first", SCRIPTED_ASK_FIRST_RESPONSE)
         logger.info("[POSTGEN] ask-first response substituted")
 
-    # Search failure on confirmation turn — substitute with a retry offer
-    # instead of letting the model narrate or re-offer from scratch. The
-    # retry offer matches OFFER_PATTERNS, so the adapter writes a pending
-    # confirmation for it and the user's next "yes" re-runs the search.
-    if confirmation_search_failed:
+    # Search failure on a confirmation exchange: substitute the repeat-search
+    # offer instead of letting the model narrate or re-offer from scratch.
+    # The adapter writes a pending confirmation for it, so the user's next
+    # "yes" re-runs the search. A refusal is kept and gets no offer.
+    if confirmation_search_failed and not is_refusal:
         reply = RETRY_OFFER_RESPONSE
         ask_first_substituted = True
+        code_offer = CodeOffer("repeat_search", RETRY_OFFER_RESPONSE)
         logger.warning("[POSTGEN] confirmation search failed - retry offer substituted")
+
+    # The model never offers a search (ADR-048): on an exchange where the
+    # code made no offer, nothing would honour a "yes" to one, so every
+    # offer sentence the model wrote is removed. A refusal is never rewritten.
+    if code_offer is None and not is_refusal:
+        reply, removed = remove_unbacked_offers(reply)
+        if removed:
+            logger.info("[POSTGEN] removed %d unbacked search offer(s)", removed)
 
     if not reply or not reply.strip():
         reply = _EMPTY_FALLBACK
@@ -192,6 +236,20 @@ def run_post_gen_pipeline(
     ):
         reply = f"{WEB_SEARCH_UNAVAILABLE_DISCLOSURE}\n\n{reply}"
         logger.info("[POSTGEN] web search unavailable - disclosure line prepended")
+
+    # Repeat-search offer (ADR-048): a search ran on this exchange and failed
+    # for a reason a repeat could fix, so the code offers to repeat it. A
+    # confirmation exchange already got its substituted offer above, and a
+    # refusal gets none.
+    if web_search_status == "unavailable" and code_offer is None and not is_refusal:
+        if web_search_reason in NO_REPEAT_OFFER_REASONS:
+            logger.info("[POSTGEN] no repeat-search offer: reason=%s repeats on retry",
+                        web_search_reason)
+        else:
+            reply = f"{reply}\n\n{REPEAT_SEARCH_OFFER}"
+            code_offer = CodeOffer("repeat_search", REPEAT_SEARCH_OFFER)
+            logger.info("[POSTGEN] repeat-search offer added (reason=%s)",
+                        web_search_reason)
 
     stripped_urls: list[dict] = []
     kept_urls: list[str] = []
@@ -228,4 +286,5 @@ def run_post_gen_pipeline(
         empty_fallback_fired=empty_fallback_fired,
         stripped_urls=stripped_urls,
         kept_urls=kept_urls,
+        code_offer=code_offer,
     )

@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 import src.tools.web_search as web_search_mod
 from src.llm.post_gen_pipeline import WEB_SEARCH_UNAVAILABLE_DISCLOSURE
+from src.llm.refusal import RefusalText
 from src.tools.web_search import WebSearchResult, run_web_search, web_search
 from tests.conftest import sse_events
 
@@ -226,7 +227,7 @@ def test_empty_search_has_header_but_no_disclosure(client):
 
 def test_refusal_reply_gets_no_disclosure(client):
     resp, text, _ = _chat(client, _BLOCKED, stream=False,
-                          model_reply="I can't help with that.")
+                          model_reply=RefusalText("I can't help with that."))
     assert _DISCLOSURE not in text
     assert resp.headers.get("x-ember-web-search") == "unavailable"
 
@@ -246,7 +247,7 @@ def _confirm(search_result):
     work = GenerationWork(message="yes")
     pending = {"confirmed": True, "action": "web_search", "query": "synthetic query"}
     with patch("src.api.openai_adapter._check_pending_confirmation",
-               return_value=(pending, [])), \
+               return_value=pending), \
          patch("src.tools.web_search.run_web_search", return_value=search_result):
         _apply_confirmation(ctx, work)
     return work
@@ -266,7 +267,8 @@ def test_confirmed_search_unavailable_routes_to_retry_offer():
         web_search_status=work.confirmation_search_status,
     )
     # The retry offer replaces the reply; no disclosure line on top of it.
-    assert result.reply == "I tried searching but hit an error. Want me to try again?"
+    from src.llm.ask_first_validator import RETRY_OFFER_RESPONSE
+    assert result.reply == RETRY_OFFER_RESPONSE
 
 
 def test_confirmed_search_with_results_is_not_a_failure():
@@ -291,13 +293,16 @@ def _postgen(reply, status, **kw):
 
 
 def test_postgen_discloses_only_when_unavailable():
-    assert _postgen("Answer.", "unavailable").reply == f"{_DISCLOSURE}\n\nAnswer."
+    # filtered: a no-repeat failure, so the disclosure is the only addition
+    # (the repeat-search offer is covered in test_ask_first_offer_phrasing.py).
+    assert (_postgen("Answer.", "unavailable", web_search_reason="filtered").reply
+            == f"{_DISCLOSURE}\n\nAnswer.")
     for status in (None, "empty", "ok"):
         assert _postgen("Answer.", status).reply == "Answer."
 
 
 def test_postgen_skips_disclosure_on_refusal_and_empty_fallback():
     refusal = "I can't help with that."
-    assert _postgen(refusal, "unavailable").reply == refusal
+    assert _postgen(refusal, "unavailable", review_refused=True).reply == refusal
     fallback = _postgen("", "unavailable")
     assert fallback.empty_fallback_fired and _DISCLOSURE not in fallback.reply

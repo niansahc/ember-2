@@ -1,24 +1,33 @@
 """
 src/llm/refusal.py
 
-Refusal markers shared by the chat paths (to skip the coaching filter on
-responses that intentionally end short) and the post-gen pipeline (to skip
-the web-search-unavailable disclosure). One list so the two cannot drift.
+The constitutional review's refusal, as the chat path receives it.
+
+When the review decides refuse_redirect, LLMAdapter returns the refusal as a
+RefusalText: a str whose type is the review's outcome. The chat path reads
+the type once, straight after generation (is_review_refusal), and passes the
+answer on as a flag: the coaching-filter skip, the grounding revision skip
+and the post-gen pipeline all act on that flag, never on the wording. A
+refusal is never rewritten, replaced by a search offer, or followed by a
+pending confirmation (CLAUDE.md implementation standard 2, ADR-048).
+
+The type replaced a list of refusal phrases. A real refusal is model-written
+(RefusalRedirect.as_text(): reason plus safer alternative) or the review's
+heuristic fallback, and neither matched the list, so a refused ask-first
+exchange got the search offer in place of the refusal.
 """
 
 from __future__ import annotations
 
-REFUSAL_PATTERNS: tuple[str, ...] = (
-    "i can't help with that",
-    "i'm not going to do that",
-    "that's not something i'm going to do",
-    "i had trouble generating a response",
-)
+
+class RefusalText(str):
+    """The refusal text of a refuse_redirect review outcome. Behaves as the
+    plain text; only its type says the review refused. String operations
+    return plain str, so read the type before transforming the text."""
+
+    __slots__ = ()
 
 
-def is_refusal_response(text: str) -> bool:
-    """True if `text` looks like a refusal."""
-    if not text:
-        return False
-    lowered = text.lower()
-    return any(m in lowered for m in REFUSAL_PATTERNS)
+def is_review_refusal(text: object) -> bool:
+    """True when `text` is the constitutional review's refusal."""
+    return isinstance(text, RefusalText)

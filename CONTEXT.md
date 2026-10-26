@@ -43,6 +43,30 @@ _Avoid_: status block, search notice, error message
 The fixed line Ember prepends to the reply when the search was unavailable, so the user knows the answer did not come from a search. The user sees it; the model does not write it.
 _Avoid_: search warning, search banner
 
+**Search offer**:
+Ember asking the user whether to run a web search. Only Ember's code makes one, with fixed text that names the web; the model never does. There are two kinds: the ask-first offer, which replaces the reply when autonomous search is off and the message needs current information, and the **Repeat-search offer**.
+_Avoid_: search prompt, search confirmation
+
+**Repeat-search offer**:
+A **Search offer** made after a web search ran and failed for a reason a repeat could fix: every engine blocked, a timeout, or a request error. It replaces the reply when the failed search was the one a **Confirmation** ran, and is added to the end of the reply after any other failed search. A search that found nothing, or whose hits were all rejected as irrelevant or filtered out, gets none, because a repeat would return the same result.
+_Avoid_: retry offer
+
+**Pending search**:
+A **Search offer** waiting for the user's answer. It holds the user's own text, which is what the search sends if the user confirms. In the vault it is a state record (code name `pending_confirmation`); in a conversation with the vault off, Ember holds it in its process for a limited time and never writes it to disk. The user's reply resolves it, whatever the reply says; a message with an image, or a **Search clarification**, resolves it without searching its text.
+_Avoid_: pending confirmation, pending offer
+
+**Confirmation**:
+A user turn that says yes to a **Pending search**: it starts with an affirmative ("yes", "sure", "go ahead") and then holds nothing more, only polite elaboration ("yes, that would be great"), or a **Follow-up**. A negation declines. Any other reply is a new request: it resolves the **Pending search**, whose text is not searched. A message with an image is never a confirmation.
+_Avoid_: acceptance, approval
+
+**Follow-up**:
+New content in a **Confirmation**, after a connector (but, and, also, then, so) or as a question ("yes, what about the weekend?"). The confirmed search sends only the text of the **Pending search**, and the model receives that text plus the follow-up. A follow-up is never sent to the search engines and gets no search of its own.
+_Avoid_: remainder, add-on
+
+**Search clarification**:
+Ember's fixed reply "What would you like me to search for?" when the user asks for a web search without saying what to search ("google please", "look it up"). The user's next message is the search content and is searched. A clarification supersedes an older **Pending search**. If the exchange that carries the search content ends unanswered, the clarification still stands, unless a newer offer or clarification was made in the conversation while that exchange ran.
+_Avoid_: B2, bare-marker reply
+
 ## Relationships
 
 - A **Conversation** has many **Exchanges**, in order. It is created with its first user **Turn**, so Ember never creates an empty one.
@@ -54,6 +78,7 @@ _Avoid_: search warning, search banner
 - Ember's own notes to the model (task, timer and search notes) never enter a user **Turn**, and nothing Ember works out about the user reads them.
 - **History** shows every stored **Turn** in order, except that a user **Turn** and its **Retries** appear once. It never shows an **Exchange outcome**, and the vault keeps every **Exchange**.
 - Retrieval and reflection share one filter and see only the **Turns** that pass it. Only **History** shows every **Turn**.
+- Every **Search offer** comes from Ember's code, and every **Pending search** was offered: there is none without a **Search offer** in one of Ember's replies.
 
 ## Example dialogue
 
@@ -73,3 +98,4 @@ _Avoid_: search warning, search banner
 - "regenerate" (UI code) re-sends the last user message whether or not its exchange has a reply, and "Try again" on the error bubble is the same call. Resolved: only a re-send after an exchange with no assistant turn is a **Retry**; regenerating after a reply is an ordinary new **Exchange**.
 - "stop" (the UI's stop button) is not "interrupted". Today the stop button only stops the display; the request keeps running and Ember stores the whole reply. Resolved: only a client disconnect interrupts an **Exchange**.
 - "session" meant three things: the storage and wire name for a **Conversation** (`session_id`, `X-Session-ID`, `memory/session/`), the UI login session in ADR-012, and an eval flag (`X-Test-Session`). Resolved: the thread is a **Conversation**. Code names and existing feature names, such as session reflection, stay as they are.
+- "retry" meant both a re-sent exchange (a **Retry**) and offering to repeat a failed web search (the code's `RETRY_OFFER_RESPONSE`). Resolved: a **Retry** is the re-sent exchange; the offer to search again is a **Repeat-search offer**.

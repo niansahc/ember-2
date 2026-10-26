@@ -1,36 +1,38 @@
 """
 src/llm/ask_first_validator.py
 
-Post-generation validator for ask-first mode compliance, and the single
-source of truth for how Ember phrases an offer to search the web.
+Ember's search offers (ADR-048): the fixed texts the code uses when it offers
+to search the web, and the detection of offers the model writes itself.
 
 Problem: when the classifier routes a query to web_search intent AND
 web_search_autonomous=False, the prompt instructs the model to ask
 "want me to search?" before attempting an answer. At qwen3:8b scale,
 the model frequently ignores this instruction and reaches for a canned
 RLHF refusal ("I don't have access to live financial data, check Yahoo
-Finance / Google Finance") — sometimes with fabricated source citations.
+Finance / Google Finance"), sometimes with fabricated source citations.
 UAT-130 and UAT-131 both failed this way.
 
-Fix: if ask-first was instructed but the response lacks an explicit
-search-confirmation question, substitute a scripted response that asks.
-The original response is discarded — it's a trained-in wrong answer and
-keeping any of it risks carrying the RLHF refusal through.
+Fix: on an ask-first exchange the reply is always the code's offer,
+SCRIPTED_ASK_FIRST_RESPONSE (src/llm/post_gen_pipeline substitutes it). The
+model's draft is discarded: it may be a trained-in wrong answer, and its own
+offer wording could leave the user unsure that the search goes to the web.
+A constitutional refusal is kept and gets no offer.
 
 First-person guard (v0.18.0): the intent classifier occasionally misroutes
 clearly first-person/conversational queries to web_search (B-CTX-001
-turns 7/9/10 surfaced this — recall queries hitting Stage 2 false-
-positive on needs_internet exemplars). When the user_message contains a
-first-person marker, we skip the substitution and let the model's draft
-through. The downstream coaching filter still trims any RLHF residue.
+turns 7/9/10 surfaced this: recall queries hitting Stage 2 false-
+positive on needs_internet exemplars). has_first_person_marker defines
+the guard; src/api/openai_adapter applies it to the ask-first decision, so
+such an exchange is not an ask-first exchange at all: no ask block in the
+prompt, no fixed offer, and the model answers.
 
-Offer phrasing (2026-10-18 review, finding 1): OFFER_PATTERNS is the one
-list of offer phrasings. The validator accepts a reply as an offer on it,
-the post-gen pipeline substitutes RETRY_OFFER_RESPONSE (which matches it),
-and src/api/openai_adapter._write_pending_confirmation writes a pending
-confirmation on it. Before this, the writer kept its own list: the retry
-offer and some accepted model offers wrote no pending, so the user's
-"yes" did nothing.
+Search offers come only from Ember's code. RETRY_OFFER_RESPONSE and
+REPEAT_SEARCH_OFFER are the repeat-search offers after a failed search. The
+adapter writes a pending confirmation for the code's offers and nothing
+else. OFFER_PATTERNS detects the offers the model writes itself; the
+post-generation guard, remove_unbacked_offers, removes them on an exchange
+where the code made no offer, since nothing would honour the user's "yes"
+to them.
 """
 
 from __future__ import annotations
@@ -38,20 +40,27 @@ from __future__ import annotations
 import re
 
 SCRIPTED_ASK_FIRST_RESPONSE = (
-    "I don't have current information on that — want me to search?"
+    "I don't have current information on that. Want me to search the web for it?"
 )
 
-# Substituted by the post-gen pipeline when the deferred (confirmed) search
-# fails for a reason a retry could fix. It is an offer like any other: it
-# matches OFFER_PATTERNS, so a pending confirmation is written for it.
+# The repeat-search offers (ADR-048): the code's offer after a search failed
+# for a reason a repeat could fix (engines blocked, timeout, request error).
+# RETRY_OFFER_RESPONSE replaces the reply on a confirmation exchange whose
+# deferred search failed; REPEAT_SEARCH_OFFER is appended to the reply after
+# any other failed search (autonomous, explicit, search clarification). The
+# adapter writes a pending confirmation for either. Both name the web.
 RETRY_OFFER_RESPONSE = (
-    "I tried searching but hit an error. Want me to try again?"
+    "I tried searching the web but hit an error. Want me to try the search again?"
 )
+REPEAT_SEARCH_OFFER = "Want me to try the web search again?"
+
+# The reply when the guard removed the model's offer and nothing else was left.
+UNBACKED_OFFER_FALLBACK = "I don't have that information."
 
 # First-person markers: pronouns and contractions that indicate the user
 # is asking about themselves or the conversation. When present, we treat
-# the query as personal/conversational regardless of classifier output
-# and skip the ask-first substitution. Pattern is case-insensitive and
+# the query as personal/conversational regardless of classifier output,
+# so the exchange is not ask-first. Pattern is case-insensitive and
 # word-bounded so common-word substrings ("welcome", "remembered") do
 # not false-match.
 #
@@ -68,96 +77,97 @@ _FIRST_PERSON_GUARD = re.compile(
 )
 
 
-def _has_first_person_marker(user_message: str) -> bool:
+def has_first_person_marker(user_message: str) -> bool:
     """Return True if the user message contains a first-person marker."""
     if not user_message:
         return False
     return bool(_FIRST_PERSON_GUARD.search(user_message))
 
 
-# Every phrasing that counts as an offer to search. Case-insensitive.
-# The "?" check is loose because the model sometimes drops terminal
-# punctuation, except for the "I can / I could" forms: those need a
+# What a search offer offers to do. "search" takes any object; "look" and
+# "find" count only with a web object ("look it up", "look up X online",
+# "find out X online"); a retry names the search.
+_WEB_LOOKUP = (
+    r"(?:search"
+    r"|look\s+(?:it|that|this|them|those|these)\s+up"
+    r"|look\s+up\b[^.!?]*?\b(?:online|on\s+the\s+(?:web|internet))"
+    r"|look\s+(?:online|on\s+the\s+(?:web|internet))"
+    r"|find\s+out\b[^.!?]*?\b(?:online|on\s+the\s+(?:web|internet)|by\s+searching)"
+    r"|try\s+(?:the\s+search|searching)\s+again)\b"
+)
+
+# Phrasings of an offer to search, as the model writes them. They decide
+# nothing on their own: remove_unbacked_offers uses them to find the model's
+# own offers and remove them on an exchange where the code made no offer
+# (ADR-048). Case-insensitive, matched after curly apostrophes are
+# straightened. The "?" check is loose because the model sometimes drops
+# terminal punctuation, except for the "I can / I could" forms: those need a
 # question mark or an "if you like / want" in the same sentence, so a
 # statement such as "I can search but I won't." is not an offer.
 OFFER_PATTERNS: tuple[re.Pattern, ...] = (
     # Also covers "do you want me to ..." and "let me know if you want me to ...".
+    re.compile(r"\bwant\s+me\s+to\s+" + _WEB_LOOKUP, re.IGNORECASE),
+    re.compile(r"\b(?:should|shall)\s+i\s+" + _WEB_LOOKUP, re.IGNORECASE),
+    re.compile(r"\bwould\s+you\s+like\s+me\s+to\s+" + _WEB_LOOKUP, re.IGNORECASE),
     re.compile(
-        r"\bwant\s+me\s+to\s+(?:search|look|find|try\s+(?:the\s+search\s+)?again)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(r"\b(?:should|shall)\s+i\s+(?:search|look)\b", re.IGNORECASE),
-    re.compile(
-        r"\bwould\s+you\s+like\s+me\s+to\s+(?:search|look|find|try\s+again)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\bi\s+(?:can|could)\s+(?:search|look\s+(?:that|it)\s+up)\b"
-        r"[^.!?]*(?:\?|\bif\s+you(?:'d)?\s+(?:like|want)\b)",
+        r"\bi\s+(?:can|could)\s+" + _WEB_LOOKUP
+        + r"[^.!?]*(?:\?|\bif\s+you(?:'d)?\s+(?:like|want)\b)",
         re.IGNORECASE,
     ),
 )
 
-# Sentence split for find_offer_sentence: after terminal punctuation.
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+# Sentence split after terminal punctuation. The separators are captured, so
+# split() alternates sentence, separator, sentence, ...
+_SENTENCE_SPLIT = re.compile(r"((?<=[.!?])\s+)")
 
 
-def has_search_offer(text: str) -> bool:
-    """Return True if the text contains an offer to search (OFFER_PATTERNS)."""
-    if not text:
-        return False
-    return any(pattern.search(text) for pattern in OFFER_PATTERNS)
+def _straighten_apostrophes(text: str) -> str:
+    """Curly single quotes to "'" (mobile keyboards send U+2019)."""
+    return text.replace("\u2018", "'").replace("\u2019", "'")
 
 
-def find_offer_sentence(text: str) -> str | None:
-    """Return the sentence that carries the offer, or None when there is none.
+def _is_offer_sentence(sentence: str) -> bool:
+    """True when one sentence offers a search (see OFFER_PATTERNS)."""
+    sentence = _straighten_apostrophes(sentence)
+    return any(pattern.search(sentence) for pattern in OFFER_PATTERNS)
 
-    No pattern spans terminal punctuation, so an offer anywhere in the text
-    is always inside one sentence.
+
+def remove_unbacked_offers(reply: str) -> tuple[str, int]:
+    """Remove the search offers the model wrote itself (ADR-048).
+
+    Returns (reply, number of offer sentences removed). The rest of the reply
+    is kept as written. When nothing else is left, the reply becomes
+    UNBACKED_OFFER_FALLBACK. Callers run this only on an exchange where the
+    code made no offer, and never on a refusal. No pattern spans terminal
+    punctuation, so an offer anywhere in the reply is inside one sentence.
     """
-    if not text:
-        return None
-    for sentence in _SENTENCE_SPLIT.split(text):
-        if has_search_offer(sentence):
-            return sentence.strip()
-    return None
+    if not reply:
+        return reply, 0
+    parts = _SENTENCE_SPLIT.split(reply)
+    kept: list[str] = []
+    removed = 0
+    for i in range(0, len(parts), 2):
+        if _is_offer_sentence(parts[i]):
+            removed += 1
+            continue
+        kept.append(parts[i] + (parts[i + 1] if i + 1 < len(parts) else ""))
+    if not removed:
+        return reply, 0
+    return "".join(kept).strip() or UNBACKED_OFFER_FALLBACK, removed
 
 
-def is_substitutable(response: str) -> bool:
-    """Return True when the response lacks a confirmation question AND is
-    non-empty. Empty responses are handled by the empty-response guard,
-    not by this validator."""
-    if not response or not response.strip():
-        return False
-    return not has_search_offer(response)
+def drop_code_offer(reply: str, offer_text: str) -> tuple[str, bool]:
+    """Remove the code's own offer from a reply whose pending could not be
+    written (ADR-048), so the user never sees an offer nothing would honour.
 
-
-def validate_ask_first_response(
-    response: str,
-    intent_class: str,
-    ask_first_mode: bool,
-    user_message: str = "",
-) -> tuple[str, bool]:
-    """Enforce the ask-first confirmation pattern.
-
-    Returns (final_response, was_substituted). Substitution happens only
-    when all of: intent_class == "web_search", ask_first_mode is True,
-    the response lacks any recognised confirmation question, AND the
-    user_message lacks a first-person marker. Empty responses pass
-    through unchanged — the empty-response guard runs separately.
-
-    The first-person guard protects the user from receiving a canned
-    "want me to search?" response on conversational/recall queries that
-    the classifier mistakenly routed to web_search (B-CTX-001 family).
-    When the guard fires, the model's actual draft is preserved; any
-    RLHF residue is handled by the coaching filter downstream.
+    Every code offer ends the reply and closes with its question sentence
+    (SCRIPTED_ASK_FIRST_RESPONSE, RETRY_OFFER_RESPONSE, REPEAT_SEARCH_OFFER),
+    so that sentence is removed from the end of the reply; matched by text,
+    not by OFFER_PATTERNS. Returns (reply, removed). When nothing else is
+    left, the reply becomes UNBACKED_OFFER_FALLBACK.
     """
-    if intent_class != "web_search":
-        return response, False
-    if not ask_first_mode:
-        return response, False
-    if _has_first_person_marker(user_message):
-        return response, False
-    if not is_substitutable(response):
-        return response, False
-    return SCRIPTED_ASK_FIRST_RESPONSE, True
+    question = _SENTENCE_SPLIT.split(offer_text.strip())[-1]
+    if not question or not reply.rstrip().endswith(question):
+        return reply, False
+    kept = reply.rstrip()[: -len(question)].strip()
+    return kept or UNBACKED_OFFER_FALLBACK, True

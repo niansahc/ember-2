@@ -17,6 +17,7 @@ from src.core.config import (
     get_ember_generation_ollama_host,
     get_ember_model,
     get_ember_vision_model,
+    get_generation_think_off,
     get_search_failure_think_off,
     spawn_vault_bound_thread,
 )
@@ -52,6 +53,26 @@ def search_failure_think(context_packet) -> bool | None:
     if context_packet.web_search_status not in ("unavailable", "empty"):
         return None
     return False
+
+
+def turn_think(context_packet) -> bool | None:
+    """The think value for a conversation turn's generation call.
+
+    False when EMBER_GENERATION_THINK is off (every turn), otherwise the
+    search-failure arm's value, which is None (do not pass think) on all
+    other turns. Decided per turn, so session reflection and the auxiliary
+    calls never see the setting. Logs one line per turn naming the mode, so
+    a manual battery can confirm from the log which arm a turn ran in.
+    """
+    if get_generation_think_off():
+        logger.info("[GEN] turn thinking: off (EMBER_GENERATION_THINK=false)")
+        return False
+    think = search_failure_think(context_packet)
+    if think is False:
+        logger.info("[GEN] turn thinking: off (search failure)")
+    else:
+        logger.info("[GEN] turn thinking: default")
+    return think
 
 
 def _retry_without_thinking(response, think: bool | None) -> bool:
@@ -450,7 +471,7 @@ class LLMAdapter:
             model_override=None,
             temperature=temperature,
             assistant_prefix=_prefix,
-            think=search_failure_think(context_packet),
+            think=turn_think(context_packet),
         )
         draft_response = strip_think_blocks(draft_response)
 
@@ -643,7 +664,7 @@ class LLMAdapter:
             model_override=None,
             temperature=temperature,
             assistant_prefix=_prefix,
-            think=search_failure_think(context_packet),
+            think=turn_think(context_packet),
         ):
             accumulated.append(chunk)
             yield chunk
@@ -963,10 +984,10 @@ class LLMAdapter:
                 "num_predict": OLLAMA_NUM_PREDICT,
             },
         )
-        # think is added only when set (search-failure arm), so the default
-        # call is identical to before.
+        # think is added only when set (turn_think: EMBER_GENERATION_THINK or
+        # the search-failure arm), so the default call is identical to before.
         if think is not None:
-            logger.info("[SEARCH_FAIL] think=%s passed to ollama answer turn", think)
+            logger.info("[GEN] think=%s passed to ollama answer turn", think)
             chat_kwargs["think"] = think
         response = _generation_client().chat(**chat_kwargs)
         # The reasoning used the whole budget and left no reply: the same
@@ -1013,7 +1034,7 @@ class LLMAdapter:
             stream=True,
         )
         if think is not None:
-            logger.info("[SEARCH_FAIL] think=%s passed to ollama answer turn", think)
+            logger.info("[GEN] think=%s passed to ollama answer turn", think)
             chat_kwargs["think"] = think
         yielded = False
         last = {}

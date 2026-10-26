@@ -103,6 +103,9 @@ _LEAK_PRONE_ENV_VARS: tuple[str, ...] = (
     "EMBER_MODEL",
     "EMBER_HOST",
     "EMBER_ALLOWED_HOSTS",
+    "WEB_SEARCH_MIN_TERM_HITS",
+    "EMBER_SEARCH_FAIL_THINK_OFF",
+    "EMBER_GENERATION_THINK",
     # src/retrieval/vector_index.py
     "MAX_INDEX_SIZE_MB",
     # src/safety/deviation_detector.py

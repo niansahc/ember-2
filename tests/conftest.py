@@ -540,6 +540,16 @@ def run_bound_inline(target, args=(), vault=None, name=None):
         target(*args)
 
 
+@pytest.fixture
+def fresh_env_warnings():
+    """The once-per-value invalid env warning can fire again in this test."""
+    from src.core import config as config_mod
+
+    config_mod._INVALID_ENV_WARNED.clear()
+    yield
+    config_mod._INVALID_ENV_WARNED.clear()
+
+
 def synthetic_packet():
     """A one-record synthetic ContextPacket. No vault content."""
     from src.context.models import ContextItem, ContextPacket

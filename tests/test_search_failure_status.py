@@ -495,13 +495,6 @@ def test_plain_empty_search_still_logs_result_count(monkeypatch, caplog):
     assert "all suppressed" not in caplog.text
 
 
-@pytest.fixture
-def fresh_env_warnings():
-    config_mod._INVALID_ENV_WARNED.clear()
-    yield
-    config_mod._INVALID_ENV_WARNED.clear()
-
-
 @pytest.mark.parametrize("raw, expected, warns", [
     ("2", 2, False),
     (" 2 ", 2, False),

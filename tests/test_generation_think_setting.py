@@ -17,8 +17,14 @@ import pytest
 from src.context.models import ContextPacket
 from src.core import config as config_mod
 from src.llm.adapter import LLMAdapter
-from src.llm.prompt_guardrail import OLLAMA_NUM_PREDICT
 from src.safety.models import SafetyTriggerResult
+from tests.test_thinking_budget_retry import (
+    _answer,
+    _answer_stream,
+    _budget_spent,
+    _ollama,
+    _scripted,
+)
 
 
 def _bare_adapter():
@@ -27,25 +33,9 @@ def _bare_adapter():
     return adapter
 
 
-def _answer(text="A plain answer."):
-    return {"message": {"content": text}, "done_reason": "stop", "eval_count": 12}
-
-
-def _scripted(*replies):
-    """fake ollama.chat returning `replies` in order; records each call."""
-    calls: list[dict] = []
-    queue = list(replies)
-
-    def fake_chat(**kwargs):
-        calls.append(kwargs)
-        return queue.pop(0)
-
-    return calls, fake_chat
-
-
-def _turn(*replies, packet=None):
-    """Run one generate_response_iter turn on a scripted ollama.chat;
-    review not triggered. Returns (final reply, calls)."""
+def _run(method, *replies, packet=None):
+    """Run one turn through adapter.<method> on a scripted ollama.chat;
+    review not triggered. Returns (items yielded, calls)."""
     adapter = _bare_adapter()
     adapter.policy_service = MagicMock()
     adapter.policy_service.evaluate_trigger.return_value = SafetyTriggerResult(
@@ -54,28 +44,40 @@ def _turn(*replies, packet=None):
     buf = MagicMock(question_suppressed=False)
     packet = packet or ContextPacket(user_message="That was a hard week.")
     calls, fake_chat = _scripted(*replies)
-    with patch("ollama.chat", side_effect=fake_chat), \
-            patch.object(adapter, "_get_num_ctx", return_value=8192), \
+    with _ollama(adapter, fake_chat), \
             patch.object(adapter, "_prepare_turn_prompt",
                          return_value=(buf, "system prompt", packet)):
-        items = list(adapter.generate_response_iter(packet))
+        items = list(getattr(adapter, method)(packet))
+    return items, calls
+
+
+def _turn(*replies, packet=None):
+    """generate_response_iter turn. Returns (final reply, calls)."""
+    items, calls = _run("generate_response_iter", *replies, packet=packet)
     return items[-1], calls
 
 
-def test_setting_false_turns_thinking_off_on_a_turn(monkeypatch):
+def test_setting_false_turns_thinking_off_on_a_turn(monkeypatch, caplog):
     monkeypatch.setenv("EMBER_GENERATION_THINK", "false")
-    reply, calls = _turn(_answer())
+    with caplog.at_level("INFO", logger="ember.llm"):
+        reply, calls = _turn(_answer())
     assert reply == "A plain answer."
     assert calls[0]["think"] is False
+    assert "[GEN] turn thinking: off (EMBER_GENERATION_THINK=false)" in caplog.text
+    assert "[GEN] think=False passed to ollama answer turn" in caplog.text
+    assert "[SEARCH_FAIL]" not in caplog.text
 
 
-def test_unset_passes_no_think(monkeypatch):
+def test_unset_passes_no_think(monkeypatch, caplog):
     """Absence test; test_setting_false_turns_thinking_off_on_a_turn is its
     positive control."""
     monkeypatch.delenv("EMBER_GENERATION_THINK", raising=False)
-    reply, calls = _turn(_answer())
+    with caplog.at_level("INFO", logger="ember.llm"):
+        reply, calls = _turn(_answer())
     assert reply == "A plain answer."
     assert "think" not in calls[0]
+    assert "[GEN] turn thinking: default" in caplog.text
+    assert "[GEN] think=" not in caplog.text
 
 
 # --- the search-failure arm ------------------------------------------------
@@ -85,11 +87,13 @@ def _failed_search_packet():
                          web_search_status="unavailable")
 
 
-def test_search_failure_arm_unchanged_when_setting_unset(monkeypatch):
+def test_search_failure_arm_unchanged_when_setting_unset(monkeypatch, caplog):
     monkeypatch.delenv("EMBER_GENERATION_THINK", raising=False)
     monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "true")
-    _, calls = _turn(_answer(), packet=_failed_search_packet())
+    with caplog.at_level("INFO", logger="ember.llm"):
+        _, calls = _turn(_answer(), packet=_failed_search_packet())
     assert calls[0]["think"] is False
+    assert "[GEN] turn thinking: off (search failure)" in caplog.text
 
 
 def test_search_failure_arm_off_leaves_failed_search_turn_alone(monkeypatch):
@@ -110,11 +114,6 @@ def test_setting_false_turns_thinking_off_on_a_successful_search_turn(monkeypatc
 
 # --- the thinking-budget retry ----------------------------------------------
 
-def _budget_spent():
-    return {"message": {"content": "", "thinking": "reasoning " * 50},
-            "done_reason": "length", "eval_count": OLLAMA_NUM_PREDICT}
-
-
 def test_no_budget_retry_when_thinking_is_off(monkeypatch):
     monkeypatch.setenv("EMBER_GENERATION_THINK", "false")
     reply, calls = _turn(_budget_spent(), _answer("That sounds like a lot."))
@@ -132,29 +131,9 @@ def test_budget_retry_fires_when_setting_unset(monkeypatch):
 
 # --- streaming turn -----------------------------------------------------------
 
-def _answer_stream(*parts):
-    chunks = [{"message": {"content": p}, "done": False} for p in parts]
-    chunks.append({"message": {"content": ""}, "done": True,
-                   "done_reason": "stop", "eval_count": 5})
-    return iter(chunks)
-
-
 def _stream_turn():
-    """Run generate_response_stream on a scripted ollama.chat; returns calls."""
-    adapter = _bare_adapter()
-    adapter.policy_service = MagicMock()
-    adapter.policy_service.evaluate_trigger.return_value = SafetyTriggerResult(
-        triggered=False, triggered_by=[])
-    adapter._maybe_compress_buffer = MagicMock()
-    buf = MagicMock(question_suppressed=False)
-    packet = ContextPacket(user_message="That was a hard week.")
-    calls, fake_chat = _scripted(_answer_stream("A plain ", "answer."))
-    with patch("ollama.chat", side_effect=fake_chat), \
-            patch.object(adapter, "_get_num_ctx", return_value=8192), \
-            patch.object(adapter, "_prepare_turn_prompt",
-                         return_value=(buf, "system prompt", packet)):
-        list(adapter.generate_response_stream(packet))
-    return calls
+    """generate_response_stream turn. Returns calls."""
+    return _run("generate_response_stream", _answer_stream("A plain ", "answer."))[1]
 
 
 def test_setting_false_turns_thinking_off_on_a_streamed_turn(monkeypatch):
@@ -177,20 +156,12 @@ def test_direct_chat_call_ignores_the_setting(monkeypatch):
     monkeypatch.setenv("EMBER_GENERATION_THINK", "false")
     adapter = _bare_adapter()
     calls, fake_chat = _scripted(_answer())
-    with patch("ollama.chat", side_effect=fake_chat), \
-            patch.object(adapter, "_get_num_ctx", return_value=8192):
+    with _ollama(adapter, fake_chat):
         assert adapter._chat("system", "user") == "A plain answer."
     assert "think" not in calls[0]
 
 
 # --- the setting itself ---------------------------------------------------------
-
-@pytest.fixture
-def fresh_env_warnings():
-    config_mod._INVALID_ENV_WARNED.clear()
-    yield
-    config_mod._INVALID_ENV_WARNED.clear()
-
 
 @pytest.mark.parametrize("raw, expected, warns", [
     ("false", True, False),
@@ -198,6 +169,7 @@ def fresh_env_warnings():
     ("0", True, False),
     ("no", True, False),
     ("Off", True, False),
+    (None, False, False),
     ("", False, False),
     ("true", False, False),
     ("1", False, False),
@@ -205,48 +177,21 @@ def fresh_env_warnings():
     ("maybe", False, True),
 ])
 def test_setting_parsing(monkeypatch, caplog, fresh_env_warnings, raw, expected, warns):
-    """The "maybe" row is the positive control for the no-warning rows."""
-    monkeypatch.setenv("EMBER_GENERATION_THINK", raw)
+    """None is unset. The "maybe" row is the positive control for the
+    no-warning rows."""
+    if raw is None:
+        monkeypatch.delenv("EMBER_GENERATION_THINK", raising=False)
+    else:
+        monkeypatch.setenv("EMBER_GENERATION_THINK", raw)
     with caplog.at_level("WARNING", logger="ember.config"):
         assert config_mod.get_generation_think_off() is expected
     assert ("EMBER_GENERATION_THINK" in caplog.text) is warns
 
 
-def test_unset_setting_is_not_off(monkeypatch):
-    monkeypatch.delenv("EMBER_GENERATION_THINK", raising=False)
-    assert config_mod.get_generation_think_off() is False
-
-
-# --- which mode a turn ran in, from the log ----------------------------------------
-
-def test_log_says_thinking_off_from_the_setting(monkeypatch, caplog):
-    monkeypatch.setenv("EMBER_GENERATION_THINK", "false")
-    with caplog.at_level("INFO", logger="ember.llm"):
-        _turn(_answer())
-    assert "[GEN] turn thinking: off (EMBER_GENERATION_THINK=false)" in caplog.text
-    assert "[GEN] think=False passed to ollama answer turn" in caplog.text
-    assert "[SEARCH_FAIL]" not in caplog.text
-
-
-def test_log_says_default_when_unset(monkeypatch, caplog):
-    monkeypatch.delenv("EMBER_GENERATION_THINK", raising=False)
-    with caplog.at_level("INFO", logger="ember.llm"):
-        _turn(_answer())
-    assert "[GEN] turn thinking: default" in caplog.text
-    assert "[GEN] think=" not in caplog.text
-
-
-def test_log_says_off_from_search_failure(monkeypatch, caplog):
-    monkeypatch.delenv("EMBER_GENERATION_THINK", raising=False)
-    monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "true")
-    with caplog.at_level("INFO", logger="ember.llm"):
-        _turn(_answer(), packet=_failed_search_packet())
-    assert "[GEN] turn thinking: off (search failure)" in caplog.text
-
-
 # --- only the turn decision reads the setting ----------------------------------------
 
 _REPO = Path(__file__).resolve().parent.parent
+_ADAPTER = _REPO / "src" / "llm" / "adapter.py"
 
 
 def _readers(source: str) -> set[str]:
@@ -265,12 +210,10 @@ def test_only_turn_think_reads_the_setting():
         if "get_generation_think_off" in p.read_text(encoding="utf-8")
     ]
     assert sorted(outside) == ["src/core/config.py", "src/llm/adapter.py"]
-    adapter_source = (_REPO / "src" / "llm" / "adapter.py").read_text(encoding="utf-8")
-    assert _readers(adapter_source) == {"turn_think"}
+    assert _readers(_ADAPTER.read_text(encoding="utf-8")) == {"turn_think"}
 
 
 def test_second_reader_would_be_caught():
     """Positive control for the test above: a second caller is detected."""
-    adapter_source = (_REPO / "src" / "llm" / "adapter.py").read_text(encoding="utf-8")
     extra = "\n\ndef _aux():\n    return get_generation_think_off()\n"
-    assert _readers(adapter_source + extra) == {"turn_think", "_aux"}
+    assert _readers(_ADAPTER.read_text(encoding="utf-8") + extra) == {"turn_think", "_aux"}

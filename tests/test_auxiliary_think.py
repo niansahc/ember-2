@@ -212,7 +212,6 @@ _THINK_UNSET_ALLOWED = {
     ("reflection/session_reflection.py", "generate_session_reflection"): "measured: no gain, background, no budget",
     ("llm/vision_service.py", "analyze"): "vision model, not an auxiliary text call",
     ("onboarding/service.py", "_format_answer"): "not yet measured",
-    ("llm/intent_classifier.py", "_stage3_llm_call"): "PR #306 moves think out of options",
 }
 
 

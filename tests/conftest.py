@@ -103,6 +103,9 @@ _LEAK_PRONE_ENV_VARS: tuple[str, ...] = (
     "EMBER_MODEL",
     "EMBER_HOST",
     "EMBER_ALLOWED_HOSTS",
+    "WEB_SEARCH_MIN_TERM_HITS",
+    "EMBER_SEARCH_FAIL_THINK_OFF",
+    "EMBER_GENERATION_THINK",
     # src/retrieval/vector_index.py
     "MAX_INDEX_SIZE_MB",
     # src/safety/deviation_detector.py
@@ -535,6 +538,16 @@ def run_bound_inline(target, args=(), vault=None, name=None):
 
     with vault_binding(vault):
         target(*args)
+
+
+@pytest.fixture
+def fresh_env_warnings():
+    """The once-per-value invalid env warning can fire again in this test."""
+    from src.core import config as config_mod
+
+    config_mod._INVALID_ENV_WARNED.clear()
+    yield
+    config_mod._INVALID_ENV_WARNED.clear()
 
 
 def synthetic_packet():

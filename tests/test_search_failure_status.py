@@ -495,13 +495,6 @@ def test_plain_empty_search_still_logs_result_count(monkeypatch, caplog):
     assert "all suppressed" not in caplog.text
 
 
-@pytest.fixture
-def fresh_env_warnings():
-    config_mod._INVALID_ENV_WARNED.clear()
-    yield
-    config_mod._INVALID_ENV_WARNED.clear()
-
-
 @pytest.mark.parametrize("raw, expected, warns", [
     ("2", 2, False),
     (" 2 ", 2, False),
@@ -557,7 +550,7 @@ def test_think_log_emitted_by_ollama_call_when_think_set(caplog):
             patch.object(adapter, "_get_num_ctx", return_value=8192), \
             caplog.at_level("INFO", logger="ember.llm"):
         adapter._chat_ollama("system", "user", model="qwen3:8b", think=False)
-    assert "[SEARCH_FAIL] think=False passed to ollama answer turn" in caplog.text
+    assert "[GEN] think=False passed to ollama answer turn" in caplog.text
 
 
 def test_think_log_not_emitted_when_think_unset(caplog):
@@ -568,7 +561,7 @@ def test_think_log_not_emitted_when_think_unset(caplog):
             patch.object(adapter, "_get_num_ctx", return_value=8192), \
             caplog.at_level("INFO", logger="ember.llm"):
         adapter._chat_ollama("system", "user", model="qwen3:8b")
-    assert "[SEARCH_FAIL]" not in caplog.text
+    assert "[GEN] think=" not in caplog.text
 
 
 def test_cloud_model_path_logs_no_think_line(monkeypatch, caplog):
@@ -581,4 +574,4 @@ def test_cloud_model_path_logs_no_think_line(monkeypatch, caplog):
         adapter._chat("system", "user", think=False)
     cloud.assert_called_once()
     assert "think" not in cloud.call_args.kwargs
-    assert "[SEARCH_FAIL]" not in caplog.text
+    assert "[GEN] think=" not in caplog.text

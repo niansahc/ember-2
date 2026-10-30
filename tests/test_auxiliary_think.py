@@ -31,8 +31,8 @@ import pytest
 import src.llm.coaching_filter as coaching_filter
 import src.reflection.generate_reflection as generate_reflection
 import src.reflection.session_reflection as session_reflection
-from src.llm.adapter import LLMAdapter
 from src.state.state_extractor import StateExtractor
+from tests.test_thinking_budget_retry import _answer, _bare_adapter, _scripted
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 
@@ -50,22 +50,6 @@ def _think_off(kwargs: dict) -> bool:
 def _no_think(kwargs: dict) -> bool:
     """True when the call leaves thinking at the model default."""
     return "think" not in kwargs and "think" not in (kwargs.get("options") or {})
-
-
-def _capturing_chat(content: str):
-    captured: dict = {}
-
-    def fake_chat(*args, **kwargs):
-        captured.update(kwargs)
-        return {"message": {"content": content}}
-
-    return fake_chat, captured
-
-
-def _bare_adapter() -> LLMAdapter:
-    adapter = LLMAdapter.__new__(LLMAdapter)
-    adapter.model = "qwen3:8b"
-    return adapter
 
 
 _NON_DELETABLE = [{"pattern": "therapeutic_mid", "match": "your feelings are valid", "position": "body", "deletable": False}]
@@ -133,43 +117,34 @@ _THINKING_SITES = [
 
 @pytest.mark.parametrize("run, target, reply", _THINK_OFF_SITES)
 def test_site_sends_top_level_think_false(run, target, reply):
-    fake_chat, captured = _capturing_chat(reply)
+    calls, fake_chat = _scripted(_answer(reply))
     with patch(target, side_effect=fake_chat):
         run()
-    assert captured, "the site never called ollama.chat"
-    assert _think_off(captured), captured
+    assert len(calls) == 1, "the site never called ollama.chat"
+    assert _think_off(calls[0]), calls[0]
 
 
 @pytest.mark.parametrize("run, target, reply", _THINKING_SITES)
 def test_site_leaves_thinking_on(run, target, reply):
-    fake_chat, captured = _capturing_chat(reply)
+    calls, fake_chat = _scripted(_answer(reply))
     with patch(target, side_effect=fake_chat):
         run()
-    assert captured, "the site never called ollama.chat"
-    assert _no_think(captured), captured
+    assert len(calls) == 1, "the site never called ollama.chat"
+    assert _no_think(calls[0]), calls[0]
 
 
 # Positive controls: the checks above must fail on the kwargs they guard against.
 
 
-def test_control_think_off_rejects_think_inside_options():
-    assert not _think_off({"options": {"think": False}})
-
-
-def test_control_think_off_rejects_missing_think():
-    assert not _think_off({"options": {"temperature": 0}})
-
-
-def test_control_think_off_rejects_options_think_beside_top_level():
-    assert not _think_off({"think": False, "options": {"think": False}})
-
-
-def test_control_no_think_rejects_top_level_think():
-    assert not _no_think({"think": False, "options": {}})
-
-
-def test_control_no_think_rejects_think_inside_options():
-    assert not _no_think({"options": {"think": True}})
+@pytest.mark.parametrize("check, kwargs", [
+    pytest.param(_think_off, {"options": {"think": False}}, id="off-think-inside-options"),
+    pytest.param(_think_off, {"options": {"temperature": 0}}, id="off-missing-think"),
+    pytest.param(_think_off, {"think": False, "options": {"think": False}}, id="off-options-think-beside-top-level"),
+    pytest.param(_no_think, {"think": False, "options": {}}, id="unset-top-level-think"),
+    pytest.param(_no_think, {"options": {"think": True}}, id="unset-think-inside-options"),
+])
+def test_control_kwarg_checks_reject(check, kwargs):
+    assert not check(kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -266,21 +241,12 @@ def test_allowlisted_functions_exist():
         assert func in names, (path, func)
 
 
-def test_control_scanner_flags_a_bare_call():
-    source = "import ollama\ndef f():\n    ollama.chat(model='m', messages=[], options={'temperature': 0})\n"
-    assert _unset_think_calls(source, "x.py") == [("x.py", "f", 3)]
-
-
-def test_control_scanner_flags_think_inside_options():
-    source = "import ollama\ndef f():\n    ollama.chat(model='m', messages=[], options={'think': False})\n"
-    assert _unset_think_calls(source, "x.py") == [("x.py", "f", 3)]
-
-
-def test_control_scanner_flags_options_think_beside_top_level():
-    source = "import ollama\ndef f():\n    ollama.chat(model='m', options={'think': False}, think=False)\n"
-    assert _unset_think_calls(source, "x.py") == [("x.py", "f", 3)]
-
-
-def test_scanner_accepts_top_level_think():
-    source = "import ollama\ndef f():\n    ollama.chat(model='m', messages=[], options={}, think=False)\n"
-    assert _unset_think_calls(source, "x.py") == []
+@pytest.mark.parametrize("call, flagged", [
+    pytest.param("ollama.chat(model='m', messages=[], options={'temperature': 0})", True, id="control-bare-call"),
+    pytest.param("ollama.chat(model='m', messages=[], options={'think': False})", True, id="control-think-inside-options"),
+    pytest.param("ollama.chat(model='m', options={'think': False}, think=False)", True, id="control-options-think-beside-top-level"),
+    pytest.param("ollama.chat(model='m', messages=[], options={}, think=False)", False, id="top-level-think"),
+])
+def test_scanner(call, flagged):
+    source = f"import ollama\ndef f():\n    {call}\n"
+    assert _unset_think_calls(source, "x.py") == ([("x.py", "f", 3)] if flagged else [])

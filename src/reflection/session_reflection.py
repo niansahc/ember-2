@@ -96,6 +96,9 @@ def generate_session_reflection(
             adapter = LLMAdapter(model=model)
             reflection_text = adapter._chat(prompt, "Generate the session reflection now.", model_override=model)
         else:
+            # Thinking stays on (no think kwarg): no token budget to exhaust,
+            # it runs in the background, and switching it off showed no
+            # measured gain.
             response = ollama.chat(
                 model=model,
                 messages=[

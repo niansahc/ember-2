@@ -365,6 +365,8 @@ def _rewrite(text: str, matches: list[dict]) -> str:
             f"Original response:\n{text}"
         )
 
+        # Thinking stays on (no think kwarg): measured without it, the rewrite
+        # left the detected coaching phrases in place more often.
         response = ollama.chat(
             model=get_ember_auxiliary_model(),
             messages=[{"role": "user", "content": prompt}],
@@ -540,10 +542,13 @@ def _check_semantic_identity_collapse(text: str) -> bool:
             "Answer ONLY 'YES' or 'NO'."
         )
 
+        # think=False at the top level (Ollama ignores it inside options):
+        # thinking spent all 10 tokens, so the answer was always empty.
         response = ollama.chat(
             model=get_ember_auxiliary_model(),
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0, "num_predict": 10},
+            think=False,
         )
         answer = response["message"]["content"].strip().upper()
         return "YES" in answer
@@ -573,10 +578,13 @@ def _rewrite_identity_collapse(text: str) -> str:
             f"\n\nOriginal response:\n{text}"
         )
 
+        # think=False: thinking can spend the 500-token budget and leave an
+        # empty rewrite.
         response = ollama.chat(
             model=get_ember_auxiliary_model(),
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0.3, "num_predict": 500},
+            think=False,
         )
         rewritten = response["message"]["content"].strip()
 

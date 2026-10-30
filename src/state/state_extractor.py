@@ -173,6 +173,9 @@ class StateExtractor:
                 {"role": "user", "content": prompt},
             ],
             options={"temperature": 0.1},
+            # think=False: extraction is a JSON classification; thinking only
+            # added seconds per turn.
+            think=False,
         )
 
         raw = response["message"]["content"]

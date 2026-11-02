@@ -27,6 +27,7 @@ import json
 import logging
 import re
 
+import httpx
 import numpy as np
 
 from src.core.config import (
@@ -292,6 +293,11 @@ class UnknownLabelError(ValueError):
     """Stage 3 answered with a label outside _VALID_LABELS."""
 
 
+# The Stage 3 client timeout equals the budget, so on an overrun either timer
+# can fire first. A client timeout is the same event as the budget wait expiring.
+_OVERRUN_ERRORS: tuple[type[Exception], ...] = (httpx.TimeoutException,)
+
+
 def _stage3_llm_call(query: str) -> str:
     """Single LLM call for Stage 3. Returns a valid label or raises.
 
@@ -335,18 +341,20 @@ def _stage3_classify_with_timeout(query: str) -> tuple[str, str]:
     Returns (label, outcome). outcome is the telemetry stage: "stage3" for
     a real answer, "stage3_failed" when the call failed, "timeout" when it
     overran the budget. The label is the safe default for the last two,
-    which also log one WARNING.
+    which also log one WARNING. An overrun gives the same outcome and warning
+    whichever timer fires first: the outcome is SetFit training data
+    (ADR-034), so it must not depend on scheduling.
     """
     timeout_s = get_intent_classifier_timeout_ms() / 1000.0
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
         future = executor.submit(_stage3_llm_call, query)
-        # wait, not result(timeout=...): a call that itself raises
+        # wait, not result(timeout=...): a call that itself raises the builtin
         # TimeoutError (a socket timeout) is a failure, not a budget overrun.
         done, _ = concurrent.futures.wait([future], timeout=timeout_s)
     finally:
         executor.shutdown(wait=False)
-    if not done:
+    if not done or isinstance(future.exception(), _OVERRUN_ERRORS):
         _warn_stage3_failed("TimeoutError")
         return _SAFE_DEFAULT, "timeout"
     exc = future.exception()

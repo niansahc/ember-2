@@ -10,6 +10,7 @@ the conftest shim, so the httpx timeout itself is what is under test.
 
 import json
 import logging
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 import pytest
 
-from src.llm import aux_client
+from src.llm import aux_client, intent_classifier
 
 pytestmark = pytest.mark.real_aux_client
 
@@ -148,3 +149,67 @@ def test_error_outcome_names_type_only(monkeypatch, caplog):
     assert "boom" not in caplog.text
     assert "outcome=error" in line
     assert "type=" in line
+
+
+def _stage3_overrun(monkeypatch, caplog, *, wait_ms, client_ms):
+    """classify_intent against a hung server, reaching Stage 3.
+
+    The cascade reads the budget twice: the wait, then (on the worker) the
+    client timeout. Giving the reads different values picks which timer fires
+    first; equal values race, as they do in production. Returns the telemetry
+    stages, the failure warnings and the aux_chat outcome lines, once the
+    abandoned call has finished.
+    """
+    server = _serve(_Hangs)
+    _point_at(monkeypatch, server)
+    budgets = iter([wait_ms, client_ms])
+    monkeypatch.setattr(
+        intent_classifier, "get_intent_classifier_timeout_ms", lambda: next(budgets))
+    monkeypatch.setattr(intent_classifier, "_stage1_classify", lambda q: None)
+    monkeypatch.setattr(intent_classifier, "_stage2_classify", lambda q: (None, 0.1))
+    monkeypatch.setenv("EMBER_CLASSIFIER_TELEMETRY", "true")
+    caplog.set_level(logging.INFO)
+
+    label = intent_classifier.classify_intent("synthetic stalled query")
+    for worker in threading.enumerate():
+        if worker.name.startswith("ThreadPoolExecutor"):
+            worker.join(timeout=5)
+    server.shutdown()
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert label == intent_classifier.VAULT_ANSWERABLE
+    return (
+        [m.group(1) for m in map(re.compile(r"stage=(\S+) label=").search, messages) if m],
+        [m for m in messages if "Stage 3 failed" in m],
+        [m for m in messages if m.startswith("[INTENT_CLASSIFY] stage3 outcome=")],
+    )
+
+
+@pytest.mark.parametrize("wait_ms, client_ms", [
+    pytest.param(100, 600, id="budget-wait-fires-first"),
+    pytest.param(600, 100, id="client-timeout-fires-first"),
+    *[pytest.param(150, 150, id=f"same-deadline-{i}") for i in range(5)],
+])
+def test_a_stage3_overrun_is_one_outcome_whichever_timer_fires_first(
+    monkeypatch, caplog, wait_ms, client_ms,
+):
+    """The telemetry stage is SetFit training data (ADR-034), so it must not
+    depend on which of two timers on one deadline won."""
+    stages, warnings, aux_lines = _stage3_overrun(
+        monkeypatch, caplog, wait_ms=wait_ms, client_ms=client_ms)
+
+    assert stages == ["timeout"]
+    assert len(warnings) == 1 and "TimeoutError" in warnings[0]
+    assert len(aux_lines) == 1 and "outcome=timeout" in aux_lines[0]
+
+
+def test_positive_control_an_unmapped_client_timeout_reads_as_a_failure(
+    monkeypatch, caplog,
+):
+    """Without the mapping the client-first order logs stage3_failed, so the
+    test above can see the split it exists to prevent."""
+    monkeypatch.setattr(intent_classifier, "_OVERRUN_ERRORS", ())
+    stages, warnings, _ = _stage3_overrun(monkeypatch, caplog, wait_ms=600, client_ms=100)
+
+    assert stages == ["stage3_failed"]
+    assert "ReadTimeout" in warnings[0]

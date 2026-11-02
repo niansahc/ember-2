@@ -12,7 +12,9 @@ cancels the task and frees its single slot, and the caller's existing
 fail-open handling runs.
 
 Not covered, by decision: the main answer generation (adapter.py) and the
-embedding calls (shared with ingest and write paths).
+embedding calls (shared with ingest and write paths). The grounding check and
+revision pass (src/safety/grounding_check.py) speak raw async HTTP and carry
+their own timeouts.
 
 Each call logs one line, labels and numbers only, never prompt or reply text:
     [TAG] step ms=412
@@ -60,7 +62,7 @@ def aux_chat(*, tag: str, step: str, timeout_s: float, **chat_kwargs):
     """
     start = time.perf_counter()
     try:
-        response = _client_for_timeout(float(timeout_s)).chat(**chat_kwargs)
+        response = _client_for_timeout(timeout_s).chat(**chat_kwargs)
     except Exception as exc:
         ms = int((time.perf_counter() - start) * 1000)
         if isinstance(exc, httpx.TimeoutException):

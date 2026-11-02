@@ -23,7 +23,7 @@ from src.context.models import ContextPacket
 class TestVisionServiceAnalyze:
     """VisionService.analyze() with mocked ollama.chat."""
 
-    @patch("src.llm.vision_service.ollama.chat")
+    @patch("ollama.chat")
     def test_analyze_returns_description(self, mock_chat):
         """analyze() returns the text description from ollama response."""
         mock_chat.return_value = {
@@ -35,7 +35,7 @@ class TestVisionServiceAnalyze:
         assert result == "A photo of a cat sitting on a keyboard."
         mock_chat.assert_called_once()
 
-    @patch("src.llm.vision_service.ollama.chat")
+    @patch("ollama.chat")
     def test_analyze_returns_empty_on_failure(self, mock_chat):
         """analyze() returns empty string when ollama raises an exception."""
         mock_chat.side_effect = Exception("Connection refused")
@@ -44,7 +44,7 @@ class TestVisionServiceAnalyze:
 
         assert result == ""
 
-    @patch("src.llm.vision_service.ollama.chat")
+    @patch("ollama.chat")
     def test_analyze_returns_empty_for_empty_input(self, mock_chat):
         """analyze() returns empty string when no images are provided."""
         service = VisionService()
@@ -53,7 +53,7 @@ class TestVisionServiceAnalyze:
         assert result == ""
         mock_chat.assert_not_called()
 
-    @patch("src.llm.vision_service.ollama.chat")
+    @patch("ollama.chat")
     def test_analyze_strips_whitespace(self, mock_chat):
         """analyze() strips leading/trailing whitespace from the description."""
         mock_chat.return_value = {
@@ -64,7 +64,7 @@ class TestVisionServiceAnalyze:
 
         assert result == "A screenshot with text."
 
-    @patch("src.llm.vision_service.ollama.chat")
+    @patch("ollama.chat")
     def test_analyze_passes_num_predict_300(self, mock_chat):
         """analyze() passes num_predict=300 to ollama.chat options."""
         mock_chat.return_value = {
@@ -78,7 +78,7 @@ class TestVisionServiceAnalyze:
         assert options["num_predict"] == VISION_MAX_TOKENS
         assert VISION_MAX_TOKENS == 300
 
-    @patch("src.llm.vision_service.ollama.chat")
+    @patch("ollama.chat")
     def test_analyze_sends_vision_prompt(self, mock_chat):
         """analyze() sends the VISION_PROMPT as the user message content."""
         mock_chat.return_value = {
@@ -93,7 +93,7 @@ class TestVisionServiceAnalyze:
         assert messages[0]["content"] == VISION_PROMPT
         assert messages[0]["images"] == ["img_data_1", "img_data_2"]
 
-    @patch("src.llm.vision_service.ollama.chat")
+    @patch("ollama.chat")
     def test_analyze_uses_configured_model(self, mock_chat):
         """analyze() uses the model specified at construction time."""
         mock_chat.return_value = {

@@ -28,7 +28,6 @@ import logging
 import re
 
 import numpy as np
-import ollama
 
 from src.core.config import (
     get_ember_auxiliary_model,

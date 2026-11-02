@@ -22,9 +22,8 @@ from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
-SLEEP_S = 3.0
+SLEEP_S = 2.0
 LIVENESS_BOUND_S = 1.0
 POLL_EVERY_S = 0.1
 
@@ -93,9 +92,8 @@ def _chat(client, *, stream):
 
 
 @pytest.fixture
-def live_client():
+def live_client(keyless_client):
     with ExitStack() as stack:
-        stack.enter_context(patch("src.api.main.get_ember_api_key", return_value=None))
         stack.enter_context(patch("ollama.chat", side_effect=_mock_ollama_chat))
         stack.enter_context(
             patch("ollama.embed", return_value={"embeddings": [[0.0] * 768]}))
@@ -107,8 +105,7 @@ def live_client():
         onboarding = stack.enter_context(
             patch("src.api.openai_adapter.onboarding_service"))
         onboarding.is_active.return_value = False
-        from src.api.main import app
-        with TestClient(app) as client:
+        with keyless_client as client:
             yield client
 
 

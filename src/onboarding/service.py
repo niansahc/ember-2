@@ -24,8 +24,6 @@ from __future__ import annotations
 
 import logging
 
-import ollama
-
 from src.llm.aux_client import AUX_FORMAT_TIMEOUT_S, aux_chat
 
 from src.core.config import get_ember_model

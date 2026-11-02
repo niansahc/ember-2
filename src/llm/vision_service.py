@@ -22,8 +22,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import ollama
-
 from src.llm.aux_client import AUX_VISION_TIMEOUT_S, aux_chat
 
 logger = logging.getLogger("ember.vision")

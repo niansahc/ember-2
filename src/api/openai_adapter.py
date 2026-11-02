@@ -34,6 +34,7 @@ from src.api.sse import (
     sse_vault_sources,
 )
 from src.core.config import (
+    call_bound as _run_bound,
     get_ember_debug,
     get_private_vault_path,
     spawn_vault_bound_thread,
@@ -78,20 +79,9 @@ _off_loop = run_in_threadpool
 _iter_off_loop = iterate_in_threadpool
 
 
-def _run_bound(vault, fn, *args, **kwargs):
-    """Call fn with the turn's vault bound (issue #144).
-
-    The binding is set here, on the worker thread, and reset before the call
-    returns. run_in_threadpool copies the calling task's context, so a
-    binding made by the SSE body on the loop would not be reliable across
-    yields; this one cannot leak or outlive the call.
-    """
-    with vault_binding(vault):
-        return fn(*args, **kwargs)
-
-
 async def _bound_off_loop(vault, fn, *args, **kwargs):
-    """fn on a worker thread, under the turn's vault."""
+    """fn on a worker thread, under the turn's vault (issue #144). A binding
+    made by the SSE body on the loop would not be reliable across yields."""
     return await _off_loop(_run_bound, vault, fn, *args, **kwargs)
 
 
@@ -100,12 +90,12 @@ def _bound_iter(vault, iterator):
     next(). Each next() may run on a different worker thread, so the binding
     is entered and left within a single step, never held across a yield."""
     iterator = iter(iterator)
+    done = object()
     while True:
         with vault_binding(vault):
-            try:
-                item = next(iterator)
-            except StopIteration:
-                return
+            item = next(iterator, done)
+        if item is done:
+            return
         yield item
 
 
@@ -492,9 +482,8 @@ def _store_reply(
     """
     pending_id = None
     if code_offer is not None and not skip_vault_write:
-        with vault_binding(exchange.vault):
-            written, pending_id = _write_pending_confirmation(
-                code_offer, pending_query, exchange.session_id)
+        written, pending_id = _write_pending_confirmation(
+            code_offer, pending_query, exchange.session_id)
         if not written:
             reply, dropped = drop_code_offer(reply, code_offer.text)
             if dropped:
@@ -508,8 +497,7 @@ def _store_reply(
         exchange.record_reply(reply)
     except Exception:
         if pending_id is not None:
-            with vault_binding(exchange.vault):
-                _resolve_unsent_pending(pending_id)
+            _resolve_unsent_pending(pending_id)
         raise
     pending_guard.settle()
     if skip_vault_write:
@@ -2206,20 +2194,16 @@ def _complete_exchange(
     _after_clarification = False
     if not _skip_vault_read:
         try:
-            with vault_binding(_turn_vault):
-                _after_clarification = _prior_turn_awaits_search_content(session_id)
+            _after_clarification = _prior_turn_awaits_search_content(session_id)
         except Exception as exc:
             logger.warning(
                 "[CLARIFY] Next-turn check failed (non-fatal): %s", type(exc).__name__,
             )
-    # Phase B reads and writes (pending confirmation, tasks, timers) belong to
-    # the vault this turn started in, not whichever is active by then. The
-    # guard is armed even when Phase B raises after consuming a pending.
+    # The guard is armed even when Phase B raises after consuming a pending.
     try:
-        with vault_binding(_turn_vault):
-            _apply_confirmation(gen_ctx, work, after_clarification=_after_clarification)
-            _apply_tasks(gen_ctx, work)
-            _apply_timers(gen_ctx, work)
+        _apply_confirmation(gen_ctx, work, after_clarification=_after_clarification)
+        _apply_tasks(gen_ctx, work)
+        _apply_timers(gen_ctx, work)
     finally:
         pending_guard.arm(work.consumed_pending)
     latest_user_message = work.message
@@ -3003,6 +2987,8 @@ def _complete_exchange(
 
                 await _bound_off_loop(_turn_vault, _post_stream_cleanup, full_reply)
 
+            _sse_body = _stream_sse()
+
         else:
             # --- FAST STREAMING PATH (non-grounding intents) ---
             # Casual/social/activity queries: stream tokens as they arrive.
@@ -3057,6 +3043,10 @@ def _complete_exchange(
 
                 _post_stream_cleanup(full_reply)
 
+            # guard_sse iterates this sync body in the threadpool; _bound_iter
+            # pins the turn's vault around each step.
+            _sse_body = _bound_iter(_turn_vault, _stream_sse())
+
         response_headers = {
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
@@ -3077,13 +3067,7 @@ def _complete_exchange(
         return StreamingResponse(
             # on_abort ends the exchange with a `failed` or `interrupted`
             # outcome when the body stops before [DONE] without a stored reply.
-            # The fast path's sync body is iterated in the threadpool by
-            # guard_sse; _bound_iter pins the turn's vault around each step.
-            guard_sse(
-                _stream_sse() if _STREAM_ALWAYS_GROUNDED
-                else _bound_iter(_turn_vault, _stream_sse()),
-                completion_id, on_abort=_abort_exchange,
-            ),
+            guard_sse(_sse_body, completion_id, on_abort=_abort_exchange),
             media_type="text/event-stream",
             headers=response_headers,
         )

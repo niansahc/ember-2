@@ -16,7 +16,6 @@ Also here: two overlapping turns on one session leave both exchanges stored.
 
 from __future__ import annotations
 
-import threading
 import time
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
@@ -25,7 +24,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.conftest import (
+    _make_vault_tree,
     run_bound_inline,
+    run_in_threads,
     synthetic_packet,
     vault_records,
 )
@@ -34,31 +35,19 @@ SESSION_ID = "sess_test_binding_001"
 REPLY = "A plain reply with nothing unusual in it at all."
 
 
-def _make_vault(root):
-    for sub in ("memory/conversation", "memory/session", "memory/state",
-                "memory/system_event", "embeddings"):
-        (root / sub).mkdir(parents=True, exist_ok=True)
-    return root
-
-
 @pytest.fixture
-def vaults(tmp_path, monkeypatch):
+def vaults(tmp_path, monkeypatch, stub_write_embeddings):
     """(vault_a, vault_b); a is the active override when the turn starts."""
     from src.core import config
 
-    vault_a = _make_vault(tmp_path / "vault_a")
-    vault_b = _make_vault(tmp_path / "vault_b")
-    previous = (config._vault_path_override, config._vault_label)
+    vault_a, vault_b = tmp_path / "vault_a", tmp_path / "vault_b"
+    _make_vault_tree(vault_a)
+    _make_vault_tree(vault_b)
     config.set_vault_path_override(str(vault_a), "test")
-    monkeypatch.setattr("src.memory.write_memory.embed_text", lambda _t: [0.0] * 768)
     monkeypatch.setattr(
         "src.memory.exchange.spawn_vault_bound_thread", run_bound_inline, raising=False,
     )
-    yield vault_a, vault_b
-    if previous[0] is None:
-        config.clear_vault_path_override()
-    else:
-        config.set_vault_path_override(*previous)
+    return vault_a, vault_b
 
 
 @pytest.fixture
@@ -248,14 +237,10 @@ class TestOverlappingTurnsOnOneSession:
         from src.api import openai_adapter as oa
 
         vault_a, _ = vaults
-        statuses: list[int] = []
 
         def slow_generate(*_a, **_k):
             time.sleep(0.5)
             yield REPLY
-
-        def post():
-            statuses.append(_raw_post(client, stream=True).status_code)
 
         # Stubs are process-global, so they are entered once, here, never
         # per thread (nested patches unwinding out of order would leak).
@@ -264,12 +249,10 @@ class TestOverlappingTurnsOnOneSession:
                 patch.object(oa.llm_adapter, "generate_response_iter",
                              side_effect=slow_generate),
             ))
-            threads = [threading.Thread(target=post) for _ in range(2)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join(timeout=30)
+            statuses, errors = run_in_threads(
+                lambda _i: _raw_post(client, stream=True).status_code, 2)
 
+        assert errors == []
         assert statuses == [200, 200]
         assert len(_turns(vault_a, "user")) == 2
         assert len(_turns(vault_a, "assistant")) == 2

@@ -124,10 +124,7 @@ def test_answered_check_fails_when_stage3_cannot_answer(monkeypatch, caplog):
     def _down(*args, **kwargs):
         raise ConnectionError("ollama unreachable")
 
-    class _DownOllama:
-        chat = staticmethod(_down)
-
-    monkeypatch.setattr(intent_classifier, "ollama", _DownOllama())
+    monkeypatch.setattr("ollama.chat", _down)
     monkeypatch.setattr(intent_classifier, "embed_text", _down)
     monkeypatch.setattr(intent_classifier, "embed_texts", _down)
     monkeypatch.setattr(sys.modules[__name__], "_warmed", True)

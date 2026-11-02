@@ -95,7 +95,7 @@ class TestEverythingElseStaysLocal:
         assert ollama.embed.__self__ is ollama._client
         assert adapter._generation_client() is not ollama._client
 
-    def test_vision_service_uses_module_level_ollama(self, monkeypatch):
+    def test_vision_service_uses_the_local_aux_client(self, monkeypatch):
         monkeypatch.setenv("EMBER_GENERATION_OLLAMA_HOST", REMOTE)
         source = _read_source("src", "llm", "vision_service.py")
         # aux_chat builds its client on the default (local) host, the same

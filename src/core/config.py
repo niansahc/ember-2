@@ -146,6 +146,17 @@ def vault_binding(path):
         var.reset(token)
 
 
+def call_bound(vault, fn, *args, **kwargs):
+    """Call fn with `vault` bound; the worker-thread form of vault_binding.
+
+    Hand this to run_in_threadpool so the binding is set on the worker and
+    reset before the call returns. It cannot leak or outlive the call, and it
+    does not depend on what the calling task's context held when it was copied.
+    """
+    with vault_binding(vault):
+        return fn(*args, **kwargs)
+
+
 def spawn_vault_bound_thread(target, args=(), vault=None, name=None) -> threading.Thread:
     """Start a daemon thread bound to a vault, and return it.
 

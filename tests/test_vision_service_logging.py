@@ -50,7 +50,7 @@ def test_log_dir_is_created_on_first_analyze_call(vision_log_dir, monkeypatch):
 
     # Stub ollama.chat so analyze() doesn't try to hit a real model.
     monkeypatch.setattr(
-        vs.ollama, "chat",
+        "ollama.chat",
         lambda **kwargs: {"message": {"content": "stub description"}},
     )
     service = vs.VisionService(model="qwen3-vl:8b")
@@ -69,7 +69,7 @@ def test_entry_and_success_events_written_on_success(vision_log_dir, monkeypatch
     """A successful analyze() emits vision_entry, vision_ollama_call, and
     vision_success — and the success entry carries the description preview."""
     monkeypatch.setattr(
-        vs.ollama, "chat",
+        "ollama.chat",
         lambda **kwargs: {"message": {"content": "A clear photograph of a sunset over the ocean."}},
     )
     service = vs.VisionService(model="qwen3-vl:8b")
@@ -101,7 +101,7 @@ def test_failure_event_written_when_ollama_raises(vision_log_dir, monkeypatch):
     def _boom(**kwargs):
         raise RuntimeError("model unavailable")
 
-    monkeypatch.setattr(vs.ollama, "chat", _boom)
+    monkeypatch.setattr("ollama.chat", _boom)
     service = vs.VisionService(model="qwen3-vl:8b")
     result = service.analyze(["fake_b64_image"])
 
@@ -150,7 +150,7 @@ def test_log_write_failure_does_not_raise(vision_log_dir, monkeypatch):
     monkeypatch.setattr(vs.Path, "mkdir", _no_write)
 
     monkeypatch.setattr(
-        vs.ollama, "chat",
+        "ollama.chat",
         lambda **kwargs: {"message": {"content": "stub"}},
     )
     service = vs.VisionService(model="qwen3-vl:8b")
@@ -171,6 +171,6 @@ def test_log_write_failure_on_failure_path_does_not_mask_return(vision_log_dir, 
     def _boom(**kwargs):
         raise RuntimeError("model unavailable")
 
-    monkeypatch.setattr(vs.ollama, "chat", _boom)
+    monkeypatch.setattr("ollama.chat", _boom)
     service = vs.VisionService(model="qwen3-vl:8b")
     assert service.analyze(["fake_b64_image"]) == ""

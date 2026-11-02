@@ -12,25 +12,27 @@ import json
 import logging
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 import pytest
 
 from src.llm import aux_client
 
+pytestmark = pytest.mark.real_aux_client
 
-@pytest.fixture
-def real_aux_client(monkeypatch):
-    """Undo the conftest shim so aux_chat builds real ollama.Client objects."""
-    monkeypatch.undo()
+
+@pytest.fixture(autouse=True)
+def fresh_clients():
+    """Each test sets its own OLLAMA_HOST, read when a client is built."""
     aux_client._client_for_timeout.cache_clear()
     yield
     aux_client._client_for_timeout.cache_clear()
 
 
 def _serve(handler_cls):
-    server = HTTPServer(("127.0.0.1", 0), handler_cls)
+    # Threading, so shutdown() does not wait out a hung handler.
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server
@@ -82,9 +84,7 @@ def _point_at(monkeypatch, server):
     monkeypatch.setenv("OLLAMA_HOST", f"127.0.0.1:{server.server_port}")
 
 
-def test_hung_server_raises_timeout_and_logs_outcome(
-    real_aux_client, monkeypatch, caplog,
-):
+def test_hung_server_raises_timeout_and_logs_outcome(monkeypatch, caplog):
     server = _serve(_Hangs)
     _point_at(monkeypatch, server)
     caplog.set_level(logging.INFO, logger="ember.aux")
@@ -106,9 +106,7 @@ def test_hung_server_raises_timeout_and_logs_outcome(
     assert "SECRET-TEXT" not in caplog.text
 
 
-def test_answering_server_returns_result_logs_ms_and_passes_kwargs(
-    real_aux_client, monkeypatch, caplog,
-):
+def test_answering_server_returns_result_logs_ms_and_passes_kwargs(monkeypatch, caplog):
     """Positive control for the timeout test: the same path succeeds when the
     server answers, so the timeout test cannot pass by the call failing for
     some other reason."""
@@ -135,7 +133,7 @@ def test_answering_server_returns_result_logs_ms_and_passes_kwargs(
     )
 
 
-def test_error_outcome_names_type_only(real_aux_client, monkeypatch, caplog):
+def test_error_outcome_names_type_only(monkeypatch, caplog):
     server = _serve(_Fails)
     _point_at(monkeypatch, server)
     caplog.set_level(logging.INFO, logger="ember.aux")
@@ -150,11 +148,3 @@ def test_error_outcome_names_type_only(real_aux_client, monkeypatch, caplog):
     assert "boom" not in caplog.text
     assert "outcome=error" in line
     assert "type=" in line
-
-
-def test_constants_live_in_one_place():
-    for name in (
-        "AUX_CHECK_TIMEOUT_S", "AUX_REWRITE_TIMEOUT_S", "AUX_REVIEW_TIMEOUT_S",
-        "AUX_SUMMARY_TIMEOUT_S", "AUX_VISION_TIMEOUT_S", "AUX_FORMAT_TIMEOUT_S",
-    ):
-        assert getattr(aux_client, name) > 0

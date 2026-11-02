@@ -36,6 +36,7 @@ from src.core.config import (
     get_ember_debug,
     get_intent_classifier_timeout_ms,
 )
+from src.llm.aux_client import aux_chat
 from src.retrieval.embed_memory import embed_text, embed_texts
 
 logger = logging.getLogger("ember.intent_classifier")
@@ -301,7 +302,12 @@ def _stage3_llm_call(query: str) -> str:
     """
     # think is a top-level chat argument. Inside options Ollama ignores
     # it, qwen3:8b thinks, and the call overruns the 1500ms budget.
-    response = ollama.chat(
+    # Client timeout equals the Stage 3 budget: an overrun closes the
+    # connection, so Ollama cancels the call and frees its slot instead of
+    # finishing a result nobody reads.
+    response = aux_chat(
+        tag="INTENT_CLASSIFY", step="stage3",
+        timeout_s=get_intent_classifier_timeout_ms() / 1000.0,
         model=get_ember_auxiliary_model(),
         messages=[
             {"role": "system", "content": _STAGE3_SYSTEM_PROMPT},

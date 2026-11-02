@@ -7,9 +7,10 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from src.api.limiter import limiter
-from src.core.config import get_private_vault_path
+from src.core.config import get_private_vault_path, vault_binding
 from src.core.jsonio import RecordExistsError
 from src.core.paths import resolve_inside
 from src.memory.write_memory import write_memory
@@ -152,6 +153,20 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
     # Save upload to a temp file, then run through the appropriate importer
     content = await file.read()
     vault_path = get_private_vault_path()
+
+    # Parsing, per-chunk embedding and vault writes block for as long as the
+    # document is large; they run on a worker thread so the event loop keeps
+    # answering other requests, bound to the vault captured above.
+    def _ingest_saved_upload() -> dict:
+        with vault_binding(vault_path):
+            return _ingest_upload_blocking(content, filename, ext, vault_path)
+
+    return await run_in_threadpool(_ingest_saved_upload)
+
+
+def _ingest_upload_blocking(content: bytes, filename: str, ext: str, vault_path: Path) -> dict:
+    """Save an uploaded document under the vault and ingest it. Synchronous;
+    called on a worker thread by ingest_upload."""
     uploads_dir = vault_path / "imports" / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
@@ -293,7 +308,14 @@ async def ingest_json(request: Request):
     except Exception:
         raise HTTPException(status_code=422, detail="Invalid JSON in request body.")
 
-    result = _import_json_records(body)
+    vault_path = get_private_vault_path()
+
+    def _import_bound() -> dict:
+        with vault_binding(vault_path):
+            return _import_json_records(body)
+
+    # Each record is embedded and written; off the event loop.
+    result = await run_in_threadpool(_import_bound)
     return {
         "status": "complete",
         "imported": result["imported"],

@@ -24,6 +24,8 @@ from typing import Any
 
 import ollama
 
+from src.llm.aux_client import AUX_VISION_TIMEOUT_S, aux_chat
+
 logger = logging.getLogger("ember.vision")
 
 # Hardcoded fallback vision model. The runtime resolution order in
@@ -126,7 +128,8 @@ class VisionService:
                 model=self.model,
                 num_predict=VISION_MAX_TOKENS,
             )
-            response = ollama.chat(
+            response = aux_chat(
+                tag="VISION", step="preprocess", timeout_s=AUX_VISION_TIMEOUT_S,
                 model=self.model,
                 messages=[
                     {

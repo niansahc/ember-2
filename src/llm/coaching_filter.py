@@ -24,6 +24,11 @@ from pathlib import Path
 from typing import Any
 
 from src.core.timestamps import utc_log_timestamp_source
+from src.llm.aux_client import (
+    AUX_CHECK_TIMEOUT_S,
+    AUX_REWRITE_TIMEOUT_S,
+    aux_chat,
+)
 
 logger = logging.getLogger("ember.coaching_filter")
 
@@ -348,7 +353,6 @@ def _rewrite(text: str, matches: list[dict]) -> str:
     Only fires when Stage 1 detected non-deletable patterns.
     """
     try:
-        import ollama
         from src.core.config import get_ember_auxiliary_model
 
         pattern_descriptions = "; ".join(
@@ -367,7 +371,9 @@ def _rewrite(text: str, matches: list[dict]) -> str:
 
         # Thinking stays on (no think kwarg): measured without it, the rewrite
         # left the detected coaching phrases in place more often.
-        response = ollama.chat(
+        response = aux_chat(
+            tag="COACHING_FILTER", step="rewrite",
+            timeout_s=AUX_REWRITE_TIMEOUT_S,
             model=get_ember_auxiliary_model(),
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0.3, "num_predict": 500},
@@ -529,7 +535,6 @@ def _check_semantic_identity_collapse(text: str) -> bool:
     identifies identity collapse in the response text.
     """
     try:
-        import ollama
         from src.core.config import get_ember_auxiliary_model
 
         prompt = (
@@ -544,7 +549,9 @@ def _check_semantic_identity_collapse(text: str) -> bool:
 
         # think=False at the top level (Ollama ignores it inside options):
         # thinking spent all 10 tokens, so the answer was always empty.
-        response = ollama.chat(
+        response = aux_chat(
+            tag="COACHING_FILTER", step="semantic check",
+            timeout_s=AUX_CHECK_TIMEOUT_S,
             model=get_ember_auxiliary_model(),
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0, "num_predict": 10},
@@ -565,7 +572,6 @@ def _rewrite_identity_collapse(text: str) -> str:
     Returns the original text if the rewrite fails.
     """
     try:
-        import ollama
         from src.core.config import get_ember_auxiliary_model
 
         prompt = (
@@ -580,7 +586,9 @@ def _rewrite_identity_collapse(text: str) -> str:
 
         # think=False: thinking can spend the 500-token budget and leave an
         # empty rewrite.
-        response = ollama.chat(
+        response = aux_chat(
+            tag="COACHING_FILTER", step="identity rewrite",
+            timeout_s=AUX_REWRITE_TIMEOUT_S,
             model=get_ember_auxiliary_model(),
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0.3, "num_predict": 500},

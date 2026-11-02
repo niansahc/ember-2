@@ -22,6 +22,7 @@ import numpy as np
 import pytest
 
 import src.llm.intent_classifier as intent_classifier
+from src.llm import aux_client
 from src.llm.classifier_examples import EXAMPLES
 from src.llm.intent_classifier import (
     NEEDS_INTERNET,
@@ -516,21 +517,37 @@ class TestStage3LlmCall:
 
     def test_returns_needs_internet_on_valid_json(self, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "needs_internet"}))
-        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setattr(aux_client, "_client_for_timeout", lambda t: fake)
         assert _stage3_llm_call("some query") == "needs_internet"
 
     def test_returns_vault_answerable_on_valid_json(self, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
-        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setattr(aux_client, "_client_for_timeout", lambda t: fake)
         assert _stage3_llm_call("some query") == "vault_answerable"
 
     def test_non_thinking_mode_is_sent_to_ollama(self, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
-        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setattr(aux_client, "_client_for_timeout", lambda t: fake)
         _stage3_llm_call("anything")
         call = fake.chat_calls[0]
         assert _think_sent_top_level(call)
         assert call.get("format") == "json"
+
+    def test_client_timeout_equals_the_stage3_budget(self, monkeypatch):
+        """An overrun closes the connection so Ollama frees its slot. A
+        different budget must give a different client timeout (control)."""
+        from src.core.config import get_intent_classifier_timeout_ms
+        seen = []
+        fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
+        monkeypatch.setattr(
+            aux_client, "_client_for_timeout", lambda t: (seen.append(t), fake)[1])
+        _stage3_llm_call("anything")
+        assert seen == [get_intent_classifier_timeout_ms() / 1000.0]
+
+        monkeypatch.setenv("INTENT_CLASSIFIER_TIMEOUT_MS", "4000")
+        seen.clear()
+        _stage3_llm_call("anything")
+        assert seen == [4.0]
 
     def test_think_inside_options_is_not_top_level(self):
         # Positive control for the absence half of _think_sent_top_level:
@@ -556,7 +573,7 @@ class TestStage3LlmCall:
         # which CI deselects; this keeps a revert or loosening of a rule
         # from passing CI silently.
         fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
-        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setattr(aux_client, "_client_for_timeout", lambda t: fake)
         _stage3_llm_call("anything")
         system = fake.chat_calls[0]["messages"][0]
         assert system["role"] == "system"
@@ -573,26 +590,26 @@ class TestStage3LlmCall:
 
     def test_query_is_truncated_at_500_chars(self, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
-        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setattr(aux_client, "_client_for_timeout", lambda t: fake)
         _stage3_llm_call("x" * 10_000)
         user_content = fake.chat_calls[0]["messages"][1]["content"]
         assert len(user_content) == 500
 
     def test_invalid_json_raises(self, monkeypatch):
         fake = FakeOllama(content="not JSON at all")
-        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setattr(aux_client, "_client_for_timeout", lambda t: fake)
         with pytest.raises(json.JSONDecodeError):
             _stage3_llm_call("any query")
 
     def test_unknown_label_raises(self, monkeypatch):
         fake = FakeOllama(content=json.dumps({"label": "maybe_internet"}))
-        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setattr(aux_client, "_client_for_timeout", lambda t: fake)
         with pytest.raises(intent_classifier.UnknownLabelError):
             _stage3_llm_call("any query")
 
     def test_ollama_exception_raises(self, monkeypatch):
         fake = FakeOllama(exc=ConnectionError("Ollama unreachable"))
-        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setattr(aux_client, "_client_for_timeout", lambda t: fake)
         with pytest.raises(ConnectionError):
             _stage3_llm_call("any query")
 
@@ -612,7 +629,7 @@ class TestStage3Failure:
     def test_failure_is_the_safe_default_with_one_warning(
         self, caplog, monkeypatch, fake, failure
     ):
-        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setattr(aux_client, "_client_for_timeout", lambda t: fake)
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
             result = _stage3_classify_with_timeout("any query")
         assert result == ("vault_answerable", "stage3_failed")
@@ -625,7 +642,7 @@ class TestStage3Failure:
         monkeypatch.delenv("EMBER_DEBUG", raising=False)
         label_text = "maybe_internet sentinel 4417"
         fake = FakeOllama(content=json.dumps({"label": label_text}))
-        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setattr(aux_client, "_client_for_timeout", lambda t: fake)
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
             result = _stage3_classify_with_timeout("unknown label query 9023")
         assert result == ("vault_answerable", "stage3_failed")
@@ -699,7 +716,7 @@ class TestStage3Timeout:
                 return super().chat(**kwargs)
 
         fake = LateFailingOllama(exc=ConnectionError("Ollama unreachable"))
-        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setattr(aux_client, "_client_for_timeout", lambda t: fake)
         monkeypatch.setattr(
             intent_classifier, "get_intent_classifier_timeout_ms", lambda: 50
         )
@@ -758,7 +775,7 @@ class TestClassifyIntentStage3Flow:
         # Real path below the timeout wrapper: a valid model answer.
         # Positive control for the stage3_failed test that follows.
         fake = FakeOllama(content=json.dumps({"label": "needs_internet"}))
-        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setattr(aux_client, "_client_for_timeout", lambda t: fake)
         monkeypatch.setenv("EMBER_CLASSIFIER_TELEMETRY", "true")
         query = "something that only the LLM can resolve cleanly"
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
@@ -770,7 +787,7 @@ class TestClassifyIntentStage3Flow:
         self, caplog, monkeypatch, stage2_escalates
     ):
         fake = FakeOllama(exc=ConnectionError("Ollama unreachable"))
-        monkeypatch.setattr(intent_classifier, "ollama", fake)
+        monkeypatch.setattr(aux_client, "_client_for_timeout", lambda t: fake)
         monkeypatch.setenv("EMBER_CLASSIFIER_TELEMETRY", "true")
         query = "something the LLM never gets to answer"
         with caplog.at_level("INFO", logger="ember.intent_classifier"):

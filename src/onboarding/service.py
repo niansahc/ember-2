@@ -26,6 +26,8 @@ import logging
 
 import ollama
 
+from src.llm.aux_client import AUX_FORMAT_TIMEOUT_S, aux_chat
+
 from src.core.config import get_ember_model
 from src.core.jsonio import RecordExistsError
 from src.memory.service import MemoryService
@@ -184,7 +186,8 @@ class OnboardingService:
         Falls back to the raw answer if the call fails or returns too little.
         """
         try:
-            resp = ollama.chat(
+            resp = aux_chat(
+                tag="ONBOARDING", step="format", timeout_s=AUX_FORMAT_TIMEOUT_S,
                 model=get_ember_model(),
                 messages=[
                     {"role": "system", "content": _FORMAT_SYSTEM},

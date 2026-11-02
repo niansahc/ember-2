@@ -18,7 +18,7 @@ nothing.
 
 import threading
 import time
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -111,9 +111,38 @@ def live_client(keyless_client):
 
 @pytest.fixture
 def pre_fix_behavior():
-    """Replace the off-loop helpers with inline callers."""
+    """Replace the chat path's off-loop helpers with inline callers. The ingest
+    routes have their own, patched in the ingest control."""
     with patch("src.api.openai_adapter._off_loop", new=_inline_call), \
          patch("src.api.openai_adapter._iter_off_loop", new=_inline_iter):
+        yield
+
+
+def _upload(client):
+    def send():
+        return client.post(
+            "/ingest/upload",
+            files={"file": ("notes.txt", b"plain text for the upload", "text/plain")},
+        )
+    return send
+
+
+def _import_json(client):
+    def send():
+        return client.post("/ingest/json", json=[{"text": "synthetic record"}])
+    return send
+
+
+def _stall(*_args, **_kwargs):
+    time.sleep(SLEEP_S)
+    return {"imported": 1, "errors": []}
+
+
+@contextmanager
+def _slow_ingest():
+    """Both ingest routes stall in the blocking half they hand to a worker."""
+    with patch("src.api.routes.ingest.write_chunks_to_vault", side_effect=_stall), \
+         patch("src.api.routes.ingest._import_json_records", side_effect=_stall):
         yield
 
 
@@ -136,17 +165,15 @@ class TestHealthAnswersWhileATurnIsStalled:
         assert max(latencies) < LIVENESS_BOUND_S
 
     def test_upload(self, live_client):
-        def slow_write(chunks, vault_path):
-            time.sleep(SLEEP_S)
+        with _slow_ingest():
+            resp, latencies = _run_while_polling(live_client, _upload(live_client))
+        assert resp.status_code == 200
+        assert len(latencies) >= 5
+        assert max(latencies) < LIVENESS_BOUND_S
 
-        def upload():
-            return live_client.post(
-                "/ingest/upload",
-                files={"file": ("notes.txt", b"plain text for the upload", "text/plain")},
-            )
-
-        with patch("src.api.routes.ingest.write_chunks_to_vault", side_effect=slow_write):
-            resp, latencies = _run_while_polling(live_client, upload)
+    def test_json_import(self, live_client):
+        with _slow_ingest():
+            resp, latencies = _run_while_polling(live_client, _import_json(live_client))
         assert resp.status_code == 200
         assert len(latencies) >= 5
         assert max(latencies) < LIVENESS_BOUND_S
@@ -169,5 +196,14 @@ class TestPositiveControl:
     ):
         resp, latencies = _run_while_polling(
             live_client, lambda: _chat(live_client, stream=False))
+        assert resp.status_code == 200
+        assert max(latencies) >= SLEEP_S - 1.0
+
+    @pytest.mark.parametrize("request_fn", [_upload, _import_json],
+                             ids=["upload", "json-import"])
+    def test_ingest_blocks_health_when_run_inline(self, live_client, request_fn):
+        with _slow_ingest(), \
+             patch("src.api.routes.ingest.run_in_threadpool", new=_inline_call):
+            resp, latencies = _run_while_polling(live_client, request_fn(live_client))
         assert resp.status_code == 200
         assert max(latencies) >= SLEEP_S - 1.0

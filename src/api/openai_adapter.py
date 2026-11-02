@@ -24,6 +24,7 @@ from src.api.pregeneration import (
     PreGenerationRouter,
 )
 from src.api.sse import (
+    GENERATION_FAILED_CODE,
     STORAGE_FAILED_CODE,
     guard_sse,
     sse_chunk,
@@ -33,6 +34,7 @@ from src.api.sse import (
     sse_status,
     sse_vault_sources,
 )
+from src.api.turn_lock import TurnBusy, TurnLocks, TurnStreamingResponse
 from src.core.config import (
     call_bound as _run_bound,
     get_ember_debug,
@@ -77,6 +79,9 @@ SUPPORTED_MODELS = [EMBER_MODEL_ID]
 # can swap in inline callers (the pre-fix behavior) as its positive control.
 _off_loop = run_in_threadpool
 _iter_off_loop = iterate_in_threadpool
+
+# Same-session turns run one at a time (src/api/turn_lock.py).
+_turn_locks = TurnLocks()
 
 
 async def _bound_off_loop(vault, fn, *args, **kwargs):
@@ -173,6 +178,29 @@ def storage_failed_response(completion_id: str) -> StreamingResponse:
 
     async def _sse():
         yield sse_failure_frames(STORAGE_FAILED_CODE, completion_id)
+
+    return StreamingResponse(
+        guard_sse(_sse(), completion_id), media_type="text/event-stream",
+    )
+
+
+def _turn_busy_response(stream: bool):
+    """The answer when the session's previous turn did not finish in time.
+
+    Usually a wedged generation, so the generation_failed text fits. Nothing
+    was stored and no exchange was opened. Streaming requests get frames, not
+    JSON (CLAUDE.md Bug Standard #1).
+    """
+    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+    logger.info("[EARLY-RETURN] label=turn_busy stream=%s id=%s", stream, completion_id)
+
+    if not stream:
+        return JSONResponse(
+            status_code=503, content={"detail": "The previous turn has not finished."},
+        )
+
+    async def _sse():
+        yield sse_failure_frames(GENERATION_FAILED_CODE, completion_id)
 
     return StreamingResponse(
         guard_sse(_sse(), completion_id), media_type="text/event-stream",
@@ -1949,30 +1977,46 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     # --- TURN VAULT (issue #144) ---
     # Every write this turn performs -- inline, post-stream, or from a
     # background thread -- belongs to the vault that was active when the turn
-    # started. Captured here and bound at each deferred site, so a vault swap
-    # landing mid-turn cannot move this turn's records into another vault.
+    # started. Captured here and bound by _bound_off_loop and _bound_iter, so a
+    # vault swap landing mid-turn cannot move this turn's records into another
+    # vault. A new blocking step in the SSE body must go through them too: the
+    # body runs on the loop, with nothing bound.
     # Capturing at turn start rather than at thread-spawn time is deliberate:
     # _post_stream_cleanup runs from inside the SSE generator, after the
     # handler has returned, so by the time it spawns anything a swap may
     # already have landed.
-    # Defensive: an unset PRIVATE_VAULT_PATH yields None, and every binding
-    # site treats None as "behave exactly as before this existed".
+    # Defensive: an unset PRIVATE_VAULT_PATH yields None, and vault_binding
+    # treats None as "behave exactly as before this existed".
     try:
         _turn_vault = get_private_vault_path()
     except ValueError:
         _turn_vault = None
 
+    session_id = _extract_session_id(request)
+    try:
+        lease = await _turn_locks.acquire(session_id)
+    except TurnBusy:
+        return _turn_busy_response(bool(body.stream))
+
     # Off the loop, so a swap can land while the turn runs (it could not when
     # the turn held the loop); the binding keeps the turn in its own vault.
-    return await _bound_off_loop(
-        _turn_vault, _chat_completions_sync, request, body, _turn_vault,
-    )
+    try:
+        response = await _bound_off_loop(
+            _turn_vault, _chat_completions_sync, request, body, _turn_vault, session_id,
+        )
+    except BaseException:
+        lease.release()
+        raise
+    if isinstance(response, StreamingResponse):
+        # The turn is not over: its body has not run yet.
+        return TurnStreamingResponse(response, lease)
+    lease.release()
+    return response
 
 
-def _chat_completions_sync(request: Request, body: ChatCompletionsRequest, _turn_vault):
-    # --- SESSION ID ---
-    session_id = _extract_session_id(request)
-
+def _chat_completions_sync(
+    request: Request, body: ChatCompletionsRequest, _turn_vault, session_id: str,
+):
     # (2) Only the last user message is used - Ember's ConversationBuffer
     #     handles conversation history. All prior messages from the request
     #     are intentionally ignored.

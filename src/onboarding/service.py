@@ -116,7 +116,7 @@ class OnboardingService:
             # would get a JSON 409). The answer was not saved, so the step
             # does not advance and its question is asked again.
             try:
-                self._memory.write(
+                saved = self._memory.write(
                     text=formatted,
                     memory_type="profile",
                     source="onboarding",
@@ -126,6 +126,14 @@ class OnboardingService:
             except RecordExistsError:
                 logger.warning(
                     "[ONBOARDING] Profile write collided, step %d (%s) not saved; asking again",
+                    current, step.key,
+                )
+                return step.question
+            # None: the memory filter refused the text (JSON-like or code, say).
+            # Advancing would lose the answer with no sign of it.
+            if saved is None:
+                logger.warning(
+                    "[ONBOARDING] Profile text refused, step %d (%s) not saved; asking again",
                     current, step.key,
                 )
                 return step.question

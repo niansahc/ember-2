@@ -36,7 +36,7 @@ from src.core.config import (
     get_ember_debug,
     get_intent_classifier_timeout_ms,
 )
-from src.llm.aux_client import aux_chat
+from src.llm.aux_client import AUX_STAGE3_LOAD_TIMEOUT_S, aux_chat
 from src.retrieval.embed_memory import embed_text, embed_texts
 
 logger = logging.getLogger("ember.intent_classifier")
@@ -293,9 +293,18 @@ class UnknownLabelError(ValueError):
     """Stage 3 answered with a label outside _VALID_LABELS."""
 
 
-# The Stage 3 client timeout equals the budget, so on an overrun either timer
-# can fire first. A client timeout is the same event as the budget wait expiring.
+# A client timeout on Stage 3 is the same event as the budget wait expiring.
+# The client normally outlasts the wait; this keeps the outcome the same if it
+# ever does not.
 _OVERRUN_ERRORS: tuple[type[Exception], ...] = (httpx.TimeoutException,)
+
+
+def _stage3_client_timeout_s() -> float:
+    """Always longer than the budget. Closing the connection makes Ollama
+    abort a model load in progress, so a client timeout at the budget means
+    Stage 3 traffic can never warm the auxiliary model."""
+    budget_s = get_intent_classifier_timeout_ms() / 1000.0
+    return max(AUX_STAGE3_LOAD_TIMEOUT_S, budget_s + 1)
 
 
 def _stage3_llm_call(query: str) -> str:
@@ -307,12 +316,9 @@ def _stage3_llm_call(query: str) -> str:
     """
     # think is a top-level chat argument. Inside options Ollama ignores
     # it, qwen3:8b thinks, and the call overruns the 1500ms budget.
-    # Client timeout equals the Stage 3 budget: an overrun closes the
-    # connection, so Ollama cancels the call and frees its slot instead of
-    # finishing a result nobody reads.
     response = aux_chat(
         tag="INTENT_CLASSIFY", step="stage3",
-        timeout_s=get_intent_classifier_timeout_ms() / 1000.0,
+        timeout_s=_stage3_client_timeout_s(),
         model=get_ember_auxiliary_model(),
         messages=[
             {"role": "system", "content": _STAGE3_SYSTEM_PROMPT},

@@ -28,7 +28,6 @@ import src.api.main as main
 import src.llm.aux_client as aux_client
 import src.llm.intent_classifier as intent_classifier
 import src.llm.vision_service as vision_service
-from src.core.config import get_intent_classifier_timeout_ms
 from src.onboarding.service import OnboardingService
 from tests.test_auxiliary_think import (
     _run_coaching_rewrite,
@@ -78,8 +77,7 @@ SITES = {
     "coaching_semantic_check": Site(_run_identity_check, _COACHING, _constant("AUX_CHECK_TIMEOUT_S"), "NO"),
     "coaching_identity_rewrite": Site(_run_identity_rewrite, _COACHING, _constant("AUX_REWRITE_TIMEOUT_S")),
     "stage3": Site(
-        _run_stage3, "src.llm.intent_classifier",
-        lambda: get_intent_classifier_timeout_ms() / 1000.0,
+        _run_stage3, "src.llm.intent_classifier", _constant("AUX_STAGE3_LOAD_TIMEOUT_S"),
         json.dumps({"label": "vault_answerable"}),
     ),
     "review": Site(_run_review, _ADAPTER, _constant("AUX_REVIEW_TIMEOUT_S"), "{}"),

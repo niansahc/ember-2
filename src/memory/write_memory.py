@@ -73,7 +73,8 @@ def should_skip_memory(text: str, memory_type: str = "journal") -> bool:
     # Conversation turns and deviation records are never skipped —
     # short messages like "Yes" are meaningful context, and deviation
     # records use [deviation:class] prefix that triggers JSON guards.
-    if memory_type not in ("conversation", "deviation"):
+    # Profile records have no length floor: "My name is Sam." is the record.
+    if memory_type not in ("conversation", "deviation", "profile"):
         min_length = 20 if memory_type == "journal" else 40
         if len(normalized) < min_length:
             return True

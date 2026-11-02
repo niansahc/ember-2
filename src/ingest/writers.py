@@ -1,5 +1,6 @@
 from pathlib import Path
 import logging
+import threading
 
 from src.core.jsonio import safe_write_json
 from src.retrieval.embed_memory import embed_text
@@ -10,15 +11,20 @@ logger = logging.getLogger("ember.ingest.writers")
 
 vector_index = VectorIndex()
 
+# Overlapping ingests of one document write the same chunk paths, and on
+# Windows os.replace() fails while another thread replaces that file. Held for
+# one file write at a time, never across embedding.
+_chunk_file_lock = threading.Lock()
+
 
 def write_chunks_to_vault(chunks, vault_path):
     memory_dir = Path(vault_path) / "memory" / "ingested"
     memory_dir.mkdir(parents=True, exist_ok=True)
 
     index_path = vector_index.get_index_path(Path(vault_path), "ingested")
-    index_data = vector_index.load_index(index_path)
-
-    index_map = {item.get("file_path"): item for item in index_data if item.get("file_path")}
+    # Embedding takes minutes and other writers use this index meanwhile, so
+    # entries are merged at the end rather than saved over an earlier read.
+    entries = []
 
     for chunk in chunks:
         file_path = memory_dir / f"{chunk.chunk_id}.json"
@@ -36,7 +42,8 @@ def write_chunks_to_vault(chunks, vault_path):
 
         # Atomic write (ADR-039): an interrupted chunk write can no longer
         # leave a truncated file where a valid chunk already existed.
-        safe_write_json(file_path, chunk_payload)
+        with _chunk_file_lock:
+            safe_write_json(file_path, chunk_payload)
 
         # ADR-033: assistant-role chunks from ChatGPT import write to flat
         # storage for thread reconstruction but are not embedded or indexed.
@@ -52,7 +59,7 @@ def write_chunks_to_vault(chunks, vault_path):
 
         embedding = embed_text(chunk.content)
 
-        index_map[str(file_path)] = {
+        entries.append({
             "file_path": str(file_path),
             "embedding": embedding,
             "text": chunk.content,
@@ -64,6 +71,6 @@ def write_chunks_to_vault(chunks, vault_path):
                 "title": chunk.title,
                 "created_at": chunk.created_at,
             },
-        }
+        })
 
-    vector_index.save_index(index_path, list(index_map.values()))
+    vector_index.merge_entries(index_path, entries)

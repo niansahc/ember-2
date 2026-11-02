@@ -1,7 +1,9 @@
 import base64
 import json
 import logging
+import os
 import tempfile
+import threading
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -162,23 +164,51 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
     )
 
 
+# Two uploads of one name replace one source file, and on Windows os.replace()
+# fails while another thread replaces that file. Held for the replace only.
+_source_publish_lock = threading.Lock()
+
+
+def _parse_path(work_dir: Path, saved_path: Path) -> Path:
+    """Where this request's upload is parsed from: its own directory, so an
+    overlapping upload of the same name cannot change the bytes. The name is
+    kept because doc_id and title come from it."""
+    return work_dir / saved_path.name
+
+
 def _ingest_upload_blocking(content: bytes, filename: str, ext: str, vault_path: Path) -> dict:
     """Save an uploaded document under the vault and ingest it. Synchronous;
     called on a worker thread by ingest_upload."""
     uploads_dir = vault_path / "imports" / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
-
-    # Write to vault/imports/uploads/ so it persists as a source file
     saved_path = _upload_target(uploads_dir, filename)
-    saved_path.write_bytes(content)
-    logger.info("[UPLOAD] Saved %s upload (%d bytes)", ext, len(content))
 
+    with tempfile.TemporaryDirectory(dir=uploads_dir, ignore_cleanup_errors=True) as work:
+        work_dir = Path(work)
+
+        # Persists in vault/imports/uploads/ as a source file. Replaced whole,
+        # so overlapping uploads of one name leave a complete file (last wins).
+        staged = work_dir / "source"
+        staged.write_bytes(content)
+        with _source_publish_lock:
+            os.replace(staged, saved_path)
+        logger.info("[UPLOAD] Saved %s upload (%d bytes)", ext, len(content))
+
+        parse_path = _parse_path(work_dir, saved_path)
+        parse_path.write_bytes(content)
+        return _ingest_saved_upload(content, parse_path, filename, ext, vault_path)
+
+
+def _ingest_saved_upload(
+    content: bytes, parse_path: Path, filename: str, ext: str, vault_path: Path,
+) -> dict:
+    """Run a saved upload through its importer, from parse_path."""
     try:
         doc_type = DOCUMENT_EXTENSIONS[ext]
 
         if doc_type == "json":
             # JSON files go through the JSON import path
-            json_data = json.loads(saved_path.read_text(encoding="utf-8"))
+            json_data = json.loads(content.decode("utf-8"))
             result = _import_json_records(json_data)
             return {
                 "status": "ingested",
@@ -187,13 +217,13 @@ def _ingest_upload_blocking(content: bytes, filename: str, ext: str, vault_path:
                 "errors": result["errors"],
             }
         elif doc_type == "pdf":
-            docs = load_pdf(str(saved_path))
+            docs = load_pdf(str(parse_path))
         elif doc_type == "docx":
-            docs = load_docx(str(saved_path))
+            docs = load_docx(str(parse_path))
         elif doc_type == "csv":
-            docs = load_csv(str(saved_path))
+            docs = load_csv(str(parse_path))
         elif doc_type == "txt":
-            docs = load_text_file(str(saved_path))
+            docs = load_text_file(str(parse_path))
         else:
             raise HTTPException(status_code=400, detail=f"No importer for {ext}")
 

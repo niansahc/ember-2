@@ -11,6 +11,12 @@ real httpx timeout instead: when it fires the connection closes, Ollama
 cancels the task and frees its single slot, and the caller's existing
 fail-open handling runs.
 
+Closing the connection also aborts a model load in progress (Ollama 0.40.13:
+"client connection closed before llama-server finished loading, aborting
+load"), so a timeout shorter than a cold load means that caller can never
+warm its model. Each timeout below must outlast a load. Stage 3 has its own
+for that reason: its budget caps the turn and is shorter than a load.
+
 Not covered, by decision: the main answer generation (adapter.py) and the
 embedding calls (shared with ingest and write paths). The grounding check and
 revision pass (src/safety/grounding_check.py) speak raw async HTTP and carry
@@ -31,14 +37,21 @@ import ollama
 
 logger = logging.getLogger("ember.aux")
 
-# Seconds. Intent classifier Stage 3 uses its own budget,
-# get_intent_classifier_timeout_ms() / 1000, passed by its caller.
+# Seconds.
 AUX_CHECK_TIMEOUT_S = 15      # yes/no checks (coaching semantic identity check)
 AUX_REWRITE_TIMEOUT_S = 45    # coaching rewrite, identity rewrite
 AUX_REVIEW_TIMEOUT_S = 60     # constitutional review call
 AUX_SUMMARY_TIMEOUT_S = 60    # buffer compression summary
 AUX_VISION_TIMEOUT_S = 120    # VL preprocessor (cold model load on 8 GiB)
-AUX_FORMAT_TIMEOUT_S = 30     # onboarding answer format, lodestone inference
+# Onboarding format, lodestone inference. Thinking is on for onboarding, and
+# it is the first call of an install, so it can be cold. Estimated, not
+# measured: 181 tokens at 3 tok/s on CPU is about 60 s, plus up to about 90 s
+# to load an 8B model from a slow disk. Under the 180 s client limit.
+AUX_FORMAT_TIMEOUT_S = 150
+# Stage 3 client timeout, longer than its budget: the classifier's budget wait
+# caps the turn, and the abandoned call stays connected so a load can finish.
+# A cold load here takes about 5.6 s; the margin is for slower disks.
+AUX_STAGE3_LOAD_TIMEOUT_S = 30
 
 
 @functools.lru_cache(maxsize=None)

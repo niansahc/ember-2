@@ -142,6 +142,25 @@ class VectorIndex:
             index_data.append(entry)
             self.save_index(index_path, index_data)
 
+    def merge_entries(self, index_path: Path, entries: list[dict]) -> None:
+        """Add entries to the index at index_path, replacing any with the same
+        file_path.
+
+        One load and one save under _index_io_lock, like append_entry but for
+        a batch: an ingest embeds first, outside the lock, then calls this
+        once, so a long embed cannot end in a save of a stale snapshot.
+        """
+        if not entries:
+            return
+        with _index_io_lock:
+            incoming = {entry["file_path"]: entry for entry in entries}
+            index_data = [
+                incoming.pop(item.get("file_path"), item)
+                for item in self.load_index(index_path)
+            ]
+            index_data.extend(incoming.values())
+            self.save_index(index_path, index_data)
+
     def search(
         self,
         vault_path: Path,

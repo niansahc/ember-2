@@ -11,7 +11,7 @@ vault each later step resolves. Positive control for every scenario: the same
 turn with the binding helpers replaced by unbound callers resolves the swapped
 vault, so the assertions cannot pass on a harness that cannot see a misroute.
 
-Also here: two overlapping turns on one session leave both exchanges stored.
+Also here: two simultaneous turns on one session leave both exchanges stored.
 """
 
 from __future__ import annotations
@@ -231,9 +231,9 @@ class TestSwapBeforeGeneration:
 class TestOverlappingTurnsOnOneSession:
 
     def test_both_exchanges_are_stored(self, client, vaults):
-        """Turns used to be serialized by the blocked loop; they can overlap
-        now. Two at once on one session store two user and two assistant
-        turns, with no error."""
+        """Two at once on one session run one after the other
+        (src/api/turn_lock.py) and store two user and two assistant turns,
+        with no error."""
         from src.api import openai_adapter as oa
 
         vault_a, _ = vaults

@@ -538,10 +538,10 @@ class TestStage3LlmCall:
         assert _think_sent_top_level(call)
         assert call.get("format") == "json"
 
-    def test_client_timeout_equals_the_stage3_budget(self, monkeypatch):
-        """An overrun closes the connection so Ollama frees its slot. A
-        different budget must give a different client timeout (control)."""
-        from src.core.config import get_intent_classifier_timeout_ms
+    def test_client_timeout_outlasts_the_stage3_budget(self, monkeypatch):
+        """Closing the connection aborts a model load in Ollama, so the client
+        must stay connected past the budget, and still when the budget is set
+        above the load allowance (control)."""
         seen = []
         fake = FakeOllama(content=json.dumps({"label": "vault_answerable"}))
 
@@ -551,12 +551,12 @@ class TestStage3LlmCall:
 
         monkeypatch.setattr(aux_client, "_client_for_timeout", record_timeout)
         _stage3_llm_call("anything")
-        assert seen == [get_intent_classifier_timeout_ms() / 1000.0]
+        assert seen == [aux_client.AUX_STAGE3_LOAD_TIMEOUT_S]
 
-        monkeypatch.setenv("INTENT_CLASSIFIER_TIMEOUT_MS", "4000")
+        monkeypatch.setenv("INTENT_CLASSIFIER_TIMEOUT_MS", "60000")
         seen.clear()
         _stage3_llm_call("anything")
-        assert seen == [4.0]
+        assert seen == [61.0]
 
     def test_think_inside_options_is_not_top_level(self):
         # Positive control for the absence half of _think_sent_top_level:

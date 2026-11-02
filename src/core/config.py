@@ -461,6 +461,11 @@ def get_intent_classifier_timeout_ms() -> int:
 
     On timeout the classifier still falls back to vault_answerable (the
     behavioral-contract-safe default).
+
+    This caps the turn, not the Ollama call. Closing the connection aborts a
+    model load in progress, so the abandoned call keeps its own, longer client
+    timeout (intent_classifier._stage3_client_timeout_s) and the next query
+    finds the model warm.
     """
     return int(os.getenv("INTENT_CLASSIFIER_TIMEOUT_MS", "1500"))
 

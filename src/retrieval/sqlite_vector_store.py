@@ -39,6 +39,7 @@ import math
 import re
 import sqlite3
 import struct
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -142,14 +143,21 @@ class SqliteVectorStore:
         db_path = Path(db_path).resolve()
         self.db_path = db_path
         db_path.parent.mkdir(parents=True, exist_ok=True)
+        # One connection is shared by every thread that holds this store
+        # (store_cache), and two threads using it at once fail inside the
+        # sqlite3 module (InterfaceError, IndexError, SystemError). Every use
+        # of _conn holds this lock. Reentrant: insert calls
+        # _disambiguate_id while holding it.
+        self._lock = threading.RLock()
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._create_table()
-        self._migrate_tiering_columns()
-        self._migrate_authorship_column()
-        self._migrate_quality_column()
-        self._has_quality_column = self._check_column_exists("quality")
-        self._has_authorship_column = self._check_column_exists("authorship")
+        with self._lock:
+            self._create_table()
+            self._migrate_tiering_columns()
+            self._migrate_authorship_column()
+            self._migrate_quality_column()
+            self._has_quality_column = self._check_column_exists("quality")
+            self._has_authorship_column = self._check_column_exists("authorship")
 
     # ------------------------------------------------------------------
     # Schema
@@ -231,6 +239,14 @@ class SqliteVectorStore:
         record_id = str(record["id"])
         text = record["text"]
 
+        with self._lock:
+            return self._insert_locked(record, record_id, text, embedding_blob, metadata_str)
+
+    def _insert_locked(
+        self, record: dict, record_id: str, text: str, embedding_blob: bytes, metadata_str: str,
+    ) -> str:
+        """The read-check-write of insert(). Call with _lock held, so a
+        collision check and its insert cannot interleave with another."""
         existing = self._conn.execute(
             "SELECT text FROM vectors WHERE id = ?", (record_id,)
         ).fetchone()
@@ -321,22 +337,24 @@ class SqliteVectorStore:
         """
         quality_filter = " AND (quality IS NULL OR quality != 'suppressed')" if self._has_quality_column else ""
 
-        if memory_type:
-            cursor = self._conn.execute(
-                f"SELECT * FROM vectors WHERE memory_type = ?{quality_filter}",
-                (memory_type,),
-            )
-        else:
-            if self._has_quality_column:
-                cursor = self._conn.execute(
+        # Rows are fetched under the lock and scored after it, so a long scan
+        # holds the connection only while it reads.
+        with self._lock:
+            if memory_type:
+                rows = self._conn.execute(
+                    f"SELECT * FROM vectors WHERE memory_type = ?{quality_filter}",
+                    (memory_type,),
+                ).fetchall()
+            elif self._has_quality_column:
+                rows = self._conn.execute(
                     "SELECT * FROM vectors WHERE quality IS NULL OR quality != 'suppressed'"
-                )
+                ).fetchall()
             else:
-                cursor = self._conn.execute("SELECT * FROM vectors")
+                rows = self._conn.execute("SELECT * FROM vectors").fetchall()
 
         scored: list[tuple[float, sqlite3.Row]] = []
 
-        for row in cursor:
+        for row in rows:
             embedding = self._unpack_embedding(row["embedding"])
             score = self._cosine_similarity(query_embedding, embedding)
             scored.append((score, row))
@@ -398,7 +416,8 @@ class SqliteVectorStore:
 
     def count(self) -> int:
         """Return the total number of records in the store."""
-        row = self._conn.execute("SELECT COUNT(*) FROM vectors").fetchone()
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) FROM vectors").fetchone()
         return row[0]
 
     def delete_by_ids(self, ids: list[str]) -> int:
@@ -413,16 +432,18 @@ class SqliteVectorStore:
         if not ids:
             return 0
         placeholders = ",".join("?" for _ in ids)
-        cursor = self._conn.execute(
-            f"DELETE FROM vectors WHERE id IN ({placeholders})",
-            ids,
-        )
-        self._conn.commit()
-        return cursor.rowcount
+        with self._lock:
+            cursor = self._conn.execute(
+                f"DELETE FROM vectors WHERE id IN ({placeholders})",
+                ids,
+            )
+            self._conn.commit()
+            return cursor.rowcount
 
     def close(self) -> None:
         """Close the SQLite connection."""
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -558,6 +579,16 @@ class SqliteVectorStore:
         now_dt = datetime.now()
         now_str = now_dt.strftime("%Y-%m-%dT%H-%M-%S")
 
+        with self._lock:
+            matched = self._update_stats_locked(record_ids, halflife, now_dt, now_str)
+
+        result = RetrievalStatsWrite(requested=len(record_ids), matched=matched)
+        self._log_stats_write(result)
+        return result
+
+    def _update_stats_locked(self, record_ids, halflife, now_dt, now_str) -> int:
+        """The per-record read-then-write of update_retrieval_stats. Call with
+        _lock held. Returns how many ids matched a row."""
         matched = 0
 
         for record_id in record_ids:
@@ -596,9 +627,10 @@ class SqliteVectorStore:
                 (new_frequency, now_str, record_id),
             )
         self._conn.commit()
+        return matched
 
-        result = RetrievalStatsWrite(requested=len(record_ids), matched=matched)
-
+    def _log_stats_write(self, result: RetrievalStatsWrite) -> None:
+        """Warn on a write that missed rows."""
         # The detector. Counts only, never an id: a record id is vault content
         # (CLAUDE.md Vault Privacy Rule) and logs/ is inside the repo tree.
         #
@@ -623,12 +655,11 @@ class SqliteVectorStore:
                 result.matched, result.requested, result.missed,
             )
 
-        return result
-
     def _check_column_exists(self, column_name: str) -> bool:
         """Check if a column exists in the vectors table."""
-        cursor = self._conn.execute("PRAGMA table_info(vectors)")
-        columns = {row["name"] for row in cursor}
+        with self._lock:
+            cursor = self._conn.execute("PRAGMA table_info(vectors)")
+            columns = {row["name"] for row in cursor}
         return column_name in columns
 
     def _unpack_embedding(self, blob: bytes) -> list[float]:

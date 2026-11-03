@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import ollama
-from src.llm.aux_client import AUX_FORMAT_TIMEOUT_S, aux_chat
+from src.llm.aux_client import AUX_LODESTONE_TIMEOUT_S, aux_chat
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -1070,7 +1070,7 @@ def _extract_lodestone_value(raw_answer: str, question_context: str | None = Non
             user_msg = f"Question: {question_context}\nAnswer: {raw_answer}"
 
         result = aux_chat(
-            tag="LODESTONE", step="inference", timeout_s=AUX_FORMAT_TIMEOUT_S,
+            tag="LODESTONE", step="inference", timeout_s=AUX_LODESTONE_TIMEOUT_S,
             model=get_ember_model(),
             messages=[
                 {"role": "system", "content": (

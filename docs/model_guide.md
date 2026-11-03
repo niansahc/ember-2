@@ -22,6 +22,8 @@ Three reasoning paths are supported. Local is the default; cloud providers are o
 
 Cost ranges and full eval breakdowns are below.
 
+**Hardware for local models:** a GPU that Ollama supports, with enough VRAM to hold the whole model (at least 8 GB for the default qwen3:8b). CPU-only and partial GPU offload are not supported; Ember's model calls have time limits sized for a GPU. The "RAM required" figures below are system RAM.
+
 ---
 
 ## How to Switch Models

@@ -858,8 +858,10 @@ class _PendingGuard:
     search content would be lost: restore() puts the offer back (vault or
     in-process store) or the clarification back (in-process store). settle()
     marks the exchange answered. Whichever runs first wins; both take a lock
-    because the SSE guard calls restore() from a worker thread. Only a
-    confirmation is armed: a decline or an unrelated reply already settled
+    because settle() runs on the worker that stores the reply, while
+    restore() runs on a worker (a failure before or outside the stream, the
+    vision_unavailable return) or on the event loop (the SSE guard's
+    on_abort). Only a confirmation is armed: a decline or an unrelated reply already settled
     the offer, and restoring it would let a later "ok" search.
     """
 
@@ -1032,10 +1034,13 @@ def _check_pending_confirmation(
 
 
 # One lock around the duplicate check and the write. The check is a fresh
-# read: two streaming requests in one session each run their writer in a
-# worker thread, and a list read earlier in the request (or a check-then-
-# write without the lock) let both pass and leave two active pendings for
-# the same query; a "yes" resolved one and the other fired on a later "ok".
+# read. Two requests in one session once ran their writers at the same time,
+# and a check-then-write without the lock let both pass and leave two active
+# pendings for the same query; a "yes" resolved one and the other fired on a
+# later "ok". Same-session turns are now serialized by the turn lock
+# (src/api/turn_lock.py), and _PendingGuard's restore finishes before the
+# turn releases it, so on the chat path this lock is defence in depth: it
+# keeps the check and the write atomic for any caller outside a turn.
 # One process serves the API, so a process lock is enough.
 _pending_write_lock = threading.Lock()
 
@@ -1215,11 +1220,13 @@ def _intercept_onboarding(ctx: RouterContext) -> Optional[TerminalReply]:
     the empty and override paths never trigger its vault read - they return
     before this interceptor runs. onboarding_service fully encapsulates the
     onboarding state writes, so this stays enrichment-independent: handle()
-    needs only the user message.
+    needs only the user message. handle() returns None when another session
+    finished onboarding after this check; the turn then runs normally.
     """
     if onboarding_service.is_active():
         reply = onboarding_service.handle(ctx.latest_user_message)
-        return TerminalReply(reply, label="onboarding")
+        if reply is not None:
+            return TerminalReply(reply, label="onboarding")
     return None
 
 
@@ -1914,7 +1921,7 @@ def _apply_timers(gen_ctx: GenerationContext, work: GenerationWork) -> None:
                 format_elapsed,
                 get_active_timers,
                 start_timer,
-                stop_timer,
+                stop_most_recent_timer,
             )
 
             timer_label = detect_start_timer(work.message)
@@ -1928,8 +1935,13 @@ def _apply_timers(gen_ctx: GenerationContext, work: GenerationWork) -> None:
                     logger.warning("[TIMER] Failed to start timer: %s", type(exc).__name__)
             elif detect_stop_timer(work.message) or detect_check_timer(work.message):
                 try:
-                    active = get_active_timers()
                     wants_stop = detect_stop_timer(work.message)
+                    # A stop reads and stops under one lock: another session's
+                    # turn can be stopping the same timer at the same time.
+                    if wants_stop:
+                        active, _stopped = stop_most_recent_timer()
+                    else:
+                        active = get_active_timers()
                     if active:
                         statuses = []
                         for t in active:
@@ -1937,8 +1949,6 @@ def _apply_timers(gen_ctx: GenerationContext, work: GenerationWork) -> None:
                             statuses.append(f'"{t.text}" {format_elapsed(started_at)}')
                         statuses_str = "; ".join(statuses)
                         if wants_stop:
-                            most_recent = active[0]
-                            stop_timer(timer_id=most_recent.metadata["timer_id"])
                             work.message = (
                                 f"[System: timer stopped \u2014 was {statuses_str}] {work.message}"
                             )

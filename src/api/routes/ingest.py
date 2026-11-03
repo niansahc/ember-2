@@ -2,8 +2,10 @@ import base64
 import json
 import logging
 import os
+import shutil
 import tempfile
 import threading
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -152,7 +154,7 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
             detail=f"Unsupported file type: {ext}. Supported: {', '.join(sorted(DOCUMENT_EXTENSIONS.keys() | IMAGE_EXTENSIONS))}",
         )
 
-    # Save upload to a temp file, then run through the appropriate importer
+    # Read the upload here; the worker saves it under the vault and ingests it.
     content = await file.read()
     vault_path = get_private_vault_path()
 
@@ -176,6 +178,20 @@ def _parse_path(work_dir: Path, saved_path: Path) -> Path:
     return work_dir / saved_path.name
 
 
+@contextmanager
+def _upload_work_dir(uploads_dir: Path):
+    """A per-request directory under uploads_dir, removed afterwards. It holds
+    a copy of the document inside the vault, so a removal that fails (a file
+    still open on Windows, say) is logged rather than left silently."""
+    work_dir = Path(tempfile.mkdtemp(dir=uploads_dir))
+    try:
+        yield work_dir
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        if work_dir.exists():
+            logger.warning("[UPLOAD] Work directory left behind: %s", work_dir.name)
+
+
 def _ingest_upload_blocking(content: bytes, filename: str, ext: str, vault_path: Path) -> dict:
     """Save an uploaded document under the vault and ingest it. Synchronous;
     called on a worker thread by ingest_upload."""
@@ -183,9 +199,7 @@ def _ingest_upload_blocking(content: bytes, filename: str, ext: str, vault_path:
     uploads_dir.mkdir(parents=True, exist_ok=True)
     saved_path = _upload_target(uploads_dir, filename)
 
-    with tempfile.TemporaryDirectory(dir=uploads_dir, ignore_cleanup_errors=True) as work:
-        work_dir = Path(work)
-
+    with _upload_work_dir(uploads_dir) as work_dir:
         # Persists in vault/imports/uploads/ as a source file. Replaced whole,
         # so overlapping uploads of one name leave a complete file (last wins).
         staged = work_dir / "source"
@@ -194,15 +208,19 @@ def _ingest_upload_blocking(content: bytes, filename: str, ext: str, vault_path:
             os.replace(staged, saved_path)
         logger.info("[UPLOAD] Saved %s upload (%d bytes)", ext, len(content))
 
-        parse_path = _parse_path(work_dir, saved_path)
-        parse_path.write_bytes(content)
+        # JSON is decoded from the bytes, so it needs no copy to parse.
+        parse_path = None
+        if DOCUMENT_EXTENSIONS[ext] != "json":
+            parse_path = _parse_path(work_dir, saved_path)
+            parse_path.write_bytes(content)
         return _ingest_saved_upload(content, parse_path, filename, ext, vault_path)
 
 
 def _ingest_saved_upload(
-    content: bytes, parse_path: Path, filename: str, ext: str, vault_path: Path,
+    content: bytes, parse_path: Path | None, filename: str, ext: str, vault_path: Path,
 ) -> dict:
-    """Run a saved upload through its importer, from parse_path."""
+    """Run a saved upload through its importer: JSON from the bytes, every
+    other type from parse_path."""
     try:
         doc_type = DOCUMENT_EXTENSIONS[ext]
 

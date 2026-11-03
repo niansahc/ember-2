@@ -14,8 +14,20 @@ fail-open handling runs.
 Closing the connection also aborts a model load in progress (Ollama 0.40.13:
 "client connection closed before llama-server finished loading, aborting
 load"), so a timeout shorter than a cold load means that caller can never
-warm its model. Each timeout below must outlast a load. Stage 3 has its own
-for that reason: its budget caps the turn and is shorter than a load.
+warm its model. Each timeout below outlasts a cold load on supported
+hardware (see below); on slower hardware a timeout can still cut a load
+short. Stage 3 has its own client timeout for that reason: its budget caps
+the turn and is shorter than a load.
+
+Supported hardware, which these budgets assume: a GPU Ollama can use with at
+least 8 GB of VRAM, so the default model (qwen3:8b, about 5.2 GB) runs
+entirely on the GPU. CPU-only and partial offload are not supported.
+Measured on an 8 GiB card (RTX 3060 Ti, qwen3:8b): about 70 tok/s, and a
+cold call of 5.6 s of which 3.4 s was the load. The budgets assume a floor of
+SUPPORTED_MIN_TOKENS_PER_S and a cold load of at most SUPPORTED_MAX_COLD_LOAD_S,
+about a fifth of the measured rate and three times the measured load, for
+thermal limits, other GPU work or a slower disk. A capped call's budget is at
+least cap / floor + load (tests/test_aux_call_timeouts.py checks it).
 
 Not covered, by decision: the main answer generation (adapter.py) and the
 embedding calls (shared with ingest and write paths). The grounding check and
@@ -37,20 +49,29 @@ import ollama
 
 logger = logging.getLogger("ember.aux")
 
-# Seconds.
-AUX_CHECK_TIMEOUT_S = 15      # yes/no checks (coaching semantic identity check)
-AUX_REWRITE_TIMEOUT_S = 45    # coaching rewrite, identity rewrite
+# The floor the budgets below assume (module docstring).
+SUPPORTED_MIN_TOKENS_PER_S = 15
+SUPPORTED_MAX_COLD_LOAD_S = 10
+
+# Seconds. "cap" is the call's num_predict; at the floor, cap / 15 + 10.
+AUX_CHECK_TIMEOUT_S = 15      # yes/no checks; cap 10: about 11 s
+AUX_REWRITE_TIMEOUT_S = 45    # coaching and identity rewrites; cap 500: about 43 s
+# Uncapped, thinking off: the review verdict JSON and the buffer summary.
+# Chosen, not derived: room for about 750 tokens at the floor after a load.
 AUX_REVIEW_TIMEOUT_S = 60     # constitutional review call
 AUX_SUMMARY_TIMEOUT_S = 60    # buffer compression summary
-AUX_VISION_TIMEOUT_S = 120    # VL preprocessor (cold model load on 8 GiB)
-# Onboarding format, lodestone inference. Thinking is on for onboarding, and
-# it is the first call of an install, so it can be cold. Estimated, not
-# measured: 181 tokens at 3 tok/s on CPU is about 60 s, plus up to about 90 s
-# to load an 8B model from a slow disk. Under the 180 s client limit.
-AUX_FORMAT_TIMEOUT_S = 150
+# VL preprocessor; cap 300: about 30 s. The rest is for swapping the vision
+# model in, which loads a second model (ADR-032).
+AUX_VISION_TIMEOUT_S = 120
+# Onboarding format: uncapped and thinking on, measured at 143-181 tokens.
+# Budgeted for twice that, 360 tokens: 24 s at the floor plus a 10 s load is
+# 34 s. It is the first call of an install, so it is often cold.
+AUX_FORMAT_TIMEOUT_S = 45
+# Lodestone value inference: thinking off, cap 100: about 17 s.
+AUX_LODESTONE_TIMEOUT_S = 30
 # Stage 3 client timeout, longer than its budget: the classifier's budget wait
 # caps the turn, and the abandoned call stays connected so a load can finish.
-# A cold load here takes about 5.6 s; the margin is for slower disks.
+# Uncapped JSON label, thinking off. Three times the 10 s load allowance.
 AUX_STAGE3_LOAD_TIMEOUT_S = 30
 
 

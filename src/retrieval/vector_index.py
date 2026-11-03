@@ -78,13 +78,20 @@ class VectorIndex:
             cached = _index_cache.get(key)
             if cached is not None:
                 return cached
-            return self._load_index_from_disk(index_path)
+            entries, _readable = self._read_disk(index_path)
+            return entries
 
-    def _load_index_from_disk(self, index_path: Path) -> list:
-        # Cache miss — load from disk
+    def _read_disk(self, index_path: Path) -> tuple[list, bool]:
+        """Load an index from disk: (entries, readable).
+
+        readable is False when the file exists but could not be used
+        (oversized, corrupt, not a list, or an OSError). Readers treat that as
+        an empty index; writers must not save over it (_entries_for_update).
+        A missing file is readable and empty.
+        """
         if not index_path.exists():
             logger.info("[VECTOR_INDEX] Missing index: %s", index_path)
-            return []
+            return [], True
 
         try:
             size_mb = index_path.stat().st_size / (1024 * 1024)
@@ -94,7 +101,7 @@ class VectorIndex:
                     "[VECTOR_INDEX] Skipping oversized index: %s (%.2f MB > %d MB)",
                     index_path, size_mb, self.max_index_size_mb,
                 )
-                return []
+                return [], False
 
             logger.info("[VECTOR_INDEX] Cache miss - loading: %s (%.2f MB)", index_path.name, size_mb)
 
@@ -105,16 +112,34 @@ class VectorIndex:
 
             if isinstance(data, list):
                 _index_cache[str(index_path)] = data
-                return data
+                return data, True
 
             if data is not None:
                 logger.warning("[VECTOR_INDEX] Invalid index format (expected list): %s", index_path)
-            return []
+            return [], False
 
         except OSError as exc:
             # stat() on the index can still fail before the read is attempted.
             logger.warning("[VECTOR_INDEX] Failed to load index %s: %s", index_path, type(exc).__name__)
-            return []
+            return [], False
+
+    def _entries_for_update(self, index_path: Path, adding: int) -> list | None:
+        """The current entries for a read-modify-write, or None when the index
+        exists but cannot be read. Saving after such a read would replace the
+        whole file with only the new entries, so the caller saves nothing; the
+        index is derived and rebuildable. Call with _index_io_lock held."""
+        cached = _index_cache.get(str(index_path))
+        if cached is not None:
+            return cached
+        entries, readable = self._read_disk(index_path)
+        if readable:
+            return entries
+        logger.warning(
+            "[VECTOR_INDEX] Refusing to overwrite unreadable index %s; %d entries "
+            "not saved. Rebuild with scripts/rebuild_indexes.py",
+            index_path.name, adding,
+        )
+        return None
 
     def save_index(self, index_path: Path, index_data: list) -> None:
         with _index_io_lock:
@@ -129,8 +154,9 @@ class VectorIndex:
                 del _index_cache[key]
                 logger.info("[VECTOR_INDEX] Cache invalidated after write: %s", index_path.name)
 
-    def append_entry(self, index_path: Path, entry: dict) -> None:
-        """Append one entry to the index at index_path.
+    def append_entry(self, index_path: Path, entry: dict) -> bool:
+        """Append one entry to the index at index_path. Returns False, saving
+        nothing, when the existing index cannot be read.
 
         Holds _index_io_lock across load, append and save, so concurrent
         callers serialize instead of each saving a copy that lacks the
@@ -138,28 +164,32 @@ class VectorIndex:
         readers and must not change before the save succeeds.
         """
         with _index_io_lock:
-            index_data = list(self.load_index(index_path))
-            index_data.append(entry)
-            self.save_index(index_path, index_data)
+            current = self._entries_for_update(index_path, 1)
+            if current is None:
+                return False
+            self.save_index(index_path, [*current, entry])
+            return True
 
-    def merge_entries(self, index_path: Path, entries: list[dict]) -> None:
+    def merge_entries(self, index_path: Path, entries: list[dict]) -> bool:
         """Add entries to the index at index_path, replacing any with the same
-        file_path.
+        file_path. Returns False, saving nothing, when the existing index
+        cannot be read.
 
         One load and one save under _index_io_lock, like append_entry but for
         a batch: an ingest embeds first, outside the lock, then calls this
         once, so a long embed cannot end in a save of a stale snapshot.
         """
         if not entries:
-            return
+            return True
         with _index_io_lock:
+            current = self._entries_for_update(index_path, len(entries))
+            if current is None:
+                return False
             incoming = {entry["file_path"]: entry for entry in entries}
-            index_data = [
-                incoming.pop(item.get("file_path"), item)
-                for item in self.load_index(index_path)
-            ]
+            index_data = [incoming.pop(item.get("file_path"), item) for item in current]
             index_data.extend(incoming.values())
             self.save_index(index_path, index_data)
+            return True
 
     def search(
         self,

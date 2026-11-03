@@ -35,7 +35,10 @@ from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger("ember.openai_adapter")
 
-# Seconds. Under the 180 s client limit, so the caller gets an answer.
+# Seconds. Chosen, not derived: long enough for a normal turn and its aux
+# calls to finish (the live same-session check waited 66 s), short enough that
+# a wedged turn ends in a visible error. The UI's chat request sets no
+# timeout, so this is the only bound on the wait.
 TURN_WAIT_TIMEOUT_S = 150
 
 

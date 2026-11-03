@@ -481,11 +481,19 @@ class FakeOllama:
 
 
 def _stage3_warnings(caplog) -> list[str]:
-    """The Stage 3 failure warnings in the captured log."""
+    """Every Stage 3 WARNING in the captured log: the classifier's
+    "Stage 3 failed" line and aux_chat's "stage3 outcome=" line."""
     return [
         r.getMessage() for r in caplog.records
-        if r.levelname == "WARNING" and "[INTENT_CLASSIFY] Stage 3" in r.getMessage()
+        if r.levelname == "WARNING" and (
+            "[INTENT_CLASSIFY] Stage 3" in r.getMessage()
+            or "[INTENT_CLASSIFY] stage3 outcome=" in r.getMessage()
+        )
     ]
+
+
+def _classifier_warning(warnings: list[str]) -> list[str]:
+    return [w for w in warnings if "[INTENT_CLASSIFY] Stage 3 failed" in w]
 
 
 def _think_sent_top_level(call: dict) -> bool:
@@ -628,22 +636,25 @@ class TestStage3Failure:
     WARNING carrying the failure type only (never the query or the model's
     output). Logged by default, so a missing auxiliary model shows."""
 
-    @pytest.mark.parametrize("fake,failure", [
-        (FakeOllama(content="not JSON at all"), "JSONDecodeError"),
-        (FakeOllama(exc=ConnectionError("Ollama unreachable")), "ConnectionError"),
+    @pytest.mark.parametrize("fake,failure,count", [
+        # The model answered, so aux_chat logged no outcome warning.
+        (FakeOllama(content="not JSON at all"), "JSONDecodeError", 1),
+        # The call raised: aux_chat's outcome line, then the classifier's.
+        (FakeOllama(exc=ConnectionError("Ollama unreachable")), "ConnectionError", 2),
         # A call that raises TimeoutError itself, inside the budget, is a
         # failure: outcome stage3_failed, not timeout.
-        (FakeOllama(exc=TimeoutError("socket timed out")), "TimeoutError"),
+        (FakeOllama(exc=TimeoutError("socket timed out")), "TimeoutError", 2),
     ], ids=["invalid-json", "ollama-exception", "call-raises-timeout"])
-    def test_failure_is_the_safe_default_with_one_warning(
-        self, caplog, monkeypatch, fake, failure
+    def test_failure_is_the_safe_default_with_its_warnings(
+        self, caplog, monkeypatch, fake, failure, count
     ):
         _use_client(monkeypatch, fake)
         with caplog.at_level("INFO", logger="ember.intent_classifier"):
             result = _stage3_classify_with_timeout("any query")
         assert result == ("vault_answerable", "stage3_failed")
         warnings = _stage3_warnings(caplog)
-        assert len(warnings) == 1 and failure in warnings[0]
+        assert len(warnings) == count and all(failure in w for w in warnings)
+        assert len(_classifier_warning(warnings)) == 1
 
     def test_unknown_label_warns_without_debug_and_without_the_label(
         self, caplog, monkeypatch
@@ -712,9 +723,11 @@ class TestStage3Timeout:
         assert len(warnings) == 1 and "TimeoutError" in warnings[0]
         assert query not in warnings[0]
 
-    def test_a_call_that_fails_after_the_timeout_warns_once(self, caplog, monkeypatch):
-        """The abandoned call failing later adds no second warning. Control:
-        TestStage3Failure, where the same failure inside the budget warns."""
+    def test_a_call_that_fails_after_the_timeout_warns_once_per_source(self, caplog, monkeypatch):
+        """The classifier warns once, as a timeout. The abandoned call failing
+        later adds aux_chat's outcome line only, not a second classifier
+        warning. Control: TestStage3Failure, where the same failure inside the
+        budget is the classifier's failure."""
         import threading
 
         release = threading.Event()
@@ -738,7 +751,9 @@ class TestStage3Timeout:
                 worker.join(timeout=5.0)
         assert result == ("vault_answerable", "timeout")
         warnings = _stage3_warnings(caplog)
-        assert len(warnings) == 1 and "TimeoutError" in warnings[0]
+        assert len(warnings) == 2
+        assert "Stage 3 failed: TimeoutError" in warnings[0]
+        assert "stage3 outcome=error type=ConnectionError" in warnings[1]
 
 
 class TestStage3TimeoutDefault:

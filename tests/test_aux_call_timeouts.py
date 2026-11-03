@@ -86,11 +86,13 @@ SITES = {
     "onboarding_format": Site(
         _run_onboarding_format, "src.onboarding.service", _constant("AUX_FORMAT_TIMEOUT_S")),
     "lodestone_inference": Site(
-        _run_lodestone_inference, "src.api.main", _constant("AUX_FORMAT_TIMEOUT_S")),
+        _run_lodestone_inference, "src.api.main", _constant("AUX_LODESTONE_TIMEOUT_S")),
 }
 
 
-def _assert_site_uses_aux_chat(site: Site, monkeypatch) -> None:
+def _run_recorded(site: Site, monkeypatch) -> tuple[list[float], MagicMock, MagicMock]:
+    """Run a site against a recording client. Returns (timeouts asked for,
+    the client, the bare ollama.chat)."""
     timeouts: list[float] = []
     client = MagicMock()
     client.chat.return_value = _answer(site.reply)
@@ -104,6 +106,11 @@ def _assert_site_uses_aux_chat(site: Site, monkeypatch) -> None:
     monkeypatch.setattr("ollama.chat", direct)
 
     site.run()
+    return timeouts, client, direct
+
+
+def _assert_site_uses_aux_chat(site: Site, monkeypatch) -> None:
+    timeouts, client, direct = _run_recorded(site, monkeypatch)
 
     assert direct.call_count == 0, "called ollama.chat directly, with no timeout"
     assert timeouts == [site.timeout()]
@@ -144,6 +151,37 @@ def test_control_a_site_with_the_wrong_timeout_fails(monkeypatch):
     monkeypatch.setattr(f"{site.module}.aux_chat", long_timeout)
     with pytest.raises(AssertionError):
         _assert_site_uses_aux_chat(site, monkeypatch)
+
+
+# ---------------------------------------------------------------------------
+# Budgets: a capped call fits its cap on the slowest supported hardware
+# ---------------------------------------------------------------------------
+
+# Sites with no num_predict; their budgets are stated in aux_client.py, not
+# derived. Pinned so a cap added or removed is noticed here.
+_UNCAPPED = {"stage3", "review", "buffer_summary", "onboarding_format"}
+
+
+def _fits_the_floor(timeout_s: float, cap: int) -> bool:
+    return timeout_s >= (cap / aux_client.SUPPORTED_MIN_TOKENS_PER_S
+                         + aux_client.SUPPORTED_MAX_COLD_LOAD_S)
+
+
+@pytest.mark.parametrize("name", SITES)
+def test_a_capped_site_fits_its_cap_at_the_supported_floor(name, monkeypatch):
+    timeouts, client, _ = _run_recorded(SITES[name], monkeypatch)
+    cap = (client.chat.call_args.kwargs.get("options") or {}).get("num_predict")
+
+    if name in _UNCAPPED:
+        assert cap is None
+        return
+    assert cap is not None, f"{name} has no num_predict; list it in _UNCAPPED"
+    assert _fits_the_floor(timeouts[0], cap), (name, timeouts[0], cap)
+
+
+def test_control_a_500_token_cap_does_not_fit_30_seconds():
+    assert not _fits_the_floor(30, 500)
+    assert _fits_the_floor(45, 500)
 
 
 # ---------------------------------------------------------------------------

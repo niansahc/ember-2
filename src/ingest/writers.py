@@ -73,4 +73,7 @@ def write_chunks_to_vault(chunks, vault_path):
             },
         })
 
-    vector_index.merge_entries(index_path, entries)
+    if not vector_index.merge_entries(index_path, entries):
+        # The chunk files are written; only the derived index is behind.
+        logger.warning("[INGEST] %d chunks written but not indexed: index unreadable",
+                       len(entries))

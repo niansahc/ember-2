@@ -301,4 +301,5 @@ def _matches_any(text: str, patterns: tuple[str, ...]) -> bool:
 
 def clear_pending_offer(session_id: str) -> None:
     """Clear any pending offer for a session."""
-    _pending_offers.pop(session_id, None)
+    with _offers_lock:
+        _pending_offers.pop(session_id, None)

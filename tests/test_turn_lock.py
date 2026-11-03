@@ -13,6 +13,7 @@ never waits reproduces the defect.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 import time
 from contextlib import ExitStack
@@ -177,6 +178,8 @@ def test_control_without_the_lock_two_sessions_are_created(env, no_lock):
 
 
 def test_only_one_caller_gets_the_pending_offers():
+    """Guaranteed by the single pop(session_id, None), not by the lock; the
+    control below is the check-then-pop form it replaced."""
     session_id = "sess_test_lock_offers"
     task_handler.store_pending_offer(session_id, "Write the synthetic report")
 
@@ -207,23 +210,48 @@ def test_control_check_then_pop_raises_keyerror():
     assert len(errors) == 1 and isinstance(errors[0], KeyError)
 
 
-def test_offers_stored_during_a_pop_are_not_lost():
+class _SlowSetdefault(dict):
+    """Holds a store between creating the session's list and appending to
+    it, the window where a pop can take the list away."""
+
+    def __init__(self):
+        super().__init__()
+        self.entered = threading.Event()
+
+    def setdefault(self, key, default=None):
+        value = super().setdefault(key, default)
+        self.entered.set()
+        time.sleep(0.3)
+        return value
+
+
+def _store_during_a_pop(monkeypatch) -> list[str]:
+    """A store is between setdefault and append when a pop runs. Returns the
+    offers that survive, popped or still stored."""
     session_id = "sess_test_lock_store"
+    offers = _SlowSetdefault()
+    monkeypatch.setattr(task_handler, "_pending_offers", offers)
     popped: list[str] = []
 
-    def work(i):
-        if i == 0:
-            for _ in range(200):
-                result = task_handler.check_pending_confirmation(session_id, "no")
-                popped.extend(result.task_titles if result else [])
-        else:
-            for n in range(100):
-                task_handler.store_pending_offer(session_id, f"task {i} {n}")
+    def pop_once_the_store_is_inside():
+        assert offers.entered.wait(5)
+        result = task_handler.check_pending_confirmation(session_id, "no")
+        popped.extend(result.task_titles if result else [])
 
-    _, errors = run_in_threads(work, 3)
-    assert errors == []
-    left = task_handler._pending_offers.pop(session_id, [])
-    assert len(popped) + len(left) == 200
+    popper = threading.Thread(target=pop_once_the_store_is_inside)
+    popper.start()
+    task_handler.store_pending_offer(session_id, "Write the synthetic report")
+    popper.join(5)
+    return popped + offers.get(session_id, [])
+
+
+def test_an_offer_stored_during_a_pop_is_kept(monkeypatch):
+    assert _store_during_a_pop(monkeypatch) == ["Write the synthetic report"]
+
+
+def test_control_without_the_offers_lock_the_offer_is_lost(monkeypatch):
+    monkeypatch.setattr(task_handler, "_offers_lock", contextlib.nullcontext())
+    assert _store_during_a_pop(monkeypatch) == []
 
 
 # --- Turns through the route ----------------------------------------------

@@ -16,9 +16,11 @@ ingest loses entries, and parsing from the shared upload path mixes bytes.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -225,6 +227,49 @@ def test_same_name_uploads_each_parse_their_own_bytes(client, vault, monkeypatch
 def test_no_work_directory_is_left_behind(client, vault, monkeypatch):
     _same_name_uploads(client, vault, monkeypatch)
     assert [p.name for p in (vault / "imports" / "uploads").iterdir()] == ["same.txt"]
+
+
+def test_control_a_failed_cleanup_leaves_the_directory_and_says_so(
+    client, vault, monkeypatch, caplog,
+):
+    """The test above would also pass if no work directory were ever made.
+    With removal failing, the directories stay and each is logged."""
+    monkeypatch.setattr(ingest_route, "shutil", SimpleNamespace(rmtree=lambda *a, **k: None))
+    with caplog.at_level(logging.WARNING, logger="ember.ingest"):
+        _same_name_uploads(client, vault, monkeypatch)
+
+    left = [p for p in (vault / "imports" / "uploads").iterdir() if p.is_dir()]
+    assert len(left) == 2
+    warned = [r.getMessage() for r in caplog.records
+              if r.getMessage().startswith("[UPLOAD] Work directory left behind")]
+    assert sorted(warned) == sorted(
+        f"[UPLOAD] Work directory left behind: {p.name}" for p in left)
+
+
+def _parse_copies(client, monkeypatch, name, body) -> int:
+    """How many parse copies one upload wrote."""
+    monkeypatch.setattr(writers, "embed_text", lambda _t: [0.1] * 768)
+    monkeypatch.setattr("src.memory.write_memory.embed_text", lambda _t: [0.1] * 768)
+    real = ingest_route._parse_path
+    calls = []
+
+    def counting(work_dir, saved_path):
+        calls.append(saved_path.name)
+        return real(work_dir, saved_path)
+
+    monkeypatch.setattr(ingest_route, "_parse_path", counting)
+    response = client.post("/ingest/upload", files={"file": (name, body, "application/octet-stream")})
+    assert response.status_code == 200
+    return len(calls)
+
+
+def test_a_json_upload_writes_no_parse_copy(client, monkeypatch):
+    body = json.dumps([{"text": _text("iota")}]).encode()
+    assert _parse_copies(client, monkeypatch, "records.json", body) == 0
+
+
+def test_control_a_text_upload_writes_one_parse_copy(client, monkeypatch):
+    assert _parse_copies(client, monkeypatch, "notes.txt", _text("lambda").encode()) == 1
 
 
 def test_control_parsing_the_shared_path_mixes_uploads(client, vault, monkeypatch):

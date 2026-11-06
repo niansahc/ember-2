@@ -58,6 +58,17 @@ def _get_write_memory_store() -> SqliteVectorStore:
     return get_store(db_path)
 
 
+def _get_write_ingested_store() -> SqliteVectorStore:
+    """Store for the active vault's ingested.db, on the write path.
+
+    `ingested` records are read from ingested.db only (semantic_search), so
+    this is where they are indexed (issue #174). Created on first write, like
+    memory.db above.
+    """
+    db_path = get_private_vault_path() / "embeddings" / "ingested.db"
+    return get_store(db_path)
+
+
 def normalize_text(text: str) -> str:
     text = text.lower().strip()
     text = re.sub(r"\s+", " ", text)
@@ -257,6 +268,25 @@ def index_record(record: dict, file_path: Path) -> None:
                 "its canonical id was already claimed in memory.db",
                 memory_type,
             )
+    elif memory_type == "ingested":
+        # Issue #174: ingested.db is the only store retrieval reads this type
+        # from. The JSON index this branch used to fall through to is unread.
+        _get_write_ingested_store().insert({
+            "id": memory_id,
+            "text": text,
+            "embedding": embedding,
+            "source": source,
+            "memory_type": memory_type,
+            "created_at": record.get("timestamp", memory_id),
+            "authorship": classify_authorship(memory_type, source, clean_metadata),
+            "metadata": {
+                **clean_metadata,
+                "file_path": str(file_path),
+                "normalized_text": normalized,
+                "tags": tags,
+                "source_field": source,
+            },
+        })
     else:
         # Fallback to JSON index for non-migrated types. append_entry holds
         # the index lock across load, append and save; an unlocked sequence

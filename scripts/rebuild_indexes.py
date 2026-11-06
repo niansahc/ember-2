@@ -57,7 +57,6 @@ Progress is printed every batch so it doesn't look hung on large corpora.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sqlite3
@@ -79,11 +78,12 @@ if __name__ == "__main__":
     load_env_file()
 
 from src.core.config import get_private_vault_path
+from src.ingest.index_routing import is_prior_substrate
 from src.memory.authorship import classify_authorship
 from src.memory.eval_fixtures import is_eval_fixture, should_index_record
 from src.memory.write_memory import should_index
 from src.retrieval.embedding_model import embed_texts
-from src.retrieval.sqlite_vector_store import SqliteVectorStore
+from src.retrieval.sqlite_vector_store import SqliteVectorStore, content_key
 
 # Batch size for embedding calls — balances speed vs memory
 BATCH_SIZE = 50
@@ -99,9 +99,8 @@ MEMORY_DB_TYPES = ("conversation", "profile", "reflection", "journal")
 # them was index-only and left canonical JSON untouched per the append-only
 # rule. They are conversation for every retrieval purpose, so the rebuild
 # applies the same predicate the migration did rather than reading the
-# stale type off disk.
-PRIOR_SUBSTRATE_SOURCE = "chatgpt"
-PRIOR_SUBSTRATE_ROLES = frozenset({"user", "assistant"})
+# stale type off disk. The predicate is shared with the live ingest writer
+# (src/ingest/index_routing.py) so the two cannot drift apart.
 
 # Columns carried across a rebuild when a source record can be matched to a
 # row in the existing database. Everything here is either delivery history
@@ -143,8 +142,11 @@ def _content_key(text: str) -> str:
     preserve store_id and delivery history. Measured coverage on a real vault
     at the time this was written: 16,804 of 16,899 distinct indexed texts
     matched a canonical record.
+
+    The key itself is src/retrieval/sqlite_vector_store.content_key, which
+    the live ingest writer also skips already-indexed content on.
     """
-    return hashlib.sha256(_normalize_for_join(text).encode("utf-8", "ignore")).hexdigest()
+    return content_key(text)
 
 
 @dataclass
@@ -357,10 +359,7 @@ def _is_prior_substrate(record: dict) -> bool:
     assistant. A chunk whose role is missing or unrecognised is left alone
     rather than guessed at, which is why it stays out of memory.db.
     """
-    if (record.get("source") or "") != PRIOR_SUBSTRATE_SOURCE:
-        return False
-    role = ((record.get("metadata") or {}).get("role") or "")
-    return role in PRIOR_SUBSTRATE_ROLES
+    return is_prior_substrate(record.get("source"), record.get("metadata"))
 
 
 def collect_source_records(vault: Path) -> list[SourceRecord]:

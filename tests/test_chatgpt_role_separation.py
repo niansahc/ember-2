@@ -8,6 +8,7 @@ chunks remain fully indexed.
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,11 +36,20 @@ def _make_chatgpt_doc(messages, roles):
 
 
 def _read_index(vault_path: Path) -> list:
-    index_file = vault_path / "embeddings" / "ingested_index.json"
-    if not index_file.exists():
-        return []
-    with open(index_file, "r", encoding="utf-8") as f:
-        return json.load(f)
+    """Every indexed row in both stores an ingest can write (#174): ChatGPT
+    turns go to memory.db as conversation, other chunks to ingested.db."""
+    rows = []
+    for db_name in ("memory.db", "ingested.db"):
+        db = vault_path / "embeddings" / db_name
+        if not db.exists():
+            continue
+        conn = sqlite3.connect(str(db))
+        try:
+            for text, metadata in conn.execute("SELECT text, metadata FROM vectors"):
+                rows.append({"text": text, "metadata": json.loads(metadata or "{}")})
+        finally:
+            conn.close()
+    return rows
 
 
 def _read_flat_chunks(vault_path: Path) -> list[dict]:

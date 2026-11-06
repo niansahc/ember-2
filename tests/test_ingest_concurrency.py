@@ -9,14 +9,16 @@ bytes.
 Overlap is forced, not hoped for: each ingest's first embed waits on a barrier
 until the other has started, so both are inside the window at once.
 
-Positive controls replay the defects: a stale snapshot saved at the end of an
-ingest loses entries, and parsing from the shared upload path mixes bytes.
+Index entries are read from ingested.db, the store retrieval reads (#174).
+Positive controls: a dropped index write is seen as a missing word, and
+parsing from the shared upload path mixes bytes.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -26,7 +28,6 @@ import pytest
 
 from src.api.routes import ingest as ingest_route
 from src.ingest import writers
-from src.retrieval.vector_index import VectorIndex, clear_index_cache
 from tests.conftest import _make_vault_tree, run_in_threads
 
 FILLER = "Synthetic harbor notes about tides, ropes and lanterns for the winter. " * 12
@@ -123,10 +124,14 @@ def _run(scenario, client, vault):
 
 
 def _indexed_words(vault: Path, scenario: str) -> set[str]:
-    index = vault / "embeddings" / "ingested_index.json"
-    clear_index_cache()
-    entries = json.loads(index.read_text(encoding="utf-8"))
-    return {w for w in WORDS[scenario] if any(w in e["text"] for e in entries)}
+    """Words whose chunk is in ingested.db, the store retrieval reads (#174)."""
+    db = vault / "embeddings" / "ingested.db"
+    conn = sqlite3.connect(str(db))
+    try:
+        texts = [row[0] for row in conn.execute("SELECT text FROM vectors")]
+    finally:
+        conn.close()
+    return {w for w in WORDS[scenario] if any(w in t for t in texts)}
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS)
@@ -138,52 +143,30 @@ def test_overlapping_ingests_keep_every_index_entry(
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS)
-def test_control_a_stale_snapshot_loses_entries(
+def test_control_a_lost_write_is_detected(
     scenario, client, vault, overlapping_embeds, monkeypatch,
 ):
-    """The defect: an ingest saves what it read before embedding, plus its
-    own entries. Index empty at the start, as in the scenarios above."""
+    """The test above would also pass if it could not see the store. Drop
+    the chunk writer's first index write and exactly one word goes missing."""
+    real_get_store = writers.get_store
+    dropped = threading.Event()
 
-    def save_stale_snapshot(index_path, entries):
-        writers.vector_index.save_index(index_path, entries)
+    class DropFirstWrite:
+        def __init__(self, store):
+            self._store = store
 
-    monkeypatch.setattr(writers.vector_index, "merge_entries", save_stale_snapshot)
+        def __getattr__(self, name):
+            return getattr(self._store, name)
+
+        def replace(self, record):
+            if not dropped.is_set():
+                dropped.set()
+                return record["id"]
+            return self._store.replace(record)
+
+    monkeypatch.setattr(writers, "get_store", lambda path: DropFirstWrite(real_get_store(path)))
     _run(scenario, client, vault)
     assert len(_indexed_words(vault, scenario)) == 1
-
-
-def _entry(path: str, text: str = "t") -> dict:
-    return {"file_path": path, "embedding": [0.0], "text": text, "metadata": {}}
-
-
-def test_merge_entries_updates_in_place_and_keeps_the_rest(tmp_path):
-    index = VectorIndex()
-    path = tmp_path / "index.json"
-    index.save_index(path, [_entry("a", "old"), _entry("b"), {"text": "no file path"}])
-    cached = index.load_index(path)
-
-    index.merge_entries(path, [_entry("a", "new"), _entry("c")])
-
-    merged = index.load_index(path)
-    assert [e.get("file_path") for e in merged] == ["a", "b", None, "c"]
-    assert merged[0]["text"] == "new"
-    # The list readers already hold is not changed under them.
-    assert cached[0]["text"] == "old"
-
-
-def test_merge_entries_serializes_with_append_entry(tmp_path):
-    index = VectorIndex()
-    path = tmp_path / "index.json"
-
-    def write(i):
-        if i % 2:
-            index.append_entry(path, _entry(f"appended{i}"))
-        else:
-            index.merge_entries(path, [_entry(f"merged{i}")])
-
-    _, errors = run_in_threads(write, 8)
-    assert errors == []
-    assert len(index.load_index(path)) == 8
 
 
 def _same_name_uploads(client, vault, monkeypatch, *, parse_path=None):

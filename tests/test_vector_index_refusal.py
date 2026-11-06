@@ -50,17 +50,13 @@ def _corrupt(path):
 
 
 @pytest.mark.parametrize("make", [_oversized, _corrupt], ids=["oversized", "corrupt"])
-@pytest.mark.parametrize("write", ["merge", "append"])
-def test_an_unreadable_index_is_not_overwritten(tmp_path, caplog, make, write):
-    path = tmp_path / "ingested_index.json"
+def test_an_unreadable_index_is_not_overwritten(tmp_path, caplog, make):
+    path = tmp_path / "task_index.json"
     index = make(path)
     before = path.read_bytes()
 
     with caplog.at_level(logging.WARNING, logger="ember.vector_index"):
-        if write == "merge":
-            saved = index.merge_entries(path, [NEW])
-        else:
-            saved = index.append_entry(path, NEW)
+        saved = index.append_entry(path, NEW)
 
     assert saved is False
     assert path.read_bytes() == before
@@ -68,22 +64,18 @@ def test_an_unreadable_index_is_not_overwritten(tmp_path, caplog, make, write):
                for r in caplog.records)
 
 
-@pytest.mark.parametrize("write", ["merge", "append"])
-def test_control_a_missing_index_takes_the_write(tmp_path, write):
-    path = tmp_path / "ingested_index.json"
-    index = VectorIndex()
-    saved = index.merge_entries(path, [NEW]) if write == "merge" else index.append_entry(path, NEW)
+def test_control_a_missing_index_takes_the_write(tmp_path):
+    path = tmp_path / "task_index.json"
+    saved = VectorIndex().append_entry(path, NEW)
 
     assert saved is True
     assert json.loads(path.read_text(encoding="utf-8")) == [NEW]
 
 
-@pytest.mark.parametrize("write", ["merge", "append"])
-def test_control_a_valid_index_takes_the_write(tmp_path, write):
-    path = tmp_path / "ingested_index.json"
+def test_control_a_valid_index_takes_the_write(tmp_path):
+    path = tmp_path / "task_index.json"
     old = _valid(path)
-    index = VectorIndex()
-    saved = index.merge_entries(path, [NEW]) if write == "merge" else index.append_entry(path, NEW)
+    saved = VectorIndex().append_entry(path, NEW)
 
     assert saved is True
     assert json.loads(path.read_text(encoding="utf-8")) == old + [NEW]

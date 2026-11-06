@@ -58,18 +58,14 @@ Role detection: any selected row whose metadata.role is not exactly
 unchanged, and counted separately as "skipped (unresolvable role)".
 Nothing is guessed or defaulted.
 
-Scope boundary: this migrates the EXISTING misfiled corpus only. It does
-NOT change the ingest pipeline (src/ingest/writers.py, chunking.py) so
-that FUTURE ChatGPT imports land as conversation directly -- the live
-ingest writer today only writes to the legacy JSON index
-(ingested_index.json via VectorIndex), never to ingested.db (SQLite);
-nothing has landed in ingested.db since this corpus did. That mismatch
-is the already-tracked "ingest writer and retrieval reader point at
-different stores" defect (issue #174), explicitly out of scope for an
-index-only migration. The general rule -- prior-substrate conversation
-is conversation, and any future export-and-ingest of the same form
-inherits it -- is documented here as guidance for whoever fixes #174
-next, not implemented as pipeline code in this script.
+Scope boundary: this migrates the EXISTING misfiled corpus only. When it
+was written, the live ingest writer saved embeddings only to the legacy
+JSON index (ingested_index.json), which retrieval never reads (issue
+#174). That is now fixed in the pipeline: src/ingest/writers.py indexes
+future ChatGPT imports into memory.db as conversation directly, using the
+same predicate as this script (src/ingest/index_routing.py), and holds
+assistant turns out of the index per ADR-033. Chunk files the old writer
+left unindexed are picked up by scripts/backfill_ingested_index.py.
 
 Usage
 -----

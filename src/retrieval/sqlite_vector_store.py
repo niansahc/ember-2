@@ -33,6 +33,7 @@ store.close()
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -98,16 +99,30 @@ class RetrievalStatsWrite:
 ID_COLLISION_MARKER = "#"
 
 
+def _norm(value: str | None) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip().lower())
+
+
 def _same_text(left: str | None, right: str | None) -> bool:
     """Whitespace- and case-insensitive equality, matching the rebuild's join.
 
     Re-indexing the same record must not be mistaken for a collision just
     because the text was re-wrapped on the way through.
     """
-    def _norm(value: str | None) -> str:
-        return re.sub(r"\s+", " ", (value or "").strip().lower())
-
     return _norm(left) == _norm(right)
+
+
+def content_key(text: str | None) -> str:
+    """Identity of a row's content: sha256 of its normalized text.
+
+    The same normalization as _same_text, and the join key
+    scripts/rebuild_indexes.py matches source records to indexed rows on.
+    Row ids are not a usable identity across the index's history (the
+    migrated corpus is keyed by absolute file path, later writes by
+    chunk_id), so a writer that must not index the same content twice
+    compares this instead.
+    """
+    return hashlib.sha256(_norm(text).encode("utf-8", "ignore")).hexdigest()
 
 
 class SqliteVectorStore:
@@ -282,6 +297,39 @@ class SqliteVectorStore:
         self._conn.commit()
         return record_id
 
+    def replace(self, record: dict) -> str:
+        """Write a record whose id names one canonical file. Returns its id.
+
+        For writers whose canonical file can be rewritten under the same name,
+        which the ingest writer does when a document is ingested again
+        (src/ingest/writers.py). The row must then follow the file:
+
+          - no row with this id -> inserted, as insert() would.
+          - same id, same normalized text -> left alone, delivery history
+            included. Re-ingesting an unchanged document is a no-op.
+          - same id, different text -> the old row is deleted and the new one
+            inserted, in one locked step. insert() would instead keep the old
+            row and add `{id}#2` (issue #210), leaving the superseded text
+            retrievable with no canonical file behind it.
+
+        Takes the same keys as insert().
+        """
+        embedding: list[float] = record["embedding"]
+        embedding_blob = struct.pack(f"{len(embedding)}f", *embedding)
+        metadata_str = json.dumps(record.get("metadata", {}), ensure_ascii=False)
+        record_id = str(record["id"])
+        text = record["text"]
+
+        with self._lock:
+            existing = self._conn.execute(
+                "SELECT text FROM vectors WHERE id = ?", (record_id,)
+            ).fetchone()
+            if existing is not None:
+                if _same_text(existing["text"], text):
+                    return record_id
+                self._conn.execute("DELETE FROM vectors WHERE id = ?", (record_id,))
+            return self._insert_locked(record, record_id, text, embedding_blob, metadata_str)
+
     def _disambiguate_id(self, record_id: str) -> str:
         """First free `{record_id}#n`, n starting at 2.
 
@@ -413,6 +461,22 @@ class SqliteVectorStore:
     # ------------------------------------------------------------------
     # Utility
     # ------------------------------------------------------------------
+
+    def content_keys(self, memory_type: str | None = None) -> set[str]:
+        """content_key() of every row, optionally of one memory_type.
+
+        Suppressed rows are included on purpose: a writer that skips content
+        already present must also skip content that was indexed and then
+        suppressed, or re-ingesting would bring it back unsuppressed.
+        """
+        with self._lock:
+            if memory_type:
+                rows = self._conn.execute(
+                    "SELECT text FROM vectors WHERE memory_type = ?", (memory_type,)
+                ).fetchall()
+            else:
+                rows = self._conn.execute("SELECT text FROM vectors").fetchall()
+        return {content_key(row["text"]) for row in rows}
 
     def count(self) -> int:
         """Return the total number of records in the store."""

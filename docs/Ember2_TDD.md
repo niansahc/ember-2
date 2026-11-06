@@ -1493,6 +1493,7 @@ The system should:
 - avoid silent failures
 - expose recoverable maintenance workflows
 - degrade gracefully if critique JSON parsing fails
+- keep one slow or stalled model call from blocking other requests (see section 52)
 
 ## 23.3 Maintainability
 
@@ -2181,6 +2182,18 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 
 - **Memory staleness vs. importance are orthogonal** — STATE_STALENESS_DAYS applies a time-based penalty but importance and staleness are independent dimensions. A frequently-retrieved memory can become confidently wrong rather than just outdated. Confirmed open research problem (State of AI Agent Memory, 2026). Related to MemPalace validity window pattern (see Active Watch Items).
   → open: revisit when connector layer increases volume of external facts entering the vault (no version assigned)
+
+- **Wedged turn blocks its session** - the turn lock (section 52) serializes one session's turns, and main generation has no timeout. A turn that never returns holds its session; each later turn in that session waits 150 s and then gets an error. Other sessions are unaffected. See KNOWN_ISSUES.
+  -> open: no version assigned
+
+- **Second-tab onboarding answer lands on the next step** - onboarding progress is global, not per session. Two tabs answering the same question are serialized, and the second answer is filed under the next step. See KNOWN_ISSUES.
+  -> open: no version assigned
+
+- **Ingested JSON index not read by retrieval (#174)** - retrieval reads `ingested` from SQLite, so the JSON index that ingest still writes is not read. See KNOWN_ISSUES.
+  -> open: #174
+
+- **Stage 3 sends two vault questions to web search** - with Stage 3 live, the Tier 2 cases `work_context_architecture` and `timeline_recent` are labelled `needs_internet`. The `web_search` policy then halves their memory scores. See KNOWN_ISSUES and section 52.
+  -> open: ADR-034 / ADR-037 territory (no version assigned)
 
 - **MemPalace verbatim baseline eval question** — how much does Ember's 18-type taxonomy and hot/warm/cold tiering actually add over a naive verbatim + embedding baseline? Retrieval eval with typed structure disabled required before adding further retrieval complexity.
   → open: run before next retrieval architecture change (no version assigned)
@@ -2913,6 +2926,8 @@ Key property: passphrase changes are operationally free. Re-wrap master key with
 
 Manual setup via SETUP.md works on all platforms (Python, Docker, Ollama are cross-platform). The installer (ember-2-installer) supports Windows (.exe via NSIS), Mac (.dmg), and Linux (.AppImage) as of v0.12.0. Tailscale works identically on all platforms.
 
+**Hardware minimum (PR #313).** Local models need a GPU that Ollama supports, with enough VRAM to hold the whole model: at least 8 GB for the default qwen3:8b (about 5.2 GB). CPU-only machines and partial GPU offload are not supported. The auxiliary call timeouts (section 52) are sized for a GPU and time out on a CPU. They assume a floor of 15 tokens/s and a cold model load of at most 10 s (`SUPPORTED_MIN_TOKENS_PER_S`, `SUPPORTED_MAX_COLD_LOAD_S` in `src/llm/aux_client.py`). These two figures are assumptions set well below one measured card; the slowest supported card has not been measured. SETUP.md ("Hardware") and docs/model_guide.md state the same minimum. The installer does not state it yet.
+
 ---
 
 # 40. Backup and Recovery
@@ -3304,3 +3319,69 @@ The model shifts into a therapeutic/counselor register on emotionally charged in
 **Mitigation:** Nature layer + identity rules reduce frequency. Post-generation filter catches pattern-matched instances. Full resolution likely requires model-level intervention (fine-tuning or model upgrade).
 
 **Revisit trigger:** Upgrading to 14B+ model or fine-tuning qwen3:8b on Ember-specific conversational data.
+
+---
+
+# 52. Request Concurrency and Auxiliary Call Timeouts
+
+**Status: Shipped in PR #313 (v0.18.1 cycle).**
+
+## 52.1 Problem
+
+The chat handler ran blocking work inline on the event loop, and the auxiliary Ollama calls had no client timeout. One stalled call froze every request, `/api/health` included.
+
+## 52.2 Turns Off the Event Loop
+
+- The chat turn body runs on a worker thread. The grounded SSE body keeps its blocking steps off the loop. `ingest_upload` and `ingest_json` run off the loop as well.
+- Each turn is bound to the vault it started in. The binding is held on the worker for the synchronous turn, and set per call in the SSE body (never across a yield). A vault swap during a turn cannot send its writes to the other vault.
+- Not covered, by decision: the main generation timeout, the embedding call timeout, and background auxiliary calls.
+
+## 52.3 Turn Lock
+
+Moving turns off the loop removed the serialization the blocked loop used to give. `src/api/turn_lock.py` restores it per session:
+
+- One turn at a time per session. Other sessions and other endpoints stay concurrent.
+- The lock is an `asyncio.Lock`, taken and released on the event loop, so a waiting turn holds no worker thread. It is held for the whole turn, including streaming, post-stream cleanup and `on_abort`.
+- Lock order: the turn lock comes first, before any buffer, pending or store lock.
+- The wait is bounded: `TURN_WAIT_TIMEOUT_S = 150`. This is a chosen value, not a derived one. It leaves room for a normal turn and its auxiliary calls, and it is the only bound on the wait, because the UI's chat request sets no timeout. A waiter that runs out gets HTTP 503 ("The previous turn has not finished.") or, when streaming, the generation-failed SSE frames. Logs: `[TURN_LOCK] waited ms=<n>`, `[EARLY-RETURN] label=turn_busy`.
+
+Turns from different sessions now run at the same time, so state shared across sessions has locks of its own:
+
+| State | Lock |
+|---|---|
+| Onboarding progress (process-wide) | `OnboardingService._lock` across read, format and write; `handle()` re-checks `is_active()` under it and returns None if another session finished onboarding |
+| Timer stop (read, then write) | `_timer_lock` in `src/state/timer_service.py`; `stop_most_recent_timer()` |
+| Pending task offers | `_offers_lock` in `src/tasks/task_handler.py`, store, pop and clear |
+| Pending confirmation write | `_pending_write_lock` in `src/api/openai_adapter.py` (defence in depth on the chat path) |
+| SQLite vector store | one `threading.RLock` per `SqliteVectorStore` (section 52.5) |
+
+## 52.4 Auxiliary Call Timeouts
+
+`src/llm/aux_client.py` `aux_chat` wraps the auxiliary Ollama calls on the request path with a real client timeout. When it fires, the connection closes, Ollama cancels the task and frees its slot, and the caller's fail-open handling runs. Each call logs one line, labels and numbers only: `[TAG] step ms=<n>`, or `outcome=timeout` / `outcome=error type=<name>`.
+
+Closing the connection also aborts a model load in progress, so every timeout must outlast a cold load on supported hardware (section 39). Budgets assume 15 tokens/s and a 10 s load; a capped call gets at least cap / 15 + 10 s (`tests/test_aux_call_timeouts.py` checks every capped site).
+
+| Constant | Seconds | Callers |
+|---|---|---|
+| `AUX_CHECK_TIMEOUT_S` | 15 | yes/no checks (cap 10 tokens) |
+| `AUX_REWRITE_TIMEOUT_S` | 45 | coaching and identity rewrites (cap 500) |
+| `AUX_REVIEW_TIMEOUT_S` | 60 | constitutional review (uncapped, thinking off) |
+| `AUX_SUMMARY_TIMEOUT_S` | 60 | buffer compression summary (uncapped, thinking off) |
+| `AUX_VISION_TIMEOUT_S` | 120 | VL preprocessor (cap 300, plus loading the vision model) |
+| `AUX_FORMAT_TIMEOUT_S` | 45 | onboarding answer format (uncapped, thinking on, budgeted for 360 tokens) |
+| `AUX_LODESTONE_TIMEOUT_S` | 30 | lodestone value inference (cap 100) |
+| `AUX_STAGE3_LOAD_TIMEOUT_S` | 30 | intent classifier Stage 3 client timeout |
+
+**Stage 3 has two limits.** The budget (`INTENT_CLASSIFIER_TIMEOUT_MS`, default 1500 ms) caps the turn: after it, the classifier returns the safe default, `vault_answerable`, with telemetry outcome `timeout`. The client timeout is `max(AUX_STAGE3_LOAD_TIMEOUT_S, budget + 1 s)`. An abandoned call therefore stays connected, a cold load finishes, and the next query finds the model warm.
+
+During the PR, the client timeout briefly equalled the budget. Each overrun then aborted the cold load, the auxiliary model never loaded, and every Stage 3 call fell back to the safe default. Tier 2 read 11 passed and 4 warned in that state. With Stage 3 live, on main before and after the PR, it reads 9 passed and 6 warned: `work_context_architecture` and `timeline_recent` are routed to `web_search` (KNOWN_ISSUES, "Stage 3 sends two vault questions to web search"). A Tier 2 count that rises when nothing in retrieval changed can mean Stage 3 stopped answering. Check the `[INTENT_CLASSIFY]` outcome lines.
+
+## 52.5 Shared Store Safety
+
+- **SQLite vector store.** The store keeps one shared `sqlite3` connection (`check_same_thread=False`). Two threads using it at once failed inside the sqlite3 module (`InterfaceError`, `IndexError`, `SystemError`). Every use of the connection now runs under one `threading.RLock` per store: init and migrations, insert, search, count, delete, close, retrieval stats. `search()` reads its rows under the lock and scores them after it. Ranking and results are unchanged.
+- **JSON vector index.** `append_entry` and `merge_entries` (`src/retrieval/vector_index.py`) refuse to save over an index they could not read (oversized, corrupt, not a list, or an OS error). They return False and log `[VECTOR_INDEX] Refusing to overwrite unreadable index <name>; <n> entries not saved. Rebuild with scripts/rebuild_indexes.py`. Ingest logs the chunks it wrote but could not index. Readers still see an empty list.
+- **Upload work directory.** Each upload uses its own work directory, removed afterwards. If removal fails, `[UPLOAD] Work directory left behind: <name>` is logged. JSON uploads write no parse copy.
+
+## 52.6 Open
+
+See section 50.3 and KNOWN_ISSUES: a wedged turn blocks its session; a second tab's onboarding answer lands on the next step; #174; Stage 3 misroutes two vault questions. The hardware floor is an assumption, and the installer does not state the GPU minimum yet.

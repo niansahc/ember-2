@@ -252,6 +252,9 @@ def test_onboarding_state_collision_does_not_fail_the_turn(tmp_path, monkeypatch
     # read_by_category must see no onboarding record so handle() takes the
     # first-call path and writes step 0 under the taken name.
     monkeypatch.setattr(service._state, "read_by_category", lambda _category: [])
+    # handle() re-checks is_active() under its lock; this turn is a first run,
+    # whatever profile records the shared test vault holds.
+    monkeypatch.setattr(service, "is_active", lambda: True)
 
     with caplog.at_level(logging.ERROR):
         reply = service.handle("hello")

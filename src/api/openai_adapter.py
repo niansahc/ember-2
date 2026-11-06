@@ -11,6 +11,7 @@ from typing import Any, List, Optional, Literal
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
+from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 logger = logging.getLogger("ember.openai_adapter")
 
@@ -23,6 +24,7 @@ from src.api.pregeneration import (
     PreGenerationRouter,
 )
 from src.api.sse import (
+    GENERATION_FAILED_CODE,
     STORAGE_FAILED_CODE,
     guard_sse,
     sse_chunk,
@@ -32,7 +34,9 @@ from src.api.sse import (
     sse_status,
     sse_vault_sources,
 )
+from src.api.turn_lock import TurnBusy, TurnLocks, TurnStreamingResponse
 from src.core.config import (
+    call_bound as _run_bound,
     get_ember_debug,
     get_private_vault_path,
     spawn_vault_bound_thread,
@@ -63,6 +67,41 @@ EMBER_MODEL_ID = "ember-2"
 _STREAM_ALWAYS_GROUNDED = True
 
 SUPPORTED_MODELS = [EMBER_MODEL_ID]
+
+
+# --- Off-loop execution --------------------------------------------------
+# The chat path calls blocking model, retrieval and vault code. Run on the
+# event loop it freezes every request, /api/health included, for as long as
+# any one call takes (2026-11-01: a wedged auxiliary call stalled the whole
+# API for 290 s). Everything blocking therefore runs on a worker thread.
+#
+# Module-level names, not direct references, so tests/test_event_loop_liveness.py
+# can swap in inline callers (the pre-fix behavior) as its positive control.
+_off_loop = run_in_threadpool
+_iter_off_loop = iterate_in_threadpool
+
+# Same-session turns run one at a time (src/api/turn_lock.py).
+_turn_locks = TurnLocks()
+
+
+async def _bound_off_loop(vault, fn, *args, **kwargs):
+    """fn on a worker thread, under the turn's vault (issue #144). A binding
+    made by the SSE body on the loop would not be reliable across yields."""
+    return await _off_loop(_run_bound, vault, fn, *args, **kwargs)
+
+
+def _bound_iter(vault, iterator):
+    """Iterate a sync generator with the turn's vault bound around each
+    next(). Each next() may run on a different worker thread, so the binding
+    is entered and left within a single step, never held across a yield."""
+    iterator = iter(iterator)
+    done = object()
+    while True:
+        with vault_binding(vault):
+            item = next(iterator, done)
+        if item is done:
+            return
+        yield item
 
 
 def _web_search_header(
@@ -139,6 +178,29 @@ def storage_failed_response(completion_id: str) -> StreamingResponse:
 
     async def _sse():
         yield sse_failure_frames(STORAGE_FAILED_CODE, completion_id)
+
+    return StreamingResponse(
+        guard_sse(_sse(), completion_id), media_type="text/event-stream",
+    )
+
+
+def _turn_busy_response(stream: bool):
+    """The answer when the session's previous turn did not finish in time.
+
+    Usually a wedged generation, so the generation_failed text fits. Nothing
+    was stored and no exchange was opened. Streaming requests get frames, not
+    JSON (CLAUDE.md Bug Standard #1).
+    """
+    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+    logger.info("[EARLY-RETURN] label=turn_busy stream=%s id=%s", stream, completion_id)
+
+    if not stream:
+        return JSONResponse(
+            status_code=503, content={"detail": "The previous turn has not finished."},
+        )
+
+    async def _sse():
+        yield sse_failure_frames(GENERATION_FAILED_CODE, completion_id)
 
     return StreamingResponse(
         guard_sse(_sse(), completion_id), media_type="text/event-stream",
@@ -448,9 +510,8 @@ def _store_reply(
     """
     pending_id = None
     if code_offer is not None and not skip_vault_write:
-        with vault_binding(exchange.vault):
-            written, pending_id = _write_pending_confirmation(
-                code_offer, pending_query, exchange.session_id)
+        written, pending_id = _write_pending_confirmation(
+            code_offer, pending_query, exchange.session_id)
         if not written:
             reply, dropped = drop_code_offer(reply, code_offer.text)
             if dropped:
@@ -464,8 +525,7 @@ def _store_reply(
         exchange.record_reply(reply)
     except Exception:
         if pending_id is not None:
-            with vault_binding(exchange.vault):
-                _resolve_unsent_pending(pending_id)
+            _resolve_unsent_pending(pending_id)
         raise
     pending_guard.settle()
     if skip_vault_write:
@@ -798,8 +858,10 @@ class _PendingGuard:
     search content would be lost: restore() puts the offer back (vault or
     in-process store) or the clarification back (in-process store). settle()
     marks the exchange answered. Whichever runs first wins; both take a lock
-    because the SSE guard calls restore() from a worker thread. Only a
-    confirmation is armed: a decline or an unrelated reply already settled
+    because settle() runs on the worker that stores the reply, while
+    restore() runs on a worker (a failure before or outside the stream, the
+    vision_unavailable return) or on the event loop (the SSE guard's
+    on_abort). Only a confirmation is armed: a decline or an unrelated reply already settled
     the offer, and restoring it would let a later "ok" search.
     """
 
@@ -972,10 +1034,13 @@ def _check_pending_confirmation(
 
 
 # One lock around the duplicate check and the write. The check is a fresh
-# read: two streaming requests in one session each run their writer in a
-# worker thread, and a list read earlier in the request (or a check-then-
-# write without the lock) let both pass and leave two active pendings for
-# the same query; a "yes" resolved one and the other fired on a later "ok".
+# read. Two requests in one session once ran their writers at the same time,
+# and a check-then-write without the lock let both pass and leave two active
+# pendings for the same query; a "yes" resolved one and the other fired on a
+# later "ok". Same-session turns are now serialized by the turn lock
+# (src/api/turn_lock.py), and _PendingGuard's restore finishes before the
+# turn releases it, so on the chat path this lock is defence in depth: it
+# keeps the check and the write atomic for any caller outside a turn.
 # One process serves the API, so a process lock is enough.
 _pending_write_lock = threading.Lock()
 
@@ -1155,11 +1220,13 @@ def _intercept_onboarding(ctx: RouterContext) -> Optional[TerminalReply]:
     the empty and override paths never trigger its vault read - they return
     before this interceptor runs. onboarding_service fully encapsulates the
     onboarding state writes, so this stays enrichment-independent: handle()
-    needs only the user message.
+    needs only the user message. handle() returns None when another session
+    finished onboarding after this check; the turn then runs normally.
     """
     if onboarding_service.is_active():
         reply = onboarding_service.handle(ctx.latest_user_message)
-        return TerminalReply(reply, label="onboarding")
+        if reply is not None:
+            return TerminalReply(reply, label="onboarding")
     return None
 
 
@@ -1854,7 +1921,7 @@ def _apply_timers(gen_ctx: GenerationContext, work: GenerationWork) -> None:
                 format_elapsed,
                 get_active_timers,
                 start_timer,
-                stop_timer,
+                stop_most_recent_timer,
             )
 
             timer_label = detect_start_timer(work.message)
@@ -1868,8 +1935,13 @@ def _apply_timers(gen_ctx: GenerationContext, work: GenerationWork) -> None:
                     logger.warning("[TIMER] Failed to start timer: %s", type(exc).__name__)
             elif detect_stop_timer(work.message) or detect_check_timer(work.message):
                 try:
-                    active = get_active_timers()
                     wants_stop = detect_stop_timer(work.message)
+                    # A stop reads and stops under one lock: another session's
+                    # turn can be stopping the same timer at the same time.
+                    if wants_stop:
+                        active, _stopped = stop_most_recent_timer()
+                    else:
+                        active = get_active_timers()
                     if active:
                         statuses = []
                         for t in active:
@@ -1877,8 +1949,6 @@ def _apply_timers(gen_ctx: GenerationContext, work: GenerationWork) -> None:
                             statuses.append(f'"{t.text}" {format_elapsed(started_at)}')
                         statuses_str = "; ".join(statuses)
                         if wants_stop:
-                            most_recent = active[0]
-                            stop_timer(timer_id=most_recent.metadata["timer_id"])
                             work.message = (
                                 f"[System: timer stopped \u2014 was {statuses_str}] {work.message}"
                             )
@@ -1899,6 +1969,9 @@ def _apply_timers(gen_ctx: GenerationContext, work: GenerationWork) -> None:
 @router.post("/v1/chat/completions", response_model=ChatCompletionsResponse)
 @limiter.limit("30/minute")
 async def chat_completions(request: Request, body: ChatCompletionsRequest):
+    """Thin async entry. The turn itself is synchronous code (model calls,
+    retrieval, vault reads and writes), so it runs on a worker thread and the
+    event loop stays free to answer health checks and other requests."""
     # --- FILE UPLOAD DIAGNOSTIC LOGGING ---
     # Gated behind EMBER_DEBUG so query/payload content does not enter
     # stdout by default. See CLAUDE.md vault privacy rule.
@@ -1911,25 +1984,49 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
             logger.warning("[PAYLOAD] failed to log raw request: %s", type(exc).__name__)
     # --- END DIAGNOSTIC LOGGING ---
 
-    # --- SESSION ID ---
-    session_id = _extract_session_id(request)
-
     # --- TURN VAULT (issue #144) ---
     # Every write this turn performs -- inline, post-stream, or from a
     # background thread -- belongs to the vault that was active when the turn
-    # started. Captured here and bound at each deferred site, so a vault swap
-    # landing mid-turn cannot move this turn's records into another vault.
+    # started. Captured here and bound by _bound_off_loop and _bound_iter, so a
+    # vault swap landing mid-turn cannot move this turn's records into another
+    # vault. A new blocking step in the SSE body must go through them too: the
+    # body runs on the loop, with nothing bound.
     # Capturing at turn start rather than at thread-spawn time is deliberate:
     # _post_stream_cleanup runs from inside the SSE generator, after the
     # handler has returned, so by the time it spawns anything a swap may
     # already have landed.
-    # Defensive: an unset PRIVATE_VAULT_PATH yields None, and every binding
-    # site treats None as "behave exactly as before this existed".
+    # Defensive: an unset PRIVATE_VAULT_PATH yields None, and vault_binding
+    # treats None as "behave exactly as before this existed".
     try:
         _turn_vault = get_private_vault_path()
     except ValueError:
         _turn_vault = None
 
+    session_id = _extract_session_id(request)
+    try:
+        lease = await _turn_locks.acquire(session_id)
+    except TurnBusy:
+        return _turn_busy_response(bool(body.stream))
+
+    # Off the loop, so a swap can land while the turn runs (it could not when
+    # the turn held the loop); the binding keeps the turn in its own vault.
+    try:
+        response = await _bound_off_loop(
+            _turn_vault, _chat_completions_sync, request, body, _turn_vault, session_id,
+        )
+    except BaseException:
+        lease.release()
+        raise
+    if isinstance(response, StreamingResponse):
+        # The turn is not over: its body has not run yet.
+        return TurnStreamingResponse(response, lease)
+    lease.release()
+    return response
+
+
+def _chat_completions_sync(
+    request: Request, body: ChatCompletionsRequest, _turn_vault, session_id: str,
+):
     # (2) Only the last user message is used - Ember's ConversationBuffer
     #     handles conversation history. All prior messages from the request
     #     are intentionally ignored.
@@ -2044,7 +2141,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
     _pending_guard = _PendingGuard(session_id, _turn_vault)
     try:
         _exchange.record_user_turn(gen_ctx.user_turn_text, gen_ctx.image_count)
-        return await _complete_exchange(
+        return _complete_exchange(
             request, body, image_data=image_data, gen_ctx=gen_ctx, exchange=_exchange,
             pending_guard=_pending_guard,
         )
@@ -2062,7 +2159,7 @@ async def chat_completions(request: Request, body: ChatCompletionsRequest):
         raise
 
 
-async def _complete_exchange(
+def _complete_exchange(
     request,
     body,
     *,
@@ -2151,20 +2248,16 @@ async def _complete_exchange(
     _after_clarification = False
     if not _skip_vault_read:
         try:
-            with vault_binding(_turn_vault):
-                _after_clarification = _prior_turn_awaits_search_content(session_id)
+            _after_clarification = _prior_turn_awaits_search_content(session_id)
         except Exception as exc:
             logger.warning(
                 "[CLARIFY] Next-turn check failed (non-fatal): %s", type(exc).__name__,
             )
-    # Phase B reads and writes (pending confirmation, tasks, timers) belong to
-    # the vault this turn started in, not whichever is active by then. The
-    # guard is armed even when Phase B raises after consuming a pending.
+    # The guard is armed even when Phase B raises after consuming a pending.
     try:
-        with vault_binding(_turn_vault):
-            _apply_confirmation(gen_ctx, work, after_clarification=_after_clarification)
-            _apply_tasks(gen_ctx, work)
-            _apply_timers(gen_ctx, work)
+        _apply_confirmation(gen_ctx, work, after_clarification=_after_clarification)
+        _apply_tasks(gen_ctx, work)
+        _apply_timers(gen_ctx, work)
     finally:
         pending_guard.arm(work.consumed_pending)
     latest_user_message = work.message
@@ -2797,10 +2890,17 @@ async def _complete_exchange(
                 # and only the final string arrives.
                 # A raise here (or anywhere below) reaches guard_sse, which
                 # emits the error frame + stop + [DONE].
+                # Generation, the review call and the buffer update are
+                # blocking; each step runs on a worker thread under the
+                # turn's vault (see _off_loop). The SSE body runs after the
+                # handler returned, so nothing here inherits a binding.
                 full_reply = ""
-                for _item in llm_adapter.generate_response_iter(
-                    context_packet, **_gen_kwargs,
-                ):
+                async for _item in _iter_off_loop(_bound_iter(
+                    _turn_vault,
+                    llm_adapter.generate_response_iter(
+                        context_packet, **_gen_kwargs,
+                    ),
+                )):
                     if isinstance(_item, StatusSignal):
                         yield _status_event(_item.name)
                     else:
@@ -2852,7 +2952,10 @@ async def _complete_exchange(
                 # and get deleted, producing a blank response.
                 if not _review_refused:
                     from src.llm.coaching_filter import filter_coaching_frame
-                    full_reply = filter_coaching_frame(full_reply, _intent_class, _is_conversational)
+                    full_reply = await _bound_off_loop(
+                        _turn_vault, filter_coaching_frame,
+                        full_reply, _intent_class, _is_conversational,
+                    )
                     # Post-coaching empty check - if coaching_filter
                     # stripped the entire response (e.g. short refusal
                     # matched a closing pattern), refill immediately.
@@ -2866,13 +2969,19 @@ async def _complete_exchange(
                 # B-MEM-005 / S1: response is now finalized - promote pending
                 # hedge marks. Done here (not at prompt-build time) so failed
                 # LLM calls or stripped-out hedges don't leave spurious marks.
-                llm_adapter.commit_pending_hedge(session_id, _turn_vault)
+                await _bound_off_loop(
+                    _turn_vault, llm_adapter.commit_pending_hedge,
+                    session_id, _turn_vault,
+                )
 
                 # 3.7. Post-gen validators (source / vision / ask-first /
                 # empty-guard). Grounded streaming path - this runs before
                 # the word-by-word re-stream, so the client sees the
                 # validated text.
-                _postgen = _run_postgen(full_reply, review_refused=_review_refused)
+                _postgen = await _bound_off_loop(
+                    _turn_vault, _run_postgen,
+                    full_reply, review_refused=_review_refused,
+                )
                 full_reply = _postgen.reply
                 # When the post-gen pipeline substituted the response
                 # (ask-first or web-refusal), the vault badge is stale -
@@ -2900,9 +3009,10 @@ async def _complete_exchange(
                 # of the reply's text is sent (ADR-047, decision D). The text
                 # sent is the text stored: an offer whose pending could not be
                 # written is dropped from it.
-                full_reply = _store_reply(_exchange, full_reply,
-                                          code_offer=_postgen.code_offer,
-                                          **_store_kwargs)
+                full_reply = await _bound_off_loop(
+                    _turn_vault, _store_reply, _exchange, full_reply,
+                    code_offer=_postgen.code_offer, **_store_kwargs,
+                )
 
                 # 4. Re-stream verified response word by word
                 tokens = full_reply.split(" ")
@@ -2929,7 +3039,9 @@ async def _complete_exchange(
                 # Final chunk
                 yield _emit_final_chunk_and_done()
 
-                _post_stream_cleanup(full_reply)
+                await _bound_off_loop(_turn_vault, _post_stream_cleanup, full_reply)
+
+            _sse_body = _stream_sse()
 
         else:
             # --- FAST STREAMING PATH (non-grounding intents) ---
@@ -2985,6 +3097,10 @@ async def _complete_exchange(
 
                 _post_stream_cleanup(full_reply)
 
+            # guard_sse iterates this sync body in the threadpool; _bound_iter
+            # pins the turn's vault around each step.
+            _sse_body = _bound_iter(_turn_vault, _stream_sse())
+
         response_headers = {
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
@@ -3005,7 +3121,7 @@ async def _complete_exchange(
         return StreamingResponse(
             # on_abort ends the exchange with a `failed` or `interrupted`
             # outcome when the body stops before [DONE] without a stored reply.
-            guard_sse(_stream_sse(), completion_id, on_abort=_abort_exchange),
+            guard_sse(_sse_body, completion_id, on_abort=_abort_exchange),
             media_type="text/event-stream",
             headers=response_headers,
         )

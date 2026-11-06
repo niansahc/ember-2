@@ -20,6 +20,10 @@ One process, one port, one URL. The Ember UI is served directly by FastAPI from 
 
 Install the following before continuing.
 
+### Hardware
+
+Ember runs its local models through Ollama on a GPU. You need a GPU that Ollama supports with at least 8 GB of VRAM, so the default model (qwen3:8b, about 5.2 GB) fits entirely on the GPU. CPU-only machines and partial GPU offload are not supported: Ember's model calls have time limits sized for a GPU, and on a CPU they time out.
+
 ### 1. Python 3.11 or later
 Download from [python.org](https://www.python.org/downloads/). During installation, check **"Add Python to PATH"**.
 

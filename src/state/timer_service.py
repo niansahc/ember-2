@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -72,6 +73,12 @@ def _next_timestamp() -> str:
     per process, including across threads. Hyphen format matches
     StateService convention for Windows filename safety."""
     return _timestamps.next()
+
+
+# Turns from different sessions run at the same time, and a stop is a read
+# of the running timers followed by a write. Held across both, so one timer
+# is stopped once. Reentrant: stop_timer can be called while it is held.
+_timer_lock = threading.RLock()
 
 
 def _new_timer_id() -> str:
@@ -160,14 +167,37 @@ def stop_timer(
     no-op that returns None.
     """
     svc = service or StateService()
-    active = get_active_timers(service=svc)
-    target = next(
-        (r for r in active if (r.metadata or {}).get("timer_id") == timer_id),
-        None,
-    )
-    if target is None:
-        return None
+    with _timer_lock:
+        active = get_active_timers(service=svc)
+        target = next(
+            (r for r in active if (r.metadata or {}).get("timer_id") == timer_id),
+            None,
+        )
+        if target is None:
+            return None
+        return _write_stop(target, svc)
 
+
+def stop_most_recent_timer(
+    service: StateService | None = None,
+) -> tuple[list[StateRecord], StateRecord | None]:
+    """Stop the newest running timer. Returns (the running timers before
+    the stop, newest first; the stop record, or None when none was running).
+
+    The read and the stop happen under one lock, so two turns asking at once
+    cannot both stop the same timer.
+    """
+    svc = service or StateService()
+    with _timer_lock:
+        active = get_active_timers(service=svc)
+        if not active:
+            return [], None
+        return active, _write_stop(active[0], svc)
+
+
+def _write_stop(target: StateRecord, svc: StateService) -> StateRecord:
+    """Write the stopped record for a running timer. Call under _timer_lock."""
+    timer_id = target.metadata["timer_id"]
     now = _next_timestamp()
     record = StateRecord(
         id=now,

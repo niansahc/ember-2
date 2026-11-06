@@ -248,6 +248,27 @@ def stub_searxng_probe(request, monkeypatch):
         monkeypatch.setattr("src.api.main._check_docker_status", lambda: "ok")
 
 
+class _OllamaModuleChat:
+    """Stand-in for an ollama.Client whose chat() looks up `ollama.chat` at
+    call time, so the many `patch("...ollama.chat")` tests keep intercepting
+    auxiliary calls and checking their kwargs after those calls moved to
+    src.llm.aux_client.aux_chat. A test marked `real_aux_client`
+    (tests/test_aux_client.py) keeps the real client, against a stub server."""
+
+    def chat(self, **kwargs):
+        import ollama
+        return ollama.chat(**kwargs)
+
+
+@pytest.fixture(autouse=True)
+def aux_client_follows_ollama_chat(request, monkeypatch):
+    if request.node.get_closest_marker("real_aux_client") is None:
+        monkeypatch.setattr(
+            "src.llm.aux_client._client_for_timeout",
+            lambda timeout_s: _OllamaModuleChat(),
+        )
+
+
 @pytest.fixture(scope="session", autouse=True)
 def isolate_to_test_vault(tmp_path_factory):
     """Redirect all vault access to a temporary test vault for the session.

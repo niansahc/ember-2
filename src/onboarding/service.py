@@ -23,8 +23,9 @@ Detection logic:
 from __future__ import annotations
 
 import logging
+import threading
 
-import ollama
+from src.llm.aux_client import AUX_FORMAT_TIMEOUT_S, aux_chat
 
 from src.core.config import get_ember_model
 from src.core.jsonio import RecordExistsError
@@ -65,6 +66,10 @@ class OnboardingService:
         self._memory = MemoryService()
         self._state = StateService()
         self._confirmed_complete: bool = False  # skip vault check once completion is known
+        # Progress is one record for the install, but turns are serialized
+        # per session only, so two tabs can answer at once. Held across read,
+        # format and write, so each step is answered once.
+        self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -89,14 +94,26 @@ class OnboardingService:
 
         return True  # no state, no profiles -> first run
 
-    def handle(self, user_message: str) -> str:
+    def handle(self, user_message: str) -> str | None:
         """
         Process a user message during onboarding. Returns Ember's next response.
 
         First call: ignores message content, writes step-0 state, returns welcome + Q0.
         Middle calls: saves formatted answer, advances step, returns next question.
         Final call: saves last answer, writes completion state, returns transition message.
+
+        Returns None when onboarding is no longer active by the time the lock
+        is held: another session finished it after this turn's is_active()
+        check, and reading the completion record as step 0 would start
+        onboarding again. The caller then handles the message as a normal turn.
         """
+        with self._lock:
+            if not self.is_active():
+                logger.info("[ONBOARDING] Finished by another turn; not handling this one")
+                return None
+            return self._handle(user_message)
+
+    def _handle(self, user_message: str) -> str:
         records = self._state.read_by_category("onboarding")
 
         # First ever call - no state record yet
@@ -111,26 +128,38 @@ class OnboardingService:
         step = ONBOARDING_STEPS[current]
 
         if user_message.strip():
-            formatted = self._format_answer(user_message.strip(), step.category)
+            raw = user_message.strip()
+            formatted = self._format_answer(raw, step.category)
             # A collision must not fail the user's turn (a streaming client
             # would get a JSON 409). The answer was not saved, so the step
             # does not advance and its question is asked again.
             try:
-                self._memory.write(
-                    text=formatted,
-                    memory_type="profile",
-                    source="onboarding",
-                    tags=step.tags,
-                    metadata={"category": step.category, "onboarding_step": step.key},
-                )
+                saved = self._write_answer(formatted, step)
+                # None: the memory filter refused the text (JSON-like or
+                # code, say). The format call can produce that from a plain
+                # answer, so the user's own words get one more try.
+                if saved is None and formatted != raw:
+                    logger.info(
+                        "[ONBOARDING] Formatted answer refused, step %d (%s); "
+                        "retrying with the raw answer", current, step.key,
+                    )
+                    saved = self._write_answer(raw, step)
             except RecordExistsError:
                 logger.warning(
                     "[ONBOARDING] Profile write collided, step %d (%s) not saved; asking again",
                     current, step.key,
                 )
                 return step.question
-            completed = completed + [step.key]
-            logger.info("[ONBOARDING] Saved answer for step %d (%s)", current, step.key)
+            if saved is None:
+                # Asking again would repeat for as long as the user answers
+                # in the same form, with no sign why, so the step is passed.
+                logger.warning(
+                    "[ONBOARDING] Answer refused, step %d (%s) skipped without saving",
+                    current, step.key,
+                )
+            else:
+                completed = completed + [step.key]
+                logger.info("[ONBOARDING] Saved answer for step %d (%s)", current, step.key)
 
         next_step = current + 1
 
@@ -146,6 +175,17 @@ class OnboardingService:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _write_answer(self, text: str, step) -> dict | None:
+        """Save one answer as a profile record. None when the memory filter
+        refuses the text; raises RecordExistsError on a collision."""
+        return self._memory.write(
+            text=text,
+            memory_type="profile",
+            source="onboarding",
+            tags=step.tags,
+            metadata={"category": step.category, "onboarding_step": step.key},
+        )
 
     def _write_progress(self, step: int, completed: list[str]) -> None:
         self._write_state(StateService.make_record(
@@ -184,7 +224,8 @@ class OnboardingService:
         Falls back to the raw answer if the call fails or returns too little.
         """
         try:
-            resp = ollama.chat(
+            resp = aux_chat(
+                tag="ONBOARDING", step="format", timeout_s=AUX_FORMAT_TIMEOUT_S,
                 model=get_ember_model(),
                 messages=[
                     {"role": "system", "content": _FORMAT_SYSTEM},

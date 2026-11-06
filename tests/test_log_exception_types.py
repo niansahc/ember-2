@@ -110,8 +110,7 @@ def test_intent_stage3_failure_logs_type_only(caplog):
     from src.llm import intent_classifier
 
     # The query is the sentinel too: neither may reach the log.
-    with patch.object(intent_classifier.ollama, "chat",
-                      side_effect=ResponseError(SENTINEL, 404)), \
+    with patch("ollama.chat", side_effect=ResponseError(SENTINEL, 404)), \
          caplog.at_level(logging.INFO):
         result = intent_classifier._stage3_classify_with_timeout(SENTINEL)
 

@@ -192,6 +192,59 @@ def test_apply_timers_start_prefixes_message():
     assert work.message.startswith('[System: timer started for "tea"]')
 
 
+def _two_stops(tmp_path, monkeypatch):
+    """Two sessions say "stop the timer" at once with one timer running.
+    Returns (stop records written, the two prompt notes)."""
+    import time
+
+    from src.core import config
+    from src.state import timer_service
+    from tests.conftest import _make_vault_tree, run_in_threads
+
+    vault = tmp_path / "vault"
+    _make_vault_tree(vault)
+    config.set_vault_path_override(str(vault), "test")
+    timer_service.start_timer(label="synthetic timer", session_id="sess_test_a")
+
+    real_active = timer_service.get_active_timers
+
+    def slow_active(*args, **kwargs):
+        found = real_active(*args, **kwargs)
+        time.sleep(0.2)
+        return found
+
+    monkeypatch.setattr(timer_service, "get_active_timers", slow_active)
+
+    def stop(i):
+        work = GenerationWork(message="stop the timer")
+        _apply_timers(_gctx(session_id=f"sess_test_{i}"), work)
+        return work.message
+
+    notes, errors = run_in_threads(stop, 2)
+    assert errors == []
+    stops = [r for r in timer_service.StateService().read_all()
+             if r.type == "timer" and (r.metadata or {}).get("status") == "stopped"]
+    return stops, notes
+
+
+def test_two_stops_at_once_stop_the_timer_once(tmp_path, monkeypatch):
+    stops, notes = _two_stops(tmp_path, monkeypatch)
+
+    assert len(stops) == 1
+    assert sum("no active timer to stop" in n for n in notes) == 1
+
+
+def test_control_without_the_timer_lock_both_stop_it(tmp_path, monkeypatch):
+    import contextlib
+
+    from src.state import timer_service
+
+    monkeypatch.setattr(timer_service, "_timer_lock", contextlib.nullcontext())
+    stops, _ = _two_stops(tmp_path, monkeypatch)
+
+    assert len(stops) == 2
+
+
 def test_apply_timers_stop_note_uses_real_em_dash_at_runtime():
     # The builder emits U+2014 at runtime; the note text must stay
     # contain the actual em dash (U+2014), byte-identical to the pre-refactor note.
@@ -201,9 +254,8 @@ def test_apply_timers_stop_note_uses_real_em_dash_at_runtime():
     with patch("src.state.timer_service.detect_start_timer", return_value=None), \
          patch("src.state.timer_service.detect_stop_timer", return_value=True), \
          patch("src.state.timer_service.detect_check_timer", return_value=False), \
-         patch("src.state.timer_service.get_active_timers", return_value=active), \
-         patch("src.state.timer_service.format_elapsed", return_value="1m"), \
-         patch("src.state.timer_service.stop_timer"):
+         patch("src.state.timer_service.stop_most_recent_timer", return_value=(active, None)), \
+         patch("src.state.timer_service.format_elapsed", return_value="1m"):
         _apply_timers(ctx, work)
     dash = chr(0x2014)
     assert dash in work.message

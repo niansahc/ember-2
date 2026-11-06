@@ -27,8 +27,8 @@ import json
 import logging
 import re
 
+import httpx
 import numpy as np
-import ollama
 
 from src.core.config import (
     get_ember_auxiliary_model,
@@ -36,6 +36,7 @@ from src.core.config import (
     get_ember_debug,
     get_intent_classifier_timeout_ms,
 )
+from src.llm.aux_client import AUX_STAGE3_LOAD_TIMEOUT_S, aux_chat
 from src.retrieval.embed_memory import embed_text, embed_texts
 
 logger = logging.getLogger("ember.intent_classifier")
@@ -292,16 +293,34 @@ class UnknownLabelError(ValueError):
     """Stage 3 answered with a label outside _VALID_LABELS."""
 
 
+# A client timeout on Stage 3 is the same event as the budget wait expiring.
+# The client normally outlasts the wait; this keeps the outcome the same if it
+# ever does not.
+_OVERRUN_ERRORS: tuple[type[Exception], ...] = (httpx.TimeoutException,)
+
+
+def _stage3_client_timeout_s() -> float:
+    """Always longer than the budget. Closing the connection makes Ollama
+    abort a model load in progress, so a client timeout at the budget means
+    Stage 3 traffic can never warm the auxiliary model."""
+    budget_s = get_intent_classifier_timeout_ms() / 1000.0
+    return max(AUX_STAGE3_LOAD_TIMEOUT_S, budget_s + 1)
+
+
 def _stage3_llm_call(query: str) -> str:
     """Single LLM call for Stage 3. Returns a valid label or raises.
 
-    It does not log. A failure reaches _stage3_classify_with_timeout through
-    the future, which warns once; a call abandoned after a timeout is never
-    read, so its later failure adds no second warning.
+    It logs no failure of its own: aux_chat logs one outcome WARNING
+    ("[INTENT_CLASSIFY] stage3 outcome=...") for each call that raises,
+    including a call abandoned after the budget that fails later. The
+    classifier's "Stage 3 failed" warning comes from
+    _stage3_classify_with_timeout, once per query.
     """
     # think is a top-level chat argument. Inside options Ollama ignores
     # it, qwen3:8b thinks, and the call overruns the 1500ms budget.
-    response = ollama.chat(
+    response = aux_chat(
+        tag="INTENT_CLASSIFY", step="stage3",
+        timeout_s=_stage3_client_timeout_s(),
         model=get_ember_auxiliary_model(),
         messages=[
             {"role": "system", "content": _STAGE3_SYSTEM_PROMPT},
@@ -330,18 +349,22 @@ def _stage3_classify_with_timeout(query: str) -> tuple[str, str]:
     Returns (label, outcome). outcome is the telemetry stage: "stage3" for
     a real answer, "stage3_failed" when the call failed, "timeout" when it
     overran the budget. The label is the safe default for the last two,
-    which also log one WARNING.
+    which also log one "Stage 3 failed" WARNING here; when the model call
+    itself raised, aux_chat has logged its own outcome WARNING as well. An
+    overrun gives the same outcome and classifier warning whichever timer
+    fires first: the outcome is SetFit training data (ADR-034), so it must
+    not depend on scheduling.
     """
     timeout_s = get_intent_classifier_timeout_ms() / 1000.0
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
         future = executor.submit(_stage3_llm_call, query)
-        # wait, not result(timeout=...): a call that itself raises
+        # wait, not result(timeout=...): a call that itself raises the builtin
         # TimeoutError (a socket timeout) is a failure, not a budget overrun.
         done, _ = concurrent.futures.wait([future], timeout=timeout_s)
     finally:
         executor.shutdown(wait=False)
-    if not done:
+    if not done or isinstance(future.exception(), _OVERRUN_ERRORS):
         _warn_stage3_failed("TimeoutError")
         return _SAFE_DEFAULT, "timeout"
     exc = future.exception()
@@ -364,7 +387,8 @@ def classify_intent(query: str) -> str:
     "[INTENT_CLASSIFY] stage=" telemetry line per call (when
     EMBER_CLASSIFIER_TELEMETRY is set) for the training-data pipeline
     described in ADR-034 Upgrade Path. A Stage 3 failure or timeout also
-    logs one "[INTENT_CLASSIFY] Stage 3 failed" WARNING.
+    logs one "[INTENT_CLASSIFY] Stage 3 failed" WARNING, plus an aux_chat
+    "[INTENT_CLASSIFY] stage3 outcome=" WARNING when the model call raised.
     """
     stage1 = _stage1_classify(query)
     if stage1 is not None:

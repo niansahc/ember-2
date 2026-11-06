@@ -188,6 +188,11 @@ def _log_safety_review_path(log_path) -> None:
     if not get_ember_debug():
         return
     logger.warning("[SAFETY] log written to: %s", log_path)
+from src.llm.aux_client import (
+    AUX_REVIEW_TIMEOUT_S,
+    AUX_SUMMARY_TIMEOUT_S,
+    aux_chat,
+)
 from src.llm.prompt_builder import PromptBuilder
 from src.llm.prompt_guardrail import OLLAMA_NUM_PREDICT, trim_to_fit
 from src.llm.refusal import RefusalText, is_review_refusal
@@ -1342,7 +1347,8 @@ class LLMAdapter:
         """
         from src.core.config import get_ember_auxiliary_model
 
-        response = ollama.chat(
+        response = aux_chat(
+            tag="BUFFER", step="summary", timeout_s=AUX_SUMMARY_TIMEOUT_S,
             model=get_ember_auxiliary_model(),
             messages=[
                 {
@@ -1366,7 +1372,8 @@ class LLMAdapter:
         this never actually ran."""
         from src.core.config import get_ember_auxiliary_model
 
-        response = ollama.chat(
+        response = aux_chat(
+            tag="REVIEW", step="llm call", timeout_s=AUX_REVIEW_TIMEOUT_S,
             model=get_ember_auxiliary_model(),
             messages=[
                 {

@@ -95,10 +95,12 @@ class TestEverythingElseStaysLocal:
         assert ollama.embed.__self__ is ollama._client
         assert adapter._generation_client() is not ollama._client
 
-    def test_vision_service_uses_module_level_ollama(self, monkeypatch):
+    def test_vision_service_uses_the_local_aux_client(self, monkeypatch):
         monkeypatch.setenv("EMBER_GENERATION_OLLAMA_HOST", REMOTE)
         source = _read_source("src", "llm", "vision_service.py")
-        assert "ollama.chat(" in source
+        # aux_chat builds its client on the default (local) host, the same
+        # instance the module-level client reaches (src/llm/aux_client.py).
+        assert "aux_chat(" in source
         assert "_generation_client" not in source
 
     def test_auxiliary_callers_do_not_use_the_generation_client(self):
@@ -140,7 +142,11 @@ class TestEverythingElseStaysLocal:
             and any(generation_chat(node) for node in ast.walk(fn))
         }
         assert sites == {"_chat_ollama", "_chat_ollama_stream"}
-        assert source.count("ollama.chat(") == 2
+        # The two local auxiliary calls go through aux_chat, whose client is
+        # on the default (local) host; nothing in adapter.py calls the
+        # module-level ollama.chat directly any more.
+        assert source.count("aux_chat(") == 2
+        assert source.count("ollama.chat(") == 0
 
 
 class TestAuxiliaryModelIndependentOfGeneration:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from dataclasses import dataclass
 
 from src.tasks.task_service import TaskService
@@ -23,6 +24,9 @@ logger = logging.getLogger("ember.task_handler")
 # Module-level pending offer storage, keyed by session_id.
 # Each entry is a list of task titles. Cleared after use or on next turn.
 _pending_offers: dict[str, list[str]] = {}
+# Turns are serialized per session, but offers are stored from a daemon thread
+# that can outlive its turn, so the store needs its own lock.
+_offers_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -230,11 +234,12 @@ def create_task(
 
 def store_pending_offer(session_id: str, task_title: str) -> None:
     """Store a pending task offer for the next turn. Appends to existing list."""
-    if session_id not in _pending_offers:
-        _pending_offers[session_id] = []
-    _pending_offers[session_id].append(task_title)
+    with _offers_lock:
+        offers = _pending_offers.setdefault(session_id, [])
+        offers.append(task_title)
+        total = len(offers)
     logger.info("[TASK_HANDLER] Stored pending offer for session %s: %d chars (total: %d)",
-                session_id, len(task_title), len(_pending_offers[session_id]))
+                session_id, len(task_title), total)
 
 
 def check_pending_confirmation(
@@ -250,10 +255,11 @@ def check_pending_confirmation(
         TaskCreationResult(created=False) if declined
         None if no pending offer exists for this session
     """
-    if session_id not in _pending_offers:
+    with _offers_lock:
+        task_titles = _pending_offers.pop(session_id, None)
+    if task_titles is None:
         return None
 
-    task_titles = _pending_offers.pop(session_id)
     lower = user_message.strip().lower()
 
     # Check for decline first
@@ -295,4 +301,5 @@ def _matches_any(text: str, patterns: tuple[str, ...]) -> bool:
 
 def clear_pending_offer(session_id: str) -> None:
     """Clear any pending offer for a session."""
-    _pending_offers.pop(session_id, None)
+    with _offers_lock:
+        _pending_offers.pop(session_id, None)

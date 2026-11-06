@@ -190,21 +190,30 @@ _THINK_UNSET_ALLOWED = {
 }
 
 
+def _is_chat_call(node) -> bool:
+    """ollama.chat(...), or aux_chat(...), which passes its kwargs to it."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id == "aux_chat"
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == "chat"
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "ollama"
+    )
+
+
 def _unset_think_calls(source: str, path: str) -> list[tuple[str, str, int]]:
-    """(path, function, line) for each ollama.chat call that does not pass a
+    """(path, function, line) for each chat call that does not pass a
     top-level think kwarg, or that puts think inside an options dict."""
     found = []
 
     def visit(node, func_name):
         for child in ast.iter_child_nodes(node):
             name = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else func_name
-            if (
-                isinstance(child, ast.Call)
-                and isinstance(child.func, ast.Attribute)
-                and child.func.attr == "chat"
-                and isinstance(child.func.value, ast.Name)
-                and child.func.value.id == "ollama"
-            ):
+            if _is_chat_call(child):
                 keywords = {k.arg: k.value for k in child.keywords}
                 options = keywords.get("options")
                 think_in_options = isinstance(options, ast.Dict) and any(
@@ -246,6 +255,8 @@ def test_allowlisted_functions_exist():
     pytest.param("ollama.chat(model='m', messages=[], options={'think': False})", True, id="control-think-inside-options"),
     pytest.param("ollama.chat(model='m', options={'think': False}, think=False)", True, id="control-options-think-beside-top-level"),
     pytest.param("ollama.chat(model='m', messages=[], options={}, think=False)", False, id="top-level-think"),
+    pytest.param("aux_chat(tag='t', step='s', timeout_s=1, model='m')", True, id="control-bare-aux-call"),
+    pytest.param("aux_chat(tag='t', step='s', timeout_s=1, model='m', think=False)", False, id="aux-top-level-think"),
 ])
 def test_scanner(call, flagged):
     source = f"import ollama\ndef f():\n    {call}\n"

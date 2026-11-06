@@ -1,15 +1,20 @@
 import base64
 import json
 import logging
+import os
+import shutil
 import tempfile
+import threading
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from src.api.limiter import limiter
-from src.core.config import get_private_vault_path
+from src.core.config import call_bound, get_private_vault_path
 from src.core.jsonio import RecordExistsError
 from src.core.paths import resolve_inside
 from src.memory.write_memory import write_memory
@@ -149,23 +154,79 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
             detail=f"Unsupported file type: {ext}. Supported: {', '.join(sorted(DOCUMENT_EXTENSIONS.keys() | IMAGE_EXTENSIONS))}",
         )
 
-    # Save upload to a temp file, then run through the appropriate importer
+    # Read the upload here; the worker saves it under the vault and ingests it.
     content = await file.read()
     vault_path = get_private_vault_path()
+
+    # Parsing, per-chunk embedding and vault writes block for as long as the
+    # document is large; they run on a worker thread so the event loop keeps
+    # answering other requests, bound to the vault captured above.
+    return await run_in_threadpool(
+        call_bound, vault_path, _ingest_upload_blocking, content, filename, ext, vault_path,
+    )
+
+
+# Two uploads of one name replace one source file, and on Windows os.replace()
+# fails while another thread replaces that file. Held for the replace only.
+_source_publish_lock = threading.Lock()
+
+
+def _parse_path(work_dir: Path, saved_path: Path) -> Path:
+    """Where this request's upload is parsed from: its own directory, so an
+    overlapping upload of the same name cannot change the bytes. The name is
+    kept because doc_id and title come from it."""
+    return work_dir / saved_path.name
+
+
+@contextmanager
+def _upload_work_dir(uploads_dir: Path):
+    """A per-request directory under uploads_dir, removed afterwards. It holds
+    a copy of the document inside the vault, so a removal that fails (a file
+    still open on Windows, say) is logged rather than left silently."""
+    work_dir = Path(tempfile.mkdtemp(dir=uploads_dir))
+    try:
+        yield work_dir
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        if work_dir.exists():
+            logger.warning("[UPLOAD] Work directory left behind: %s", work_dir.name)
+
+
+def _ingest_upload_blocking(content: bytes, filename: str, ext: str, vault_path: Path) -> dict:
+    """Save an uploaded document under the vault and ingest it. Synchronous;
+    called on a worker thread by ingest_upload."""
     uploads_dir = vault_path / "imports" / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
-
-    # Write to vault/imports/uploads/ so it persists as a source file
     saved_path = _upload_target(uploads_dir, filename)
-    saved_path.write_bytes(content)
-    logger.info("[UPLOAD] Saved %s upload (%d bytes)", ext, len(content))
 
+    with _upload_work_dir(uploads_dir) as work_dir:
+        # Persists in vault/imports/uploads/ as a source file. Replaced whole,
+        # so overlapping uploads of one name leave a complete file (last wins).
+        staged = work_dir / "source"
+        staged.write_bytes(content)
+        with _source_publish_lock:
+            os.replace(staged, saved_path)
+        logger.info("[UPLOAD] Saved %s upload (%d bytes)", ext, len(content))
+
+        # JSON is decoded from the bytes, so it needs no copy to parse.
+        parse_path = None
+        if DOCUMENT_EXTENSIONS[ext] != "json":
+            parse_path = _parse_path(work_dir, saved_path)
+            parse_path.write_bytes(content)
+        return _ingest_saved_upload(content, parse_path, filename, ext, vault_path)
+
+
+def _ingest_saved_upload(
+    content: bytes, parse_path: Path | None, filename: str, ext: str, vault_path: Path,
+) -> dict:
+    """Run a saved upload through its importer: JSON from the bytes, every
+    other type from parse_path."""
     try:
         doc_type = DOCUMENT_EXTENSIONS[ext]
 
         if doc_type == "json":
             # JSON files go through the JSON import path
-            json_data = json.loads(saved_path.read_text(encoding="utf-8"))
+            json_data = json.loads(content.decode("utf-8"))
             result = _import_json_records(json_data)
             return {
                 "status": "ingested",
@@ -174,13 +235,13 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
                 "errors": result["errors"],
             }
         elif doc_type == "pdf":
-            docs = load_pdf(str(saved_path))
+            docs = load_pdf(str(parse_path))
         elif doc_type == "docx":
-            docs = load_docx(str(saved_path))
+            docs = load_docx(str(parse_path))
         elif doc_type == "csv":
-            docs = load_csv(str(saved_path))
+            docs = load_csv(str(parse_path))
         elif doc_type == "txt":
-            docs = load_text_file(str(saved_path))
+            docs = load_text_file(str(parse_path))
         else:
             raise HTTPException(status_code=400, detail=f"No importer for {ext}")
 
@@ -293,7 +354,10 @@ async def ingest_json(request: Request):
     except Exception:
         raise HTTPException(status_code=422, detail="Invalid JSON in request body.")
 
-    result = _import_json_records(body)
+    # Each record is embedded and written; off the event loop.
+    result = await run_in_threadpool(
+        call_bound, get_private_vault_path(), _import_json_records, body,
+    )
     return {
         "status": "complete",
         "imported": result["imported"],

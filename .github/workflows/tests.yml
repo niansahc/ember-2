@@ -48,5 +48,5 @@ jobs:
           PRIVATE_VAULT_PATH: ${{ runner.temp }}/ember_test_vault
         run: |
           mkdir -p "$PRIVATE_VAULT_PATH"
-          pytest tests/ -q \
+          pytest tests/ -q -rs \
             --ignore=tests/eval/test_conversation_quality.py

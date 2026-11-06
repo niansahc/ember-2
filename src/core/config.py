@@ -146,6 +146,17 @@ def vault_binding(path):
         var.reset(token)
 
 
+def call_bound(vault, fn, *args, **kwargs):
+    """Call fn with `vault` bound; the worker-thread form of vault_binding.
+
+    Hand this to run_in_threadpool so the binding is set on the worker and
+    reset before the call returns. It cannot leak or outlive the call, and it
+    does not depend on what the calling task's context held when it was copied.
+    """
+    with vault_binding(vault):
+        return fn(*args, **kwargs)
+
+
 def spawn_vault_bound_thread(target, args=(), vault=None, name=None) -> threading.Thread:
     """Start a daemon thread bound to a vault, and return it.
 
@@ -450,6 +461,11 @@ def get_intent_classifier_timeout_ms() -> int:
 
     On timeout the classifier still falls back to vault_answerable (the
     behavioral-contract-safe default).
+
+    This caps the turn, not the Ollama call. Closing the connection aborts a
+    model load in progress, so the abandoned call keeps its own, longer client
+    timeout (intent_classifier._stage3_client_timeout_s) and the next query
+    finds the model warm.
     """
     return int(os.getenv("INTENT_CLASSIFIER_TIMEOUT_MS", "1500"))
 

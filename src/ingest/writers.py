@@ -22,7 +22,7 @@ import threading
 from pathlib import Path
 
 from src.core.jsonio import safe_write_json
-from src.ingest.index_routing import index_target
+from src.ingest.index_routing import index_target, is_indexable
 from src.memory.authorship import classify_authorship
 from src.retrieval.embed_memory import embed_text
 from src.retrieval.sqlite_vector_store import content_key
@@ -40,12 +40,17 @@ _chunk_file_lock = threading.Lock()
 # onto every chunk: the whole conversation's messages and roles. They stay in
 # the canonical chunk file. On an index row they repeat the conversation once
 # per turn, which is what grew the old JSON index past its load guard.
-_DOCUMENT_ONLY_METADATA = frozenset({"messages", "roles"})
+DOCUMENT_ONLY_METADATA = frozenset({"messages", "roles"})
+
+
+def ingested_dir(vault_path) -> Path:
+    """The directory canonical chunk files live in."""
+    return Path(vault_path) / "memory" / "ingested"
 
 
 def chunk_file_path(vault_path, chunk_id: str) -> Path:
     """Where a chunk's canonical file lives."""
-    return Path(vault_path) / "memory" / "ingested" / f"{chunk_id}.json"
+    return ingested_dir(vault_path) / f"{chunk_id}.json"
 
 
 def _write_chunk_file(chunk, file_path: Path) -> None:
@@ -69,7 +74,7 @@ def _index_metadata(chunk, file_path: Path) -> dict:
     metadata = {
         key: value
         for key, value in (chunk.metadata or {}).items()
-        if key not in _DOCUMENT_ONLY_METADATA
+        if key not in DOCUMENT_ONLY_METADATA
     }
     metadata.update({
         "source": chunk.source,
@@ -83,13 +88,19 @@ def _index_metadata(chunk, file_path: Path) -> dict:
     return metadata
 
 
-def index_chunks(chunks, vault_path, *, dry_run: bool = False) -> dict[str, int]:
+def index_chunks(
+    chunks, vault_path, *, dry_run: bool = False,
+    known_keys: dict[str, set[str]] | None = None,
+) -> dict[str, int]:
     """Index chunks whose canonical files are already in the vault.
 
     Returns counts: indexed per store, skipped because the content is
     already indexed, and held out by ADR-033. With dry_run, the same
     decisions are made and counted but nothing is embedded or written, and
     a store that does not exist yet is not created.
+
+    known_keys, when given, is filled per db name with the content keys the
+    store holds plus the ones this call indexed (or, on a dry run, would).
 
     A chunk whose normalized text is already in its target store is skipped
     before embedding, under any id. That makes re-importing a cumulative
@@ -99,14 +110,14 @@ def index_chunks(chunks, vault_path, *, dry_run: bool = False) -> dict[str, int]
     """
     embeddings_dir = Path(vault_path) / "embeddings"
     counts = {"ingested.db": 0, "memory.db": 0, "already_indexed": 0, "assistant_gated": 0}
-    # Content keys per store, loaded on first use. One read per call, not per
-    # chunk: an export holds thousands of chunks.
-    known_keys: dict[str, set[str]] = {}
+    if known_keys is None:
+        known_keys = {}
+    # Store and content keys per db, opened and loaded on first use. One read
+    # per call, not per chunk: an export holds thousands of chunks.
+    stores: dict[str, tuple] = {}
 
     for chunk in chunks:
-        # ADR-033: assistant-role chunks from ChatGPT import write to flat
-        # storage for thread reconstruction but are not embedded or indexed.
-        if not (chunk.metadata or {}).get("index_for_retrieval", True):
+        if not is_indexable(chunk.metadata):
             logger.info(
                 "[INGEST] Skipping vector index for chunk "
                 "(doc_id=%s chunk_id=%s role=%s)",
@@ -118,12 +129,14 @@ def index_chunks(chunks, vault_path, *, dry_run: bool = False) -> dict[str, int]
             continue
 
         target = index_target(chunk.source, chunk.metadata)
-        db_path = embeddings_dir / target.db_name
-        store = None if dry_run and not db_path.exists() else get_store(db_path)
-        keys = known_keys.get(target.db_name)
-        if keys is None:
-            keys = store.content_keys(target.dedupe_type) if store is not None else set()
-            known_keys[target.db_name] = keys
+        if target.db_name not in stores:
+            db_path = embeddings_dir / target.db_name
+            opened = None if dry_run and not db_path.exists() else get_store(db_path)
+            loaded = known_keys.setdefault(target.db_name, set())
+            if opened is not None:
+                loaded |= opened.content_keys(target.dedupe_type)
+            stores[target.db_name] = (opened, loaded)
+        store, keys = stores[target.db_name]
 
         key = content_key(chunk.content)
         if key in keys:
@@ -162,7 +175,7 @@ def write_chunks_to_vault(chunks, vault_path) -> dict[str, int]:
     Returns index_chunks()'s counts.
     """
     chunks = list(chunks)
-    (Path(vault_path) / "memory" / "ingested").mkdir(parents=True, exist_ok=True)
+    ingested_dir(vault_path).mkdir(parents=True, exist_ok=True)
     for chunk in chunks:
         _write_chunk_file(chunk, chunk_file_path(vault_path, chunk.chunk_id))
     return index_chunks(chunks, vault_path)

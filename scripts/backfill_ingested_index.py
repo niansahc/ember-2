@@ -47,7 +47,6 @@ printed.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -63,12 +62,17 @@ if __name__ == "__main__":
 
 from src.core.config import get_private_vault_path, resolve_vault_path  # noqa: E402
 from src.core.jsonio import safe_read_json  # noqa: E402
-from src.ingest.index_routing import index_target  # noqa: E402
+from src.ingest.index_routing import index_target, is_indexable  # noqa: E402
 from src.ingest.models import ChunkedDocument  # noqa: E402
-from src.ingest.writers import index_chunks  # noqa: E402
+from src.ingest.writers import (  # noqa: E402
+    DOCUMENT_ONLY_METADATA,
+    chunk_file_path,
+    index_chunks,
+    ingested_dir,
+)
+from src.memory.eval_fixtures import is_test_vault  # noqa: E402
 from src.memory.write_memory import should_index  # noqa: E402
 from src.retrieval.sqlite_vector_store import content_key  # noqa: E402
-from src.retrieval.store_cache import get_store  # noqa: E402
 from src.retrieval.vector_index import VectorIndex  # noqa: E402
 
 
@@ -86,7 +90,7 @@ def load_chunk_files(vault: Path) -> tuple[list[ChunkedDocument], int, int]:
     chunks: list[ChunkedDocument] = []
     unreadable = 0
     filtered = 0
-    directory = vault / "memory" / "ingested"
+    directory = ingested_dir(vault)
     if not directory.exists():
         return chunks, unreadable, filtered
     for path in sorted(directory.glob("*.json")):
@@ -109,18 +113,13 @@ def load_chunk_files(vault: Path) -> tuple[list[ChunkedDocument], int, int]:
             title=str(data.get("title") or ""),
             created_at=data.get("created_at") or data.get("timestamp"),
             content=content,
-            metadata=data.get("metadata") or {},
+            # A ChatGPT chunk carries its whole conversation's messages and
+            # roles; nothing here reads them, and across an export they grow
+            # with turns times conversation length.
+            metadata={k: v for k, v in (data.get("metadata") or {}).items()
+                      if k not in DOCUMENT_ONLY_METADATA},
         ))
     return chunks, unreadable, filtered
-
-
-def _indexed_keys(vault: Path) -> dict[str, set[str]]:
-    """Content keys per store, read without creating a store."""
-    keys: dict[str, set[str]] = {}
-    for db_name, dedupe_type in (("ingested.db", None), ("memory.db", "conversation")):
-        db_path = vault / "embeddings" / db_name
-        keys[db_name] = get_store(db_path).content_keys(dedupe_type) if db_path.exists() else set()
-    return keys
 
 
 def json_index_cross_check(vault: Path, chunks: list[ChunkedDocument], planned: dict[str, set[str]]) -> dict:
@@ -138,7 +137,7 @@ def json_index_cross_check(vault: Path, chunks: list[ChunkedDocument], planned: 
     index = VectorIndex()
     entries, readable = index._read_disk(index_path)
     report["readable"] = readable
-    by_name = {f"{chunk.chunk_id}.json": chunk for chunk in chunks}
+    by_name = {chunk_file_path(vault, chunk.chunk_id).name: chunk for chunk in chunks}
     for entry in entries:
         report["entries"] += 1
         name = Path(str(entry.get("file_path") or "")).name
@@ -147,9 +146,11 @@ def json_index_cross_check(vault: Path, chunks: list[ChunkedDocument], planned: 
             report["without_chunk_file"] += 1
             continue
         report["with_chunk_file"] += 1
-        gated = not (chunk.metadata or {}).get("index_for_retrieval", True)
+        if not is_indexable(chunk.metadata):
+            report["covered"] += 1
+            continue
         target = index_target(chunk.source, chunk.metadata)
-        if gated or content_key(chunk.content) in planned[target.db_name]:
+        if content_key(chunk.content) in planned.get(target.db_name, ()):
             report["covered"] += 1
     return report
 
@@ -157,16 +158,10 @@ def json_index_cross_check(vault: Path, chunks: list[ChunkedDocument], planned: 
 def backfill(vault: Path, *, confirm: bool) -> dict:
     """Plan (and with confirm, run) the backfill for one vault. Counts only."""
     chunks, unreadable, filtered = load_chunk_files(vault)
-    counts = index_chunks(chunks, vault, dry_run=not confirm)
-
     # What the stores hold (or, on a dry run, would hold) afterwards, for the
     # cross-check: what is there now plus what this run adds.
-    planned = _indexed_keys(vault)
-    if not confirm:
-        for chunk in chunks:
-            if (chunk.metadata or {}).get("index_for_retrieval", True):
-                planned[index_target(chunk.source, chunk.metadata).db_name].add(
-                    content_key(chunk.content))
+    planned: dict[str, set[str]] = {}
+    counts = index_chunks(chunks, vault, dry_run=not confirm, known_keys=planned)
 
     return {
         "chunk_files": len(chunks),
@@ -177,11 +172,6 @@ def backfill(vault: Path, *, confirm: bool) -> dict:
         "assistant_gated": counts["assistant_gated"],
         "json_index": json_index_cross_check(vault, chunks, planned),
     }
-
-
-def _is_test_vault(vault: Path) -> bool:
-    test_vault = resolve_vault_path(os.getenv("VAULT_PATH_TEST"))
-    return test_vault is not None and test_vault == resolve_vault_path(str(vault))
 
 
 def _print_report(report: dict, confirm: bool) -> None:
@@ -214,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     vault = Path(vault)
 
-    if args.confirm and not args.live_vault and not _is_test_vault(vault):
+    if args.confirm and not args.live_vault and not is_test_vault(vault):
         print("FATAL: --confirm writes only to VAULT_PATH_TEST. This vault is not it. "
               "Pass --live-vault to backfill another vault, with the API stopped.")
         return 2

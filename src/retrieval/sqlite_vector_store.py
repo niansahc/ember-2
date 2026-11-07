@@ -99,7 +99,8 @@ class RetrievalStatsWrite:
 ID_COLLISION_MARKER = "#"
 
 
-def _norm(value: str | None) -> str:
+def normalize_content(value: str | None) -> str:
+    """Lowercased, whitespace-collapsed text: what content identity compares."""
     return re.sub(r"\s+", " ", (value or "").strip().lower())
 
 
@@ -109,7 +110,7 @@ def _same_text(left: str | None, right: str | None) -> bool:
     Re-indexing the same record must not be mistaken for a collision just
     because the text was re-wrapped on the way through.
     """
-    return _norm(left) == _norm(right)
+    return normalize_content(left) == normalize_content(right)
 
 
 def content_key(text: str | None) -> str:
@@ -122,7 +123,7 @@ def content_key(text: str | None) -> str:
     chunk_id), so a writer that must not index the same content twice
     compares this instead.
     """
-    return hashlib.sha256(_norm(text).encode("utf-8", "ignore")).hexdigest()
+    return hashlib.sha256(normalize_content(text).encode("utf-8", "ignore")).hexdigest()
 
 
 class SqliteVectorStore:
@@ -314,21 +315,15 @@ class SqliteVectorStore:
 
         Takes the same keys as insert().
         """
-        embedding: list[float] = record["embedding"]
-        embedding_blob = struct.pack(f"{len(embedding)}f", *embedding)
-        metadata_str = json.dumps(record.get("metadata", {}), ensure_ascii=False)
         record_id = str(record["id"])
-        text = record["text"]
-
+        # _lock is reentrant: the delete and insert()'s write commit together.
         with self._lock:
             existing = self._conn.execute(
                 "SELECT text FROM vectors WHERE id = ?", (record_id,)
             ).fetchone()
-            if existing is not None:
-                if _same_text(existing["text"], text):
-                    return record_id
+            if existing is not None and not _same_text(existing["text"], record["text"]):
                 self._conn.execute("DELETE FROM vectors WHERE id = ?", (record_id,))
-            return self._insert_locked(record, record_id, text, embedding_blob, metadata_str)
+            return self.insert(record)
 
     def _disambiguate_id(self, record_id: str) -> str:
         """First free `{record_id}#n`, n starting at 2.

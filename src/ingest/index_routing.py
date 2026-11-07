@@ -47,6 +47,12 @@ INGESTED_TARGET = IndexTarget("ingested.db", "ingested", None)
 CONVERSATION_TARGET = IndexTarget("memory.db", "conversation", "conversation")
 
 
+def is_indexable(metadata: dict | None) -> bool:
+    """False for a chunk ADR-033 holds out of every index (a ChatGPT
+    assistant turn): it is written to disk for thread reconstruction only."""
+    return (metadata or {}).get("index_for_retrieval", True)
+
+
 def is_prior_substrate(source: str | None, metadata: dict | None) -> bool:
     """True when a chunk is prior-substrate conversation.
 

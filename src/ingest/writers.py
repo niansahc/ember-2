@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 from src.core.jsonio import safe_write_json
@@ -90,17 +91,30 @@ def _index_metadata(chunk, file_path: Path) -> dict:
 
 # Overlapping ingests of one document must write their files and index them as
 # one step, or the files can end up on one version and the rows on the other
-# (lean review of #315, finding 3). One lock per document would grow without
-# bound, so documents share a fixed set of stripes by hash; two documents on
-# one stripe only wait for each other. A writer holds one stripe at a time,
-# so stripes cannot deadlock. In-process only: a CLI import or backfill must
-# not run alongside the API.
-_DOCUMENT_LOCK_STRIPES = tuple(threading.Lock() for _ in range(64))
+# (lean review of #315, finding 3). One lock per document in use, counted and
+# dropped when its last holder leaves, so the table holds only documents being
+# ingested right now. Exact per document: hashing documents onto shared locks
+# made unrelated ingests wait on each other. A writer holds one document's
+# lock at a time, so these locks cannot deadlock. In-process only: a CLI
+# import or backfill must not run alongside the API (KNOWN_ISSUES B-RET-008).
+_document_locks: dict[str, list] = {}  # key -> [lock, holders and waiters]
+_document_locks_guard = threading.Lock()
 
 
-def _document_lock(vault_path, doc_id: str) -> threading.Lock:
+@contextmanager
+def _document_lock(vault_path, doc_id: str):
     key = f"{Path(vault_path).resolve()}|{doc_id}"
-    return _DOCUMENT_LOCK_STRIPES[hash(key) % len(_DOCUMENT_LOCK_STRIPES)]
+    with _document_locks_guard:
+        entry = _document_locks.setdefault(key, [threading.Lock(), 0])
+        entry[1] += 1
+    try:
+        with entry[0]:
+            yield
+    finally:
+        with _document_locks_guard:
+            entry[1] -= 1
+            if entry[1] == 0:
+                del _document_locks[key]
 
 
 def _by_document(chunks) -> list[tuple[str, list]]:

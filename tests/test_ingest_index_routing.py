@@ -333,6 +333,50 @@ class TestOverlappingIngestsOfOneDocument:
         assert rows(vault)["notes_chunk_0"] == ALPHA
 
 
+class TestDocumentLockScope:
+    """The per-document lock is exact. Hashing documents onto 64 shared locks
+    made unrelated ingests wait on each other, and an overlap test that holds
+    both ingests at a barrier timed out whenever two documents shared one (CI
+    run 42484913797)."""
+
+    def _acquired_elsewhere(self, vault: Path, doc_id: str, wait: float) -> bool:
+        import threading
+
+        from src.ingest.writers import _document_lock
+
+        got = threading.Event()
+
+        def take():
+            with _document_lock(vault, doc_id):
+                got.set()
+
+        t = threading.Thread(target=take, daemon=True)
+        t.start()
+        result = got.wait(timeout=wait)
+        t.join(timeout=5)
+        return result
+
+    def test_holding_one_document_never_blocks_another(self, vault):
+        from src.ingest.writers import _document_lock
+
+        with _document_lock(vault, "doc-held"):
+            blocked = [i for i in range(200)
+                       if not self._acquired_elsewhere(vault, f"doc-{i}", wait=2)]
+        assert blocked == []
+
+    def test_control_the_same_document_waits(self, vault):
+        from src.ingest.writers import _document_lock
+
+        with _document_lock(vault, "doc-held"):
+            assert self._acquired_elsewhere(vault, "doc-held", wait=0.3) is False
+
+    def test_the_lock_table_empties_after_use(self, vault):
+        from src.ingest import writers
+
+        write(doc_chunks("notes", [ALPHA]), vault)
+        assert writers._document_locks == {}
+
+
 class TestConcurrentIdenticalText:
     """Lean review of #315, finding 4. Two documents with the same text, both
     past the pre-embedding check before either writes: the check under the

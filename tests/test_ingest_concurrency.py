@@ -28,6 +28,7 @@ import pytest
 
 from src.api.routes import ingest as ingest_route
 from src.ingest import writers
+from src.retrieval.sqlite_vector_store import IndexOutcome
 from tests.conftest import _make_vault_tree, run_in_threads
 
 FILLER = "Synthetic harbor notes about tides, ropes and lanterns for the winter. " * 12
@@ -158,11 +159,11 @@ def test_control_a_lost_write_is_detected(
         def __getattr__(self, name):
             return getattr(self._store, name)
 
-        def replace(self, record):
-            if not dropped.is_set():
+        def insert_if_absent(self, record, **kwargs):
+            if "embedding" in record and not dropped.is_set():
                 dropped.set()
-                return record["id"]
-            return self._store.replace(record)
+                return IndexOutcome.INSERTED
+            return self._store.insert_if_absent(record, **kwargs)
 
     monkeypatch.setattr(writers, "get_store", lambda path: DropFirstWrite(real_get_store(path)))
     _run(scenario, client, vault)

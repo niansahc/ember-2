@@ -200,7 +200,9 @@ class TestChatgptRoleSeparation:
         assert m_embed.call_count == 1
 
     def test_skip_log_emitted_for_assistant_chunk(self, tmp_path, caplog):
-        """Runtime log line confirms the gate executes on the skip path."""
+        """Runtime log line confirms the gate executes on the skip path. The
+        summary counts it; the per-chunk line with ids is gone (lean review
+        of #315, finding 7)."""
         doc = _make_chatgpt_doc(
             messages=["Assistant: GPT said something that is not user memory."],
             roles=["assistant"],
@@ -212,6 +214,6 @@ class TestChatgptRoleSeparation:
                 write_chunks_to_vault(chunks, str(tmp_path))
 
         assert any(
-            "Skipping vector index" in record.message
+            "1 held out by ADR-033" in record.getMessage()
             for record in caplog.records
-        ), "expected skip log line not emitted"
+        ), "expected the summary to count the gated chunk"

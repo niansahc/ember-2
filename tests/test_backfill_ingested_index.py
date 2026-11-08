@@ -190,3 +190,141 @@ class TestLiveVaultGuard:
     def test_dry_run_needs_no_test_vault(self, vault, monkeypatch):
         monkeypatch.delenv("VAULT_PATH_TEST", raising=False)
         assert backfill.main(["--vault", str(vault)]) == 0
+
+    def test_confirm_refuses_the_live_vault_even_when_it_is_also_the_test_vault(
+        self, vault, monkeypatch,
+    ):
+        """Lean review of #315, finding 6: VAULT_PATH_TEST misconfigured to
+        the live vault passed the guard and wrote the live vault."""
+        monkeypatch.setenv("VAULT_PATH_TEST", str(vault))
+        monkeypatch.setenv("PRIVATE_VAULT_PATH", str(vault))
+
+        with patch("src.ingest.writers.embed_text", side_effect=fake_embed):
+            code = backfill.main(["--vault", str(vault), "--confirm"])
+
+        assert code == 2
+        assert not (vault / "embeddings" / "ingested.db").exists()
+
+    def test_control_live_vault_flag_allows_it(self, vault, monkeypatch):
+        monkeypatch.setenv("VAULT_PATH_TEST", str(vault))
+        monkeypatch.setenv("PRIVATE_VAULT_PATH", str(vault))
+
+        with patch("src.ingest.writers.embed_text", side_effect=fake_embed):
+            code = backfill.main(["--vault", str(vault), "--confirm", "--live-vault"])
+
+        assert code == 0
+        assert _rows(vault, "ingested.db") == [(DOC, "ingested")]
+
+
+class TestPreFlagAssistantTurns:
+    """Lean review of #315, finding 2. ChatGPT chunk files written before the
+    chunker set index_for_retrieval (2026-04-20) carry role=assistant and no
+    flag. The backfill indexed them into memory.db as conversation."""
+
+    def _pre_flag_vault(self, tmp_path: Path, role: str) -> Path:
+        root = tmp_path / "vault"
+        _make_vault_tree(root)
+        _chunk_file(root, "conversations-001_0_chunk_0", ASSISTANT, "chatgpt", {"role": role})
+        return root
+
+    def test_assistant_turn_without_the_flag_is_not_indexed(self, tmp_path):
+        vault = self._pre_flag_vault(tmp_path, "assistant")
+
+        report = run(vault, confirm=True)
+
+        assert _rows(vault, "memory.db") == []
+        assert report["assistant_gated"] == 1
+
+    def test_control_user_turn_without_the_flag_is_indexed(self, tmp_path):
+        vault = self._pre_flag_vault(tmp_path, "user")
+
+        run(vault, confirm=True)
+
+        assert _rows(vault, "memory.db") == [(ASSISTANT, "conversation")]
+
+
+LEGACY_SCHEMA = """CREATE TABLE vectors (
+    id TEXT PRIMARY KEY, text TEXT NOT NULL, embedding BLOB NOT NULL,
+    source TEXT, memory_type TEXT, created_at TEXT, metadata TEXT)"""
+
+
+def _legacy_ingested_db(vault: Path) -> Path:
+    db = vault / "embeddings" / "ingested.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(LEGACY_SCHEMA)
+    conn.execute("INSERT INTO vectors VALUES ('legacy-id', 'synthetic legacy text', x'00', "
+                 "'file', 'ingested', NULL, '{}')")
+    conn.commit()
+    conn.close()
+    return db
+
+
+def _columns(db: Path) -> list[str]:
+    conn = sqlite3.connect(str(db))
+    try:
+        return [r[1] for r in conn.execute("PRAGMA table_info(vectors)")]
+    finally:
+        conn.close()
+
+
+class TestDryRunIsReadOnly:
+    """Lean review of #315, finding 10: a dry run opened the store for
+    writing, which commits the schema migrations."""
+
+    def test_dry_run_leaves_a_legacy_database_byte_for_byte(self, vault):
+        db = _legacy_ingested_db(vault)
+        before = db.read_bytes()
+
+        report = run(vault, confirm=False)
+
+        assert db.read_bytes() == before
+        assert _columns(db) == ["id", "text", "embedding", "source", "memory_type",
+                                "created_at", "metadata"]
+        assert report["indexed"]["ingested.db"] == 1
+
+    def test_control_confirm_migrates_the_same_database(self, vault):
+        db = _legacy_ingested_db(vault)
+
+        run(vault, confirm=True)
+
+        assert "content_key" in _columns(db)
+
+
+class TestExitCodes:
+    def test_empty_vault_argument_does_not_fall_through_to_the_active_vault(self, vault):
+        assert backfill.main(["--vault", ""]) == 1
+
+    def test_unset_private_vault_path_is_a_fatal_message_not_a_traceback(self, monkeypatch, capsys):
+        from src.core.config import clear_vault_path_override
+
+        clear_vault_path_override()  # restored by conftest
+        monkeypatch.delenv("PRIVATE_VAULT_PATH", raising=False)
+
+        assert backfill.main([]) == 1
+        assert "FATAL: vault directory not found" in capsys.readouterr().out
+
+    def test_a_failure_partway_reports_partial_counts_and_keeps_written_rows(
+        self, vault, monkeypatch, capsys,
+    ):
+        monkeypatch.setenv("VAULT_PATH_TEST", str(vault))
+        calls = {"n": 0}
+
+        def embed_then_fail(text):
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise ConnectionError("synthetic embedder outage")
+            return fake_embed(text)
+
+        with patch("src.ingest.writers.embed_text", side_effect=embed_then_fail):
+            code = backfill.main(["--vault", str(vault), "--confirm"])
+
+        out = capsys.readouterr().out
+        assert code == 3
+        # Files are read in name order: the user turn is embedded first.
+        assert "ConnectionError" in out and "1 into memory.db" in out
+        assert (USER, "conversation") in _rows(vault, "memory.db")
+
+    def test_control_a_normal_run_exits_zero(self, vault, monkeypatch):
+        monkeypatch.setenv("VAULT_PATH_TEST", str(vault))
+        with patch("src.ingest.writers.embed_text", side_effect=fake_embed):
+            assert backfill.main(["--vault", str(vault), "--confirm"]) == 0

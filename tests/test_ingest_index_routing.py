@@ -224,7 +224,161 @@ class TestReingest:
         assert row_ids(vault, "memory.db") == ["conversations-000_0_chunk_1", "legacy-path-id"]
 
 
-class TestFixPointLog:
+def doc_chunks(doc_id: str, texts: list[str], source: str = "file"):
+    from src.ingest.models import ChunkedDocument
+
+    return [
+        ChunkedDocument(source=source, doc_id=doc_id, chunk_id=f"{doc_id}_chunk_{i}",
+                        title=doc_id, created_at=None, content=text,
+                        metadata={"chunk_index": i})
+        for i, text in enumerate(texts)
+    ]
+
+
+def rows(vault: Path, db_name: str = "ingested.db") -> dict[str, str]:
+    import sqlite3
+
+    conn = sqlite3.connect(str(vault / "embeddings" / db_name))
+    try:
+        return dict(conn.execute("SELECT id, text FROM vectors").fetchall())
+    finally:
+        conn.close()
+
+
+ALPHA = "Alpha paragraph: the ferry timetable changes on the first Monday of spring."
+BETA = "Beta paragraph: the lighthouse lamp is serviced every second Thursday."
+GAMMA = "Gamma paragraph: the harbour crane was repainted yellow last autumn."
+
+
+class TestReingestWithShiftedText:
+    """Lean review of #315, finding 1. Re-ingesting an edited document whose
+    text moves to another chunk id: the writer skipped text whose only row it
+    had just deleted, and kept the superseded row. Red on 4dbbe36 with rows
+    {c0: gamma, c1: beta}."""
+
+    def test_every_chunk_of_the_new_version_is_indexed_and_nothing_else(self, vault):
+        write(doc_chunks("notes", [ALPHA, BETA]), vault)
+        write(doc_chunks("notes", [GAMMA, ALPHA]), vault)
+
+        assert rows(vault) == {"notes_chunk_0": GAMMA, "notes_chunk_1": ALPHA}
+
+    def test_stale_row_goes_when_its_new_text_is_indexed_under_another_id(self, vault):
+        write(doc_chunks("other", [GAMMA]), vault)
+        write(doc_chunks("notes", [ALPHA]), vault)
+        write(doc_chunks("notes", [GAMMA]), vault)
+
+        # notes_chunk_0's file now holds gamma, already indexed under
+        # other_chunk_0: the row with alpha has no file behind it any more.
+        assert rows(vault) == {"other_chunk_0": GAMMA}
+
+    def test_control_new_unique_text_under_the_same_id_is_inserted(self, vault):
+        write(doc_chunks("notes", [ALPHA]), vault)
+        write(doc_chunks("notes", [BETA]), vault)
+
+        assert rows(vault) == {"notes_chunk_0": BETA}
+
+
+def chunk_file_text(vault: Path, chunk_id: str) -> str:
+    import json
+
+    path = vault / "memory" / "ingested" / f"{chunk_id}.json"
+    return json.loads(path.read_text(encoding="utf-8"))["content"]
+
+
+class TestOverlappingIngestsOfOneDocument:
+    """Lean review of #315, finding 3. Ingest A writes its files, ingest B
+    writes and indexes the next version, then A indexes: without one lock
+    across write-then-index the file holds B and the row holds A."""
+
+    def _race(self, vault: Path) -> None:
+        import threading
+
+        from src.ingest.writers import write_chunks_to_vault
+
+        a_wrote, b_done = threading.Event(), threading.Event()
+
+        def embed(text):
+            if threading.current_thread().name == "ingest-a" and not a_wrote.is_set():
+                a_wrote.set()
+                b_done.wait(timeout=1.0)  # with the lock, B cannot finish meanwhile
+            return fake_embed(text)
+
+        def ingest_b():
+            write_chunks_to_vault(doc_chunks("notes", [BETA]), vault)
+            b_done.set()
+
+        with patch("src.ingest.writers.embed_text", side_effect=embed):
+            a = threading.Thread(name="ingest-a", target=write_chunks_to_vault,
+                                 args=(doc_chunks("notes", [ALPHA]), vault))
+            a.start()
+            assert a_wrote.wait(timeout=5)
+            b = threading.Thread(name="ingest-b", target=ingest_b)
+            b.start()
+            a.join(timeout=10)
+            b.join(timeout=10)
+
+    def test_file_and_row_end_on_the_same_version(self, vault):
+        self._race(vault)
+
+        assert rows(vault)["notes_chunk_0"] == chunk_file_text(vault, "notes_chunk_0")
+
+    def test_control_without_the_document_lock_they_disagree(self, vault, monkeypatch):
+        import threading
+
+        monkeypatch.setattr("src.ingest.writers._document_lock", lambda *a: threading.Lock())
+
+        self._race(vault)
+
+        assert chunk_file_text(vault, "notes_chunk_0") == BETA
+        assert rows(vault)["notes_chunk_0"] == ALPHA
+
+
+class TestConcurrentIdenticalText:
+    """Lean review of #315, finding 4. Two documents with the same text, both
+    past the pre-embedding check before either writes: the check under the
+    store lock lets only one row in."""
+
+    def test_identical_text_from_two_racing_documents_is_indexed_once(self, vault, monkeypatch):
+        import threading
+
+        from src.ingest.writers import write_chunks_to_vault
+
+        # Each ingest takes its own lock: this race is about the store check.
+        monkeypatch.setattr("src.ingest.writers._document_lock", lambda *a: threading.Lock())
+        barrier = threading.Barrier(2, timeout=5)
+        embedded = []
+
+        def embed(text):
+            barrier.wait()  # both threads have passed the pre-embedding check
+            embedded.append(text)
+            return fake_embed(text)
+
+        with patch("src.ingest.writers.embed_text", side_effect=embed):
+            threads = [threading.Thread(target=write_chunks_to_vault,
+                                        args=(doc_chunks(name, [ALPHA]), vault))
+                       for name in ("d1", "d2")]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+
+        # Control: both really raced (both embedded), and one row went in.
+        assert len(embedded) == 2
+        assert list(rows(vault).values()) == [ALPHA]
+
+
+class TestLogCarriesNoIds:
+    def test_no_log_record_names_a_chunk(self, vault, caplog):
+        """Lean review of #315, finding 7: a gated chunk's ids were logged.
+        Control: the summary, counting that chunk, is captured."""
+        chunks = chatgpt_chunks([USER_TURN, ASSISTANT_TURN], ["user", "assistant"])
+        with caplog.at_level("DEBUG", logger="ember.ingest.writers"):
+            write(chunks, vault)
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert not any(c.chunk_id in m or c.doc_id in m for c in chunks for m in messages)
+        assert any("1 held out by ADR-033" in m for m in messages)
+
     def test_writer_logs_where_each_chunk_was_indexed(self, vault, caplog):
         chunks = chatgpt_chunks([USER_TURN, ASSISTANT_TURN], ["user", "assistant"])
         with caplog.at_level("INFO", logger="ember.ingest.writers"):

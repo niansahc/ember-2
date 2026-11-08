@@ -148,7 +148,8 @@ _ENV_FALLBACK_VAULT = _PROCESS_TMP_ROOT / "vault"
 _make_vault_tree(_ENV_FALLBACK_VAULT)
 os.environ["PRIVATE_VAULT_PATH"] = str(_ENV_FALLBACK_VAULT)
 
-for _key in (*_LEAK_PRONE_ENV_VARS, "VAULT_PATH_LIVE", "VAULT_PATH_DEMO", "VAULT_PATH_TEST"):
+for _key in (*_LEAK_PRONE_ENV_VARS, "VAULT_PATH_LIVE", "VAULT_PATH_DEMO", "VAULT_PATH_TEST",
+             "EMBER_LIVE_VAULT_PATH"):
     os.environ.pop(_key, None)
 
 # TestClient presents Host: testserver. The host allowlist in src/api/main.py
@@ -422,14 +423,17 @@ def restore_process_state():
     # tools/eval_helpers.require_test_vault() pins an eval process by
     # rewriting this variable; a test that reaches it must not move the
     # session's throwaway vault for the tests after it.
-    prior_env_vault = os.environ.get("PRIVATE_VAULT_PATH")
+    # It also records the pre-pin value in EMBER_LIVE_VAULT_PATH.
+    pinned_env = ("PRIVATE_VAULT_PATH", "EMBER_LIVE_VAULT_PATH")
+    prior_env = {name: os.environ.get(name) for name in pinned_env}
 
     yield
 
-    if prior_env_vault is None:
-        os.environ.pop("PRIVATE_VAULT_PATH", None)
-    else:
-        os.environ["PRIVATE_VAULT_PATH"] = prior_env_vault
+    for name, value in prior_env.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
     clear_store_cache()
     clear_index_cache()
     clear_adapter_process_stores()

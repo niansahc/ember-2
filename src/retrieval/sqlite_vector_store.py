@@ -43,6 +43,7 @@ import struct
 import threading
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 
 from src.core.timestamps import parse_vault_timestamp
@@ -98,6 +99,9 @@ class RetrievalStatsWrite:
 # See SqliteVectorStore.insert (issue #210).
 ID_COLLISION_MARKER = "#"
 
+# Rows per commit when _migrate_content_key_column fills a store's keys.
+CONTENT_KEY_FILL_BATCH = 2000
+
 
 def normalize_content(value: str | None) -> str:
     """Lowercased, whitespace-collapsed text: what content identity compares."""
@@ -124,6 +128,37 @@ def content_key(text: str | None) -> str:
     compares this instead.
     """
     return hashlib.sha256(normalize_content(text).encode("utf-8", "ignore")).hexdigest()
+
+
+class IndexOutcome(Enum):
+    """What SqliteVectorStore.insert_if_absent did with a record."""
+
+    INSERTED = "inserted"
+    # The text is already indexed: under this id, or under another id in
+    # the dedupe scope. Nothing new was written.
+    ALREADY_INDEXED = "already_indexed"
+    # The text is not indexed and the record carried no embedding. Nothing
+    # was written; embed (outside any lock) and call again.
+    NEEDS_EMBEDDING = "needs_embedding"
+
+
+def read_index_snapshot(db_path: Path) -> list[tuple[str, str | None, str]]:
+    """(id, memory_type, content_key) of every row, read without writing.
+
+    Opens the database read-only, so a dry run neither creates the file nor
+    runs the schema migrations that opening a SqliteVectorStore commits. The
+    keys are computed from the text, so a database from before the
+    content_key column reads the same. Empty when the file does not exist.
+    """
+    db_path = Path(db_path)
+    if not db_path.exists():
+        return []
+    conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        rows = conn.execute("SELECT id, memory_type, text FROM vectors").fetchall()
+    finally:
+        conn.close()
+    return [(str(row_id), memory_type, content_key(text)) for row_id, memory_type, text in rows]
 
 
 class SqliteVectorStore:
@@ -172,6 +207,7 @@ class SqliteVectorStore:
             self._migrate_tiering_columns()
             self._migrate_authorship_column()
             self._migrate_quality_column()
+            self._migrate_content_key_column()
             self._has_quality_column = self._check_column_exists("quality")
             self._has_authorship_column = self._check_column_exists("authorship")
 
@@ -245,21 +281,25 @@ class SqliteVectorStore:
         been required to equal it (roughly 99 percent of rows carry ids
         minted by the retired ingest pipeline).
         """
-        embedding: list[float] = record["embedding"]
-        n = len(embedding)
-        embedding_blob = struct.pack(f"{n}f", *embedding)
-
-        metadata = record.get("metadata", {})
-        metadata_str = json.dumps(metadata, ensure_ascii=False)
-
+        embedding_blob, metadata_str = self._encode(record)
         record_id = str(record["id"])
         text = record["text"]
 
         with self._lock:
             return self._insert_locked(record, record_id, text, embedding_blob, metadata_str)
 
+    @staticmethod
+    def _encode(record: dict) -> tuple[bytes, str]:
+        """The embedding BLOB and metadata JSON for a record. Built before
+        any write, so a record that cannot be encoded changes nothing."""
+        embedding: list[float] = record["embedding"]
+        embedding_blob = struct.pack(f"{len(embedding)}f", *embedding)
+        metadata_str = json.dumps(record.get("metadata", {}), ensure_ascii=False)
+        return embedding_blob, metadata_str
+
     def _insert_locked(
         self, record: dict, record_id: str, text: str, embedding_blob: bytes, metadata_str: str,
+        *, quality: str | None = None, commit: bool = True,
     ) -> str:
         """The read-check-write of insert(). Call with _lock held, so a
         collision check and its insert cannot interleave with another."""
@@ -280,9 +320,10 @@ class SqliteVectorStore:
         self._conn.execute(
             """
             INSERT INTO vectors
-                (id, text, embedding, source, memory_type, created_at, metadata, authorship)
+                (id, text, embedding, source, memory_type, created_at, metadata,
+                 authorship, content_key, quality)
             VALUES
-                (?, ?, ?, ?, ?, ?, ?, ?)
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record_id,
@@ -293,37 +334,87 @@ class SqliteVectorStore:
                 record.get("created_at"),
                 metadata_str,
                 record.get("authorship", "unknown"),
+                content_key(text),
+                quality,
             ),
         )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
         return record_id
 
-    def replace(self, record: dict) -> str:
-        """Write a record whose id names one canonical file. Returns its id.
+    def insert_if_absent(self, record: dict, *, dedupe_type: str | None = None) -> IndexOutcome:
+        """Index a record whose id names one canonical file, unless its text
+        is already indexed. Takes the same keys as insert(); "embedding" may
+        be left out until the text is known to be absent.
 
         For writers whose canonical file can be rewritten under the same name,
         which the ingest writer does when a document is ingested again
-        (src/ingest/writers.py). The row must then follow the file:
+        (src/ingest/writers.py). The row must follow the file, and the check
+        and the write happen under the store lock in one transaction, so two
+        writers cannot both pass the check and both insert:
 
-          - no row with this id -> inserted, as insert() would.
-          - same id, same normalized text -> left alone, delivery history
-            included. Re-ingesting an unchanged document is a no-op.
-          - same id, different text -> the old row is deleted and the new one
-            inserted, in one locked step. insert() would instead keep the old
-            row and add `{id}#2` (issue #210), leaving the superseded text
-            retrievable with no canonical file behind it.
+          - same id, same normalized text -> ALREADY_INDEXED, row untouched.
+          - the text is indexed under another id (in `dedupe_type`, or in the
+            whole store when None) -> ALREADY_INDEXED. A row under this id
+            with other text is deleted: its file no longer holds that text.
+          - the text is absent and no embedding was given -> NEEDS_EMBEDDING,
+            nothing written.
+          - otherwise -> a row under this id with other text is replaced by
+            the new one, else the new one is inserted. INSERTED.
 
-        Takes the same keys as insert().
+        A replaced row's quality flag (suppression) is carried to the new
+        text: it is an operator judgment, and losing it would resurface a
+        hidden row silently. Delivery history (tier, heat, frequency, last
+        retrieval) is not: it measured the old text, and the rebuild treats
+        history as belonging to content the same way.
+
+        Any error rolls the transaction back, so a delete is never committed
+        without the insert that was meant to follow it.
         """
         record_id = str(record["id"])
-        # _lock is reentrant: the delete and insert()'s write commit together.
+        text = record["text"]
+        key = content_key(text)
+        encoded = self._encode(record) if record.get("embedding") is not None else None
+
         with self._lock:
-            existing = self._conn.execute(
-                "SELECT text FROM vectors WHERE id = ?", (record_id,)
+            try:
+                same_id = self._conn.execute(
+                    "SELECT text, quality FROM vectors WHERE id = ?", (record_id,)
+                ).fetchone()
+                if same_id is not None and _same_text(same_id["text"], text):
+                    return IndexOutcome.ALREADY_INDEXED
+                if self._has_content_key_locked(key, dedupe_type):
+                    if same_id is not None:
+                        self._conn.execute("DELETE FROM vectors WHERE id = ?", (record_id,))
+                        self._conn.commit()
+                    return IndexOutcome.ALREADY_INDEXED
+                if encoded is None:
+                    return IndexOutcome.NEEDS_EMBEDDING
+                quality = None
+                if same_id is not None:
+                    quality = same_id["quality"]
+                    self._conn.execute("DELETE FROM vectors WHERE id = ?", (record_id,))
+                self._insert_locked(record, record_id, text, *encoded,
+                                    quality=quality, commit=False)
+                self._conn.commit()
+                return IndexOutcome.INSERTED
+            except BaseException:
+                self._conn.rollback()
+                raise
+
+    def _has_content_key_locked(self, key: str, memory_type: str | None) -> bool:
+        """Whether a row in scope holds text with this content key. Call with
+        _lock held."""
+        if memory_type:
+            row = self._conn.execute(
+                "SELECT 1 FROM vectors WHERE content_key = ? AND memory_type = ? LIMIT 1",
+                (key, memory_type),
             ).fetchone()
-            if existing is not None and not _same_text(existing["text"], record["text"]):
-                self._conn.execute("DELETE FROM vectors WHERE id = ?", (record_id,))
-            return self.insert(record)
+        else:
+            row = self._conn.execute(
+                "SELECT 1 FROM vectors WHERE content_key = ? LIMIT 1", (key,)
+            ).fetchone()
+        return row is not None
 
     def _disambiguate_id(self, record_id: str) -> str:
         """First free `{record_id}#n`, n starting at 2.
@@ -467,11 +558,11 @@ class SqliteVectorStore:
         with self._lock:
             if memory_type:
                 rows = self._conn.execute(
-                    "SELECT text FROM vectors WHERE memory_type = ?", (memory_type,)
+                    "SELECT content_key FROM vectors WHERE memory_type = ?", (memory_type,)
                 ).fetchall()
             else:
-                rows = self._conn.execute("SELECT text FROM vectors").fetchall()
-        return {content_key(row["text"]) for row in rows}
+                rows = self._conn.execute("SELECT content_key FROM vectors").fetchall()
+        return {row["content_key"] for row in rows}
 
     def count(self) -> int:
         """Return the total number of records in the store."""
@@ -578,6 +669,48 @@ class SqliteVectorStore:
         except _sqlite3.OperationalError:
             pass  # column already exists
         self._conn.commit()
+
+    def _migrate_content_key_column(self) -> None:
+        """Add and fill the indexed content_key column (content_key()).
+
+        insert_if_absent checks whether text is already indexed under the
+        store lock; without an index that check would scan every row for
+        every chunk. Rows with no key are filled here on every open: the
+        rows that predate the column, and any row a script wrote with raw
+        SQL (a rebuild's orphan copy, the ADR-015 reclassification). Filled
+        in batches with a progress line, because the first open of a large
+        store hashes every row once.
+        """
+        try:
+            self._conn.execute("ALTER TABLE vectors ADD COLUMN content_key TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_vectors_content_key ON vectors (content_key)"
+        )
+        self._conn.commit()
+
+        pending = self._conn.execute(
+            "SELECT COUNT(*) FROM vectors WHERE content_key IS NULL"
+        ).fetchone()[0]
+        if not pending:
+            return
+        logger.info("[INDEX] filling content_key for %d row(s) in %s", pending, self.db_path.name)
+        filled = 0
+        while True:
+            rows = self._conn.execute(
+                "SELECT id, text FROM vectors WHERE content_key IS NULL LIMIT ?",
+                (CONTENT_KEY_FILL_BATCH,),
+            ).fetchall()
+            if not rows:
+                break
+            self._conn.executemany(
+                "UPDATE vectors SET content_key = ? WHERE id = ?",
+                [(content_key(row["text"]), row["id"]) for row in rows],
+            )
+            self._conn.commit()
+            filled += len(rows)
+            logger.info("[INDEX] content_key filled %d/%d in %s", filled, pending, self.db_path.name)
 
     def update_retrieval_stats(self, record_ids: list[str]) -> RetrievalStatsWrite:
         """

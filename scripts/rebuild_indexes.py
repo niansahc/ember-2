@@ -123,17 +123,6 @@ _CARRIED_COLUMNS = (
 )
 
 
-# Join key for matching a source record to an existing indexed row:
-# src/retrieval/sqlite_vector_store.content_key, which the live ingest writer
-# also skips already-indexed content on. Identity in memory.db is not
-# reproducible from the vault: roughly 99% of rows carry ids minted by the
-# retired ingest pipeline that wrote ingested.db, and those ids appear in no
-# canonical record. Normalized text is the only field both sides share, so it
-# is what the rebuild joins on to preserve store_id and delivery history.
-# Measured coverage on a real vault at the time this was written: 16,804 of
-# 16,899 distinct indexed texts matched a canonical record.
-
-
 @dataclass
 class SourceRecord:
     """One canonical vault record eligible for memory.db."""
@@ -148,6 +137,17 @@ class SourceRecord:
 
     @property
     def content_key(self) -> str:
+        """Join key for matching this record to an existing indexed row:
+        src/retrieval/sqlite_vector_store.content_key, which the live ingest
+        writer also dedupes on. Identity in memory.db is not reproducible
+        from the vault: roughly 99% of rows carry ids minted by the retired
+        ingest pipeline that wrote ingested.db, and those ids appear in no
+        canonical record. Normalized text is the only field both sides
+        share, so it is what the rebuild joins on to preserve store_id and
+        delivery history. Measured coverage on a real vault at the time this
+        was written: 16,804 of 16,899 distinct indexed texts matched a
+        canonical record.
+        """
         return content_key(self.text)
 
 
@@ -343,7 +343,7 @@ def collect_source_records(vault: Path) -> list[SourceRecord]:
     record id. Prior-substrate chunks take type conversation and their
     chunk_id, which is the filename stem -- ingested payloads carry the text
     under "content" rather than "text" and have no "id" field at all
-    (src/ingest/writers.py:26-35).
+    (src/ingest/writers.py, _write_chunk_file).
     """
     records: list[SourceRecord] = []
     skipped_fixtures: list[str] = []
@@ -683,7 +683,11 @@ def _carry_orphans(existing_db: Path, target: Path, orphans: list[dict]) -> int:
     source.row_factory = sqlite3.Row
     destination = sqlite3.connect(str(target))
     try:
-        columns = [r[1] for r in destination.execute("PRAGMA table_info(vectors)")]
+        # Columns both tables have: an old database can predate a column the
+        # new store added (content_key, filled when the store next opens).
+        source_columns = {r[1] for r in source.execute("PRAGMA table_info(vectors)")}
+        columns = [r[1] for r in destination.execute("PRAGMA table_info(vectors)")
+                   if r[1] in source_columns]
         placeholders = ", ".join("?" for _ in columns)
         copied = 0
         for record_id in ids:

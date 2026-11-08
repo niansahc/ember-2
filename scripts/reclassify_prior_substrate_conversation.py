@@ -98,10 +98,12 @@ if __name__ == "__main__":
 
     load_env_file()
 
+from src.ingest.index_routing import PRIOR_SUBSTRATE_ROLES, PRIOR_SUBSTRATE_SOURCE  # noqa: E402
 from src.memory.authorship import classify_authorship  # noqa: E402
 from src.retrieval.sqlite_vector_store import SqliteVectorStore  # noqa: E402
 
-VALID_ROLES = {"user", "assistant"}
+# The predicate the live ingest writer routes by (src/ingest/index_routing.py).
+VALID_ROLES = PRIOR_SUBSTRATE_ROLES
 
 # Full column set copied verbatim from ingested.db's row into memory.db,
 # except memory_type (forced to 'conversation') and authorship
@@ -196,7 +198,8 @@ def reclassify(
 
     cursor = ingested_conn.execute(
         f"SELECT {', '.join(select_cols)} FROM vectors "
-        "WHERE memory_type = 'ingested' AND source = 'chatgpt'"
+        "WHERE memory_type = 'ingested' AND source = ?",
+        (PRIOR_SUBSTRATE_SOURCE,),
     )
 
     migrated_ids: list[str] = []
@@ -213,7 +216,7 @@ def reclassify(
             report["skipped_unresolvable_role"] += 1
             continue
 
-        authorship = classify_authorship("conversation", "chatgpt", metadata)
+        authorship = classify_authorship("conversation", PRIOR_SUBSTRATE_SOURCE, metadata)
         report["authorship_assigned"][authorship] = report["authorship_assigned"].get(authorship, 0) + 1
 
         quality = row["quality"] if ingested_has_quality else None

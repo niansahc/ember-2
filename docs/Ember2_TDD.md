@@ -537,11 +537,11 @@ private_vault/
     ingested/
     archive/
   embeddings/
-    conversation_index.json
-    journal_index.json
-    reflection_index.json
-    state_index.json
-    ingested_index.json
+    memory.db              SQLite index: conversation, profile, reflection, journal
+    ingested.db            SQLite index: ingested documents
+    state_index.json       JSON index, one per other type (<type>_index.json)
+    conversation_index.json, journal_index.json, reflection_index.json,
+    ingested_index.json    retired: no longer written or read (left in place)
   imports/
     chatgpt/
     docs/
@@ -2190,7 +2190,7 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
   -> open: no version assigned
 
 - **~~Ingested JSON index not read by retrieval (#174)~~** - fixed: the ingest writer indexes chunks into `ingested.db` (documents) and `memory.db` (ChatGPT user turns); `scripts/backfill_ingested_index.py` indexes chunk files already on disk. See KNOWN_ISSUES (B-RET-003).
-  -> addressed: PR pending
+  -> addressed: PR #315
 
 - **Stage 3 sends two vault questions to web search** - with Stage 3 live, the Tier 2 cases `work_context_architecture` and `timeline_recent` are labelled `needs_internet`. The `web_search` policy then halves their memory scores. See KNOWN_ISSUES and section 52.
   -> open: ADR-034 / ADR-037 territory (no version assigned)

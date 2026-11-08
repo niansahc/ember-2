@@ -106,6 +106,32 @@ def test_env_is_read_per_call_not_cached(tmp_path, monkeypatch):
     assert is_test_vault(tmp_path) is False
 
 
+def test_a_test_vault_that_is_the_live_vault_is_not_the_test_vault(tmp_path, monkeypatch):
+    """Lean review of #315, finding 6: VAULT_PATH_TEST set to the same path
+    as PRIVATE_VAULT_PATH let eval fixtures into the live vault's index."""
+    monkeypatch.setenv("VAULT_PATH_TEST", str(tmp_path))
+    monkeypatch.setenv("PRIVATE_VAULT_PATH", str(tmp_path))
+    assert is_test_vault(tmp_path) is False
+    assert may_index_eval_fixture(tmp_path) is False
+
+
+def test_control_an_eval_process_pinned_to_the_test_vault_still_indexes(tmp_path, monkeypatch):
+    """require_test_vault pins PRIVATE_VAULT_PATH to the test vault and
+    records the live one; the seeder's fixtures must still be indexed there."""
+    import tools.eval_helpers as eval_helpers
+
+    live, test = tmp_path / "live", tmp_path / "test"
+    live.mkdir()
+    test.mkdir()
+    monkeypatch.setenv("PRIVATE_VAULT_PATH", str(live))
+    monkeypatch.setenv("VAULT_PATH_TEST", str(test))
+
+    eval_helpers.require_test_vault()  # conftest restores both variables
+
+    assert may_index_eval_fixture(test) is True
+    assert is_test_vault(live) is False
+
+
 # ---------------------------------------------------------------------------
 # The question both write paths ask
 # ---------------------------------------------------------------------------

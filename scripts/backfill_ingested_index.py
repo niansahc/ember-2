@@ -35,8 +35,10 @@ Usage
     python scripts/backfill_ingested_index.py --vault PATH --confirm
     python scripts/backfill_ingested_index.py --confirm --live-vault
 
---confirm writes only when the vault is VAULT_PATH_TEST, unless --live-vault
-is also given. A live-vault run is the user's to make, with the API stopped:
+--confirm writes only when the vault is VAULT_PATH_TEST and not the live
+vault (PRIVATE_VAULT_PATH), unless --live-vault is also given. Exit codes:
+0 done, 1 no vault, 2 refused by that guard, 3 the run failed partway (rows
+written before the failure stay; a re-run skips them). A live-vault run is the user's to make, with the API stopped:
 the API caches store handles (src/retrieval/store_cache.py) and its content
 keys go stale under a concurrent writer.
 
@@ -70,7 +72,7 @@ from src.ingest.writers import (  # noqa: E402
     index_chunks,
     ingested_dir,
 )
-from src.memory.eval_fixtures import is_test_vault  # noqa: E402
+from src.memory.eval_fixtures import is_live_vault, is_test_vault  # noqa: E402
 from src.memory.write_memory import should_index  # noqa: E402
 from src.retrieval.sqlite_vector_store import content_key  # noqa: E402
 from src.retrieval.vector_index import VectorIndex  # noqa: E402
@@ -146,7 +148,7 @@ def json_index_cross_check(vault: Path, chunks: list[ChunkedDocument], planned: 
             report["without_chunk_file"] += 1
             continue
         report["with_chunk_file"] += 1
-        if not is_indexable(chunk.metadata):
+        if not is_indexable(chunk.source, chunk.metadata):
             report["covered"] += 1
             continue
         target = index_target(chunk.source, chunk.metadata)
@@ -155,13 +157,17 @@ def json_index_cross_check(vault: Path, chunks: list[ChunkedDocument], planned: 
     return report
 
 
-def backfill(vault: Path, *, confirm: bool) -> dict:
-    """Plan (and with confirm, run) the backfill for one vault. Counts only."""
+def backfill(vault: Path, *, confirm: bool, counts: dict[str, int] | None = None) -> dict:
+    """Plan (and with confirm, run) the backfill for one vault. Counts only.
+
+    counts, when given, is filled as the run goes, so a caller can report
+    how far a run that raised got.
+    """
     chunks, unreadable, filtered = load_chunk_files(vault)
     # What the stores hold (or, on a dry run, would hold) afterwards, for the
     # cross-check: what is there now plus what this run adds.
     planned: dict[str, set[str]] = {}
-    counts = index_chunks(chunks, vault, dry_run=not confirm, known_keys=planned)
+    counts = index_chunks(chunks, vault, dry_run=not confirm, known_keys=planned, counts=counts)
 
     return {
         "chunk_files": len(chunks),
@@ -198,19 +204,38 @@ def main(argv: list[str] | None = None) -> int:
                         help="Allow --confirm on a vault that is not VAULT_PATH_TEST")
     args = parser.parse_args(argv)
 
-    vault = resolve_vault_path(args.vault) if args.vault else get_private_vault_path()
+    # An empty --vault ("--vault $UNSET") names no vault; it must not fall
+    # through to the active one.
+    try:
+        vault = resolve_vault_path(args.vault) if args.vault is not None else get_private_vault_path()
+    except ValueError:
+        vault = None
     if vault is None or not Path(vault).is_dir():
         print("FATAL: vault directory not found")
         return 1
     vault = Path(vault)
 
-    if args.confirm and not args.live_vault and not is_test_vault(vault):
-        print("FATAL: --confirm writes only to VAULT_PATH_TEST. This vault is not it. "
-              "Pass --live-vault to backfill another vault, with the API stopped.")
-        return 2
+    if args.confirm and not args.live_vault:
+        if is_live_vault(vault):
+            print("FATAL: this vault is the live vault (PRIVATE_VAULT_PATH). "
+                  "Pass --live-vault to backfill it, with the API stopped.")
+            return 2
+        if not is_test_vault(vault):
+            print("FATAL: --confirm writes only to VAULT_PATH_TEST. This vault is not it. "
+                  "Pass --live-vault to backfill another vault, with the API stopped.")
+            return 2
 
     print(f"Backfill ingested index ({'confirm' if args.confirm else 'dry run'})")
-    report = backfill(vault, confirm=args.confirm)
+    counts: dict[str, int] = {}
+    try:
+        report = backfill(vault, confirm=args.confirm, counts=counts)
+    except Exception as exc:
+        print(f"FATAL: backfill stopped by {type(exc).__name__} after indexing "
+              f"{counts.get('ingested.db', 0)} into ingested.db and "
+              f"{counts.get('memory.db', 0)} into memory.db "
+              f"({counts.get('already_indexed', 0)} already indexed). "
+              "Rows written before the failure stay; a re-run skips them.")
+        return 3
     _print_report(report, args.confirm)
     if not args.confirm:
         print("  dry run: nothing embedded, nothing written")

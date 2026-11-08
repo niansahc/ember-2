@@ -47,10 +47,19 @@ INGESTED_TARGET = IndexTarget("ingested.db", "ingested", None)
 CONVERSATION_TARGET = IndexTarget("memory.db", "conversation", "conversation")
 
 
-def is_indexable(metadata: dict | None) -> bool:
+def is_indexable(source: str | None, metadata: dict | None) -> bool:
     """False for a chunk ADR-033 holds out of every index (a ChatGPT
-    assistant turn): it is written to disk for thread reconstruction only."""
-    return (metadata or {}).get("index_for_retrieval", True)
+    assistant turn): it is written to disk for thread reconstruction only.
+
+    The role decides, not only the flag. The chunker has set
+    index_for_retrieval=False on assistant turns since 2026-04-20; chunk
+    files a ChatGPT import wrote before that carry the role and no flag,
+    and the backfill reads them.
+    """
+    metadata = metadata or {}
+    if not metadata.get("index_for_retrieval", True):
+        return False
+    return not ((source or "") == PRIOR_SUBSTRATE_SOURCE and metadata.get("role") == "assistant")
 
 
 def is_prior_substrate(source: str | None, metadata: dict | None) -> bool:

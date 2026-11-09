@@ -74,8 +74,40 @@ def _configured_test_vault() -> Path | None:
         return None
 
 
+# Set by tools/eval_helpers.require_test_vault to the PRIVATE_VAULT_PATH it
+# found before pinning the process to the test vault. After the pin,
+# PRIVATE_VAULT_PATH names the test vault, so it can no longer say which
+# vault is the live one.
+LIVE_VAULT_ENV = "EMBER_LIVE_VAULT_PATH"
+
+
+def _configured_live_vault() -> Path | None:
+    """The live vault: the pre-pin PRIVATE_VAULT_PATH when an eval pinned
+    this process (None if it had none), else PRIVATE_VAULT_PATH."""
+    if LIVE_VAULT_ENV in os.environ:
+        raw = os.environ[LIVE_VAULT_ENV]
+    else:
+        raw = os.getenv("PRIVATE_VAULT_PATH")
+    try:
+        return resolve_vault_path(raw)
+    except (OSError, ValueError):
+        return None
+
+
+def is_live_vault(vault_path: str | os.PathLike | None) -> bool:
+    """True when vault_path resolves to the live vault."""
+    target = _caller_vault(vault_path)
+    return target is not None and target == _configured_live_vault()
+
+
 def is_test_vault(vault_path: str | os.PathLike | None) -> bool:
-    """True only when vault_path positively resolves to VAULT_PATH_TEST.
+    """True only when vault_path positively resolves to VAULT_PATH_TEST,
+    and VAULT_PATH_TEST is not the live vault.
+
+    The second condition catches VAULT_PATH_TEST set to the same path as
+    PRIVATE_VAULT_PATH: everything gated on "is the test vault" would then
+    write to the live one (tools/eval_helpers.require_test_vault refuses the
+    same case).
 
     Read from the environment on every call rather than cached, because the
     vault can be swapped at runtime and a cached answer would outlive the
@@ -85,7 +117,7 @@ def is_test_vault(vault_path: str | os.PathLike | None) -> bool:
     configured = _configured_test_vault()
     if target is None or configured is None:
         return False
-    return target == configured
+    return target == configured and configured != _configured_live_vault()
 
 
 def may_index_eval_fixture(vault_path: str | os.PathLike | None) -> bool:

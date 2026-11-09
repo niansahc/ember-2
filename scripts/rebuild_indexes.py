@@ -57,7 +57,6 @@ Progress is printed every batch so it doesn't look hung on large corpora.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sqlite3
@@ -79,11 +78,16 @@ if __name__ == "__main__":
     load_env_file()
 
 from src.core.config import get_private_vault_path
+from src.ingest.index_routing import is_prior_substrate
 from src.memory.authorship import classify_authorship
 from src.memory.eval_fixtures import is_eval_fixture, should_index_record
 from src.memory.write_memory import should_index
 from src.retrieval.embedding_model import embed_texts
-from src.retrieval.sqlite_vector_store import SqliteVectorStore
+from src.retrieval.sqlite_vector_store import (
+    SqliteVectorStore,
+    content_key,
+    normalize_content,
+)
 
 # Batch size for embedding calls — balances speed vs memory
 BATCH_SIZE = 50
@@ -92,16 +96,6 @@ BATCH_SIZE = 50
 # carrying its own type. Mirrors SQLITE_MEMORY_TYPES in write_memory.py and
 # semantic_search.py; kept as a tuple here so enumeration order is stable.
 MEMORY_DB_TYPES = ("conversation", "profile", "reflection", "journal")
-
-# Prior-substrate conversation (ADR-015 amendment, "Timestamps and
-# prior-substrate conversation"). These records live in memory/ingested/
-# with "type": "ingested" on disk, because the reclassification that moved
-# them was index-only and left canonical JSON untouched per the append-only
-# rule. They are conversation for every retrieval purpose, so the rebuild
-# applies the same predicate the migration did rather than reading the
-# stale type off disk.
-PRIOR_SUBSTRATE_SOURCE = "chatgpt"
-PRIOR_SUBSTRATE_ROLES = frozenset({"user", "assistant"})
 
 # Columns carried across a rebuild when a source record can be matched to a
 # row in the existing database. Everything here is either delivery history
@@ -129,24 +123,6 @@ _CARRIED_COLUMNS = (
 )
 
 
-def _normalize_for_join(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "").strip().lower())
-
-
-def _content_key(text: str) -> str:
-    """Join key for matching a source record to an existing indexed row.
-
-    Identity in memory.db is not reproducible from the vault: roughly 99% of
-    rows carry ids minted by the retired ingest pipeline that wrote
-    ingested.db, and those ids appear in no canonical record. Normalized text
-    is the only field both sides share, so it is what the rebuild joins on to
-    preserve store_id and delivery history. Measured coverage on a real vault
-    at the time this was written: 16,804 of 16,899 distinct indexed texts
-    matched a canonical record.
-    """
-    return hashlib.sha256(_normalize_for_join(text).encode("utf-8", "ignore")).hexdigest()
-
-
 @dataclass
 class SourceRecord:
     """One canonical vault record eligible for memory.db."""
@@ -161,7 +137,18 @@ class SourceRecord:
 
     @property
     def content_key(self) -> str:
-        return _content_key(self.text)
+        """Join key for matching this record to an existing indexed row:
+        src/retrieval/sqlite_vector_store.content_key, which the live ingest
+        writer also dedupes on. Identity in memory.db is not reproducible
+        from the vault: roughly 99% of rows carry ids minted by the retired
+        ingest pipeline that wrote ingested.db, and those ids appear in no
+        canonical record. Normalized text is the only field both sides
+        share, so it is what the rebuild joins on to preserve store_id and
+        delivery history. Measured coverage on a real vault at the time this
+        was written: 16,804 of 16,899 distinct indexed texts matched a
+        canonical record.
+        """
+        return content_key(self.text)
 
 
 @dataclass
@@ -349,20 +336,6 @@ def rebuild_sqlite_index(vault: Path) -> int:
     return updated
 
 
-def _is_prior_substrate(record: dict) -> bool:
-    """True when an ingested chunk is prior-substrate conversation.
-
-    Same predicate as scripts/reclassify_prior_substrate_conversation.py:
-    source is the chat export, and the role resolves to exactly user or
-    assistant. A chunk whose role is missing or unrecognised is left alone
-    rather than guessed at, which is why it stays out of memory.db.
-    """
-    if (record.get("source") or "") != PRIOR_SUBSTRATE_SOURCE:
-        return False
-    role = ((record.get("metadata") or {}).get("role") or "")
-    return role in PRIOR_SUBSTRATE_ROLES
-
-
 def collect_source_records(vault: Path) -> list[SourceRecord]:
     """Enumerate every canonical vault record that belongs in memory.db.
 
@@ -370,7 +343,7 @@ def collect_source_records(vault: Path) -> list[SourceRecord]:
     record id. Prior-substrate chunks take type conversation and their
     chunk_id, which is the filename stem -- ingested payloads carry the text
     under "content" rather than "text" and have no "id" field at all
-    (src/ingest/writers.py:26-35).
+    (src/ingest/writers.py, _write_chunk_file).
     """
     records: list[SourceRecord] = []
     skipped_fixtures: list[str] = []
@@ -425,7 +398,12 @@ def collect_source_records(vault: Path) -> list[SourceRecord]:
             except (json.JSONDecodeError, OSError) as exc:
                 print(f"  [memory.db] Unreadable ingested chunk {path.name}: {exc}")
                 continue
-            if not _is_prior_substrate(data):
+            # Prior-substrate conversation (ADR-015 amendment): these chunks
+            # carry "type": "ingested" on disk because the reclassification
+            # was index-only (append-only rule). The predicate is the live
+            # ingest writer's (src/ingest/index_routing.py), so the two
+            # cannot drift; a chunk with no recognised role stays out.
+            if not is_prior_substrate(data.get("source"), data.get("metadata")):
                 continue
             text = data.get("content") or data.get("text") or ""
             if not text.strip():
@@ -490,7 +468,7 @@ def plan_memory_db_rebuild(vault: Path, existing_db: Path) -> RebuildPlan:
 
     by_key_existing: dict[str, list[dict]] = defaultdict(list)
     for row in existing:
-        by_key_existing[_content_key(row.get("text", ""))].append(row)
+        by_key_existing[content_key(row.get("text", ""))].append(row)
     for bucket in by_key_existing.values():
         bucket.sort(key=lambda r: str(r.get("id") or ""))
 
@@ -548,7 +526,7 @@ def _row_for(record: SourceRecord, existing: dict | None) -> dict:
         "metadata": {
             **record.metadata,
             "file_path": str(record.file_path),
-            "normalized_text": _normalize_for_join(record.text),
+            "normalized_text": normalize_content(record.text),
         },
     }
     if existing:
@@ -705,7 +683,11 @@ def _carry_orphans(existing_db: Path, target: Path, orphans: list[dict]) -> int:
     source.row_factory = sqlite3.Row
     destination = sqlite3.connect(str(target))
     try:
-        columns = [r[1] for r in destination.execute("PRAGMA table_info(vectors)")]
+        # Columns both tables have: an old database can predate a column the
+        # new store added (content_key, filled when the store next opens).
+        source_columns = {r[1] for r in source.execute("PRAGMA table_info(vectors)")}
+        columns = [r[1] for r in destination.execute("PRAGMA table_info(vectors)")
+                   if r[1] in source_columns]
         placeholders = ", ".join("?" for _ in columns)
         copied = 0
         for record_id in ids:

@@ -131,10 +131,11 @@ private_vault/
     ingested/       Chunked content from imports
     archive/        Lower-priority preserved material
   embeddings/
-    conversation_index.json
-    ingested_index.json
-    reflection_index.json
-    (etc.)
+    memory.db             SQLite index: conversation, profile, reflection, journal
+    ingested.db           SQLite index: ingested documents
+    <type>_index.json     JSON index for each other type (state, task, ...)
+    conversation_index.json, reflection_index.json, ingested_index.json
+                          retired: no longer written or read (left in place)
   imports/          Raw source files (ChatGPT exports, docs)
 ```
 

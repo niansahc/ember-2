@@ -42,6 +42,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.core.config import resolve_vault_path  # noqa: E402
+from src.memory.eval_fixtures import LIVE_VAULT_ENV  # noqa: E402
 
 
 _DEFAULT_API_BASE = "http://localhost:8000"
@@ -112,6 +113,9 @@ def require_test_vault() -> Path:
         )
         sys.exit(1)
 
+    # Recorded before the pin so src/memory/eval_fixtures can still tell the
+    # live vault from the test vault in this process.
+    os.environ[LIVE_VAULT_ENV] = os.getenv("PRIVATE_VAULT_PATH") or ""
     os.environ["PRIVATE_VAULT_PATH"] = str(test_vault)
     return test_vault
 

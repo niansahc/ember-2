@@ -54,8 +54,25 @@ def _get_write_memory_store() -> SqliteVectorStore:
     Unlike the read accessors in semantic_search, this one creates the db
     when it does not exist: a first write to a fresh vault has to.
     """
-    db_path = get_private_vault_path() / "embeddings" / "memory.db"
-    return get_store(db_path)
+    return _get_write_store("memory.db")
+
+
+def _get_write_store(db_name: str) -> SqliteVectorStore:
+    """Store for the active vault's embeddings/<db_name>, created if absent."""
+    return get_store(get_private_vault_path() / "embeddings" / db_name)
+
+
+def _write_store_for(memory_type: str) -> SqliteVectorStore | None:
+    """The SQLite store a type is indexed into, or None for a JSON index.
+
+    `ingested` is read from ingested.db only (semantic_search), so that is
+    where it is written (issue #174).
+    """
+    if memory_type in SQLITE_MEMORY_TYPES:
+        return _get_write_memory_store()
+    if memory_type == "ingested":
+        return _get_write_store("ingested.db")
+    return None
 
 
 def normalize_text(text: str) -> str:
@@ -213,7 +230,8 @@ def index_record(record: dict, file_path: Path) -> None:
     """
     Embed a canonical record and add it to the active vault's index.
 
-    SQLite types go to memory.db; any other type goes to its JSON index.
+    SQLite types go to memory.db, `ingested` to ingested.db; any other type
+    goes to its JSON index.
     Callers decide whether to index (should_index); this only does it.
     """
     vault = get_private_vault_path()
@@ -227,9 +245,8 @@ def index_record(record: dict, file_path: Path) -> None:
 
     embedding = embed_text(text)
 
-    if memory_type in SQLITE_MEMORY_TYPES:
-        # Write to SQLite (memory.db) for migrated types
-        store = _get_write_memory_store()
+    store = _write_store_for(memory_type)
+    if store is not None:
         store_id = store.insert({
             "id": memory_id,
             "text": text,
@@ -254,7 +271,7 @@ def index_record(record: dict, file_path: Path) -> None:
             # written by this path is now wrong.
             logger.warning(
                 "[VAULT] indexed a %s record under a disambiguated store id: "
-                "its canonical id was already claimed in memory.db",
+                "its canonical id was already claimed in its store",
                 memory_type,
             )
     else:

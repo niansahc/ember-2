@@ -537,11 +537,11 @@ private_vault/
     ingested/
     archive/
   embeddings/
-    conversation_index.json
-    journal_index.json
-    reflection_index.json
-    state_index.json
-    ingested_index.json
+    memory.db              SQLite index: conversation, profile, reflection, journal
+    ingested.db            SQLite index: ingested documents
+    state_index.json       JSON index, one per other type (<type>_index.json)
+    conversation_index.json, journal_index.json, reflection_index.json,
+    ingested_index.json    retired: no longer written or read (left in place)
   imports/
     chatgpt/
     docs/
@@ -2189,8 +2189,8 @@ Primary research monitoring sources: arxiv.org ("local LLM memory", "personal AI
 - **Second-tab onboarding answer lands on the next step** - onboarding progress is global, not per session. Two tabs answering the same question are serialized, and the second answer is filed under the next step. See KNOWN_ISSUES.
   -> open: no version assigned
 
-- **Ingested JSON index not read by retrieval (#174)** - retrieval reads `ingested` from SQLite, so the JSON index that ingest still writes is not read. See KNOWN_ISSUES.
-  -> open: #174
+- **~~Ingested JSON index not read by retrieval (#174)~~** - fixed: the ingest writer indexes chunks into `ingested.db` (documents) and `memory.db` (ChatGPT user turns); `scripts/backfill_ingested_index.py` indexes chunk files already on disk. See KNOWN_ISSUES (B-RET-003).
+  -> addressed: PR #315
 
 - **Stage 3 sends two vault questions to web search** - with Stage 3 live, the Tier 2 cases `work_context_architecture` and `timeline_recent` are labelled `needs_internet`. The `web_search` policy then halves their memory scores. See KNOWN_ISSUES and section 52.
   -> open: ADR-034 / ADR-037 territory (no version assigned)
@@ -3379,9 +3379,9 @@ During the PR, the client timeout briefly equalled the budget. Each overrun then
 ## 52.5 Shared Store Safety
 
 - **SQLite vector store.** The store keeps one shared `sqlite3` connection (`check_same_thread=False`). Two threads using it at once failed inside the sqlite3 module (`InterfaceError`, `IndexError`, `SystemError`). Every use of the connection now runs under one `threading.RLock` per store: init and migrations, insert, search, count, delete, close, retrieval stats. `search()` reads its rows under the lock and scores them after it. Ranking and results are unchanged.
-- **JSON vector index.** `append_entry` and `merge_entries` (`src/retrieval/vector_index.py`) refuse to save over an index they could not read (oversized, corrupt, not a list, or an OS error). They return False and log `[VECTOR_INDEX] Refusing to overwrite unreadable index <name>; <n> entries not saved. Rebuild with scripts/rebuild_indexes.py`. Ingest logs the chunks it wrote but could not index. Readers still see an empty list.
+- **JSON vector index.** `append_entry` (`src/retrieval/vector_index.py`) refuses to save over an index it could not read (oversized, corrupt, not a list, or an OS error). It returns False and logs `[VECTOR_INDEX] Refusing to overwrite unreadable index <name>; <n> entries not saved. Rebuild with scripts/rebuild_indexes.py`. Readers still see an empty list. Ingest no longer writes a JSON index; it indexes into SQLite (#174).
 - **Upload work directory.** Each upload uses its own work directory, removed afterwards. If removal fails, `[UPLOAD] Work directory left behind: <name>` is logged. JSON uploads write no parse copy.
 
 ## 52.6 Open
 
-See section 50.3 and KNOWN_ISSUES: a wedged turn blocks its session; a second tab's onboarding answer lands on the next step; #174; Stage 3 misroutes two vault questions. The hardware floor is an assumption, and the installer does not state the GPU minimum yet.
+See section 50.3 and KNOWN_ISSUES: a wedged turn blocks its session; a second tab's onboarding answer lands on the next step; Stage 3 misroutes two vault questions. The hardware floor is an assumption, and the installer does not state the GPU minimum yet.

@@ -58,18 +58,14 @@ Role detection: any selected row whose metadata.role is not exactly
 unchanged, and counted separately as "skipped (unresolvable role)".
 Nothing is guessed or defaulted.
 
-Scope boundary: this migrates the EXISTING misfiled corpus only. It does
-NOT change the ingest pipeline (src/ingest/writers.py, chunking.py) so
-that FUTURE ChatGPT imports land as conversation directly -- the live
-ingest writer today only writes to the legacy JSON index
-(ingested_index.json via VectorIndex), never to ingested.db (SQLite);
-nothing has landed in ingested.db since this corpus did. That mismatch
-is the already-tracked "ingest writer and retrieval reader point at
-different stores" defect (issue #174), explicitly out of scope for an
-index-only migration. The general rule -- prior-substrate conversation
-is conversation, and any future export-and-ingest of the same form
-inherits it -- is documented here as guidance for whoever fixes #174
-next, not implemented as pipeline code in this script.
+Scope boundary: this migrates the EXISTING misfiled corpus only. When it
+was written, the live ingest writer saved embeddings only to the legacy
+JSON index (ingested_index.json), which retrieval never reads (issue
+#174). That is now fixed in the pipeline: src/ingest/writers.py indexes
+future ChatGPT imports into memory.db as conversation directly, using the
+same predicate as this script (src/ingest/index_routing.py), and holds
+assistant turns out of the index per ADR-033. Chunk files the old writer
+left unindexed are picked up by scripts/backfill_ingested_index.py.
 
 Usage
 -----
@@ -102,10 +98,12 @@ if __name__ == "__main__":
 
     load_env_file()
 
+from src.ingest.index_routing import PRIOR_SUBSTRATE_ROLES, PRIOR_SUBSTRATE_SOURCE  # noqa: E402
 from src.memory.authorship import classify_authorship  # noqa: E402
 from src.retrieval.sqlite_vector_store import SqliteVectorStore  # noqa: E402
 
-VALID_ROLES = {"user", "assistant"}
+# The predicate the live ingest writer routes by (src/ingest/index_routing.py).
+VALID_ROLES = PRIOR_SUBSTRATE_ROLES
 
 # Full column set copied verbatim from ingested.db's row into memory.db,
 # except memory_type (forced to 'conversation') and authorship
@@ -200,7 +198,8 @@ def reclassify(
 
     cursor = ingested_conn.execute(
         f"SELECT {', '.join(select_cols)} FROM vectors "
-        "WHERE memory_type = 'ingested' AND source = 'chatgpt'"
+        "WHERE memory_type = 'ingested' AND source = ?",
+        (PRIOR_SUBSTRATE_SOURCE,),
     )
 
     migrated_ids: list[str] = []
@@ -217,7 +216,7 @@ def reclassify(
             report["skipped_unresolvable_role"] += 1
             continue
 
-        authorship = classify_authorship("conversation", "chatgpt", metadata)
+        authorship = classify_authorship("conversation", PRIOR_SUBSTRATE_SOURCE, metadata)
         report["authorship_assigned"][authorship] = report["authorship_assigned"].get(authorship, 0) + 1
 
         quality = row["quality"] if ingested_has_quality else None

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import re
+from functools import lru_cache
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -126,72 +127,57 @@ def test_no_budget_retry_when_off():
     assert reply.startswith("I had trouble generating a response")
 
 
-# --- the adapter never reads the preference ---------------------------------
+# --- nothing but the passed value decides the turn -------------------------
 
-def _stored_on(monkeypatch):
-    """Make every preference read see generation_think=True, as if the user
+def _store_on(monkeypatch):
+    """Every preference read sees generation_think=True, as if the user
     flipped the setting while the turn was running."""
     real_get = preferences.get
 
     def fake_get(key, default=None, vault_path=None):
-        if key == "generation_think":
-            return True
-        return real_get(key, default, vault_path)
+        return True if key == "generation_think" else real_get(key, default, vault_path)
 
     monkeypatch.setattr(preferences, "get", fake_get)
     assert preferences.generation_thinking_enabled() is True
 
 
-def test_mid_turn_flip_does_not_change_the_turn(monkeypatch):
-    """Absence test: the stored value says on, the turn started off, and the
-    call still sends think=False. Positive control:
-    test_passed_value_changes_the_turn_under_the_same_store."""
-    _stored_on(monkeypatch)
-    _, calls = _turn(_answer(), thinking=False)
-    assert calls[0]["think"] is False
-
-
-def test_passed_value_changes_the_turn_under_the_same_store(monkeypatch):
-    _stored_on(monkeypatch)
-    _, calls = _turn(_answer(), thinking=True)
-    assert "think" not in calls[0]
-
-
-# --- retired env vars ----------------------------------------------------------
-
-def test_retired_env_vars_do_not_turn_thinking_on(monkeypatch):
-    """Absence test; test_retired_env_var_does_not_turn_thinking_off flips
-    only the passed value and gets the other result."""
+def _retired_env_says_on(monkeypatch):
     monkeypatch.setenv("EMBER_GENERATION_THINK", "true")
     monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "false")
-    _, calls = _turn(_answer(), thinking=False)
-    assert calls[0]["think"] is False
 
 
-def test_retired_env_var_does_not_turn_thinking_off(monkeypatch):
+def _retired_env_says_off(monkeypatch):
     monkeypatch.setenv("EMBER_GENERATION_THINK", "false")
     monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "true")
-    _, calls = _turn(_answer(), thinking=True)
-    assert "think" not in calls[0]
 
 
-# --- search failures follow the setting ------------------------------------------
-
-def _failed_search_packet():
-    return ContextPacket(user_message="q", web_items=[],
-                         web_search_status="unavailable")
+def _failed_search(monkeypatch):
+    """The retired search-failure arm forced think=False on this packet."""
+    return ContextPacket(user_message="q", web_items=[], web_search_status="unavailable")
 
 
-def test_failed_search_turn_with_thinking_on_sends_no_think():
-    """The search-failure arm is gone. Absence test; the test below is its
-    positive control."""
-    _, calls = _turn(_answer(), packet=_failed_search_packet(), thinking=True)
-    assert "think" not in calls[0]
+_SETUPS = {
+    "stored_value_flipped_mid_turn": _store_on,
+    "retired_env_says_on": _retired_env_says_on,
+    "retired_env_says_off": _retired_env_says_off,
+    "failed_search_packet": _failed_search,
+}
 
 
-def test_failed_search_turn_with_thinking_off_sends_think_false():
-    _, calls = _turn(_answer(), packet=_failed_search_packet(), thinking=False)
+@pytest.mark.parametrize("setup", _SETUPS.values(), ids=_SETUPS.keys())
+def test_off_turn_sends_think_false_under(monkeypatch, setup):
+    """Positive control for test_on_turn_sends_no_think_under: same setup,
+    only the passed value differs."""
+    _, calls = _turn(_answer(), packet=setup(monkeypatch), thinking=False)
     assert calls[0]["think"] is False
+
+
+@pytest.mark.parametrize("setup", _SETUPS.values(), ids=_SETUPS.keys())
+def test_on_turn_sends_no_think_under(monkeypatch, setup):
+    """Absence test: neither the stored value, the retired env vars nor a
+    failed search add think. Control: test_off_turn_sends_think_false_under."""
+    _, calls = _turn(_answer(), packet=setup(monkeypatch), thinking=True)
+    assert "think" not in calls[0]
 
 
 # --- not a conversation turn --------------------------------------------------------
@@ -214,6 +200,7 @@ _KEY = "generation_think"
 _RESOLVER = "generation_thinking_enabled"
 
 
+@lru_cache(maxsize=None)
 def _src_files() -> dict[str, str]:
     return {
         p.relative_to(_REPO).as_posix(): p.read_text(encoding="utf-8")
@@ -221,52 +208,55 @@ def _src_files() -> dict[str, str]:
     }
 
 
-def _files_with_key(files: dict[str, str]) -> set[str]:
+@lru_cache(maxsize=None)
+def _src_trees() -> dict[str, ast.AST]:
+    """src/ parsed once for every guard in this module. Callers copy before
+    adding entries."""
+    return {name: ast.parse(source) for name, source in _src_files().items()}
+
+
+def _files_with_key(trees: dict[str, ast.AST]) -> set[str]:
     """Files holding the preference key as a string constant."""
     return {
-        name for name, source in files.items()
-        if any(isinstance(n, ast.Constant) and n.value == _KEY
-               for n in ast.walk(ast.parse(source)))
+        name for name, tree in trees.items()
+        if any(isinstance(n, ast.Constant) and n.value == _KEY for n in ast.walk(tree))
     }
 
 
-def _resolver_callers(files: dict[str, str]) -> set[str]:
+def _resolver_callers(trees: dict[str, ast.AST]) -> set[str]:
     """Files that call generation_thinking_enabled, by name or attribute."""
     def calls_it(node):
         if not isinstance(node, ast.Call):
             return False
         func = node.func
         return getattr(func, "id", None) == _RESOLVER or getattr(func, "attr", None) == _RESOLVER
-    return {
-        name for name, source in files.items()
-        if any(calls_it(n) for n in ast.walk(ast.parse(source)))
-    }
+    return {name for name, tree in trees.items() if any(calls_it(n) for n in ast.walk(tree))}
 
 
 def test_only_preferences_and_the_settings_endpoint_name_the_key():
     """The key is read in preferences.py (default + resolver) and written by
     the settings endpoint in main.py. Nothing else touches it."""
-    assert _files_with_key(_src_files()) == {
+    assert _files_with_key(_src_trees()) == {
         "src/core/preferences.py", "src/api/main.py"}
 
 
 def test_resolver_called_only_by_the_chat_handler_and_settings_endpoint():
-    assert _resolver_callers(_src_files()) == {
+    assert _resolver_callers(_src_trees()) == {
         "src/api/openai_adapter.py", "src/api/main.py"}
 
 
 def test_a_second_reader_would_be_caught():
     """Positive control for the two tests above."""
-    files = _src_files()
-    files["src/llm/extra.py"] = (
+    trees = dict(_src_trees())
+    trees["src/llm/extra.py"] = ast.parse(
         "from src.core import preferences\n\n"
         "def _aux():\n"
         "    return preferences.get('generation_think')\n\n"
         "def _aux2():\n"
         "    return preferences.generation_thinking_enabled()\n"
     )
-    assert "src/llm/extra.py" in _files_with_key(files)
-    assert "src/llm/extra.py" in _resolver_callers(files)
+    assert "src/llm/extra.py" in _files_with_key(trees)
+    assert "src/llm/extra.py" in _resolver_callers(trees)
 
 
 _RETIRED = ("EMBER_GENERATION_THINK", "EMBER_SEARCH_FAIL_THINK_OFF",

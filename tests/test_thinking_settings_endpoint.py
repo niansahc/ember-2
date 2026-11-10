@@ -9,41 +9,30 @@ synthetic data only.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 from src.core import preferences
 from tests.test_generation_failure_stream import _post_chat
 
 
 @pytest.fixture
-def client():
-    with patch("src.api.main.get_ember_api_key", return_value=None):
-        from src.api.main import app
-        yield TestClient(app)
+def client(keyless_client):
+    return keyless_client
 
 
-def _store(monkeypatch, value):
-    """Make preference reads see generation_think=value and count resolver
-    calls. Returns the call counter list."""
-    real_get = preferences.get
-
-    def fake_get(key, default=None, vault_path=None):
-        if key == "generation_think":
-            return value
-        return real_get(key, default, vault_path)
-
-    monkeypatch.setattr(preferences, "get", fake_get)
-    real_resolver = preferences.generation_thinking_enabled
+def _stored(monkeypatch, value: bool) -> list:
+    """The resolver reports `value`; returns the list of its calls. The
+    resolver itself is covered in test_preferences_thinking.py."""
     calls: list = []
 
-    def counting_resolver(vault_path=None):
+    def resolver(vault_path=None):
         calls.append(vault_path)
-        return real_resolver(vault_path)
+        return value
 
-    monkeypatch.setattr(preferences, "generation_thinking_enabled", counting_resolver)
+    monkeypatch.setattr(preferences, "generation_thinking_enabled", resolver)
     return calls
 
 
@@ -74,7 +63,7 @@ def _chat_kwargs(client, *, stream: bool) -> dict:
 
 @pytest.mark.parametrize("stream", [True, False])
 def test_stored_on_reaches_generation_as_thinking_true(client, monkeypatch, stream):
-    resolver_calls = _store(monkeypatch, True)
+    resolver_calls = _stored(monkeypatch, True)
     assert _chat_kwargs(client, stream=stream)["thinking"] is True
     assert len(resolver_calls) == 1
 
@@ -82,7 +71,7 @@ def test_stored_on_reaches_generation_as_thinking_true(client, monkeypatch, stre
 @pytest.mark.parametrize("stream", [True, False])
 def test_stored_off_reaches_generation_as_thinking_false(client, monkeypatch, stream):
     """Control for the test above: only the stored value differs."""
-    resolver_calls = _store(monkeypatch, False)
+    resolver_calls = _stored(monkeypatch, False)
     assert _chat_kwargs(client, stream=stream)["thinking"] is False
     assert len(resolver_calls) == 1
 
@@ -104,27 +93,31 @@ class _Show:
         self.capabilities = capabilities
 
 
-def _ollama_client(capabilities=None, error=None):
-    """Patch the capability lookup's client. Returns (patcher, shown models)."""
+@contextmanager
+def _on_model(model="qwen3:8b", capabilities=None, error=None):
+    """Make `model` the active model; its capability lookup returns
+    `capabilities` or raises `error`. Yields the models looked up."""
+    from src.api import main
+
     shown: list = []
 
     class _Client:
         def __init__(self, *args, **kwargs):
             pass
 
-        def show(self, model):
-            shown.append(model)
+        def show(self, name):
+            shown.append(name)
             if error is not None:
                 raise error
             return _Show(capabilities)
 
-    return patch("src.llm.adapter.ollama.Client", _Client), shown
+    with patch("src.llm.adapter.ollama.Client", _Client), \
+            patch.object(main.llm_adapter, "model", model):
+        yield shown
 
 
-def _get(client, model="qwen3:8b", capabilities=None, error=None):
-    from src.api import main
-    patcher, shown = _ollama_client(capabilities, error)
-    with patcher, patch.object(main.llm_adapter, "model", model):
+def _get(client, **model):
+    with _on_model(**model) as shown:
         response = client.get(_PATH)
     return response, shown
 
@@ -158,9 +151,7 @@ def test_get_on_a_cloud_model_skips_the_lookup(client, vault):
 
 
 def test_post_round_trips(client, vault):
-    from src.api import main
-    patcher, _ = _ollama_client(["thinking"])
-    with patcher, patch.object(main.llm_adapter, "model", "qwen3:8b"):
+    with _on_model(capabilities=["thinking"]):
         on = client.post(_PATH, json={"enabled": True})
         assert on.status_code == 200
         assert on.json()["enabled"] is True

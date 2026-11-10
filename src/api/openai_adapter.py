@@ -2765,6 +2765,25 @@ def _complete_exchange(
         context_packet.web_items or context_packet.web_search_status is not None
     )
 
+    # Keyword arguments shared by every generation call below (both
+    # streaming calls and the non-streaming one), so a new generation
+    # parameter is added in one place.
+    _gen_kwargs = dict(
+        style=conversational_style,
+        project_name=project_name,
+        last_session_label=last_session_label,
+        suppress_relational_lodestone=suppress_relational_lodestone,
+        temperature=_inference_temperature,
+        bare_mode=_bare_mode,
+        vision_description=_vision_description,
+        ask_first_active=_ask_first_active,
+        intent_class=_intent_class,
+        session_id=session_id,
+        vault_path=_turn_vault,
+        skip_vault_write=_skip_vault_write,
+        thinking=_thinking,
+    )
+
     # --- STREAMING PATH ---
     if body.stream:
         # One id for the whole exchange (ADR-042, ADR-047): the response id
@@ -2860,24 +2879,6 @@ def _complete_exchange(
         def _emit_final_chunk_and_done() -> str:
             """Final chunk (finish_reason='stop') concatenated with [DONE]."""
             return _emit_chunk(content=None, finish_reason="stop") + sse_done()
-
-        # Keyword arguments shared by both generation calls below, so a new
-        # generation parameter is added in one place.
-        _gen_kwargs = dict(
-            style=conversational_style,
-            project_name=project_name,
-            last_session_label=last_session_label,
-            suppress_relational_lodestone=suppress_relational_lodestone,
-            temperature=_inference_temperature,
-            bare_mode=_bare_mode,
-            vision_description=_vision_description,
-            ask_first_active=_ask_first_active,
-            intent_class=_intent_class,
-            session_id=session_id,
-            vault_path=_turn_vault,
-            skip_vault_write=_skip_vault_write,
-            thinking=_thinking,
-        )
 
         if _STREAM_ALWAYS_GROUNDED:
             # --- BUFFER-THEN-STREAM PATH (ADR-019) ---
@@ -3134,22 +3135,7 @@ def _complete_exchange(
         )
 
     # --- NON-STREAMING PATH ---
-    reply = llm_adapter.generate_response(
-        context_packet,
-        style=conversational_style,
-        project_name=project_name,
-        last_session_label=last_session_label,
-        suppress_relational_lodestone=suppress_relational_lodestone,
-        temperature=_inference_temperature,
-        bare_mode=_bare_mode,
-        vision_description=_vision_description,
-        ask_first_active=_ask_first_active,
-        intent_class=_intent_class,
-        session_id=session_id,
-        vault_path=_turn_vault,
-        skip_vault_write=_skip_vault_write,
-        thinking=_thinking,
-    )
+    reply = llm_adapter.generate_response(context_packet, **_gen_kwargs)
 
     # The review's refuse_redirect outcome, read from the reply's type before
     # anything transforms the text (src/llm/refusal.py).

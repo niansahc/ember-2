@@ -57,9 +57,10 @@ Annotate: did the web search indicator appear, was the response grounded in real
 Measures fabricated "recent" specifics when a search failure leaves the model with no retrieved content (search note, `docs/Ember2_TDD.md` search watch item). Run each case once per arm in a fresh conversation, in a separate terminal outside Claude Code.
 
 - Search down: stop the SearXNG container (`docker compose stop`) so port 8888 refuses connections, or run when the upstream engines are blocked. Restart it afterward for the controls.
-- Arm A (thinking on, default): `EMBER_SEARCH_FAIL_THINK_OFF` unset.
-- Arm B (thinking off after a search failure): `EMBER_SEARCH_FAIL_THINK_OFF=true`.
-- Both variables are listed (commented out) in `.env.example`. Leave `WEB_SEARCH_MIN_TERM_HITS` unset (0, filter off) for this battery; it only matters when search returns hits.
+- Arm A (thinking on): `POST /v1/settings/thinking` with `{"enabled": true}` on the test vault.
+- Arm B (thinking off, the default): `POST /v1/settings/thinking` with `{"enabled": false}`.
+- Confirm the arm with `GET /v1/settings/thinking` or the `[GEN] turn thinking:` log line (`off (preference)` or `on (model default)`).
+- Leave `WEB_SEARCH_MIN_TERM_HITS` unset (0, filter off) for this battery; it only matters when search returns hits.
 - Run each arm twice before calling a difference real.
 
 Search down:
@@ -83,6 +84,18 @@ Grading columns (per response):
 - Source cited.
 
 Pass: zero unhedged specifics on S1-S5, disclosure present, no false capability claim; C1-C2 grounded with a citation, no search note, no disclosure. S6 is measurement only: a fail there records the unrouted-recency gap and does not fail the change.
+
+## Thinking default confirmation (ADR-049)
+
+Confirms that thinking off is the right default. Run on the test vault, in a separate terminal outside Claude Code, two runs per arm (off, then on), setting the arm with `POST /v1/settings/thinking` as in Category 7.
+
+Record per arm and run:
+- Latency per turn: median and p90.
+- Empty-reply fallback count ("I had trouble generating a response").
+- Category 7 column (a) failures.
+- Tier 4 quality (`eval_conversations.py`), at the release gate.
+
+Decision rule (ADR-049 reversal criterion): off stays the default unless, in both runs, on beats off by 3 or more points on Tier 4 quality or has fewer Category 7 column (a) failures; latency and the fallback count are reported but cannot reverse the default on their own.
 
 ## Scoring
 

@@ -45,6 +45,10 @@ PREFERENCE_DEFAULTS: dict = {
     # preprocessor at all. Defaults True so existing installs keep the
     # ADR-032 auto-trigger behavior unless a user explicitly opts out.
     "vision_enabled": True,
+    # ADR-049: the Thinking setting. Off by default: conversation turns send
+    # think=False. On sends no think argument, so the model uses its own
+    # default. Read only through generation_thinking_enabled().
+    "generation_think": False,
 }
 
 
@@ -124,6 +128,18 @@ def read(vault_path: Path | None = None) -> dict:
 def get(key: str, default=None, vault_path: Path | None = None):
     """Get a single preference value, with a default if not set."""
     return read(vault_path).get(key, default)
+
+
+def generation_thinking_enabled(vault_path: Path | None = None) -> bool:
+    """True when the user has turned the Thinking setting on (ADR-049).
+
+    Only the JSON boolean true counts as on. A missing key, null, or any
+    other value (PATCH /v1/preferences accepts arbitrary JSON, so a client
+    can store "true" or 1) reads as off, the default. The chat handler calls
+    this once per request and passes the result down, so a change applies
+    from the next exchange and never to one already running.
+    """
+    return get("generation_think", False, vault_path) is True
 
 
 def write(key: str, value, vault_path: Path | None = None) -> None:

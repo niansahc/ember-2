@@ -406,46 +406,6 @@ def get_web_search_min_term_hits() -> int:
     return value
 
 
-def get_search_failure_think_off() -> bool:
-    """True when EMBER_SEARCH_FAIL_THINK_OFF disables thinking after a search failure.
-
-    Default False: generation is unchanged. When True, the answer turn runs
-    with thinking off on turns that carry a search note (status unavailable
-    or empty), so the manual battery can compare both arms. Read at call
-    time. Accepts 1/true/yes/on (on) and 0/false/no/off (off), ignoring case
-    and surrounding whitespace; anything else logs a warning once and counts
-    as off.
-    """
-    raw = os.getenv("EMBER_SEARCH_FAIL_THINK_OFF", "").strip()
-    value = raw.lower()
-    if value in ("1", "true", "yes", "on"):
-        return True
-    if value and value not in ("0", "false", "no", "off"):
-        _warn_invalid_env_once("EMBER_SEARCH_FAIL_THINK_OFF", raw, False)
-    return False
-
-
-def get_generation_think_off() -> bool:
-    """True when EMBER_GENERATION_THINK turns thinking off on conversation turns.
-
-    Default False: unset leaves the generation call exactly as before, with
-    no think argument, so a thinking model reasons by its own default. When
-    the value is 0/false/no/off, every conversation turn's generation call
-    passes think=False, so the manual battery can compare thinking on and
-    off. Auxiliary calls and session reflection are not affected. 1/true/
-    yes/on is the same as unset: it does not force thinking on. Read at
-    call time, ignoring case and surrounding whitespace; anything else logs
-    a warning once and counts as unset.
-    """
-    raw = os.getenv("EMBER_GENERATION_THINK", "").strip()
-    value = raw.lower()
-    if value in ("0", "false", "no", "off"):
-        return True
-    if value and value not in ("1", "true", "yes", "on"):
-        _warn_invalid_env_once("EMBER_GENERATION_THINK", raw, "unset")
-    return False
-
-
 def get_intent_classifier_timeout_ms() -> int:
     """Hard timeout for Stage 3 of the ADR-034 intent classifier.
 

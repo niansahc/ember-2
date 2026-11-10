@@ -2713,6 +2713,12 @@ def _complete_exchange(
     else:
         _bare_mode = bool(get_pref("bare_mode", False))
 
+    # Thinking setting (ADR-049): read once here and passed to generation, so
+    # a change made while this exchange runs applies from the next one. Global
+    # only; there is no per-request override. Read from this exchange's vault.
+    from src.core import preferences as _preferences
+    _thinking = _preferences.generation_thinking_enabled(vault_path=_turn_vault)
+
     # What every path passes to _store_reply.
     _store_kwargs = dict(
         skip_vault_write=_skip_vault_write,
@@ -2870,6 +2876,7 @@ def _complete_exchange(
             session_id=session_id,
             vault_path=_turn_vault,
             skip_vault_write=_skip_vault_write,
+            thinking=_thinking,
         )
 
         if _STREAM_ALWAYS_GROUNDED:
@@ -3141,6 +3148,7 @@ def _complete_exchange(
         session_id=session_id,
         vault_path=_turn_vault,
         skip_vault_write=_skip_vault_write,
+        thinking=_thinking,
     )
 
     # The review's refuse_redirect outcome, read from the reply's type before

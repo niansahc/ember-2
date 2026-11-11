@@ -39,6 +39,8 @@ def client(ui_tree: Path):
         ("GET", "/v1/models"),
         ("POST", "/ingest/upload"),
         ("POST", "/v1/chat/completions"),
+        ("GET", "/v1/settings/thinking"),
+        ("POST", "/v1/settings/thinking"),
     ],
 )
 def test_requires_key(client: TestClient, method: str, path: str):

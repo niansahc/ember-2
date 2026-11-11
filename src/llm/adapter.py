@@ -17,8 +17,6 @@ from src.core.config import (
     get_ember_generation_ollama_host,
     get_ember_model,
     get_ember_vision_model,
-    get_generation_think_off,
-    get_search_failure_think_off,
     spawn_vault_bound_thread,
 )
 
@@ -37,42 +35,48 @@ def _client_for_host(host: str) -> ollama.Client:
     return ollama.Client(host=host)
 
 
-def search_failure_think(context_packet) -> bool | None:
-    """think=False for the answer turn after a search failure, else None.
+def turn_think(thinking: bool) -> bool | None:
+    """The think value for a conversation turn's generation call (ADR-049).
 
-    Only when EMBER_SEARCH_FAIL_THINK_OFF is on, the packet carries no web
-    items, and its search status is unavailable or empty: exactly the turns
-    that receive the search note (CONTEXT.md, "Web search"). None means do
-    not pass `think` at all, so generation is unchanged. Ollama only; cloud
-    providers ignore it.
+    `thinking` is the user's Thinking setting, resolved once at request
+    start by the chat handler. Off returns False, so the call sends
+    think=False. On returns None: no think argument at all, so the model
+    uses its own default. think=True is never sent, because Ollama rejects
+    it with HTTP 400 on a model without thinking support. Only the
+    conversation-turn generation calls use this, so session reflection and
+    the auxiliary calls never see the setting. Logs one line per turn naming
+    the mode, so a manual battery can confirm from the log which arm a turn
+    ran in.
     """
-    if not get_search_failure_think_off():
+    if thinking:
+        logger.info("[GEN] turn thinking: on (model default)")
         return None
-    if context_packet.web_items:
-        return None
-    if context_packet.web_search_status not in ("unavailable", "empty"):
-        return None
+    logger.info("[GEN] turn thinking: off (preference)")
     return False
 
 
-def turn_think(context_packet) -> bool | None:
-    """The think value for a conversation turn's generation call.
+# Seconds. A capability lookup reads the model manifest and loads nothing,
+# so it answers in milliseconds; the cap only bounds an unreachable host.
+THINKING_PROBE_TIMEOUT_S = 5
 
-    False when EMBER_GENERATION_THINK is off (every turn), otherwise the
-    search-failure arm's value, which is None (do not pass think) on all
-    other turns. Decided per turn, so session reflection and the auxiliary
-    calls never see the setting. Logs one line per turn naming the mode, so
-    a manual battery can confirm from the log which arm a turn ran in.
+
+def model_supports_thinking(model: str) -> bool | None:
+    """Whether `model` on the generation host can think, for the settings UI.
+
+    True or False from the model's Ollama capabilities. None when the
+    lookup fails or times out: unknown, not unsupported. Never consulted
+    on a turn (ADR-049): it only decides what the settings view shows.
+    Uses its own short-timeout client because the shared generation client
+    has no timeout.
     """
-    if get_generation_think_off():
-        logger.info("[GEN] turn thinking: off (EMBER_GENERATION_THINK=false)")
-        return False
-    think = search_failure_think(context_packet)
-    if think is False:
-        logger.info("[GEN] turn thinking: off (search failure)")
-    else:
-        logger.info("[GEN] turn thinking: default")
-    return think
+    host = get_ember_generation_ollama_host() or None
+    try:
+        client = ollama.Client(host=host, timeout=THINKING_PROBE_TIMEOUT_S)
+        capabilities = client.show(model).capabilities or []
+    except Exception as exc:
+        logger.warning("[GEN] thinking capability check failed: %s", type(exc).__name__)
+        return None
+    return "thinking" in capabilities
 
 
 def _retry_without_thinking(response, think: bool | None) -> bool:
@@ -85,7 +89,7 @@ def _retry_without_thinking(response, think: bool | None) -> bool:
     emotional prompts on qwen3.6:35b-a3b did this on about one turn in eight
     (docs/KNOWN_ISSUES.md, B-GEN-001). A reply that has text, even one cut
     short at the cap, is not this case. A call already made with think=False
-    (the search-failure arm, or the retry itself) is never retried. Read with
+    (the Thinking setting off, or the retry itself) is never retried. Read with
     .get: a mocked response may carry no done_reason.
     """
     if think is False:
@@ -387,6 +391,7 @@ class LLMAdapter:
         session_id: str | None = None,
         vault_path=None,
         skip_vault_write: bool = False,
+        thinking: bool = False,
     ) -> str:
         """Drain generate_response_iter() and return the final response
         string. Status signals are dropped here -- non-streaming callers
@@ -409,6 +414,7 @@ class LLMAdapter:
             session_id=session_id,
             vault_path=vault_path,
             skip_vault_write=skip_vault_write,
+            thinking=thinking,
         ):
             if isinstance(item, str):
                 final = item
@@ -429,6 +435,7 @@ class LLMAdapter:
         session_id: str | None = None,
         vault_path=None,
         skip_vault_write: bool = False,
+        thinking: bool = False,
     ) -> Iterator[StatusSignal | str]:
         """Generator form of generate_response. Yields StatusSignal
         sentinels around the constitutional review call (only when
@@ -437,7 +444,11 @@ class LLMAdapter:
         iterates this method and translates each StatusSignal to a
         top-level status SSE frame (ADR-040 v2) so the UI breathing-dot
         indicator activates during the genuine review window (ADR-036
-        Option A; UI commit ed858c9)."""
+        Option A; UI commit ed858c9).
+
+        `thinking` is the user's Thinking setting (ADR-049), resolved once
+        by the caller at request start. The default False is the shipped
+        default: thinking off."""
         _build_kwargs = {
             "style": style,
             "project_name": project_name,
@@ -476,7 +487,7 @@ class LLMAdapter:
             model_override=None,
             temperature=temperature,
             assistant_prefix=_prefix,
-            think=turn_think(context_packet),
+            think=turn_think(thinking),
         )
         draft_response = strip_think_blocks(draft_response)
 
@@ -627,9 +638,13 @@ class LLMAdapter:
         session_id: str | None = None,
         vault_path=None,
         skip_vault_write: bool = False,
+        thinking: bool = False,
     ):
         """
         Stream a response token by token. Yields string chunks.
+
+        `thinking` is the user's Thinking setting (ADR-049); see
+        generate_response_iter.
 
         After the stream completes, runs safety review on the accumulated
         text. If safety triggers a revision, yields a follow-up correction.
@@ -669,7 +684,7 @@ class LLMAdapter:
             model_override=None,
             temperature=temperature,
             assistant_prefix=_prefix,
-            think=turn_think(context_packet),
+            think=turn_think(thinking),
         ):
             accumulated.append(chunk)
             yield chunk
@@ -989,8 +1004,10 @@ class LLMAdapter:
                 "num_predict": OLLAMA_NUM_PREDICT,
             },
         )
-        # think is added only when set (turn_think: EMBER_GENERATION_THINK or
-        # the search-failure arm), so the default call is identical to before.
+        # think is added only when set: turn_think returns False when the
+        # Thinking setting is off and None when it is on (ADR-049). Direct
+        # callers such as session reflection pass nothing, so their call is
+        # unchanged.
         if think is not None:
             logger.info("[GEN] think=%s passed to ollama answer turn", think)
             chat_kwargs["think"] = think

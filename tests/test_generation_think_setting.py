@@ -1,21 +1,26 @@
 """
 tests/test_generation_think_setting.py
 
-EMBER_GENERATION_THINK=false turns thinking off on conversation-turn
-generation only. Unset leaves the call exactly as before: no think kwarg.
-Everything is mocked: no Ollama.
+The Thinking setting (ADR-049) on conversation-turn generation. The chat
+handler resolves it once per request and passes thinking=... to the
+adapter. Off sends think=False; on sends no think argument, so the model
+uses its own default. The adapter never reads preferences, the retired env
+vars have no effect, and session reflection's direct _chat call is not
+affected. Everything is mocked: no Ollama.
 """
 
 from __future__ import annotations
 
 import ast
+import re
+from functools import lru_cache
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.context.models import ContextPacket
-from src.core import config as config_mod
+from src.core import preferences
 from src.llm.adapter import LLMAdapter
 from src.safety.models import SafetyTriggerResult
 from tests.test_thinking_budget_retry import (
@@ -26,6 +31,9 @@ from tests.test_thinking_budget_retry import (
     _scripted,
 )
 
+_OFF_LOG = "[GEN] turn thinking: off (preference)"
+_ON_LOG = "[GEN] turn thinking: on (model default)"
+
 
 def _bare_adapter():
     adapter = LLMAdapter.__new__(LLMAdapter)
@@ -33,7 +41,7 @@ def _bare_adapter():
     return adapter
 
 
-def _run(method, *replies, packet=None):
+def _run(method, *replies, packet=None, **kwargs):
     """Run one turn through adapter.<method> on a scripted ollama.chat;
     review not triggered. Returns (items yielded, calls)."""
     adapter = _bare_adapter()
@@ -47,113 +55,136 @@ def _run(method, *replies, packet=None):
     with _ollama(adapter, fake_chat), \
             patch.object(adapter, "_prepare_turn_prompt",
                          return_value=(buf, "system prompt", packet)):
-        items = list(getattr(adapter, method)(packet))
+        items = list(getattr(adapter, method)(packet, **kwargs))
     return items, calls
 
 
-def _turn(*replies, packet=None):
+def _turn(*replies, packet=None, **kwargs):
     """generate_response_iter turn. Returns (final reply, calls)."""
-    items, calls = _run("generate_response_iter", *replies, packet=packet)
+    items, calls = _run("generate_response_iter", *replies, packet=packet, **kwargs)
     return items[-1], calls
 
 
-def test_setting_false_turns_thinking_off_on_a_turn(monkeypatch, caplog):
-    monkeypatch.setenv("EMBER_GENERATION_THINK", "false")
+def _stream_turn(**kwargs):
+    """generate_response_stream turn. Returns calls."""
+    return _run("generate_response_stream",
+                _answer_stream("A plain ", "answer."), **kwargs)[1]
+
+
+# --- off and on -------------------------------------------------------------
+
+def test_off_sends_think_false(caplog):
+    """Positive control for test_on_sends_no_think."""
     with caplog.at_level("INFO", logger="ember.llm"):
-        reply, calls = _turn(_answer())
+        reply, calls = _turn(_answer(), thinking=False)
     assert reply == "A plain answer."
     assert calls[0]["think"] is False
-    assert "[GEN] turn thinking: off (EMBER_GENERATION_THINK=false)" in caplog.text
+    assert _OFF_LOG in caplog.text
     assert "[GEN] think=False passed to ollama answer turn" in caplog.text
-    assert "[SEARCH_FAIL]" not in caplog.text
 
 
-def test_unset_passes_no_think(monkeypatch, caplog):
-    """Absence test; test_setting_false_turns_thinking_off_on_a_turn is its
-    positive control."""
-    monkeypatch.delenv("EMBER_GENERATION_THINK", raising=False)
+def test_default_is_off():
+    """A caller that passes nothing gets the shipped default: off."""
+    _, calls = _turn(_answer())
+    assert calls[0]["think"] is False
+
+
+def test_on_sends_no_think(caplog):
+    """Absence test; test_off_sends_think_false is its positive control."""
     with caplog.at_level("INFO", logger="ember.llm"):
-        reply, calls = _turn(_answer())
+        reply, calls = _turn(_answer(), thinking=True)
     assert reply == "A plain answer."
     assert "think" not in calls[0]
-    assert "[GEN] turn thinking: default" in caplog.text
+    assert _ON_LOG in caplog.text
     assert "[GEN] think=" not in caplog.text
 
 
-# --- the search-failure arm ------------------------------------------------
-
-def _failed_search_packet():
-    return ContextPacket(user_message="q", web_items=[],
-                         web_search_status="unavailable")
+def test_streamed_turn_off_sends_think_false():
+    calls = _stream_turn(thinking=False)
+    assert calls[0]["think"] is False and calls[0]["stream"] is True
 
 
-def test_search_failure_arm_unchanged_when_setting_unset(monkeypatch, caplog):
-    monkeypatch.delenv("EMBER_GENERATION_THINK", raising=False)
-    monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "true")
-    with caplog.at_level("INFO", logger="ember.llm"):
-        _, calls = _turn(_answer(), packet=_failed_search_packet())
-    assert calls[0]["think"] is False
-    assert "[GEN] turn thinking: off (search failure)" in caplog.text
-
-
-def test_search_failure_arm_off_leaves_failed_search_turn_alone(monkeypatch):
+def test_streamed_turn_on_sends_no_think():
     """Absence test; the test above is its positive control."""
-    monkeypatch.delenv("EMBER_GENERATION_THINK", raising=False)
-    monkeypatch.delenv("EMBER_SEARCH_FAIL_THINK_OFF", raising=False)
-    _, calls = _turn(_answer(), packet=_failed_search_packet())
-    assert "think" not in calls[0]
-
-
-def test_setting_false_turns_thinking_off_on_a_successful_search_turn(monkeypatch):
-    monkeypatch.setenv("EMBER_GENERATION_THINK", "false")
-    hits = [{"title": "T", "url": "https://example.com/a", "snippet": "s"}]
-    packet = ContextPacket(user_message="q", web_items=hits, web_search_status="ok")
-    _, calls = _turn(_answer(), packet=packet)
-    assert calls[0]["think"] is False
+    assert "think" not in _stream_turn(thinking=True)[0]
 
 
 # --- the thinking-budget retry ----------------------------------------------
 
-def test_no_budget_retry_when_thinking_is_off(monkeypatch):
-    monkeypatch.setenv("EMBER_GENERATION_THINK", "false")
-    reply, calls = _turn(_budget_spent(), _answer("That sounds like a lot."))
-    assert len(calls) == 1
-    assert reply.startswith("I had trouble generating a response")
-
-
-def test_budget_retry_fires_when_setting_unset(monkeypatch):
-    """Positive control for the test above: same script, setting unset."""
-    monkeypatch.delenv("EMBER_GENERATION_THINK", raising=False)
-    reply, calls = _turn(_budget_spent(), _answer("That sounds like a lot."))
+def test_budget_retry_fires_when_on():
+    """Positive control for the test below."""
+    reply, calls = _turn(_budget_spent(), _answer("That sounds like a lot."),
+                         thinking=True)
     assert len(calls) == 2
     assert reply == "That sounds like a lot."
 
 
-# --- streaming turn -----------------------------------------------------------
+def test_no_budget_retry_when_off():
+    """Absence test: a call already made with think=False is never retried."""
+    reply, calls = _turn(_budget_spent(), _answer("That sounds like a lot."),
+                         thinking=False)
+    assert len(calls) == 1
+    assert reply.startswith("I had trouble generating a response")
 
-def _stream_turn():
-    """generate_response_stream turn. Returns calls."""
-    return _run("generate_response_stream", _answer_stream("A plain ", "answer."))[1]
+
+# --- nothing but the passed value decides the turn -------------------------
+
+def _store_on(monkeypatch):
+    """Every preference read sees generation_think=True, as if the user
+    flipped the setting while the turn was running."""
+    real_get = preferences.get
+
+    def fake_get(key, default=None, vault_path=None):
+        return True if key == "generation_think" else real_get(key, default, vault_path)
+
+    monkeypatch.setattr(preferences, "get", fake_get)
+    assert preferences.generation_thinking_enabled() is True
 
 
-def test_setting_false_turns_thinking_off_on_a_streamed_turn(monkeypatch):
+def _retired_env_says_on(monkeypatch):
+    monkeypatch.setenv("EMBER_GENERATION_THINK", "true")
+    monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "false")
+
+
+def _retired_env_says_off(monkeypatch):
     monkeypatch.setenv("EMBER_GENERATION_THINK", "false")
-    calls = _stream_turn()
-    assert calls[0]["think"] is False and calls[0]["stream"] is True
+    monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "true")
 
 
-def test_streamed_turn_unset_passes_no_think(monkeypatch):
-    """Absence test; the test above is its positive control."""
-    monkeypatch.delenv("EMBER_GENERATION_THINK", raising=False)
-    assert "think" not in _stream_turn()[0]
+def _failed_search(monkeypatch):
+    """The retired search-failure arm forced think=False on this packet."""
+    return ContextPacket(user_message="q", web_items=[], web_search_status="unavailable")
 
 
-# --- not a conversation turn ---------------------------------------------------
+_SETUPS = {
+    "stored_value_flipped_mid_turn": _store_on,
+    "retired_env_says_on": _retired_env_says_on,
+    "retired_env_says_off": _retired_env_says_off,
+    "failed_search_packet": _failed_search,
+}
 
-def test_direct_chat_call_ignores_the_setting(monkeypatch):
+
+@pytest.mark.parametrize("setup", _SETUPS.values(), ids=_SETUPS.keys())
+def test_off_turn_sends_think_false_under(monkeypatch, setup):
+    """Positive control for test_on_turn_sends_no_think_under: same setup,
+    only the passed value differs."""
+    _, calls = _turn(_answer(), packet=setup(monkeypatch), thinking=False)
+    assert calls[0]["think"] is False
+
+
+@pytest.mark.parametrize("setup", _SETUPS.values(), ids=_SETUPS.keys())
+def test_on_turn_sends_no_think_under(monkeypatch, setup):
+    """Absence test: neither the stored value, the retired env vars nor a
+    failed search add think. Control: test_off_turn_sends_think_false_under."""
+    _, calls = _turn(_answer(), packet=setup(monkeypatch), thinking=True)
+    assert "think" not in calls[0]
+
+
+# --- not a conversation turn --------------------------------------------------------
+
+def test_direct_chat_call_is_not_affected():
     """Session reflection calls _chat directly. Absence test; its positive
-    control is test_setting_false_turns_thinking_off_on_a_turn."""
-    monkeypatch.setenv("EMBER_GENERATION_THINK", "false")
+    control is test_off_sends_think_false."""
     adapter = _bare_adapter()
     calls, fake_chat = _scripted(_answer())
     with _ollama(adapter, fake_chat):
@@ -161,59 +192,88 @@ def test_direct_chat_call_ignores_the_setting(monkeypatch):
     assert "think" not in calls[0]
 
 
-# --- the setting itself ---------------------------------------------------------
-
-@pytest.mark.parametrize("raw, expected, warns", [
-    ("false", True, False),
-    (" FALSE ", True, False),
-    ("0", True, False),
-    ("no", True, False),
-    ("Off", True, False),
-    (None, False, False),
-    ("", False, False),
-    ("true", False, False),
-    ("1", False, False),
-    ("on", False, False),
-    ("maybe", False, True),
-])
-def test_setting_parsing(monkeypatch, caplog, fresh_env_warnings, raw, expected, warns):
-    """None is unset. The "maybe" row is the positive control for the
-    no-warning rows."""
-    if raw is None:
-        monkeypatch.delenv("EMBER_GENERATION_THINK", raising=False)
-    else:
-        monkeypatch.setenv("EMBER_GENERATION_THINK", raw)
-    with caplog.at_level("WARNING", logger="ember.config"):
-        assert config_mod.get_generation_think_off() is expected
-    assert ("EMBER_GENERATION_THINK" in caplog.text) is warns
-
-
-# --- only the turn decision reads the setting ----------------------------------------
+# --- one reader, one decision point ---------------------------------------------------
 
 _REPO = Path(__file__).resolve().parent.parent
-_ADAPTER = _REPO / "src" / "llm" / "adapter.py"
+_SRC = _REPO / "src"
+_KEY = "generation_think"
+_RESOLVER = "generation_thinking_enabled"
 
 
-def _readers(source: str) -> set[str]:
-    """Names of the functions in `source` that call get_generation_think_off."""
+@lru_cache(maxsize=None)
+def _src_files() -> dict[str, str]:
     return {
-        fn.name for fn in ast.walk(ast.parse(source))
-        if isinstance(fn, ast.FunctionDef)
-        and any(isinstance(n, ast.Call) and getattr(n.func, "id", None) == "get_generation_think_off"
-                for n in ast.walk(fn))
+        p.relative_to(_REPO).as_posix(): p.read_text(encoding="utf-8")
+        for p in _SRC.rglob("*.py")
     }
 
 
-def test_only_turn_think_reads_the_setting():
-    outside = [
-        p.relative_to(_REPO).as_posix() for p in (_REPO / "src").rglob("*.py")
-        if "get_generation_think_off" in p.read_text(encoding="utf-8")
-    ]
-    assert sorted(outside) == ["src/core/config.py", "src/llm/adapter.py"]
-    assert _readers(_ADAPTER.read_text(encoding="utf-8")) == {"turn_think"}
+@lru_cache(maxsize=None)
+def _src_trees() -> dict[str, ast.AST]:
+    """src/ parsed once for every guard in this module. Callers copy before
+    adding entries."""
+    return {name: ast.parse(source) for name, source in _src_files().items()}
 
 
-def test_second_reader_would_be_caught():
-    """Positive control for the test above: a second caller is detected."""
-    extra = "\n\ndef _aux():\n    return get_generation_think_off()\n"
-    assert _readers(_ADAPTER.read_text(encoding="utf-8") + extra) == {"turn_think", "_aux"}
+def _files_with_key(trees: dict[str, ast.AST]) -> set[str]:
+    """Files holding the preference key as a string constant."""
+    return {
+        name for name, tree in trees.items()
+        if any(isinstance(n, ast.Constant) and n.value == _KEY for n in ast.walk(tree))
+    }
+
+
+def _resolver_callers(trees: dict[str, ast.AST]) -> set[str]:
+    """Files that call generation_thinking_enabled, by name or attribute."""
+    def calls_it(node):
+        if not isinstance(node, ast.Call):
+            return False
+        func = node.func
+        return getattr(func, "id", None) == _RESOLVER or getattr(func, "attr", None) == _RESOLVER
+    return {name for name, tree in trees.items() if any(calls_it(n) for n in ast.walk(tree))}
+
+
+def test_only_preferences_and_the_settings_endpoint_name_the_key():
+    """The key is read in preferences.py (default + resolver) and written by
+    the settings endpoint in main.py. Nothing else touches it."""
+    assert _files_with_key(_src_trees()) == {
+        "src/core/preferences.py", "src/api/main.py"}
+
+
+def test_resolver_called_only_by_the_chat_handler_and_settings_endpoint():
+    assert _resolver_callers(_src_trees()) == {
+        "src/api/openai_adapter.py", "src/api/main.py"}
+
+
+def test_a_second_reader_would_be_caught():
+    """Positive control for the two tests above."""
+    trees = dict(_src_trees())
+    trees["src/llm/extra.py"] = ast.parse(
+        "from src.core import preferences\n\n"
+        "def _aux():\n"
+        "    return preferences.get('generation_think')\n\n"
+        "def _aux2():\n"
+        "    return preferences.generation_thinking_enabled()\n"
+    )
+    assert "src/llm/extra.py" in _files_with_key(trees)
+    assert "src/llm/extra.py" in _resolver_callers(trees)
+
+
+_RETIRED = ("EMBER_GENERATION_THINK", "EMBER_SEARCH_FAIL_THINK_OFF",
+            "get_generation_think_off", "get_search_failure_think_off",
+            "search_failure_think")
+
+
+def _retired_hits(files: dict[str, str]) -> set[str]:
+    pattern = re.compile(r"\b(" + "|".join(_RETIRED) + r")\b")
+    return {name for name, source in files.items() if pattern.search(source)}
+
+
+def test_retired_names_are_gone_from_src():
+    assert _retired_hits(_src_files()) == set()
+
+
+def test_retired_name_would_be_caught():
+    """Positive control for the test above."""
+    files = {"src/x.py": 'os.getenv("EMBER_GENERATION_THINK")\n'}
+    assert _retired_hits(files) == {"src/x.py"}

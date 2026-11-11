@@ -1739,6 +1739,56 @@ def get_bare_mode_endpoint():
     return {"bare_mode": read_prefs().get("bare_mode", False)}
 
 
+def _thinking_setting() -> dict:
+    """The Thinking setting as the UI sees it (ADR-049).
+
+    `supported` is looked up on every call, never cached, so a model swap
+    shows on the next read. Cloud models skip the lookup: they never receive
+    a think argument. None means the lookup failed, not that the model lacks
+    thinking.
+    """
+    from src.core import preferences
+    from src.llm.adapter import model_supports_thinking
+
+    model = llm_adapter.model
+    cloud = llm_adapter._is_cloud_model(model)
+    return {
+        "enabled": preferences.generation_thinking_enabled(),
+        "model": model,
+        "supported": False if cloud else model_supports_thinking(model),
+        "cloud": cloud,
+    }
+
+
+@app.get("/v1/settings/thinking")
+def get_thinking_endpoint():
+    """Return the Thinking setting, the active model, and whether it can think."""
+    return _thinking_setting()
+
+
+@app.post("/v1/settings/thinking")
+def set_thinking_endpoint(request: Request, body: dict):
+    """Turn thinking on conversation turns on or off (ADR-049).
+
+    Body: {"enabled": true/false}. Only a JSON boolean is accepted, so a
+    stored value is always one the resolver reads as the user meant it.
+    Takes effect from the next exchange; a reply in progress keeps its value.
+    """
+    from src.core.jsonio import JsonIoError
+    from src.core.preferences import update as update_prefs
+
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="enabled must be true or false")
+    try:
+        update_prefs({"generation_think": enabled})
+    except JsonIoError as exc:
+        logging.getLogger("ember.preferences").warning(
+            "[SETTINGS] thinking setting write failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Could not save the thinking setting")
+    return _thinking_setting()
+
+
 # ── Preferences endpoints ──────────────────────────────────────────────
 
 

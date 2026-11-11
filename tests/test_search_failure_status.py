@@ -16,7 +16,7 @@ import requests
 import src.tools.web_search as web_search_mod
 from src.context.models import ContextPacket
 from src.context.service import resolve_search_outcome
-from src.llm.adapter import LLMAdapter, search_failure_think
+from src.llm.adapter import LLMAdapter
 from src.llm.prompt_builder import PromptBuilder
 from src.llm.post_gen_pipeline import (
     WEB_SEARCH_UNAVAILABLE_DISCLOSURE,
@@ -280,35 +280,9 @@ def test_no_disclosure_for_ok():
 
 
 # ---------------------------------------------------------------------------
-# 5. Thinking-off arm (EMBER_SEARCH_FAIL_THINK_OFF)
+# 5. The think argument reaches the Ollama client only (the search-failure
+#    arm is retired; the Thinking setting decides, ADR-049)
 # ---------------------------------------------------------------------------
-
-def _packet(status, items=None):
-    return ContextPacket(user_message="q", web_items=items or [],
-                         web_search_status=status)
-
-
-@pytest.mark.parametrize("status", ["unavailable", "empty"])
-def test_flag_on_disables_thinking_after_failure(monkeypatch, status):
-    monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "true")
-    assert search_failure_think(_packet(status)) is False
-
-
-def test_flag_off_leaves_thinking_alone(monkeypatch):
-    monkeypatch.delenv("EMBER_SEARCH_FAIL_THINK_OFF", raising=False)
-    assert search_failure_think(_packet("unavailable")) is None
-
-
-def test_flag_on_leaves_successful_search_alone(monkeypatch):
-    monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "true")
-    hits = [{"title": "T", "url": "https://example.com/a", "snippet": "s"}]
-    assert search_failure_think(_packet("ok", hits)) is None
-
-
-def test_flag_on_leaves_no_search_alone(monkeypatch):
-    monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "true")
-    assert search_failure_think(_packet(None)) is None
-
 
 def _bare_adapter():
     adapter = LLMAdapter.__new__(LLMAdapter)
@@ -374,57 +348,6 @@ def test_ollama_stream_passes_think_false_when_asked():
     assert captured["think"] is False
 
 
-class _Stop(Exception):
-    pass
-
-
-def _run_iter_until_chat(adapter, packet):
-    """Drive generate_response_iter up to the answer-turn _chat call and
-    return the kwargs it was given."""
-    seen: dict = {}
-
-    def fake_chat(**kwargs):
-        seen.update(kwargs)
-        raise _Stop
-
-    with patch.object(adapter, "_prepare_turn_prompt",
-                      return_value=(MagicMock(), "sys", packet)), \
-            patch.object(adapter, "_chat", side_effect=fake_chat):
-        with pytest.raises(_Stop):
-            list(adapter.generate_response_iter(packet))
-    return seen
-
-
-def _run_stream_until_chat(adapter, packet):
-    seen: dict = {}
-
-    def fake_stream(**kwargs):
-        seen.update(kwargs)
-        raise _Stop
-        yield  # pragma: no cover
-
-    with patch.object(adapter, "_prepare_turn_prompt",
-                      return_value=(MagicMock(), "sys", packet)), \
-            patch.object(adapter, "_chat_stream", side_effect=fake_stream):
-        with pytest.raises(_Stop):
-            list(adapter.generate_response_stream(packet))
-    return seen
-
-
-@pytest.mark.parametrize("runner", [_run_iter_until_chat, _run_stream_until_chat])
-def test_generation_paths_pass_think_false_when_flag_on(monkeypatch, runner):
-    monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "true")
-    seen = runner(_bare_adapter(), _packet("unavailable"))
-    assert seen.get("think") is False
-
-
-@pytest.mark.parametrize("runner", [_run_iter_until_chat, _run_stream_until_chat])
-def test_generation_paths_pass_no_think_when_flag_off(monkeypatch, runner):
-    monkeypatch.delenv("EMBER_SEARCH_FAIL_THINK_OFF", raising=False)
-    seen = runner(_bare_adapter(), _packet("unavailable"))
-    assert seen.get("think") is None
-
-
 # ---------------------------------------------------------------------------
 # 6. Lean-review fixes (PR #298)
 # ---------------------------------------------------------------------------
@@ -433,15 +356,6 @@ from src.api.openai_adapter import _merge_confirmation_search  # noqa: E402
 from src.core import config as config_mod  # noqa: E402
 
 _HIT = {"title": "T", "url": "https://example.com/a", "snippet": "s"}
-
-
-def test_think_guard_returns_none_when_packet_has_items(monkeypatch):
-    """Finding 1: status unavailable with items present must not disable
-    thinking. Positive control: test_flag_on_disables_thinking_after_failure
-    (same status, no items) returns False."""
-    monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "true")
-    assert search_failure_think(_packet("unavailable", [_HIT])) is None
-    assert search_failure_think(_packet("empty", [_HIT])) is None
 
 
 def test_merge_failed_confirm_does_not_override_packet_with_items():
@@ -512,27 +426,6 @@ def test_min_term_hits_parsing(monkeypatch, caplog, fresh_env_warnings,
     assert ("WEB_SEARCH_MIN_TERM_HITS" in caplog.text) is warns
 
 
-@pytest.mark.parametrize("raw, expected, warns", [
-    ("true", True, False),
-    (" true", True, False),
-    ("true ", True, False),
-    ("TRUE", True, False),
-    ("on", True, False),
-    ("1", True, False),
-    ("yes", True, False),
-    ("false", False, False),
-    ("off", False, False),
-    ("", False, False),
-    ("maybe", False, True),
-])
-def test_think_off_flag_parsing(monkeypatch, caplog, fresh_env_warnings,
-                                raw, expected, warns):
-    monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", raw)
-    with caplog.at_level("WARNING", logger="ember.config"):
-        assert config_mod.get_search_failure_think_off() is expected
-    assert ("EMBER_SEARCH_FAIL_THINK_OFF" in caplog.text) is warns
-
-
 def test_invalid_env_value_warns_only_once(monkeypatch, caplog,
                                            fresh_env_warnings):
     monkeypatch.setenv("WEB_SEARCH_MIN_TERM_HITS", "abc")
@@ -564,11 +457,11 @@ def test_think_log_not_emitted_when_think_unset(caplog):
     assert "[GEN] think=" not in caplog.text
 
 
-def test_cloud_model_path_logs_no_think_line(monkeypatch, caplog):
-    monkeypatch.setenv("EMBER_SEARCH_FAIL_THINK_OFF", "true")
+def test_cloud_model_path_logs_no_think_line(caplog):
+    """Absence test: a cloud model never receives think. Positive control:
+    test_ollama_call_passes_think_false_when_asked (Ollama does)."""
     adapter = _bare_adapter()
     adapter.model = "claude-test"
-    assert search_failure_think(_packet("unavailable")) is False
     with patch.object(adapter, "_chat_anthropic", return_value="ok") as cloud, \
             caplog.at_level("INFO", logger="ember.llm"):
         adapter._chat("system", "user", think=False)

@@ -200,7 +200,9 @@ def test_stream_already_without_thinking_is_not_restreamed():
 
 def _turn(*replies):
     """Run one generate_response_iter turn on a scripted ollama.chat;
-    review not triggered. Returns (final reply, calls)."""
+    review not triggered. Thinking is on (ADR-049): with it off the call
+    already sends think=False and is never retried. Returns (final reply,
+    calls)."""
     adapter = _bare_adapter()
     adapter.policy_service = MagicMock()
     adapter.policy_service.evaluate_trigger.return_value = SafetyTriggerResult(
@@ -212,7 +214,7 @@ def _turn(*replies):
     with _ollama(adapter, fake_chat), \
             patch.object(adapter, "_prepare_turn_prompt",
                          return_value=(buf, "system prompt", packet)):
-        items = list(adapter.generate_response_iter(packet))
+        items = list(adapter.generate_response_iter(packet, thinking=True))
     return items[-1], calls
 
 

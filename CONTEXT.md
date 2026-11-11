@@ -67,6 +67,12 @@ _Avoid_: remainder, add-on
 Ember's fixed reply "What would you like me to search for?" when the user asks for a web search without saying what to search ("google please", "look it up"). The user's next message is the search content and is searched. A clarification supersedes an older **Pending search**. If the exchange that carries the search content ends unanswered, the clarification still stands, unless a newer offer or clarification was made in the conversation while that exchange ran.
 _Avoid_: B2, bare-marker reply
 
+### Generation
+
+**Turn thinking**:
+Whether the model reasons before it writes an assistant **Turn**. The user switches it on or off; it is off by default. It applies only to generating the reply, never to Ember's other model calls (review, classification, extraction, reflection). A cloud model, or a model without thinking support, is not affected.
+_Avoid_: reasoning mode, think mode
+
 ## Relationships
 
 - A **Conversation** has many **Exchanges**, in order. It is created with its first user **Turn**, so Ember never creates an empty one.
@@ -79,6 +85,7 @@ _Avoid_: B2, bare-marker reply
 - **History** shows every stored **Turn** in order, except that a user **Turn** and its **Retries** appear once. It never shows an **Exchange outcome**, and the vault keeps every **Exchange**.
 - Retrieval and reflection share one filter and see only the **Turns** that pass it. Only **History** shows every **Turn**.
 - Every **Search offer** comes from Ember's code, and every **Pending search** was offered: there is none without a **Search offer** in one of Ember's replies.
+- **Turn thinking** is read once when an **Exchange** starts; a change applies from the next **Exchange**.
 
 ## Example dialogue
 

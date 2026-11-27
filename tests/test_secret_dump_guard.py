@@ -447,12 +447,17 @@ def test_single_quoted_substitution_is_literal(hermetic_hook_project):
     assert guard._matches_dump_command("echo `cat private_vault/a.json`", cwd) is not None
 
 
-def test_quoted_heredoc_body_is_literal_text(hermetic_hook_project):
+def test_quoted_heredoc_body_is_literal_text_only_for_a_receiver_that_stores_it(hermetic_hook_project):
+    """A quoted-delimiter body fed to tee is text no command receives. Fed to
+    a bare cat it is printed, and is scanned (as the ember-2-installer guard
+    scans it). Control: behind a bare delimiter tee's body runs its
+    substitution."""
     cwd = str(hermetic_hook_project)
-    prose = "cat <<'EOF'\nsee private_vault/a.json and $(cat private_vault/a.json)\nEOF\n"
-    assert guard._matches_dump_command(prose, cwd) is None
-    # Control: the same body behind a bare delimiter runs its substitution.
-    assert guard._matches_dump_command(prose.replace("'EOF'", "EOF"), cwd) is not None
+    body = "see private_vault/a.json and $(cat private_vault/a.json)"
+    stored = f"tee notes.txt <<'EOF'\n{body}\nEOF\n"
+    assert guard._matches_dump_command(stored, cwd) is None
+    assert guard._matches_dump_command(f"cat <<'EOF'\n{body}\nEOF\n", cwd) is not None
+    assert guard._matches_dump_command(stored.replace("'EOF'", "EOF"), cwd) is not None
 
 
 def _nest(inner: str, levels: int) -> str:
@@ -829,16 +834,17 @@ def test_substitution_words_check_a_configured_vault_by_location(configured):
     assert guard._matches_dump_command(f"cat $(echo {configured.outside.as_posix()}/notes.txt)", cwd) is None
 
 
-# A body is dropped only for a receiver that stores or displays it.
+# A body is dropped only for a receiver that stores it (a bare top-level cat
+# prints it, so it is scanned, as in the ember-2-installer guard).
 INERT_HEREDOC = [
-    "cat <<'EOF'\n{body}\nEOF\n",
-    "cat > notes.txt <<'EOF'\n{body}\nEOF\n",
     "tee notes.txt <<'EOF'\n{body}\nEOF\n",
     "git commit -F - <<'EOF'\n{body}\nEOF\n",
     "gh pr create --body-file - <<'EOF'\n{body}\nEOF\n",
     "git commit -m \"$(cat <<'EOF'\n{body}\nEOF\n)\"",
 ]
 SCRIPT_RECEIVERS = [
+    "cat <<'EOF'\n{body}\nEOF\n",
+    "cat > run.sh <<'EOF'\n{body}\nEOF\n",
     "bash <<'EOF'\n{body}\nEOF\n",
     "python3.12 <<'EOF'\n{body}\nEOF\n",
     "python <<'EOF'\n{body}\nEOF\n",
@@ -1027,14 +1033,17 @@ def test_comment_text_is_not_a_command(hermetic_hook_project):
     assert guard._matches_dump_command("cat src/a\ncat private_vault/x", cwd) is not None
 
 
-def test_strip_comments_units():
-    strip = guard._strip_comments
-    assert strip("a # b\nc") == "a \nc"
-    assert strip("a#b") == "a#b"
-    assert strip("'# x'") == "'# x'"
-    assert strip("echo $#") == "echo $#"
-    assert strip(r"echo \# x") == r"echo \# x"
-    assert strip("x;# y") == "x;"  # control: a # after a separator starts a word
+@pytest.mark.parametrize(
+    "command",
+    ["cat a#b private_vault/x", "cat '# x' private_vault/x", "cat $# private_vault/x", r"cat \# private_vault/x"],
+)
+def test_a_hash_inside_a_word_quoted_or_escaped_is_not_a_comment(hermetic_hook_project, command):
+    assert guard._matches_dump_command(command, str(hermetic_hook_project)) is not None
+
+
+def test_a_hash_after_a_separator_starts_a_comment(hermetic_hook_project):
+    """Control for the test above: a # that starts a word after `;`."""
+    assert guard._matches_dump_command("cat src/a;# cat private_vault/x", str(hermetic_hook_project)) is None
 
 
 BASH_C_OPTIONS = [
@@ -1072,3 +1081,60 @@ def test_a_command_word_reading_nested_command_is_an_ordinary_match(hermetic_hoo
     assert isinstance(guard._matches_dump_command(_nest("echo hi", 9), cwd), guard._NestedTooDeep)
     payload = {"tool_name": "Bash", "tool_input": {"command": '"nested command" private_vault/x'}, "cwd": cwd}
     assert "more than 8 levels" not in hook_output(_run_hook(payload))["permissionDecisionReason"]
+
+
+# --- parity with the ember-2-installer guards: the shell tokenizer ----------
+# Each pair is a command the installer's parser denies and ember-2's shlex
+# scan allowed, and a near-identical benign command (the control).
+TOKENIZER_PARITY = [
+    # Bash brace expansion runs before the rules.
+    ("cat private_{vault,x}/f", "cat private_{docs,x}/f"),
+    ("cat {src/a,private_vault/x}", "cat {src/a,src/b}"),
+    ("cat private_vaul{a..z}/x", "cat private_doc{a..z}/x"),
+    # A Bash backslash before any character is an escape.
+    (r"cat private_vau\lt/x", r"cat READ\ME.md"),
+    # An unterminated quote runs to the end; the words before it are read.
+    ("cat private_vault/x '", "cat README.md '"),
+    ('cat private_vault/x "', 'cat README.md "'),
+    # A top-level cat heredoc prints its body, which is scanned.
+    ("cat <<'EOF' > run.sh\ncat private_vault/x\nEOF\n", "cat <<'EOF' > run.sh\ncat README.md\nEOF\n"),
+]
+
+
+@pytest.mark.parametrize("command", [deny for deny, _ in TOKENIZER_PARITY])
+def test_tokenizer_parity_denies(hermetic_hook_project, command):
+    assert guard._matches_dump_command(command, str(hermetic_hook_project)) is not None
+
+
+@pytest.mark.parametrize("command", [allow for _, allow in TOKENIZER_PARITY])
+def test_tokenizer_parity_controls_are_allowed(hermetic_hook_project, command):
+    assert guard._matches_dump_command(command, str(hermetic_hook_project)) is None
+
+
+def test_tokenizer_parity_through_the_hook_process(hermetic_hook_project):
+    cwd = str(hermetic_hook_project)
+    denied = hook_output(_run_hook({"tool_name": "Bash", "tool_input": {"command": "cat private_{vault,x}/f"}, "cwd": cwd}))
+    assert denied["permissionDecision"] == "deny"
+    allowed = _run_hook({"tool_name": "Bash", "tool_input": {"command": "cat private_{docs,x}/f"}, "cwd": cwd})
+    assert allowed.stdout.strip() == ""
+
+
+def test_a_brace_expansion_past_the_caps_is_denied(hermetic_hook_project):
+    """A reader whose words cannot all be expanded cannot be checked. Control:
+    a print command that ends its pipeline may overflow (its words reach no
+    reader), and a command under the caps is checked as usual."""
+    cwd = str(hermetic_hook_project)
+    big = "{a,b}" * 9  # 512 words from one word
+    hit = guard._matches_dump_command(f"cat x{big}", cwd)
+    assert isinstance(hit, guard._BraceTooBig)
+    assert "brace expansion past the limit" in guard.reason(hit)
+    assert guard._matches_dump_command(f"echo x{big}", cwd) is None
+    assert guard._matches_dump_command(f"echo x{big} | xargs cat", cwd) is not None
+    assert guard._matches_dump_command("cat x{a,b}{a,b}", cwd) is None
+
+
+def test_a_brace_overflow_is_denied_through_the_hook_process(hermetic_hook_project):
+    payload = {"tool_name": "Bash", "tool_input": {"command": "cat x" + "{a,b}" * 9}, "cwd": str(hermetic_hook_project)}
+    output = hook_output(_run_hook(payload))
+    assert output["permissionDecision"] == "deny"
+    assert "brace expansion" in output["permissionDecisionReason"]

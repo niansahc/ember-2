@@ -21,9 +21,14 @@ definition:
     env_references() is the vault cache's digest of referenced variables,
     None when the file cannot be read.
   - shell_step() / close_paren() / extract_substitutions() / shell_spans() /
-    drop_inert_heredocs(): the shell scanner env_guard.py and
-    secret_dump_guard.py share (quote state with backslash escapes, command
-    substitution, quoted spans, heredocs whose receiver only stores them).
+    drop_inert_heredocs(): the text scanner env_guard.py uses (quote state
+    with backslash escapes, command substitution, quoted spans, heredocs
+    whose receiver only stores them).
+  - parse_shell() / pipelines() / expand_braces() / output_words() /
+    literal_heredocs(): the shell parser secret_dump_guard.py uses (words
+    with their quoting, substitutions, heredocs, pipe stages, Bash brace
+    expansion, heredoc bodies no command runs). A Python port of the
+    ember-2-installer parser (.claude/hooks/hook-utils.cjs).
   - run_hook(): the one entry of the three PreToolUse guards (env_guard.py,
     vault_guard.py, secret_dump_guard.py): stdin, the input caps
     (MAX_COMMAND_CHARS, MAX_PATH_CHARS), InputLimit denies, fail closed
@@ -522,6 +527,644 @@ def drop_inert_heredocs(text: str, literal_only: bool = True) -> str:
         pos = end.end()
     out.append(text[pos:])
     return "".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Shell parser: a port of ember-2-installer .claude/hooks/hook-utils.cjs
+# (parseShell, pipelines, expandBraces, literalHeredocs), Bash flavor. One
+# quote- and escape-aware pass gives words, operators, substitutions and
+# heredocs, so a quote, an escape or a brace is read the way the shell reads
+# it before any rule looks at a word.
+# ---------------------------------------------------------------------------
+
+# Nesting deeper than this (substitutions inside substitutions) is not
+# followed: parse_shell raises NestingLimit and the caller denies.
+MAX_DEPTH = 8
+# Bash brace expansion caps, besides MAX_LIVE_BRACES and MAX_BRACE_WORDS
+# (words from one word): words added in one pipe stage, and expansion steps
+# in one word. Past a cap nothing is expanded (BraceOverflow).
+MAX_BRACE_STAGE = 1024
+MAX_BRACE_STEPS = 32
+
+
+class NestingLimit(Exception):
+    """A substitution nested past MAX_DEPTH."""
+
+
+class BraceOverflow(Exception):
+    """A brace expansion past the caps."""
+
+
+# Characters that end a word and stand as operators (with `(` and `)`). In
+# Bash `{` and `}` are operators only as a word of their own.
+_OPERATORS = ";<>|&{}"
+
+
+class Word:
+    """One parsed word. `text`: its value, a literal backslash read as `/`
+    (so a Windows path stays a path); `bare`: the part read outside quotes;
+    `live`: one char per char of `text`, "1" where Bash may read it as
+    expansion syntax (unquoted, unescaped, outside ${...}), else "0";
+    `parts`: [(quote, text)] runs by the quote they were read in (None, '
+    or "); `subs`: the parsed substitutions inside it; `src`: `text` with
+    each substitution put back as $(body), the command line a nested shell
+    receives; `start`/`end`: offsets in the command; `open`: ends inside a
+    quote left open; `escaped`: a backslash escape was read in it."""
+
+    __slots__ = ("text", "bare", "live", "parts", "subs", "src", "start", "end", "open", "escaped")
+
+
+class Heredoc:
+    """A heredoc operator and its body. `quoted`: the delimiter word has any
+    quoting (<<'EOF', <<\\EOF); `body`: the raw text between the operator
+    line and the terminator line; `subs`: the substitutions Bash runs in an
+    unquoted body; `terminated`: a terminator line was found."""
+
+    __slots__ = ("quoted", "strip", "delimiter", "body", "subs", "start", "end", "terminated")
+
+
+class Script:
+    """A parsed command: `tokens` are operator strings, Words and Heredocs."""
+
+    __slots__ = ("tokens", "bash")
+
+    def __init__(self, tokens, bash):
+        self.tokens = tokens
+        self.bash = bash
+
+
+class _WordBuilder:
+    """A word being read: lists joined once by finish(), so a long word costs
+    linear time."""
+
+    __slots__ = ("text", "bare", "live", "parts", "subs", "src", "start", "escaped")
+
+    def __init__(self, start):
+        self.text, self.bare, self.live, self.parts, self.subs, self.src = [], [], [], [], [], []
+        self.start = start
+        self.escaped = False
+
+    def add(self, piece: str, quote, literal: bool) -> None:
+        if self.parts and self.parts[-1][0] == quote:
+            self.parts[-1][1].append(piece)
+        else:
+            self.parts.append((quote, [piece]))
+        self.text.append(piece)
+        self.src.append(piece)
+        self.live.append(("1" if quote is None and not literal else "0") * len(piece))
+        if quote is None:
+            self.bare.append(piece)
+
+    def finish(self, end: int, open_quote: bool) -> Word:
+        word = Word()
+        word.text = "".join(self.text)
+        word.bare = "".join(self.bare)
+        word.live = "".join(self.live)
+        word.parts = [(quote, "".join(pieces)) for quote, pieces in self.parts]
+        word.subs = self.subs
+        word.src = "".join(self.src)
+        word.start, word.end, word.open = self.start, end, open_quote
+        word.escaped = self.escaped
+        return word
+
+
+class _ShellParser:
+    """parse_shell's state: the command and the read position."""
+
+    def __init__(self, command: str, flavor: str, backslash_literal: bool):
+        self.s = command
+        self.i = 0
+        self.bash = flavor == "bash"
+        # The second reading of a Bash command: every backslash is a path
+        # separator, as PowerShell and cmd read one.
+        self.escapes = self.bash and not backslash_literal
+
+    def heredoc_operator(self):
+        """The heredoc whose `<<` ends at s[i], or None when no delimiter word
+        follows."""
+        s, j = self.s, self.i
+        strip = s[j : j + 1] == "-"
+        if strip:
+            j += 1
+        while j < len(s) and s[j] in " \t":
+            j += 1
+        delimiter: list[str] = []
+        quoted = False
+        while j < len(s) and not (s[j].isspace() or s[j] in ";&|<>()"):
+            c = s[j]
+            if c in "'\"":
+                end = s.find(c, j + 1)
+                if end < 0:
+                    return None
+                delimiter.append(s[j + 1 : end])
+                quoted = True
+                j = end + 1
+            elif c == "\\":
+                delimiter.append(s[j + 1 : j + 2])
+                quoted = True
+                j += 2
+            else:
+                delimiter.append(c)
+                j += 1
+        if not delimiter or not "".join(delimiter):
+            return None
+        self.i = min(j, len(s))
+        heredoc = Heredoc()
+        heredoc.quoted, heredoc.strip, heredoc.delimiter = quoted, strip, "".join(delimiter)
+        heredoc.body, heredoc.subs = "", []
+        heredoc.start = heredoc.end = self.i
+        heredoc.terminated = False
+        return heredoc
+
+    def read_bodies(self, heredocs: list, level: int) -> None:
+        """The bodies of `heredocs`, one after another from s[i] (the line
+        after the operator)."""
+        s, n = self.s, len(self.s)
+        for heredoc in heredocs:
+            heredoc.start = self.i
+            body_end = following = n
+            line = self.i
+            while line < n:
+                nl = s.find("\n", line)
+                text = s[line : n if nl < 0 else nl]
+                if text.endswith("\r"):
+                    text = text[:-1]
+                if heredoc.strip:
+                    text = text.lstrip("\t")
+                if text == heredoc.delimiter:
+                    heredoc.terminated = True
+                    body_end = line
+                    following = n if nl < 0 else nl + 1
+                    break
+                if nl < 0:
+                    break
+                line = nl + 1
+            heredoc.body = s[heredoc.start : body_end]
+            heredoc.end = following
+            # Bash runs $(...) and `...` in an unquoted body; quotes there are text.
+            j = heredoc.start
+            while not heredoc.quoted and j < body_end:
+                c = s[j]
+                if c == "\\":
+                    j += 2
+                    continue
+                if (c == "$" and s[j + 1 : j + 2] == "(") or c == "`":
+                    self.i = j + 1 if c == "`" else j + 2
+                    arith = s[self.i : self.i + 1] == "("
+                    heredoc.subs.append(self.script(level + 1, "`" if c == "`" else ")", arith))
+                    j = self.i
+                    continue
+                j += 1
+            self.i = following
+
+    def script(self, level: int, close, arith: bool) -> Script:
+        """One script level: the whole command, or a substitution body ending
+        at `close` (")" or "`"). `arith`: a $(( )) body, where << is a shift."""
+        if level > MAX_DEPTH:
+            raise NestingLimit
+        s, n, bash, escapes = self.s, len(self.s), self.bash, self.escapes
+        tokens: list = []
+        pending: list = []
+        word = None
+        quote = None
+        parens = 0
+
+        def cur() -> _WordBuilder:
+            nonlocal word
+            if word is None:
+                word = _WordBuilder(self.i)
+            return word
+
+        def append(ch: str, literal: bool = False) -> None:
+            cur().add("/" if ch == "\\" else ch, quote, literal)
+
+        def flush() -> None:
+            nonlocal word
+            if word is not None:
+                tokens.append(word.finish(self.i, quote is not None))
+            word = None
+
+        def sub(skip: int, end: str) -> None:
+            is_arith = end == ")" and s[self.i + skip : self.i + skip + 1] == "("
+            builder = cur()
+            self.i += skip
+            body_start = self.i
+            builder.subs.append(self.script(level + 1, end, is_arith))
+            builder.src.append(f"$({s[body_start : max(body_start, self.i - 1)]})")
+
+        def in_quote() -> None:
+            nonlocal quote
+            if s[self.i] == quote:
+                self.i += 1
+                quote = None
+            else:
+                append(s[self.i])
+                self.i += 1
+
+        while self.i < n:
+            i = self.i
+            c = s[i]
+            nxt = s[i + 1] if i + 1 < n else None
+            if quote == "'":
+                in_quote()
+            elif escapes and c == "\\":
+                if nxt == "\n":
+                    self.i += 2  # line continuation
+                elif nxt is None or (quote == '"' and nxt not in '$`"\\'):
+                    append(c)
+                    self.i += 1
+                else:
+                    append(nxt, True)
+                    word.escaped = True
+                    self.i += 2
+            elif close == "`" and c == "`":
+                flush()
+                self.i += 1
+                break
+            elif c == "$" and nxt == "(":
+                sub(2, ")")
+            elif bash and c == "`":
+                sub(1, "`")
+            elif quote == '"':
+                in_quote()
+            elif c in "\"'":
+                quote = c
+                cur()
+                self.i += 1
+            elif close == ")" and c == ")" and parens == 0:
+                flush()
+                self.i += 1
+                break
+            elif c == "\n":
+                flush()
+                tokens.append(";")
+                self.i += 1
+                if pending:
+                    self.read_bodies(pending, level)
+                pending = []
+            elif c in " \t\r":
+                flush()
+                self.i += 1
+            elif c == "#" and word is None:
+                nl = s.find("\n", i)
+                self.i = n if nl < 0 else nl
+            elif c == "$" and nxt == "{":
+                end = s.find("}", i)
+                stop = n if end < 0 else end + 1
+                cur().add(s[i:stop].replace("\\", "/"), quote, True)
+                self.i = stop
+            elif bash and c in "<>" and nxt == "(":
+                # Process substitution: a word of its own (a /dev/fd name).
+                flush()
+                sub(2, ")")
+                flush()
+            elif c in "()":
+                flush()
+                tokens.append(c)
+                parens += 1 if c == "(" else -1
+                self.i += 1
+            elif bash and c in "{}" and not (word is None and (nxt is None or nxt.isspace() or nxt in ";&|()")):
+                # A brace is group syntax only as a word of its own ({ cmd; });
+                # anywhere else it is word text, read by expand_braces.
+                append(c)
+                self.i += 1
+            elif c in _OPERATORS:
+                flush()
+                j = i
+                while j < n and s[j] in _OPERATORS:
+                    j += 1
+                op = s[i:j]
+                self.i = j
+                heredoc = self.heredoc_operator() if bash and not arith and op == "<<" else None
+                if heredoc:
+                    pending.append(heredoc)
+                    tokens.append(heredoc)
+                else:
+                    tokens.append(op)
+            else:
+                append(c)
+                self.i += 1
+        flush()
+        return Script(tokens, bash)
+
+
+def parse_shell(command: str, flavor: str = "bash", depth: int = 0, backslash_literal: bool = False) -> Script:
+    """`command` parsed. Bash: '...' is literal; inside "..." a backslash
+    escapes only $ ` " \\ and a newline, and $(...) and `...` still run;
+    outside quotes \\x is a literal x and a backslash-newline joins lines. A
+    quote left open runs to the end of the command and its text is still
+    read. A newline is the `;` operator, and `#` at a word start begins a
+    comment. With `backslash_literal` every backslash is a path separator
+    (`/`) instead, the reading PowerShell and cmd would give. Raises
+    NestingLimit past MAX_DEPTH."""
+    return _ShellParser(command, flavor, backslash_literal).script(depth, None, False)
+
+
+class Stage:
+    """One pipe stage: its words, redirection targets and heredocs."""
+
+    __slots__ = ("words", "redirs", "heredocs")
+
+    def __init__(self):
+        self.words, self.redirs, self.heredocs = [], [], []
+
+
+def pipelines(script: Script) -> list:
+    """The pipelines of a parsed script, each a list of Stages. Pipelines end
+    at ; && || & newline and at ( ) { } (a group runs its own commands).
+    Empty stages and pipelines are left out."""
+    out = [[Stage()]]
+    pipeline = out[0]
+    stage = pipeline[0]
+    redirect = False
+
+    def begin():
+        nonlocal pipeline, stage
+        pipeline = [Stage()]
+        stage = pipeline[0]
+        out.append(pipeline)
+
+    for token in script.tokens:
+        if isinstance(token, Heredoc):
+            stage.heredocs.append(token)
+        elif isinstance(token, Word):
+            (stage.redirs if redirect else stage.words).append(token)
+            redirect = False
+        elif token in ("|", "|&"):
+            stage = Stage()
+            pipeline.append(stage)
+        elif any(c in token for c in ";(){}") or token in ("&&", "||", "&"):
+            begin()
+            redirect = False
+        elif "<" in token or ">" in token:
+            redirect = True
+    return [p for p in ([st for st in p if st.words or st.redirs or st.heredocs] for p in out) if p]
+
+
+# ---------------------------------------------------------------------------
+# Bash brace expansion
+# ---------------------------------------------------------------------------
+
+_RANGE = re.compile(r"([+-]?\d+|[A-Za-z])\.\.([+-]?\d+|[A-Za-z])(?:\.\.([+-]?\d+))?")
+_NUMBER = re.compile(r"[+-]?\d")
+_PADDED = re.compile(r"[+-]?0\d")
+
+
+def _is_range(body: str) -> bool:
+    """A {x..y[..step]} body: two integers or two letters."""
+    m = _RANGE.fullmatch(body)
+    return bool(m) and bool(_NUMBER.match(m[1])) == bool(_NUMBER.match(m[2]))
+
+
+def _closing_brace(text: str, live: str, p: int) -> int:
+    """The index of the live } closing the live { at `p`, or -1. As in Bash,
+    a depth-0 } closes only after a depth-0 comma or when the body so far is
+    a range; any other depth-0 } is text ({a},b} is the words a} and b)."""
+    depth = commas = 0
+    for j in range(p + 1, len(text)):
+        if live[j] != "1":
+            continue
+        c = text[j]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            if depth:
+                depth -= 1
+            elif commas or ("0" not in live[p + 1 : j] and _is_range(text[p + 1 : j])):
+                return j
+        elif c == "," and not depth:
+            commas += 1
+    return -1
+
+
+def _top_level_commas(text: str, live: str, p: int, q: int) -> list:
+    cuts, depth = [], 0
+    for j in range(p + 1, q):
+        if live[j] != "1":
+            continue
+        if text[j] == "{":
+            depth += 1
+        elif text[j] == "}":
+            depth = max(0, depth - 1)
+        elif text[j] == "," and not depth:
+            cuts.append(j)
+    return cuts
+
+
+def _range_words(body: str):
+    """The words of a {x..y[..step]} body, or None. Counted before built."""
+    if not _is_range(body):
+        return None
+    a, b, inc = _RANGE.fullmatch(body).groups()
+    numeric = bool(_NUMBER.match(a))
+    step = 1 if inc is None else (abs(int(inc)) or 1)  # step 0 is 1
+    x, y = (int(a), int(b)) if numeric else (ord(a), ord(b))
+    count = abs(y - x) // step + 1
+    if count > MAX_BRACE_WORDS:
+        raise BraceOverflow
+    pad = max(len(a.lstrip("+-")), len(b.lstrip("+-"))) if numeric and (_PADDED.match(a) or _PADDED.match(b)) else 0
+    delta = step if y >= x else -step
+    out = []
+    for k in range(count):
+        v = x + k * delta
+        if not numeric:
+            out.append(chr(v))
+        elif pad:
+            out.append(("-" if v < 0 else "") + str(abs(v)).zfill(pad))
+        else:
+            out.append(str(v))
+    return out
+
+
+def _expand_from(text: str, live: str, steps: int) -> list:
+    if steps > MAX_BRACE_STEPS:
+        raise BraceOverflow
+    for p in range(len(text)):
+        if live[p] != "1" or text[p] != "{":
+            continue
+        if p == 0 and text[1:2] == "}" and live[1:2] == "1":
+            continue  # a leading {} is text
+        q = _closing_brace(text, live, p)
+        if q < 0:
+            continue
+        cuts = _top_level_commas(text, live, p, q)
+        if cuts:
+            bounds = [p, *cuts, q]
+            parts = [(text[bounds[k] + 1 : bounds[k + 1]], live[bounds[k] + 1 : bounds[k + 1]]) for k in range(len(bounds) - 1)]
+        else:
+            seq = _range_words(text[p + 1 : q]) if "0" not in live[p + 1 : q] else None
+            if not seq:
+                continue
+            parts = [(v, "0" * len(v)) for v in seq]
+        out: list = []
+        for part, part_live in parts:
+            out.extend(_expand_from(text[:p] + part + text[q + 1 :], live[:p] + part_live + live[q + 1 :], steps + 1))
+            if len(out) > MAX_BRACE_WORDS:
+                raise BraceOverflow
+        return out
+    return [text]
+
+
+def expand_braces(text: str, live: str) -> list:
+    """The words Bash makes of one word by brace expansion: {a,b}, nested
+    lists, prefix and suffix, products, and {x..y[..step]} ranges. A quoted,
+    escaped or ${...} brace (`live` "0"), an unterminated one, {a} and an
+    invalid range stay text. An empty result is dropped unless the word had
+    a literal char. Raises BraceOverflow past MAX_BRACE_WORDS words,
+    MAX_BRACE_STEPS steps or MAX_LIVE_BRACES live braces."""
+    if "{" not in text:
+        return [text] if text else []
+    if sum(1 for j, c in enumerate(text) if c == "{" and live[j] == "1") > MAX_LIVE_BRACES:
+        raise BraceOverflow
+    out = _expand_from(text, live, 0)
+    return out if "0" in live else [w for w in out if w]
+
+
+# The words of heredoc text: a body is text, so only blanks and punctuation split it.
+_BODY_SPLIT = re.compile(r"[\s'\"`;|&<>(){}]+")
+
+
+def output_words(script: Script, level: int, literal=frozenset(), budget=None) -> list:
+    """The words a substitution can print, and so add to the word it sits
+    in: every word in it, in the substitutions nested in it, and in its
+    heredoc bodies (not those in `literal`, which no command receives). With
+    `budget` (a one-item list), Bash words are brace-expanded and the words
+    added are taken from it; past it BraceOverflow."""
+    if level > MAX_DEPTH:
+        raise NestingLimit
+    out: list = []
+    for token in script.tokens:
+        if isinstance(token, str):
+            continue
+        if isinstance(token, Heredoc):
+            if token not in literal:
+                out.extend(w for w in _BODY_SPLIT.split(token.body.replace("\\", "/")) if w)
+            continue
+        if token.text:
+            texts = expand_braces(token.text, token.live) if budget is not None and script.bash else [token.text]
+            if budget is not None:
+                budget[0] -= max(0, len(texts) - 1)
+                if budget[0] < 0:
+                    raise BraceOverflow
+            out.extend(texts)
+        for inner in token.subs:
+            out.extend(output_words(inner, level + 1, literal, budget))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Heredoc bodies no command runs
+# ---------------------------------------------------------------------------
+
+# Words that can open a stage before the command it runs, and the wrappers
+# that run the next word, with the flags of each that take a value.
+_START_KEYWORDS = frozenset({"if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!"})
+_START_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+_START_WRAPPERS = {
+    "sudo": frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-U", "-r", "-t"}),
+    "env": frozenset({"-u", "-C", "-S"}),
+    "time": frozenset({"-f", "-o"}),
+    "nice": frozenset({"-n"}),
+    "nohup": frozenset(),
+}
+# git/gh flags whose value is a message: prose, not a path.
+_PROSE_FLAGS = ("-m", "-am", "--message", "--body", "--title", "--notes")
+
+
+def command_start(words: list) -> int:
+    """The index in `words` (texts of one stage) of the command the stage
+    runs: keywords, VAR=value and wrappers skipped."""
+    i = 0
+    while i < len(words):
+        word = words[i]
+        if word in _START_KEYWORDS or _START_ASSIGNMENT.match(word):
+            i += 1
+            continue
+        value_flags = _START_WRAPPERS.get(command_name(word))
+        if value_flags is None:
+            break
+        i += 1
+        while i < len(words) and (words[i].startswith("-") or _START_ASSIGNMENT.match(words[i])):
+            i += 2 if words[i] in value_flags else 1
+    return i
+
+
+def prose_values(words: list) -> set:
+    """Indexes in `words` (texts of one stage) that hold a git/gh message
+    value: the word after a message flag, or a --flag=<value> word."""
+    start = command_start(words)
+    if start >= len(words) or command_name(words[start]) not in ("git", "gh"):
+        return set()
+    out = set()
+    for k in range(start + 1, len(words)):
+        if words[k] in _PROSE_FLAGS:
+            out.add(k + 1)
+        elif any(f.startswith("--") and words[k].startswith(f + "=") for f in _PROSE_FLAGS):
+            out.add(k)
+    return out
+
+
+def _reads_stdin(args: list, flags: tuple) -> bool:
+    """`args` pass `-` (stdin) to one of `flags`, as `-F -` or `--file=-`."""
+    return any(
+        (a in flags and args[k + 1 : k + 2] == ["-"]) or any(a == f"{f}=-" for f in flags)
+        for k, a in enumerate(args)
+    )
+
+
+def _stores_input(stage: Stage) -> bool:
+    """A stage at the top of the command that stores the text it receives
+    and runs none of it: tee to a file, git commit -F -, gh ... --body-file -."""
+    if any(w.subs for w in (*stage.words, *stage.redirs)):
+        return False
+    words = [w.text for w in stage.words]
+    runner, args = (command_name(words[0]) if words else ""), words[1:]
+    if runner == "tee":
+        return any(a and not a.startswith("-") for a in args)
+    if runner == "git":
+        return "commit" in args and _reads_stdin(args, ("-F", "--file"))
+    if runner == "gh":
+        return _reads_stdin(args, ("-F", "--body-file"))
+    return False
+
+
+def _bare_cat(stage: Stage) -> bool:
+    """A lone `cat` (or `cat -`) with nothing else in the stage."""
+    return (
+        bool(stage.words)
+        and command_name(stage.words[0].text) == "cat"
+        and all(not w.subs and (k == 0 or w.text == "-") for k, w in enumerate(stage.words))
+        and not stage.redirs
+    )
+
+
+def literal_heredocs(script: Script, context: str = "top", out=None) -> set:
+    """The heredocs in a parsed Bash script whose body is literal text that
+    no command runs or turns into arguments: a quoted delimiter, a
+    terminator line, and an inert receiver alone in its pipeline:
+      - at the top of the command: tee to a file, git commit -F -,
+        gh --body-file - (a bare `cat` prints the body, so it is scanned);
+      - in a substitution that is a git/gh message value and holds nothing
+        but that cat: git commit -m "$(cat <<'EOF' ... EOF)".
+    Every other receiver keeps the body scanned."""
+    out = set() if out is None else out
+    found = pipelines(script)
+    for pipeline in found:
+        for stage in pipeline:
+            prose = prose_values([w.text for w in stage.words])
+            for k, w in enumerate(stage.words):
+                for inner in w.subs:
+                    literal_heredocs(inner, "prose" if k in prose else "args", out)
+            for w in stage.redirs:
+                for inner in w.subs:
+                    literal_heredocs(inner, "args", out)
+        if len(pipeline) != 1:
+            continue
+        stage = pipeline[0]
+        inert = _stores_input(stage) if context == "top" else context == "prose" and len(found) == 1 and _bare_cat(stage)
+        if inert:
+            out.update(h for h in stage.heredocs if h.quoted and h.terminated)
+    return out
 
 
 def deny_on_error(guard: str, exc: BaseException) -> None:

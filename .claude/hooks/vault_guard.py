@@ -97,6 +97,7 @@ from collections import namedtuple
 # script. Shared with post_commit_eval.py so both hooks parse .env one way
 # and resolve PRIVATE_VAULT_PATH by the app's rule (src/core/vault_path.py).
 from hook_utils import (
+    PATH_FIELDS,  # which input fields of each tool can name a path
     absolute_path,
     env_file_value,
     env_references,
@@ -385,16 +386,6 @@ def _reaches_vault(tool: str, tool_input: dict, cwd: str, vaults: list[Vault]) -
         elif above_vault(root_forms, vault) and _grep_reaches(pattern, roots, vault):
             return pattern or root
     return None
-
-
-# Which input fields of each tool can name a path.
-PATH_FIELDS = {
-    "Read": ("file_path",),
-    "Edit": ("file_path",),
-    "Write": ("file_path",),
-    "Grep": ("path", "glob"),
-    "Glob": ("path", "pattern"),
-}
 
 
 def evaluate(payload) -> str | None:

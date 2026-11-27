@@ -21,12 +21,11 @@ definition:
     secret_dump_guard.py share (quote state with backslash escapes, command
     substitution, quoted spans, heredocs whose receiver only stores them).
   - run_hook(): the one entry of the three PreToolUse guards (env_guard.py,
-    vault_guard.py, secret_dump_guard.py): stdin, the MAX_COMMAND_CHARS cap
-    on shell commands, InputLimit denies, fail closed (deny_on_error), and
-    the deny() decision on stdout.
-  - SHELL_TOOLS, and MAX_LIVE_BRACES / MAX_BRACE_WORDS for env_guard.py's
-    brace expansion. The cap values match the ember-2-installer guards
-    (.claude/hooks/hook-utils.cjs).
+    vault_guard.py, secret_dump_guard.py): stdin, the input caps
+    (MAX_COMMAND_CHARS, MAX_PATH_CHARS), InputLimit denies, fail closed
+    (deny_on_error), and the deny() decision on stdout.
+  - SHELL_TOOLS, PATH_FIELDS, and MAX_LIVE_BRACES / MAX_BRACE_WORDS for
+    env_guard.py's brace expansion.
 
 Deliberately pathlib- and typing-free: PreToolUse guards start a fresh
 Python process on every tool call, and those imports cost ~11 ms each time.
@@ -358,20 +357,38 @@ GIT_OR_GH = re.compile(r"^\s*(?:git|gh)\s")
 _PROSE_FLAG = re.compile(r"(?:^|\s)" + PROSE_FLAG_NAMES + r"(?:\s+|=)\"?$")
 _STDIN_FILE_FLAGS = {"git": ("-F", "--file"), "gh": ("-F", "--body-file")}
 _ASSIGNMENT_WORD = re.compile(r"[A-Za-z_]\w*=")
+# Characters of command text before a heredoc's `<<` that _heredoc_is_inert
+# will read; past this the heredoc counts as not inert.
+_MAX_HEREDOC_COMMAND = 1024
 
 
-def _last_separator(text: str) -> int:
-    """Index of the last unquoted `; & | ( newline` or backtick in `text`, or
-    -1. A `$(` inside double quotes opens a fresh unquoted context, so the
-    commit idiom `-m "$(cat <<'EOF'` finds the `(`."""
-    sep, quote, i = -1, "", 0
+def _separator_index(text: str) -> tuple[list[int], list[str]]:
+    """(seps, quotes) for every p in 0..len(text): seps[p] is the index of
+    the last unquoted `; & | ( newline` or backtick in text[:p], or -1, and
+    quotes[p] the quote state ("", "'" or '"') at the end of text[:p]. A
+    `$(` inside double quotes opens a fresh unquoted context, so the commit
+    idiom `-m "$(cat <<'EOF'` finds the `(`.
+
+    One pass for all prefixes: drop_inert_heredocs needs the separator before
+    every heredoc, and one scan per heredoc was quadratic (2730 heredocs in
+    16 K characters took 6 s). A step is one character or a two-character
+    escape (shell_step), and only the `$(` check looks past a cut, so each
+    prefix gets exactly what a scan of that prefix alone would give
+    (tests/test_hook_input_caps.py compares the two)."""
+    n = len(text)
+    seps = [-1] * (n + 1)
+    quotes = [""] * (n + 1)
+    sep, quote, i, depth = -1, "", 0, 0
     resume: list[tuple[int, str]] = []  # (paren depth, quote) to return to at the matching `)`
-    depth = 0
-    while i < len(text):
+    while i < n:
         ch = text[i]
         if quote == '"' and ch == "$" and text[i + 1 : i + 2] == "(":
+            # A prefix cut between `$` and `(` sees a plain `$`.
+            seps[i + 1], quotes[i + 1] = sep, quote
             resume.append((depth, quote))
-            depth, quote, sep, i = 0, "", i + 1, i + 2
+            depth, quote, sep = 0, "", i + 1
+            seps[i + 2], quotes[i + 2] = sep, quote
+            i += 2
             continue
         size, after = shell_step(text, i, quote)
         if not quote and not after:
@@ -384,32 +401,44 @@ def _last_separator(text: str) -> int:
                 sep = i
             elif ch == "(":
                 depth, sep = depth + 1, i
+        for k in range(i + 1, i + size + 1):
+            seps[k], quotes[k] = sep, after
         quote, i = after, i + size
-    return sep
+    return seps, quotes
 
 
-def _heredoc_is_inert(before: str, rest: str) -> bool:
-    """True when the receiver of a heredoc only stores or displays its body:
-    `cat` whose output is not used as words, `tee`, `git ... -F -` and
-    `gh ... --body-file -`. `before` is the text preceding `<<`, `rest` the
-    remainder of its line. Every other receiver (a shell, an interpreter,
-    sqlite3, xargs, versioned python3.12, ...) may run the body, and so does
-    a pipe on the line."""
-    if _PIPED.search(rest):
+def _heredoc_is_inert(text: str, start: int, rest: str, index) -> bool:
+    """True when the receiver of the heredoc whose `<<` is at text[start]
+    only stores or displays its body: `cat` whose output is not used as
+    words, `tee`, `git ... -F -` and `gh ... --body-file -`. `rest` is the
+    remainder of its line, `index` is _separator_index(text). Every other
+    receiver (a shell, an interpreter, sqlite3, xargs, versioned python3.12,
+    ...) may run the body, and so does a pipe on the line."""
+    seps, quotes = index
+    # A `<<` inside quotes is text, not a heredoc, and its segment holds an
+    # unclosed quote that shlex rejects below; answering here keeps the
+    # cost of each heredoc off the length of the text before it.
+    if quotes[start] or _PIPED.search(rest):
         return False
-    sep = _last_separator(before)
-    in_substitution = sep >= 0 and (before[sep] == "`" or (before[sep] == "(" and before[sep - 1 : sep] == "$"))
+    sep = seps[start]
+    # The command before `<<` is short in real use. A longer one keeps its
+    # body scanned (the conservative answer), which bounds the shlex work per
+    # heredoc: several heredocs sharing one quote-balanced segment re-split
+    # all of it each time (`<<A'\nA\n'` x 1820 took 5 s).
+    if start - sep - 1 > _MAX_HEREDOC_COMMAND:
+        return False
+    in_substitution = sep >= 0 and (text[sep] == "`" or (text[sep] == "(" and text[sep - 1 : sep] == "$"))
     if in_substitution:
         # The output of $(...) becomes words of the outer command: prose is
         # the one use that does not run or read anything.
-        outer = before[: sep - 1] if before[sep] == "(" else before[:sep]
-        segment = outer[_last_separator(outer) + 1 :]
+        outer_end = sep - 1 if text[sep] == "(" else sep
+        segment = text[seps[outer_end] + 1 : outer_end]
         if not (GIT_OR_GH.match(segment) and _PROSE_FLAG.search(segment)):
             return False
     try:
         import shlex
 
-        words = [w for w in shlex.split(before[sep + 1 :]) if not _ASSIGNMENT_WORD.match(w)]
+        words = [w for w in shlex.split(text[sep + 1 : start]) if not _ASSIGNMENT_WORD.match(w)]
     except ValueError:
         return False
     name = command_name(words[0]) if words else ""
@@ -436,12 +465,15 @@ def drop_inert_heredocs(text: str, literal_only: bool = True) -> str:
     text = text.replace("\r\n", "\n")
     out: list[str] = []
     pos = 0
+    index = None  # _separator_index(text), built on the first heredoc
     while True:
         match = _HEREDOC_START.search(text, pos)
         if not match:
             break
         end = re.compile(rf"^[ \t]*{match['tag']}[ \t]*$", re.MULTILINE).search(text, match.end())
-        if not end or not _heredoc_is_inert(text[: match.start()], match["rest"]):
+        if end and index is None:
+            index = _separator_index(text)
+        if not end or not _heredoc_is_inert(text, match.start(), match["rest"], index):
             out.append(text[pos : match.end()])
             pos = match.end()
             continue
@@ -469,17 +501,29 @@ def deny_on_error(guard: str, exc: BaseException) -> None:
     )
 
 
-# Input caps, the same values as the ember-2-installer guards
-# (.claude/hooks/hook-utils.cjs). They deny input that could run a guard
-# past its 5 s timeout, with a reason that names the limit.
+# Input caps. They deny input that could run a guard past its 5 s timeout,
+# with a reason that names the limit. MAX_COMMAND_CHARS, MAX_LIVE_BRACES and
+# MAX_BRACE_WORDS are the values of the ember-2-installer guards (that
+# repo's .claude/hooks/hook-utils.cjs).
 # A Bash or PowerShell command longer than this is denied before parsing.
 MAX_COMMAND_CHARS = 16384
+# A path or pattern field (PATH_FIELDS) longer than this is denied before it
+# is checked: brace expansion and path resolution grow with its length.
+MAX_PATH_CHARS = 4096
 # Brace expansion (env_guard.py): `{` in one pattern, and alternatives one
-# pattern expands to. Expansion is exponential in the brace sets:
-# `.e{a,b}` x 21 took 5.5 s before the cap.
+# pattern expands to. Expansion is exponential in the brace sets.
 MAX_LIVE_BRACES = 256
 MAX_BRACE_WORDS = 256
 SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
+# The path and pattern fields the guards check, by tool (vault_guard.py
+# checks exactly these; env_guard.py maps the same fields to its checks).
+PATH_FIELDS = {
+    "Read": ("file_path",),
+    "Edit": ("file_path",),
+    "Write": ("file_path",),
+    "Grep": ("path", "glob"),
+    "Glob": ("path", "pattern"),
+}
 
 
 class InputLimit(Exception):
@@ -488,36 +532,42 @@ class InputLimit(Exception):
     the input (which can hold a vault path)."""
 
 
-def _over_length(guard: str, payload) -> str | None:
-    """The deny reason when `payload` is a Bash or PowerShell call whose
-    command is longer than MAX_COMMAND_CHARS, else None."""
-    if not isinstance(payload, dict) or payload.get("tool_name") not in SHELL_TOOLS:
-        return None
-    tool_input = payload.get("tool_input")
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    if not isinstance(command, str) or len(command) <= MAX_COMMAND_CHARS:
-        return None
-    return (
-        f"{guard}: this command is {len(command)} characters, over the "
-        f"{MAX_COMMAND_CHARS} limit, so it is denied rather than checked "
-        f"against a timeout. Split it into smaller commands or write the "
-        f"content to a file. See .claude/hooks/{guard}.py."
-    )
+def _check_caps(guard: str, payload) -> None:
+    """Raise InputLimit when a shell command is longer than
+    MAX_COMMAND_CHARS or a path or pattern field is longer than
+    MAX_PATH_CHARS. The reason holds only lengths and limits."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("tool_input"), dict):
+        return
+    tool, tool_input = payload.get("tool_name"), payload["tool_input"]
+    if tool in SHELL_TOOLS:
+        fields, limit, what = ("command",), MAX_COMMAND_CHARS, "command"
+    else:
+        fields, limit, what = PATH_FIELDS.get(tool, ()), MAX_PATH_CHARS, "path or pattern"
+    for field in fields:
+        value = tool_input.get(field)
+        if isinstance(value, str) and len(value) > limit:
+            raise InputLimit(
+                f"{guard}: this {what} is {len(value)} characters, over the "
+                f"{limit} limit, so it is denied rather than checked against "
+                f"the hook timeout. Split it into smaller calls or write the "
+                f"content to a file. See .claude/hooks/hook_utils.py."
+            )
 
 
 def run_hook(guard: str, evaluate, reason) -> None:
-    """One guard run: hook JSON on stdin, a deny on stdout or nothing.
-    Never raises, so the exit code is always 0.
+    """One guard run: hook JSON on stdin, a deny on stdout or nothing. Exit
+    code 0, or 2 (which blocks the call) when the deny cannot be written.
 
       - An unparseable payload is allowed, with a note on stderr naming
         only the exception type. The harness always sends JSON, and denying
         here would block every call and lock the session out of fixing the
         hook.
-      - A shell command over MAX_COMMAND_CHARS is denied before `evaluate`.
+      - Input past a cap (_check_caps) is denied before `evaluate`.
       - `evaluate(payload)` returns a target (deny with `reason(target)`)
         or None (allow). An InputLimit it raises is a deny with its message.
-      - Any other exception in `evaluate` or `reason` is a deny naming the
-        guard and the exception type (deny_on_error).
+      - Anything else raised in the check, SystemExit and KeyboardInterrupt
+        included, is a deny naming the guard and the exception type
+        (deny_on_error).
 
     Fail closed in two layers: this gives a named reason, and the guards'
     settings entries set "onFailure": "block", which covers what no code
@@ -529,18 +579,22 @@ def run_hook(guard: str, evaluate, reason) -> None:
     except Exception as exc:
         print(f"[{guard}] unparseable hook payload, allowing ({type(exc).__name__})", file=sys.stderr)
         return
-    message = _over_length(guard, payload)
-    if message is None:
+    try:
         try:
+            _check_caps(guard, payload)
             target = evaluate(payload)
             message = reason(target) if target else None
         except InputLimit as exc:
             message = str(exc)
-        except Exception as exc:
+        except BaseException as exc:
             deny_on_error(guard, exc)
             return
-    if message:
-        deny(message)
+        if message:
+            deny(message)
+    except BaseException:
+        # The deny could not be written (a closed or failing stdout): exit
+        # code 2 is the harness's own block signal.
+        sys.exit(2)
 
 
 def deny(reason: str) -> None:

@@ -1,10 +1,10 @@
 """
 tests/test_hook_input_caps.py
 
-The PreToolUse guards fail closed and cap their input, matching the
+The PreToolUse guards fail closed and bound their work, matching the
 ember-2-installer guards. The rationale lives with the caps in
-.claude/hooks/hook_utils.py (MAX_COMMAND_CHARS, MAX_LIVE_BRACES,
-MAX_BRACE_WORDS, run_hook).
+.claude/hooks/hook_utils.py (MAX_COMMAND_CHARS, MAX_PATH_CHARS,
+MAX_LIVE_BRACES, MAX_BRACE_WORDS, run_hook).
 
 Each cap is tested on both sides of its boundary, so every deny has its
 allow control in the same test. Most cases drive each guard's main()
@@ -17,24 +17,32 @@ from __future__ import annotations
 
 import io
 import json
+import random
+import sys
 import time
+import tracemalloc
 from pathlib import Path
 
 import pytest
 
 from tests.conftest import REPO_ROOT, hook_output, hook_payload, load_hook, run_hook
 
-hook_utils = load_hook("hook_utils.py")
+GUARDS = {name: load_hook(name) for name in ("env_guard.py", "vault_guard.py", "secret_dump_guard.py")}
+# The hook_utils module the guards imported, not a second copy.
+hook_utils = sys.modules["hook_utils"]
 MAX_COMMAND_CHARS = hook_utils.MAX_COMMAND_CHARS
+MAX_PATH_CHARS = hook_utils.MAX_PATH_CHARS
 MAX_LIVE_BRACES = hook_utils.MAX_LIVE_BRACES
 MAX_BRACE_WORDS = hook_utils.MAX_BRACE_WORDS
-GUARDS = {name: load_hook(name) for name in ("env_guard.py", "vault_guard.py", "secret_dump_guard.py")}
 SHELL_GUARDS = ("env_guard.py", "secret_dump_guard.py")
 
 
-def test_caps_match_the_installer_guards():
-    """The values are pinned to ember-2-installer/.claude/hooks/hook-utils.cjs."""
+def test_caps_keep_their_pinned_values():
+    """Pinned values. The command and brace caps were copied from the
+    ember-2-installer guards (that repo's .claude/hooks/hook-utils.cjs); a
+    change on either side is a deliberate edit to both."""
     assert (MAX_COMMAND_CHARS, MAX_LIVE_BRACES, MAX_BRACE_WORDS) == (16384, 256, 256)
+    assert MAX_PATH_CHARS == 4096
 
 
 @pytest.fixture
@@ -65,7 +73,32 @@ def test_command_length_cap(guard, tool, length, denied, decide, hermetic_hook_p
     out = decide(guard, payload)
     assert (out is not None) == denied
     if denied:
-        assert f"over the {MAX_COMMAND_CHARS} limit" in out["permissionDecisionReason"]
+        reason = out["permissionDecisionReason"]
+        assert f"over the {MAX_COMMAND_CHARS} limit" in reason
+        assert ".claude/hooks/hook_utils.py" in reason
+
+
+# ---------------------------------------------------------------------------
+# Over-length path and pattern fields
+# ---------------------------------------------------------------------------
+
+_PATH_GUARDS = ("env_guard.py", "vault_guard.py")
+
+
+@pytest.mark.parametrize("guard", _PATH_GUARDS)
+@pytest.mark.parametrize("tool, field", [
+    (tool, field) for tool, fields in sorted(hook_utils.PATH_FIELDS.items()) for field in fields
+])
+@pytest.mark.parametrize("length, denied", [(MAX_PATH_CHARS, False), (MAX_PATH_CHARS + 1, True)])
+def test_path_field_length_cap(guard, tool, field, length, denied, decide, hermetic_hook_project):
+    value = "s/" + "a" * (length - 2)
+    extra = {"pattern": "x"} if tool == "Grep" else {}
+    out = decide(guard, hook_payload(tool, cwd=str(hermetic_hook_project), **{field: value, **extra}))
+    assert (out is not None) == denied
+    if denied:
+        reason = out["permissionDecisionReason"]
+        assert f"over the {MAX_PATH_CHARS} limit" in reason
+        assert value not in reason  # lengths only, never the input
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +143,34 @@ def test_brace_caps(pattern, denied, decide, hermetic_hook_project):
             reason = out["permissionDecisionReason"]
             assert f"{MAX_BRACE_WORDS} alternatives" in reason
             assert f"{MAX_LIVE_BRACES} braces" in reason
+
+
+@pytest.mark.parametrize("pattern", [
+    "{" + "a," * 100000 + "a}" + "x" * 100000,  # one wide set, long tail
+    "{" + "a," * 300 + "a}" + "x" * 100000,      # just over the budget
+], ids=["wide-set", "set-over-budget"])
+def test_brace_set_is_counted_before_its_strings_are_built(pattern):
+    """One set with N alternatives and a tail of M characters used to build
+    N strings of M characters before the cap could fire (20 K x 20 K: 399
+    MB). The set is now counted against the budget first."""
+    env_guard = GUARDS["env_guard.py"]
+    tracemalloc.start()
+    start = time.perf_counter()
+    try:
+        with pytest.raises(env_guard.BraceLimit):
+            env_guard._expand_braces(pattern)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert time.perf_counter() - start < 1.0
+    assert peak < 50 * 1024 * 1024, f"peak {peak / 1e6:.1f} MB"
+
+
+def test_brace_set_at_the_budget_expands():
+    """Control for the test above: a set of exactly MAX_BRACE_WORDS
+    alternatives is expanded, not refused."""
+    pattern = "{" + "a," * (MAX_BRACE_WORDS - 1) + "a}" + "x" * 1000
+    assert len(GUARDS["env_guard.py"]._expand_braces(pattern)) == MAX_BRACE_WORDS
 
 
 def test_brace_set_that_names_env_is_still_denied_as_env(decide, hermetic_hook_project):
@@ -176,6 +237,121 @@ def test_hook_process_denies_an_exponential_brace_pattern_before_the_timeout(her
     elapsed = time.perf_counter() - start
     assert out is not None and out["permissionDecision"] == "deny"
     assert elapsed < 3.0, f"took {elapsed:.2f} s"
+
+
+# ---------------------------------------------------------------------------
+# Heredoc scanning stays linear
+# ---------------------------------------------------------------------------
+
+def _last_separator_reference(text: str) -> int:
+    """The per-prefix scan drop_inert_heredocs used to run once per heredoc
+    (hook_utils._last_separator before the separator index), kept as the
+    reference the index must reproduce."""
+    sep, quote, i, depth = -1, "", 0, 0
+    resume: list[tuple[int, str]] = []
+    while i < len(text):
+        ch = text[i]
+        if quote == '"' and ch == "$" and text[i + 1 : i + 2] == "(":
+            resume.append((depth, quote))
+            depth, quote, sep, i = 0, "", i + 1, i + 2
+            continue
+        size, after = hook_utils.shell_step(text, i, quote)
+        if not quote and not after:
+            if ch == ")":
+                if depth:
+                    depth -= 1
+                elif resume:
+                    depth, after = resume.pop()
+            elif ch in (";", "&", "|", "`", "\n"):
+                sep = i
+            elif ch == "(":
+                depth, sep = depth + 1, i
+        quote, i = after, i + size
+    return sep
+
+
+def test_separator_index_matches_a_scan_of_every_prefix():
+    rng = random.Random(318)
+    alphabet = "ab <$()\\'\"`;&|\n"
+    texts = ['-m "$(cat <<\'EOF\'\nx\nEOF\n)"', 'a "$(b)" c; d', "x\\'y 'z' \"$(", "\\"]
+    texts += ["".join(rng.choice(alphabet) for _ in range(rng.randint(0, 40))) for _ in range(2000)]
+    for text in texts:
+        seps, _ = hook_utils._separator_index(text)
+        assert len(seps) == len(text) + 1
+        for p in range(len(text) + 1):
+            assert seps[p] == _last_separator_reference(text[:p]), (text, p)
+
+
+_HEREDOC_FLOODS = {
+    "dense": "<<A\nA\n" * 2730,
+    "open-quote": "'" + "<<A\nA\n" * 2729,
+    "balanced-quote": "<<A'\nA\n'" * 1820,
+}
+
+
+@pytest.mark.parametrize("guard", SHELL_GUARDS)
+@pytest.mark.parametrize("name", sorted(_HEREDOC_FLOODS))
+def test_hook_process_checks_a_heredoc_flood_in_time(guard, name, hermetic_hook_project):
+    """Under MAX_COMMAND_CHARS, these took 4-8 s (past the 5 s hook timeout)
+    when each heredoc rescanned the text before it."""
+    command = _HEREDOC_FLOODS[name]
+    assert len(command) <= MAX_COMMAND_CHARS
+    payload = hook_payload("Bash", cwd=str(hermetic_hook_project), command=command)
+    start = time.perf_counter()
+    result = run_hook(guard, payload, cwd=hermetic_hook_project)
+    elapsed = time.perf_counter() - start
+    assert result.returncode == 0 and "could not complete" not in result.stdout
+    assert elapsed < 3.0, f"took {elapsed:.2f} s"
+
+
+_ENV_NAME = "." + "env"
+
+
+@pytest.mark.parametrize("words, denied", [(1, False), (600, True)], ids=["short", "over-bound"])
+def test_heredoc_after_a_long_command_keeps_its_body_scanned(words, denied, decide, hermetic_hook_project):
+    """An inert heredoc body is dropped before the .env check. Past
+    hook_utils._MAX_HEREDOC_COMMAND characters of command before `<<`, the
+    heredoc counts as not inert, so its body is still checked."""
+    command = "cat " + "a " * words + f"<<'EOF'\nsee {_ENV_NAME}\nEOF\n"
+    out = decide("env_guard.py", hook_payload("Bash", cwd=str(hermetic_hook_project), command=command))
+    assert (out is not None) == denied
+
+
+# ---------------------------------------------------------------------------
+# run_hook fails closed on anything raised
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("exc", [SystemExit(1), KeyboardInterrupt(), RuntimeError("boom")],
+                         ids=["SystemExit", "KeyboardInterrupt", "RuntimeError"])
+def test_run_hook_denies_whatever_the_check_raises(exc, monkeypatch, capsys):
+    def evaluate(_payload):
+        raise exc
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(hook_payload("Read", file_path="src/a.py"))))
+    hook_utils.run_hook("test_guard", evaluate, str)  # must not raise
+    out = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    assert type(exc).__name__ in out["permissionDecisionReason"]
+    assert "boom" not in out["permissionDecisionReason"]
+
+
+def test_run_hook_allows_when_the_check_passes(monkeypatch, capsys):
+    """Control for the test above: the same call with a passing check."""
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(hook_payload("Read", file_path="src/a.py"))))
+    hook_utils.run_hook("test_guard", lambda _payload: None, str)
+    assert capsys.readouterr().out == ""
+
+
+def test_run_hook_exits_2_when_the_deny_cannot_be_written(monkeypatch):
+    """Exit code 2 is the harness's own block signal."""
+    def broken_deny(_reason):
+        raise OSError("stdout closed")
+
+    monkeypatch.setattr(hook_utils, "deny", broken_deny)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(hook_payload("Read", file_path="src/a.py"))))
+    with pytest.raises(SystemExit) as raised:
+        hook_utils.run_hook("test_guard", lambda _payload: "target", str)
+    assert raised.value.code == 2
 
 
 # ---------------------------------------------------------------------------

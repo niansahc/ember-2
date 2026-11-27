@@ -115,8 +115,9 @@ class BraceLimit(InputLimit):
 
 def _expand_braces(pattern: str) -> list[str]:
     """The alternatives of `pattern`'s brace sets, in no particular order.
-    Raises BraceLimit past the caps; alternatives are counted as they are
-    made, so the work stays bounded."""
+    Raises BraceLimit past the caps. Every pending string yields at least one
+    alternative, so a set is counted against the budget before its strings
+    are built: at most MAX_BRACE_WORDS strings exist at any time."""
     if pattern.count("{") > MAX_LIVE_BRACES:
         raise BraceLimit
     todo, out = [pattern], []
@@ -124,11 +125,11 @@ def _expand_braces(pattern: str) -> list[str]:
         word = todo.pop()
         brace = _BRACE.match(word)
         if not brace:
-            if len(out) >= MAX_BRACE_WORDS:
-                raise BraceLimit
             out.append(word)
             continue
         head, alts, tail = brace.groups()
+        if len(out) + len(todo) + alts.count(",") + 1 > MAX_BRACE_WORDS:
+            raise BraceLimit
         todo += [f"{head}{alt}{tail}" for alt in alts.split(",")]
     return out
 

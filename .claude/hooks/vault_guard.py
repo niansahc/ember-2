@@ -98,12 +98,11 @@ from collections import namedtuple
 # and resolve PRIVATE_VAULT_PATH by the app's rule (src/core/vault_path.py).
 from hook_utils import (
     absolute_path,
-    deny,
-    deny_on_error,
     env_file_value,
     env_references,
     project_dir,
     project_path,
+    run_hook,
 )
 
 _VAULT_DIR = "private_vault"
@@ -424,26 +423,19 @@ def evaluate(payload) -> str | None:
     return None
 
 
+def reason(target: str) -> str:
+    return (
+        f"Vault Privacy Rule: vault content (private_vault/ or the "
+        f"configured PRIVATE_VAULT_PATH) may not be read, listed, "
+        f"or edited (matched '{target}'). If this is a search, "
+        f"scope `path` to a subdirectory or anchor the pattern "
+        f"(e.g. src/**/*.py). See CLAUDE.md and "
+        f".claude/hooks/vault_guard.py."
+    )
+
+
 def main():
-    try:
-        payload = json.load(sys.stdin)
-    except Exception:
-        return
-    try:
-        target = evaluate(payload)
-    except Exception as exc:
-        # Fail closed: a crash exits non-zero and the harness runs the call.
-        deny_on_error("vault_guard", exc)
-        return
-    if target:
-        deny(
-            f"Vault Privacy Rule: vault content (private_vault/ or the "
-            f"configured PRIVATE_VAULT_PATH) may not be read, listed, "
-            f"or edited (matched '{target}'). If this is a search, "
-            f"scope `path` to a subdirectory or anchor the pattern "
-            f"(e.g. src/**/*.py). See CLAUDE.md and "
-            f".claude/hooks/vault_guard.py."
-        )
+    run_hook("vault_guard", evaluate, reason)
 
 
 if __name__ == "__main__":

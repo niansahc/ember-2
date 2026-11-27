@@ -20,23 +20,22 @@ definition:
     drop_inert_heredocs(): the shell scanner env_guard.py and
     secret_dump_guard.py share (quote state with backslash escapes, command
     substitution, quoted spans, heredocs whose receiver only stores them).
-  - deny(): the PreToolUse deny decision the harness reads from stdout
-    (env_guard.py, vault_guard.py, secret_dump_guard.py).
-  - deny_on_error(): the fail-closed deny the guards emit when their own
-    check raises.
-  - MAX_COMMAND_CHARS / deny_if_over_cap(): one length cap for shell
-    commands (env_guard.py, secret_dump_guard.py), and MAX_LIVE_BRACES /
-    MAX_BRACE_WORDS for env_guard.py's brace expansion. The values match
-    the ember-2-installer guards (.claude/hooks/hook-utils.cjs).
+  - run_hook(): the one entry of the three PreToolUse guards (env_guard.py,
+    vault_guard.py, secret_dump_guard.py): stdin, the MAX_COMMAND_CHARS cap
+    on shell commands, InputLimit denies, fail closed (deny_on_error), and
+    the deny() decision on stdout.
+  - SHELL_TOOLS, and MAX_LIVE_BRACES / MAX_BRACE_WORDS for env_guard.py's
+    brace expansion. The cap values match the ember-2-installer guards
+    (.claude/hooks/hook-utils.cjs).
 
 Deliberately pathlib- and typing-free: PreToolUse guards start a fresh
 Python process on every tool call, and those imports cost ~11 ms each time.
 """
 
-import hashlib
 import json
 import os
 import re
+import sys
 
 
 # The checkout this file lives in (.claude/hooks/hook_utils.py -> root).
@@ -244,6 +243,10 @@ def env_references(env_path) -> str:
     if not names:
         return ""
     pairs = json.dumps([[name, os.environ.get(name)] for name in sorted(names)])
+    # Imported here: only vault_guard's cache key needs it, and loading
+    # OpenSSL costs ~6 ms on every guard call.
+    import hashlib
+
     return hashlib.sha256(pairs.encode("utf-8")).hexdigest()
 
 
@@ -456,10 +459,9 @@ def drop_inert_heredocs(text: str, literal_only: bool = True) -> str:
 
 
 def deny_on_error(guard: str, exc: BaseException) -> None:
-    """Fail closed: deny when a guard cannot finish its check. A crashed
-    hook exits non-zero, which the harness treats as a non-blocking error
-    and lets the tool call run. Only the exception type is printed; its
-    message can carry the configured vault path."""
+    """Fail closed: deny when a guard cannot finish its check, naming the
+    guard and the exception type. Only the type is printed; its message can
+    carry the configured vault path."""
     deny(
         f"{guard} could not complete its check "
         f"({type(exc).__name__}); denying rather than allowing an "
@@ -467,10 +469,9 @@ def deny_on_error(guard: str, exc: BaseException) -> None:
     )
 
 
-# Input caps. The guards' settings entries block on hook failure
-# ("onFailure": "block"), so a guard that runs past its 5 s timeout denies
-# the call; these caps deny the input that could take that long before it is
-# checked, with a reason naming the limit instead of a timeout.
+# Input caps, the same values as the ember-2-installer guards
+# (.claude/hooks/hook-utils.cjs). They deny input that could run a guard
+# past its 5 s timeout, with a reason that names the limit.
 # A Bash or PowerShell command longer than this is denied before parsing.
 MAX_COMMAND_CHARS = 16384
 # Brace expansion (env_guard.py): `{` in one pattern, and alternatives one
@@ -478,25 +479,68 @@ MAX_COMMAND_CHARS = 16384
 # `.e{a,b}` x 21 took 5.5 s before the cap.
 MAX_LIVE_BRACES = 256
 MAX_BRACE_WORDS = 256
-_SHELL_TOOLS = ("Bash", "PowerShell")
+SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
 
 
-def deny_if_over_cap(guard: str, payload) -> bool:
-    """Deny, and return True, when `payload` is a Bash or PowerShell call
-    whose command is longer than MAX_COMMAND_CHARS."""
-    if not isinstance(payload, dict) or payload.get("tool_name") not in _SHELL_TOOLS:
-        return False
+class InputLimit(Exception):
+    """Input past a guard's cap. run_hook denies with str(exc) as the reason,
+    so the message must be fixed text written by the guard, never built from
+    the input (which can hold a vault path)."""
+
+
+def _over_length(guard: str, payload) -> str | None:
+    """The deny reason when `payload` is a Bash or PowerShell call whose
+    command is longer than MAX_COMMAND_CHARS, else None."""
+    if not isinstance(payload, dict) or payload.get("tool_name") not in SHELL_TOOLS:
+        return None
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if not isinstance(command, str) or len(command) <= MAX_COMMAND_CHARS:
-        return False
-    deny(
+        return None
+    return (
         f"{guard}: this command is {len(command)} characters, over the "
         f"{MAX_COMMAND_CHARS} limit, so it is denied rather than checked "
         f"against a timeout. Split it into smaller commands or write the "
         f"content to a file. See .claude/hooks/{guard}.py."
     )
-    return True
+
+
+def run_hook(guard: str, evaluate, reason) -> None:
+    """One guard run: hook JSON on stdin, a deny on stdout or nothing.
+    Never raises, so the exit code is always 0.
+
+      - An unparseable payload is allowed, with a note on stderr naming
+        only the exception type. The harness always sends JSON, and denying
+        here would block every call and lock the session out of fixing the
+        hook.
+      - A shell command over MAX_COMMAND_CHARS is denied before `evaluate`.
+      - `evaluate(payload)` returns a target (deny with `reason(target)`)
+        or None (allow). An InputLimit it raises is a deny with its message.
+      - Any other exception in `evaluate` or `reason` is a deny naming the
+        guard and the exception type (deny_on_error).
+
+    Fail closed in two layers: this gives a named reason, and the guards'
+    settings entries set "onFailure": "block", which covers what no code
+    here can catch (a timeout, an interpreter that does not start, an
+    import error before this runs).
+    """
+    try:
+        payload = json.load(sys.stdin)
+    except Exception as exc:
+        print(f"[{guard}] unparseable hook payload, allowing ({type(exc).__name__})", file=sys.stderr)
+        return
+    message = _over_length(guard, payload)
+    if message is None:
+        try:
+            target = evaluate(payload)
+            message = reason(target) if target else None
+        except InputLimit as exc:
+            message = str(exc)
+        except Exception as exc:
+            deny_on_error(guard, exc)
+            return
+    if message:
+        deny(message)
 
 
 def deny(reason: str) -> None:

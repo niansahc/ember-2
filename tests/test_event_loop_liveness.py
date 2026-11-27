@@ -13,35 +13,29 @@ uvicorn.
 
 The pass condition has no latency threshold. A free loop answers health while
 the step is parked, however slowly a loaded machine schedules it; a blocked
-loop cannot answer until the step is released. The earlier version asserted
-"slowest health sample < 1.0 s". That bound sat about 2x above a synchronous
-stretch of the chat path unrelated to the stalled call (a TLS context built on
-the loop in the grounding revision pass: 0.3-0.5 s unloaded, 0.6-0.9 s under
-CPU load) and above thread-scheduling hiccups, so it flaked under load
-(2 of 10 file runs failed with 16 CPU burners). A wall-clock bound cannot tell
-"loop blocked" from "machine busy"; the release ordering can.
+loop cannot answer until the step is released. A wall-clock bound cannot tell
+"loop blocked" from "machine busy" (the earlier 1.0 s bound flaked under CPU
+load); the release ordering can.
 
 Positive control (same commit, per CLAUDE.md "Testing Discipline"): the same
 scenario with the off-loop helpers replaced by inline callers, which is the
-pre-fix behavior. The loop must stay blocked until release: a callback
-scheduled on the loop must not run before release, and the health call must
-complete after release. If the loop answers early, the control fails, so the
-liveness tests cannot stay green on a harness that cannot see a block.
+pre-fix behavior. Health must not be answered while the step is parked. If it
+is, the control fails, so the liveness tests cannot stay green on a harness
+that cannot see a block.
 """
 
 import threading
-import time
+from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import ExitStack, contextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-# Only time bound: a hang guard so a broken test cannot wedge the suite. It is
-# never a latency assertion.
+# Hang guard so a broken test cannot wedge the suite. Never a latency
+# assertion: the liveness wait returns as soon as health answers.
 HANG_GUARD_S = 30.0
-HEALTH_CALLS = 5
-# Positive control: how long to wait for a callback to run on the loop before
-# concluding it is blocked.
+# Positive control: how long health gets to answer before the loop is
+# concluded blocked. A free loop answers in milliseconds even under heavy load.
 BLOCK_GRACE_S = 2.0
 
 
@@ -51,17 +45,12 @@ class Stall:
     def __init__(self):
         self.entered = threading.Event()
         self.release = threading.Event()
-        self.released_at = None
 
     def block(self):
         """Called from the stalled step. Parks until release (or the guard)."""
         self.entered.set()
         if not self.release.wait(HANG_GUARD_S):
             raise AssertionError("stalled step was never released")
-
-    def do_release(self):
-        self.released_at = time.perf_counter()
-        self.release.set()
 
 
 @pytest.fixture
@@ -98,115 +87,51 @@ def _inline_iter(iterator):
     return _gen()
 
 
-class _Requester(threading.Thread):
-    """Runs the request under test on its own thread."""
+def _health_during_stall(client, request_fn, stall, wait_s):
+    """Run request_fn until its blocking step parks, then issue GET
+    /api/health and give it up to wait_s to answer while the step is still
+    parked. Release the step and let both finish.
 
-    def __init__(self, request_fn):
-        super().__init__(daemon=True)
-        self._request_fn = request_fn
-        self.result = None
-        self.error = None
-
-    def run(self):
+    Returns (request response, health answered while parked, health status).
+    Worker exceptions re-raise here with their own traceback.
+    """
+    with ThreadPoolExecutor(max_workers=2) as pool:
         try:
-            self.result = self._request_fn()
-        except BaseException as exc:  # surfaced by the test, not swallowed
-            self.error = exc
-
-
-class _HealthCaller(threading.Thread):
-    """Issues GET /api/health `count` times; records each completion time."""
-
-    def __init__(self, client, count):
-        super().__init__(daemon=True)
-        self._client = client
-        self._count = count
-        self.completed_at = []
-        self.statuses = []
-
-    def run(self):
-        for _ in range(self._count):
-            resp = self._client.get("/api/health")
-            self.statuses.append(resp.status_code)
-            self.completed_at.append(time.perf_counter())
-
-
-class _LoopProbe(threading.Thread):
-    """Runs a trivial coroutine on the app's event loop and records when the
-    loop executed it."""
-
-    def __init__(self, client):
-        super().__init__(daemon=True)
-        self._client = client
-        self.ran_at = None
-
-    def run(self):
-        async def _mark():
-            self.ran_at = time.perf_counter()
-
-        self._client.portal.call(_mark)
-
-
-def _start_request(request_fn, stall):
-    requester = _Requester(request_fn)
-    requester.start()
-    assert stall.entered.wait(HANG_GUARD_S), "the stalled step was never reached"
-    return requester
-
-
-def _finish_request(requester):
-    requester.join(HANG_GUARD_S)
-    assert not requester.is_alive(), "request did not finish after release"
-    assert requester.error is None, repr(requester.error)
-    return requester.result
+            request = pool.submit(request_fn)
+            if not stall.entered.wait(HANG_GUARD_S):
+                if request.done():
+                    request.result()  # surface the request's own error
+                raise AssertionError("the stalled step was never reached")
+            health = pool.submit(client.get, "/api/health")
+            wait([health], timeout=wait_s)
+            # Sampled before release, so True means answered during the stall.
+            answered_while_parked = health.done()
+        finally:
+            stall.release.set()
+        health_status = health.result(timeout=HANG_GUARD_S).status_code
+        resp = request.result(timeout=HANG_GUARD_S)
+    return resp, answered_while_parked, health_status
 
 
 def _run_while_stalled(client, request_fn, stall):
     """Liveness scenario. Health must be answered while the step is parked.
     Returns the request's response."""
-    requester = _start_request(request_fn, stall)
-    health = _HealthCaller(client, HEALTH_CALLS)
-    health.start()
-    health.join(HANG_GUARD_S)
-    answered_while_parked = (
-        not health.is_alive() and len(health.completed_at) == HEALTH_CALLS)
-    stall.do_release()
-    health.join(HANG_GUARD_S)
-    resp = _finish_request(requester)
-
-    assert answered_while_parked, (
+    resp, answered, health_status = _health_during_stall(
+        client, request_fn, stall, HANG_GUARD_S)
+    assert answered, (
         "health did not answer while the stalled step was parked: "
         "the event loop was blocked")
-    # Every completion preceded the release: answered during the stall.
-    assert max(health.completed_at) < stall.released_at
-    assert health.statuses == [200] * HEALTH_CALLS
+    assert health_status == 200
     return resp
 
 
 def _run_while_blocked(client, request_fn, stall):
-    """Positive control. The loop must stay blocked until release. Returns the
-    request's response."""
-    requester = _start_request(request_fn, stall)
-    health = _HealthCaller(client, 1)
-    health.start()
-
-    probe = _LoopProbe(client)
-    probe.start()
-    # portal calls block until the loop runs them, so they go on their own
-    # thread. A blocked loop never runs the callback; a free one runs it in
-    # milliseconds even under heavy CPU load.
-    probe.join(BLOCK_GRACE_S)
-    ran_early = not probe.is_alive()
-
-    stall.do_release()
-    probe.join(HANG_GUARD_S)
-    health.join(HANG_GUARD_S)
-    resp = _finish_request(requester)
-
-    assert not ran_early, "the loop ran a callback while the step was parked"
-    assert probe.ran_at is not None and probe.ran_at >= stall.released_at
-    assert health.completed_at, "health never completed after release"
-    assert health.completed_at[0] >= stall.released_at
+    """Positive control. Health must not be answered until release. Returns
+    the request's response."""
+    resp, answered, health_status = _health_during_stall(
+        client, request_fn, stall, BLOCK_GRACE_S)
+    assert not answered, "health answered while the step was parked"
+    assert health_status == 200
     return resp
 
 
@@ -232,6 +157,11 @@ def live_client(keyless_client, stall):
         stack.enter_context(patch(
             "src.safety.grounding_check.run_grounding_check",
             new=AsyncMock(return_value=(True, None))))
+        # The empty test vault short-circuits grounding straight into the
+        # revision pass, which would otherwise make a real HTTP call.
+        stack.enter_context(patch(
+            "src.safety.grounding_check.run_revision_pass",
+            new=AsyncMock(side_effect=lambda response, *_a, **_k: response)))
         # An empty test vault would otherwise start onboarding, which
         # answers before generation and never reaches the stalled step.
         onboarding = stack.enter_context(

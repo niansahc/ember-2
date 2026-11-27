@@ -1,4 +1,40 @@
 {
+  "permissions": {
+    "deny": [
+      "Bash(git commit *--no-v*)",
+      "Bash(git * commit *--no-v*)",
+      "Bash(git commit -n*)",
+      "Bash(git commit * -n*)",
+      "Bash(git commit -an*)",
+      "Bash(git commit * -an*)",
+      "Bash(git commit -sn*)",
+      "Bash(git commit * -sn*)",
+      "Bash(git commit -vn*)",
+      "Bash(git commit * -vn*)",
+      "Bash(git commit -qn*)",
+      "Bash(git commit * -qn*)",
+      "Bash(git commit -en*)",
+      "Bash(git commit * -en*)",
+      "Bash(git * commit -n*)",
+      "Bash(git * commit * -n*)",
+      "PowerShell(git commit *--no-v*)",
+      "PowerShell(git * commit *--no-v*)",
+      "PowerShell(git commit -n*)",
+      "PowerShell(git commit * -n*)",
+      "PowerShell(git commit -an*)",
+      "PowerShell(git commit * -an*)",
+      "PowerShell(git commit -sn*)",
+      "PowerShell(git commit * -sn*)",
+      "PowerShell(git commit -vn*)",
+      "PowerShell(git commit * -vn*)",
+      "PowerShell(git commit -qn*)",
+      "PowerShell(git commit * -qn*)",
+      "PowerShell(git commit -en*)",
+      "PowerShell(git commit * -en*)",
+      "PowerShell(git * commit -n*)",
+      "PowerShell(git * commit * -n*)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {

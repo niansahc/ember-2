@@ -373,6 +373,12 @@ Eval regressions require running the eval twice before concluding a 3+ point dro
 - After making backend changes that affect the running API, restart it automatically — kill existing uvicorn process(es) and start a new one. Do not ask. The human should not have to manage API restarts during development.
 - After making UI changes, rebuild (npm run build in ember-2-ui) and copy dist/ to ember-2/ui/ automatically. Do not ask.
 
+## Doing the work
+- If the correct fix is blocked, larger than scoped, or a test looks wrong, stop and report it. Do not substitute a workaround, partial fix, or fallback that hides the failure.
+- Tests verify correctness; they do not define the solution. Do not edit a test to make it pass unless the prompt names it.
+- Comments: match the surrounding file's density. Comment only a non-obvious why. No comments that restate the code, narrate the change, or explain a shortcut.
+- Reports state: commands run with their results; what was not verified; shortcuts or deviations from the plan; what is incomplete. A claim without a run behind it is labelled unverified.
+
 ## Manager Prompt Format
 
 Prompts from manager follow compact format:

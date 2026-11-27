@@ -90,6 +90,7 @@ def _both(path, monkeypatch) -> tuple:
 @pytest.fixture(autouse=True)
 def _clean_environment(monkeypatch):
     monkeypatch.delenv("NOPE_UNSET_X", raising=False)
+    monkeypatch.delenv("NOPE_UNSET_Y", raising=False)
     monkeypatch.delenv("LATER", raising=False)
     monkeypatch.delenv(KEY, raising=False)
 
@@ -109,6 +110,8 @@ def test_fallback_reference_to_a_process_variable(tmp_path, monkeypatch):
     path.write_text(f"{KEY}=${{PROBE_HOME_DIR}}/vault\n", encoding="utf-8")
     official, fallback = _both(path, monkeypatch)
     assert official == fallback == "/home/probe/vault"
+    # A resolved reference is no residue for the strict read either.
+    assert hook_utils.env_file_value(KEY, str(path), strict=True) == official
 
 
 def test_process_variable_beats_file_value_in_a_reference(tmp_path, monkeypatch):
@@ -276,23 +279,16 @@ def test_strict_read_raises_when_the_path_is_not_a_readable_file(tmp_path):
     [f"{KEY}=/data/${{UNTERMINATED\n", f"{KEY}=${{NOPE_UNSET_X:-${{NOPE_UNSET_Y}}}}/vault\n"],
     ids=["unterminated", "nested-default"],
 )
-def test_strict_read_raises_on_a_reference_left_in_the_value(tmp_path, monkeypatch, text):
+def test_strict_read_raises_on_a_reference_left_in_the_value(tmp_path, text):
     """python-dotenv leaves these `${` in the value; strict refuses to return
-    it. Control: the default returns the value as python-dotenv gives it."""
-    monkeypatch.delenv("NOPE_UNSET_Y", raising=False)
+    it. Controls: the default returns the value as python-dotenv gives it,
+    and test_fallback_reference_to_a_process_variable reads a resolved one
+    strictly."""
     path = tmp_path / "probe.env"
     path.write_text(text, encoding="utf-8")
     with pytest.raises(ValueError):
         hook_utils.env_file_value(KEY, str(path), strict=True)
     assert "${" in hook_utils.env_file_value(KEY, str(path))
-
-
-def test_strict_read_returns_a_resolved_reference(tmp_path, monkeypatch):
-    """Control for the raise above: a reference that resolves is no residue."""
-    monkeypatch.setenv("PROBE_HOME_DIR", "/home/probe")
-    path = tmp_path / "probe.env"
-    path.write_text(f"{KEY}=${{PROBE_HOME_DIR}}/vault\n", encoding="utf-8")
-    assert hook_utils.env_file_value(KEY, str(path), strict=True) == "/home/probe/vault"
 
 
 def test_references_digest_hides_values_and_follows_them(tmp_path, monkeypatch):

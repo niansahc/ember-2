@@ -127,53 +127,41 @@ def env_file_value(key: str, env_path, strict: bool = False) -> str | None:
 
     The value comes from python-dotenv (the venv has it), with a minimal
     KEY=VALUE parser as a fallback so a hook never hard-depends on an
-    import being present.
+    import being present. The fallback raises ValueError on an unresolved
+    reference itself, in either mode.
     """
-    text = None
-    if strict:
-        try:
-            with open(env_path, encoding="utf-8") as handle:
-                text = handle.read()
-        except (FileNotFoundError, NotADirectoryError):
-            return None
-    value = _dotenv_value(key, env_path, text)
-    if value is _NO_DOTENV:
-        if text is None:
-            try:
-                with open(env_path, encoding="utf-8-sig") as handle:
-                    text = handle.read()
-            except OSError:
-                return None
-        value = _fallback_value(key, text.lstrip("\ufeff").splitlines())
+    try:
+        with open(env_path, encoding="utf-8-sig") as handle:
+            text = handle.read()
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError:
+        if strict:
+            raise
+        return None
+    try:
+        value = _dotenv_value(key, text)
+    except Exception:
+        return _fallback_value(key, text.splitlines())
     if strict and value and "${" in value:
         raise ValueError("unresolved reference in .env value")
     return value
 
 
-# _dotenv_value's answer when python-dotenv is not importable or fails.
-_NO_DOTENV = object()
+def _dotenv_value(key: str, text: str) -> str | None:
+    """`key` as python-dotenv reads it from the file's text. Raises when
+    python-dotenv is not importable or fails."""
+    import io
 
+    from dotenv.main import DotEnv
 
-def _dotenv_value(key: str, env_path, text):
-    """`key` as python-dotenv reads it, from `text` when given, else from
-    the file; _NO_DOTENV when python-dotenv cannot answer."""
-    try:
-        import io
-
-        from dotenv.main import DotEnv
-
-        # override=False is how the app loads this file (src/core/config.py:
-        # load_dotenv's default): in a `${VAR}` reference the process
-        # environment wins over the file's own keys. dotenv_values() uses
-        # override=True, the reverse, and would point the guards at another
-        # directory whenever the two define the same name.
-        if text is None:
-            dotenv = DotEnv(env_path, encoding="utf-8", interpolate=True, override=False)
-        else:
-            dotenv = DotEnv(None, stream=io.StringIO(text), interpolate=True, override=False)
-        return (dotenv.dict().get(key) or "").strip() or None
-    except Exception:
-        return _NO_DOTENV
+    # override=False is how the app loads this file (src/core/config.py:
+    # load_dotenv's default): in a `${VAR}` reference the process
+    # environment wins over the file's own keys. dotenv_values() uses
+    # override=True, the reverse, and would point the guards at another
+    # directory whenever the two define the same name.
+    values = DotEnv(None, stream=io.StringIO(text), interpolate=True, override=False).dict()
+    return (values.get(key) or "").strip() or None
 
 
 # One `[export] KEY = value` line, and python-dotenv's `${NAME}` /

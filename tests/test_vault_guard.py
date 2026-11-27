@@ -608,66 +608,48 @@ def test_a_configured_vault_that_does_not_exist_is_just_absent(hermetic_hook_pro
 
 
 # --- a .env that cannot be read, or a value left unresolved, is a deny -----
-# Parity with ember-2-installer vault-guard.cjs envFileValue: the configured
-# vault is unknown, so no call is checked against it, and both guards deny.
+# See hook_utils.env_file_value (strict).
 
-def _read_src(project) -> dict:
-    return hook_payload("Read", cwd=str(project), file_path="src/a.py")
-
-
-def _cat_src(project) -> dict:
-    return hook_payload("Bash", cwd=str(project), command="cat src/a.py")
-
-
-def _decision(result: subprocess.CompletedProcess) -> str:
-    output = hook_output(result)
-    return output["permissionDecision"] if output else "allow"
+def _both_guards(c) -> tuple:
+    """(vault_guard, secret_dump_guard) decisions for an ordinary call in
+    the project: a Read of src/a.py, and `cat src/a.py`."""
+    read = _run(_config_payload(CONFIG_ALLOW["read-src"], c))
+    cat = run_hook("secret_dump_guard.py", hook_payload("Bash", cwd=str(c.project), command="cat src/a.py"))
+    return tuple((hook_output(r) or {}).get("permissionDecision", "allow") for r in (read, cat))
 
 
-def test_an_env_file_that_cannot_be_read_is_a_deny(configured_vault):
-    """A .env that exists but cannot be opened (a directory here, which open()
-    refuses on every platform) is not "no key"."""
+# (setup, the exception vault_dirs raises)
+BROKEN_ENV = {
+    # Exists but cannot be opened: open() refuses a directory on every platform.
+    "unreadable": (lambda c, env: env.mkdir(), OSError),
+    "unterminated": (lambda c, env: env.write_text(f"PRIVATE_VAULT_PATH={c.outside.as_posix()}/${{x\n"), ValueError),
+    "nested-default": (lambda c, env: env.write_text("PRIVATE_VAULT_PATH=${NOPE_UNSET_X:-${NOPE_UNSET_Y}}/v\n"), ValueError),
+}
+
+
+@pytest.mark.parametrize("case", BROKEN_ENV)
+def test_an_env_the_guards_cannot_resolve_is_a_deny(configured_vault, monkeypatch, case):
+    monkeypatch.delenv("NOPE_UNSET_X", raising=False)
+    monkeypatch.delenv("NOPE_UNSET_Y", raising=False)
+    setup, raised = BROKEN_ENV[case]
     env = configured_vault.project / ".env"
     env.unlink()
-    env.mkdir()
-    with pytest.raises(OSError):
+    setup(configured_vault, env)
+    with pytest.raises(raised):
         guard.vault_dirs()
-    assert _decision(_run(_read_src(configured_vault.project))) == "deny"
-    assert _decision(run_hook("secret_dump_guard.py", _cat_src(configured_vault.project))) == "deny"
+    assert _both_guards(configured_vault) == ("deny", "deny")
     assert not _cache_file(configured_vault.project).exists()
 
 
 @pytest.mark.parametrize("env_text", [None, "OTHER_KEY=1\n"], ids=["no-env-file", "no-key"])
 def test_an_absent_env_file_or_key_is_still_allowed(configured_vault, env_text):
-    """Control: the same calls with no .env, or a readable one without the
-    key, are allowed (only the in-repo rules apply)."""
+    """Control: no .env, or a readable one without the key, is no vault."""
     env = configured_vault.project / ".env"
     env.unlink()
     if env_text is not None:
         env.write_text(env_text, encoding="utf-8")
     assert guard.vault_dirs() == []
-    assert _decision(_run(_read_src(configured_vault.project))) == "allow"
-    assert _decision(run_hook("secret_dump_guard.py", _cat_src(configured_vault.project))) == "allow"
-
-
-UNRESOLVED = {
-    "unterminated": lambda c: f"PRIVATE_VAULT_PATH={c.outside.as_posix()}/${{{HOOK_VAULT_NAME}\n",
-    "nested-default": lambda c: "PRIVATE_VAULT_PATH=${NOPE_UNSET_X:-${NOPE_UNSET_Y}}/vault\n",
-}
-
-
-@pytest.mark.parametrize("case", sorted(UNRESOLVED))
-def test_a_value_left_holding_a_reference_is_a_deny(configured_vault, monkeypatch, case):
-    """python-dotenv leaves an unterminated or nested `${` in the value; no
-    directory is guessed from it."""
-    monkeypatch.delenv("NOPE_UNSET_X", raising=False)
-    monkeypatch.delenv("NOPE_UNSET_Y", raising=False)
-    (configured_vault.project / ".env").write_text(UNRESOLVED[case](configured_vault), encoding="utf-8")
-    with pytest.raises(ValueError):
-        guard.vault_dirs()
-    assert _decision(_run(_read_src(configured_vault.project))) == "deny"
-    assert _decision(run_hook("secret_dump_guard.py", _cat_src(configured_vault.project))) == "deny"
-    assert not _cache_file(configured_vault.project).exists()
+    assert _both_guards(configured_vault) == ("allow", "allow")
 
 
 def test_a_value_whose_reference_resolves_is_used(configured_vault, monkeypatch):
@@ -677,9 +659,8 @@ def test_a_value_whose_reference_resolves_is_used(configured_vault, monkeypatch)
     (configured_vault.project / ".env").write_text(
         f"PRIVATE_VAULT_PATH=${{PROBE_VAULT_ROOT}}/{HOOK_VAULT_NAME}\n", encoding="utf-8"
     )
-    assert _decision(_run(_read_src(configured_vault.project))) == "allow"
-    assert _decision(run_hook("secret_dump_guard.py", _cat_src(configured_vault.project))) == "allow"
-    assert _decision(_run(_config_payload(CONFIG_DENY["read-relative"], configured_vault))) == "deny"
+    assert _both_guards(configured_vault) == ("allow", "allow")
+    assert hook_output(_run(_config_payload(CONFIG_DENY["read-relative"], configured_vault)))["permissionDecision"] == "deny"
 
 
 # Installer lean-review finding 5 does not apply: Python's fnmatch drops only

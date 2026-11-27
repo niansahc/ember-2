@@ -388,14 +388,16 @@ _HEREDOC_START = re.compile(
     r"(?<!<)<<-?[ \t]*(?P<q>['\"]?)(?P<tag>[A-Za-z_]\w*)(?P=q)(?P<rest>[^\n]*)\n"
 )
 _PIPED = re.compile(r"(?<!\|)\|(?!\|)")
-# The value of a message flag of a git or gh command is prose.
 # The one list of message flags whose value is prose on a git or gh command
-# (env_guard.py's prose rule imports it too), and the git/gh command test.
-PROSE_FLAG_NAMES = r"(?:-a?m|--message|--body|--title|--notes)"
+# (env_guard.py's prose rule and the parser's prose_values use it), as words
+# and as a regex alternation, and the git/gh command test.
+PROSE_FLAGS = ("-m", "-am", "--message", "--body", "--title", "--notes")
+PROSE_FLAG_NAMES = "(?:" + "|".join(PROSE_FLAGS) + ")"
 GIT_OR_GH = re.compile(r"^\s*(?:git|gh)\s")
 _PROSE_FLAG = re.compile(r"(?:^|\s)" + PROSE_FLAG_NAMES + r"(?:\s+|=)\"?$")
+# The flags of git and gh that read a message from a file (`-` is stdin).
 _STDIN_FILE_FLAGS = {"git": ("-F", "--file"), "gh": ("-F", "--body-file")}
-_ASSIGNMENT_WORD = re.compile(r"[A-Za-z_]\w*=")
+_ASSIGNMENT_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 # Characters of command text before a heredoc's `<<` that _heredoc_is_inert
 # will read; past this the heredoc counts as not inert.
 _MAX_HEREDOC_COMMAND = 1024
@@ -916,12 +918,17 @@ def _is_range(body: str) -> bool:
     return bool(m) and bool(_NUMBER.match(m[1])) == bool(_NUMBER.match(m[2]))
 
 
+# The characters brace expansion reads; every other character is skipped.
+_BRACE_CHARS = re.compile(r"[{},]")
+
+
 def _closing_brace(text: str, live: str, p: int) -> int:
     """The index of the live } closing the live { at `p`, or -1. As in Bash,
     a depth-0 } closes only after a depth-0 comma or when the body so far is
     a range; any other depth-0 } is text ({a},b} is the words a} and b)."""
     depth = commas = 0
-    for j in range(p + 1, len(text)):
+    for match in _BRACE_CHARS.finditer(text, p + 1):
+        j = match.start()
         if live[j] != "1":
             continue
         c = text[j]
@@ -932,21 +939,22 @@ def _closing_brace(text: str, live: str, p: int) -> int:
                 depth -= 1
             elif commas or ("0" not in live[p + 1 : j] and _is_range(text[p + 1 : j])):
                 return j
-        elif c == "," and not depth:
+        elif not depth:
             commas += 1
     return -1
 
 
 def _top_level_commas(text: str, live: str, p: int, q: int) -> list:
     cuts, depth = [], 0
-    for j in range(p + 1, q):
+    for match in _BRACE_CHARS.finditer(text, p + 1, q):
+        j = match.start()
         if live[j] != "1":
             continue
         if text[j] == "{":
             depth += 1
         elif text[j] == "}":
             depth = max(0, depth - 1)
-        elif text[j] == "," and not depth:
+        elif not depth:
             cuts.append(j)
     return cuts
 
@@ -976,33 +984,45 @@ def _range_words(body: str):
     return out
 
 
+def _brace_parts(text: str, live: str, p: int):
+    """(q, [(text, live)]) for the brace expression whose { is at `p` and
+    whose } is at q, or None when that { opens no expression."""
+    if live[p] != "1" or (p == 0 and text[1:2] == "}" and live[1:2] == "1"):
+        return None  # quoted or escaped, or a leading {} (text)
+    q = _closing_brace(text, live, p)
+    if q < 0:
+        return None
+    cuts = _top_level_commas(text, live, p, q)
+    if cuts:
+        bounds = [p, *cuts, q]
+        return q, [(text[bounds[k] + 1 : bounds[k + 1]], live[bounds[k] + 1 : bounds[k + 1]]) for k in range(len(bounds) - 1)]
+    seq = _range_words(text[p + 1 : q]) if "0" not in live[p + 1 : q] else None
+    return (q, [(v, "0" * len(v)) for v in seq]) if seq else None
+
+
 def _expand_from(text: str, live: str, steps: int) -> list:
     if steps > MAX_BRACE_STEPS:
         raise BraceOverflow
-    for p in range(len(text)):
-        if live[p] != "1" or text[p] != "{":
-            continue
-        if p == 0 and text[1:2] == "}" and live[1:2] == "1":
-            continue  # a leading {} is text
-        q = _closing_brace(text, live, p)
-        if q < 0:
-            continue
-        cuts = _top_level_commas(text, live, p, q)
-        if cuts:
-            bounds = [p, *cuts, q]
-            parts = [(text[bounds[k] + 1 : bounds[k + 1]], live[bounds[k] + 1 : bounds[k + 1]]) for k in range(len(bounds) - 1)]
-        else:
-            seq = _range_words(text[p + 1 : q]) if "0" not in live[p + 1 : q] else None
-            if not seq:
-                continue
-            parts = [(v, "0" * len(v)) for v in seq]
-        out: list = []
-        for part, part_live in parts:
-            out.extend(_expand_from(text[:p] + part + text[q + 1 :], live[:p] + part_live + live[q + 1 :], steps + 1))
-            if len(out) > MAX_BRACE_WORDS:
-                raise BraceOverflow
-        return out
+    p = text.find("{")
+    while p >= 0:
+        found = _brace_parts(text, live, p)
+        if found:
+            q, parts = found
+            out: list = []
+            for part, part_live in parts:
+                out.extend(_expand_from(text[:p] + part + text[q + 1 :], live[:p] + part_live + live[q + 1 :], steps + 1))
+                if len(out) > MAX_BRACE_WORDS:
+                    raise BraceOverflow
+            return out
+        p = text.find("{", p + 1)
     return [text]
+
+
+# expand_braces results by (text, live), BraceOverflow as _OVERFLOW: a word is
+# expanded for the stage that holds it and again for the words its
+# substitution prints, and once more in the second reading.
+_EXPANSIONS: dict = {}
+_OVERFLOW = object()
 
 
 def expand_braces(text: str, live: str) -> list:
@@ -1014,10 +1034,21 @@ def expand_braces(text: str, live: str) -> list:
     MAX_BRACE_STEPS steps or MAX_LIVE_BRACES live braces."""
     if "{" not in text:
         return [text] if text else []
-    if sum(1 for j, c in enumerate(text) if c == "{" and live[j] == "1") > MAX_LIVE_BRACES:
+    key = (text, live)
+    found = _EXPANSIONS.get(key)
+    if found is None:
+        live_braces = sum(1 for m in re.finditer(r"\{", text) if live[m.start()] == "1")
+        try:
+            if live_braces > MAX_LIVE_BRACES:
+                raise BraceOverflow
+            out = _expand_from(text, live, 0)
+            found = tuple(out if "0" in live else [w for w in out if w])
+        except BraceOverflow:
+            found = _OVERFLOW
+        _EXPANSIONS[key] = found
+    if found is _OVERFLOW:
         raise BraceOverflow
-    out = _expand_from(text, live, 0)
-    return out if "0" in live else [w for w in out if w]
+    return list(found)
 
 
 # The words of heredoc text: a body is text, so only blanks and punctuation split it.
@@ -1059,7 +1090,6 @@ def output_words(script: Script, level: int, literal=frozenset(), budget=None) -
 # Words that can open a stage before the command it runs, and the wrappers
 # that run the next word, with the flags of each that take a value.
 _START_KEYWORDS = frozenset({"if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!"})
-_START_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _START_WRAPPERS = {
     "sudo": frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-U", "-r", "-t"}),
     "env": frozenset({"-u", "-C", "-S"}),
@@ -1067,24 +1097,23 @@ _START_WRAPPERS = {
     "nice": frozenset({"-n"}),
     "nohup": frozenset(),
 }
-# git/gh flags whose value is a message: prose, not a path.
-_PROSE_FLAGS = ("-m", "-am", "--message", "--body", "--title", "--notes")
 
 
 def command_start(words: list) -> int:
     """The index in `words` (texts of one stage) of the command the stage
-    runs: keywords, VAR=value and wrappers skipped."""
+    runs: keywords, VAR=value and wrappers skipped (the installer's list;
+    secret_dump_guard._core adds command/exec/builtin)."""
     i = 0
     while i < len(words):
         word = words[i]
-        if word in _START_KEYWORDS or _START_ASSIGNMENT.match(word):
+        if word in _START_KEYWORDS or _ASSIGNMENT_WORD.match(word):
             i += 1
             continue
         value_flags = _START_WRAPPERS.get(command_name(word))
         if value_flags is None:
             break
         i += 1
-        while i < len(words) and (words[i].startswith("-") or _START_ASSIGNMENT.match(words[i])):
+        while i < len(words) and (words[i].startswith("-") or _ASSIGNMENT_WORD.match(words[i])):
             i += 2 if words[i] in value_flags else 1
     return i
 
@@ -1097,9 +1126,9 @@ def prose_values(words: list) -> set:
         return set()
     out = set()
     for k in range(start + 1, len(words)):
-        if words[k] in _PROSE_FLAGS:
+        if words[k] in PROSE_FLAGS:
             out.add(k + 1)
-        elif any(f.startswith("--") and words[k].startswith(f + "=") for f in _PROSE_FLAGS):
+        elif any(f.startswith("--") and words[k].startswith(f + "=") for f in PROSE_FLAGS):
             out.add(k)
     return out
 
@@ -1121,11 +1150,9 @@ def _stores_input(stage: Stage) -> bool:
     runner, args = (command_name(words[0]) if words else ""), words[1:]
     if runner == "tee":
         return any(a and not a.startswith("-") for a in args)
-    if runner == "git":
-        return "commit" in args and _reads_stdin(args, ("-F", "--file"))
-    if runner == "gh":
-        return _reads_stdin(args, ("-F", "--body-file"))
-    return False
+    if runner not in _STDIN_FILE_FLAGS or (runner == "git" and "commit" not in args):
+        return False
+    return _reads_stdin(args, _STDIN_FILE_FLAGS[runner])
 
 
 def _bare_cat(stage: Stage) -> bool:

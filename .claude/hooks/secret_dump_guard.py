@@ -119,12 +119,12 @@ from hook_utils import (
     MAX_BRACE_STAGE,
     MAX_BRACE_STEPS,
     MAX_BRACE_WORDS,
+    MAX_DEPTH,
     MAX_LIVE_BRACES,
     BraceOverflow,
     NestingLimit,
     absolute_path,
     command_name,
-    command_start,
     expand_braces,
     literal_heredocs,
     output_words,
@@ -176,9 +176,6 @@ _LIST_UTILITIES = frozenset({
     "wc",
 })
 
-# shlex punctuation runs that are redirections or grouping, not words.
-_PUNCTUATION = frozenset("();<>|&")
-
 # Directory changes tracked across the pipelines of one command line.
 _CD = frozenset({"cd", "chdir", "pushd", "set-location", "sl", "push-location"})
 
@@ -215,12 +212,12 @@ _PS_SHELL_VALUE = frozenset({
 # wsl flags that take the next word as a value; `--` and -e/--exec end the flags.
 _WSL_VALUE = frozenset({"-d", "--distribution", "-u", "--user", "--cd", "--shell-type"})
 _SHELL_C_FLAG = re.compile(r"-[a-zA-Z]*c[a-zA-Z]*")
-_MAX_DEPTH = 8
 
 
 class _NestedTooDeep(str):
-    """The match reported when a command nests past _MAX_DEPTH. A type of its
-    own: a command word that reads "nested command" is an ordinary match."""
+    """The match reported when a command nests past hook_utils.MAX_DEPTH. A
+    type of its own: a command word that reads "nested command" is an
+    ordinary match."""
 
 
 _NESTED = _NestedTooDeep("nested command")
@@ -264,12 +261,37 @@ _SELECT_VALUES = (
 _TREE_VALUE = frozenset({"-L", "-P", "-I", "-o", "-H", "--filelimit", "--charset"})
 
 
-class _TooDeep(Exception):
-    """Command substitution or a nested shell goes deeper than _MAX_DEPTH."""
+class _Token(str):
+    """A stage word, with the parsed hook_utils.Word it came from (`word`;
+    None for a word a substitution prints): the rules read its text, the
+    adapter its source and its escapes."""
+
+    word = None
 
 
-class _Redir(str):
+class _Redir(_Token):
     """A word that is the target of a redirection (`> x`, `< x`)."""
+
+
+def _token(text: str, word, cls=_Token) -> _Token:
+    token = cls(text)
+    token.word = word
+    return token
+
+
+def _source(token: str) -> str:
+    """What a nested shell receives for `token`: the word as written, with
+    its substitutions as $(body), unless brace expansion changed it."""
+    word = getattr(token, "word", None)
+    return word.src if word is not None and token == word.text else token
+
+
+def _escaped(token: str) -> bool:
+    """`token` held a Bash backslash escape (`C:\\x` read as `C:x`). The
+    reading with every backslash a separator has the same word as a path,
+    so this one is not taken for a missing search root (_recursive_roots)."""
+    word = getattr(token, "word", None)
+    return word is not None and word.escaped
 
 
 # ---------------------------------------------------------------------------
@@ -287,33 +309,27 @@ _BRACES = _BraceTooBig("brace expansion")
 class _TooManyWords(Exception):
     """A stage whose brace expansion is past the caps cannot be checked."""
 
+
 # Splits a printed word into loose pieces as well (`$(echo a,private_vault/x)`,
 # `--file=private_vault/x`): over-reading only adds candidates.
 _LOOSE = re.compile("[\\s\"'`;|&<>(){}=,$]+")
 
 
-class _Escaped(str):
-    """A word that held a Bash backslash escape (`C:\\x` read as `C:x`). The
-    reading with every backslash a separator has the same word as a path,
-    so this one is not taken for a missing search root (_recursive_roots)."""
-
-
-def _spread(words: list, bash: bool) -> tuple:
-    """(texts, overflowed) for a list of parsed words after Bash brace
-    expansion; past a cap the texts stay as written. A word with a
+def _spread(words: list, bash: bool, cls=_Token) -> tuple:
+    """(tokens, overflowed) for a list of parsed words after Bash brace
+    expansion; past a cap the words stay as written. A word with a
     substitution is never empty: the substitution is its value."""
-    def mark(w, text):
-        return _Escaped(text) if w.escaped else text
-
-    if not bash:
-        return [w.text for w in words], False
-    try:
-        texts = []
-        for w in words:
-            texts.extend(mark(w, t) for t in (expand_braces(w.text, w.live) or ([""] if w.subs else [])))
-        return texts, False
-    except BraceOverflow:
-        return [mark(w, w.text) for w in words], True
+    if bash:
+        try:
+            expanded = [
+                _token(text, w, cls)
+                for w in words
+                for text in (expand_braces(w.text, w.live) or ([""] if w.subs else []))
+            ]
+            return expanded, False
+        except BraceOverflow:
+            pass
+    return [_token(w.text, w, cls) for w in words], bash
 
 
 def _printed(words: list, level: int, literal, bash: bool) -> tuple:
@@ -336,35 +352,27 @@ def _printed(words: list, level: int, literal, bash: bool) -> tuple:
 
 
 def _stage_words(stage, level: int, literal, bash: bool) -> tuple:
-    """(tokens, sources, overflowed) for one parsed stage. `tokens`: the
-    words after brace expansion, then the redirection targets (_Redir),
-    then the words its substitutions print. `sources`: the same list with
-    each word's substitutions put back as $(body), for a nested shell's
-    command line. `overflowed`: (words, redirection targets) past a brace
-    cap; then they stay as written."""
+    """(tokens, overflowed) for one parsed stage: the words after brace
+    expansion, the redirection targets (_Redir), then the words its
+    substitutions print. `overflowed`: the words are past a brace cap and
+    stay as written. A redirection target past a cap raises _TooManyWords:
+    it is a file name no rule can skip."""
     words, words_over = _spread(stage.words, bash)
-    redirs, redirs_over = _spread(stage.redirs, bash)
-    added_words = len(words) - len(stage.words)
+    redirs, redirs_over = _spread(stage.redirs, bash, _Redir)
     added_redirs = len(redirs) - len(stage.redirs)
-    if added_words + added_redirs > MAX_BRACE_STAGE:
-        words, words_over = [w.text for w in stage.words], True
-        if added_redirs > 0:
-            redirs, redirs_over = [w.text for w in stage.redirs], True
+    if redirs_over or (added_redirs and len(words) - len(stage.words) + added_redirs > MAX_BRACE_STAGE):
+        raise _TooManyWords
+    if len(words) - len(stage.words) > MAX_BRACE_STAGE:
+        words, words_over = [_token(w.text, w) for w in stage.words], True
     printed, printed_over = _printed((*stage.words, *stage.redirs), level, literal, bash)
-    # Brace expansion changes the word count, so the source of an expanded
-    # word list is the expanded text itself (expansion never adds a `$(`).
-    sources = [w.src for w in stage.words] if len(words) == len(stage.words) else list(words)
-    sources += [w.src for w in stage.redirs] if len(redirs) == len(stage.redirs) else list(redirs)
-    tokens = [*words, *(_Redir(r) for r in redirs), *printed]
-    return tokens, sources + printed, (words_over or printed_over, redirs_over)
+    return [*words, *redirs, *printed], words_over or printed_over
 
 
 def _core(tokens: list[str]) -> tuple[list[str], bool]:
     """The stage's effective command and arguments: leading assignments,
     shell keywords and wrappers (sudo, env, time, nice, nohup, ...) are
     skipped, and for `xargs [flags] cmd` the command xargs runs. The flag
-    reports an xargs stage, whose operands arrive on stdin. The result is a
-    suffix of `tokens`."""
+    reports an xargs stage, whose operands arrive on stdin."""
     i, n = 0, len(tokens)
     while i < n:
         word = tokens[i]
@@ -438,35 +446,32 @@ def _script_pipelines(script, depth: int, literal) -> list:
     via_xargs) stages, with the pipelines of its substitutions, of heredoc
     bodies a command reads, and of nested shell command lines after them.
     Raises _TooManyWords when a stage that reads, lists, or feeds the next
-    stage has words past a brace cap, or a redirection target is."""
+    stage has words past a brace cap."""
     outer: list = []
     inner: list = []
     for pipeline in pipelines(script):
         stages = []
-        parsed = [(st, *_stage_words(st, depth, literal, script.bash)) for st in pipeline]
-        for k, (st, tokens, sources, (words_over, redirs_over)) in enumerate(parsed):
-            runner = tokens[command_start(tokens)] if command_start(tokens) < len(tokens) else ""
-            last = k == len(parsed) - 1
-            if redirs_over or (words_over and (command_name(runner) not in _REDIRECT_ONLY or not last)):
-                raise _TooManyWords
+        for k, st in enumerate(pipeline):
+            tokens, overflowed = _stage_words(st, depth, literal, script.bash)
             core, via_xargs = _core(tokens)
+            # Only a print or test command that ends its pipeline may keep
+            # words past a cap: they reach no reader.
+            if overflowed and (not core or command_name(core[0]) not in _REDIRECT_ONLY or k < len(pipeline) - 1):
+                raise _TooManyWords
             if core:
-                stages.append((core, via_xargs, sources[len(tokens) - len(core) :]))
-            for w in (*st.words, *st.redirs):
-                for sub in w.subs:
-                    inner.extend(_script_pipelines(sub, depth + 1, literal))
+                stages.append((core, via_xargs))
+            for sub in [s for w in (*st.words, *st.redirs) for s in w.subs] + [s for h in st.heredocs for s in h.subs]:
+                inner.extend(_script_pipelines(sub, depth + 1, literal))
             for heredoc in st.heredocs:
-                for sub in heredoc.subs:
-                    inner.extend(_script_pipelines(sub, depth + 1, literal))
                 if heredoc not in literal:
                     # A body a command reads or runs is a command line of its own.
                     inner.extend(_pipelines(heredoc.body, depth + 1))
-        for core, _, sources in stages:
-            line = _nested(sources)
+        for core, _ in stages:
+            line = _nested([_source(t) for t in core])
             if line:
                 inner.extend(_pipelines(line, depth + 1))
         if stages:
-            outer.append([(core, via_xargs) for core, via_xargs, _ in stages])
+            outer.append(stages)
     return outer + inner
 
 
@@ -474,17 +479,15 @@ def _pipelines(command: str, depth: int = 0) -> list[list[tuple[list[str], bool]
     """Every pipeline in `command` (see _script_pipelines). A command holding
     a backslash is read twice, as Bash reads it (an escape) and with every
     backslash a path separator (PowerShell, cmd), and the pipelines of both
-    are returned."""
-    if depth > _MAX_DEPTH:
-        raise _TooDeep
+    are returned (a `cd` in each reading moves the base for the pipelines
+    after it, so neither list can drop the other's look-alikes)."""
+    if depth > MAX_DEPTH:
+        raise NestingLimit
     command = command.replace("\r\n", "\n")
     out: list = []
     for backslash_literal in ((False, True) if "\\" in command else (False,)):
-        try:
-            script = parse_shell(command, "bash", depth, backslash_literal)
-            out.extend(_script_pipelines(script, depth, literal_heredocs(script)))
-        except NestingLimit:
-            raise _TooDeep from None
+        script = parse_shell(command, "bash", depth, backslash_literal)
+        out.extend(_script_pipelines(script, depth, literal_heredocs(script)))
     return out
 
 
@@ -645,7 +648,7 @@ def _recursive_roots(tokens: list[str], utility: str, base: str) -> list[str] | 
         positional, pattern = _parse_search(tokens, utility)
         roots = [tokens[i] for i in positional if i not in pattern] or ["."]
         if any(
-            not isinstance(r, _Escaped) and not set("*?[") & set(r) and not os.path.exists(absolute_path(r, base))
+            not _escaped(r) and not set("*?[") & set(r) and not os.path.exists(absolute_path(r, base))
             for r in roots
         ):
             roots.append(".")
@@ -718,12 +721,13 @@ def _matches_dump_command(command: str, cwd: str | None = None) -> str | None:
     base = cwd or os.getcwd()
     try:
         parsed = _pipelines(command)
-    except _TooDeep:
+    except NestingLimit:
         return _NESTED
     except _TooManyWords:
         return _BRACES
     pending_cd: list[str] = []  # resolved once vault_guard is loaded
     vg = vaults = None
+    resolved: dict = {}  # (path candidate, base) -> inside a vault
     for pipeline in parsed:
         utilities = [command_name(core[0]) for core, _ in pipeline]
         if len(pipeline) == 1 and utilities[0] in _CD:
@@ -766,8 +770,13 @@ def _matches_dump_command(command: str, cwd: str | None = None) -> str | None:
         for target in pending_cd:
             base = absolute_path(target, base)
         pending_cd.clear()
-        if any(vg.inside_vault(c, base, vaults) for c in paths):
-            return hit
+        # The two readings repeat most words, and path resolution (realpath)
+        # is the costly step, so each (word, base) is resolved once.
+        for c in paths:
+            if (c, base) not in resolved:
+                resolved[(c, base)] = vg.inside_vault(c, base, vaults)
+            if resolved[(c, base)]:
+                return hit
         # Stages that run their own operands; an xargs stage gets them on stdin.
         direct = [(core, u) for (core, via_xargs), u in zip(pipeline, utilities) if not via_xargs]
         if any(_lists_cwd(core, u) for core, u in direct) and vg.inside_vault(".", base, vaults):
@@ -792,7 +801,7 @@ def reason(matched_utility: str) -> str:
     if isinstance(matched_utility, _NestedTooDeep):
         return (
             f"Vault Privacy Rule (#188): this command nests substitutions or "
-            f"shells more than {_MAX_DEPTH} levels deep, which the vault "
+            f"shells more than {MAX_DEPTH} levels deep, which the vault "
             "check does not follow, so it is denied rather than allowed "
             "unchecked. Flatten the command. See "
             ".claude/hooks/secret_dump_guard.py."

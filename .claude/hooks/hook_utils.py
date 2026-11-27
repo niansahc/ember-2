@@ -15,7 +15,11 @@ definition:
   - command_name(): one "bare command name" rule (env_guard.py,
     secret_dump_guard.py).
   - read_env_value() / env_file_value(): one .env value reader
-    (post_commit_eval.py, vault_guard.py). It never prints a value.
+    (post_commit_eval.py, vault_guard.py). It never prints a value. Its
+    strict mode (the vault guards) raises on a file that exists but cannot
+    be read and on a value left unresolved (require_resolved()).
+    env_references() is the vault cache's digest of referenced variables,
+    None when the file cannot be read.
   - shell_step() / close_paren() / extract_substitutions() / shell_spans() /
     drop_inert_heredocs(): the shell scanner env_guard.py and
     secret_dump_guard.py share (quote state with backslash escapes, command
@@ -115,36 +119,62 @@ def read_env_value(key: str, env_path) -> str | None:
 
 
 def env_file_value(key: str, env_path, strict: bool = False) -> str | None:
-    """Return `key` from the .env file at `env_path` only. With `strict`, a
-    file that cannot be opened raises OSError instead of reading as "no
-    key", so a caller that caches the answer can tell a failed read from an
-    absent key.
+    """Return `key` from the .env file at `env_path` only.
+
+    With `strict` (the vault guards), a file that exists but cannot be read
+    (no permission, a lock, a directory) raises OSError, and a value still
+    holding `${` after interpolation raises ValueError, instead of reading
+    as "no key" or as a path. The guards deny on either, as the
+    ember-2-installer vault guard does (ember-2-installer/.claude/hooks/
+    vault-guard.cjs, envFileValue). A missing file is None either way.
+    The file is opened once and its text handed to the parser: python-dotenv
+    reads a directory as an empty file.
 
     The value comes from python-dotenv (the venv has it), with a minimal
     KEY=VALUE parser as a fallback so a hook never hard-depends on an
-    import being present.
+    import being present. The fallback raises ValueError on an unresolved
+    reference itself, in either mode.
     """
     try:
-        from dotenv.main import DotEnv
-
-        # override=False is how the app loads this file (src/core/config.py:
-        # load_dotenv's default): in a `${VAR}` reference the process
-        # environment wins over the file's own keys. dotenv_values() uses
-        # override=True, the reverse, and would point the guards at another
-        # directory whenever the two define the same name.
-        values = DotEnv(env_path, encoding="utf-8", interpolate=True, override=False).dict()
-        return (values.get(key) or "").strip() or None
-    except Exception:
-        pass
-
-    try:
         with open(env_path, encoding="utf-8-sig") as handle:
-            lines = handle.read().splitlines()
+            text = handle.read()
+    except (FileNotFoundError, NotADirectoryError):
+        return None
     except OSError:
         if strict:
             raise
         return None
-    return _fallback_value(key, lines)
+    try:
+        value = _dotenv_value(key, text)
+    except Exception:
+        return _fallback_value(key, text.splitlines())
+    if strict:
+        require_resolved(value)
+    return value
+
+
+def require_resolved(value) -> None:
+    """Raise ValueError when a configured value still holds `${` (a reference
+    python-dotenv could not resolve: unterminated, or a nested default). The
+    vault guards apply it to a fresh read and to a cached value alike."""
+    if isinstance(value, str) and "${" in value:
+        raise ValueError("unresolved reference in .env value")
+
+
+def _dotenv_value(key: str, text: str) -> str | None:
+    """`key` as python-dotenv reads it from the file's text. Raises when
+    python-dotenv is not importable or fails."""
+    import io
+
+    from dotenv.main import DotEnv
+
+    # override=False is how the app loads this file (src/core/config.py:
+    # load_dotenv's default): in a `${VAR}` reference the process
+    # environment wins over the file's own keys. dotenv_values() uses
+    # override=True, the reverse, and would point the guards at another
+    # directory whenever the two define the same name.
+    values = DotEnv(None, stream=io.StringIO(text), interpolate=True, override=False).dict()
+    return (values.get(key) or "").strip() or None
 
 
 # One `[export] KEY = value` line, and python-dotenv's `${NAME}` /
@@ -227,18 +257,22 @@ def _fallback_literal(text: str) -> str:
 _ENV_REFERENCE_NAME = re.compile(r"\$\{([^}:]*)")
 
 
-def env_references(env_path) -> str:
+def env_references(env_path) -> str | None:
     """A digest of the process-environment values of every `${NAME}` the file
-    at `env_path` references ("" when it has none). Part of the
-    PRIVATE_VAULT_PATH cache key: a reference resolves from the process
-    environment first, so the cached result is stale when one of them
-    changes. A digest, so a referenced value is never copied into the cache
-    file."""
+    at `env_path` references ("" when it has none, or there is no file).
+    Part of the PRIVATE_VAULT_PATH cache key: a reference resolves from the
+    process environment first, so the cached result is stale when one of
+    them changes. A digest, so a referenced value is never copied into the
+    cache file. None when the file exists but cannot be read: the
+    references are unknown, so no key can be built and the cache is
+    skipped."""
     try:
         with open(env_path, encoding="utf-8-sig") as handle:
             names = set(_ENV_REFERENCE_NAME.findall(handle.read()))
-    except OSError:
+    except (FileNotFoundError, NotADirectoryError):
         return ""
+    except OSError:
+        return None
     if not names:
         return ""
     pairs = json.dumps([[name, os.environ.get(name)] for name in sorted(names)])

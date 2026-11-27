@@ -607,6 +607,67 @@ def test_a_configured_vault_that_does_not_exist_is_just_absent(hermetic_hook_pro
     assert out.stdout.strip() == ""
 
 
+# --- a .env that cannot be read, or a value left unresolved, is a deny -----
+# See hook_utils.env_file_value (strict). Each case raises in-process; the
+# entry points' turning of that raise into a deny is checked once per guard.
+
+def _replace_env(c, text) -> None:
+    """The project's .env replaced by `text`, or by a directory (which open()
+    refuses on every platform) when None."""
+    env = c.project / ".env"
+    env.unlink()
+    if text is None:
+        env.mkdir()
+    else:
+        env.write_text(text, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "text, raised",
+    [
+        pytest.param(None, OSError, id="unreadable"),
+        pytest.param("PRIVATE_VAULT_PATH=/v/${x\n", ValueError, id="unterminated"),
+        pytest.param("PRIVATE_VAULT_PATH=${EMBER_PROBE_UNSET_A:-${EMBER_PROBE_UNSET_B}}/v\n", ValueError, id="nested-default"),
+    ],
+)
+def test_an_env_the_guards_cannot_resolve_raises(configured_vault, monkeypatch, text, raised):
+    monkeypatch.delenv("EMBER_PROBE_UNSET_A", raising=False)
+    monkeypatch.delenv("EMBER_PROBE_UNSET_B", raising=False)
+    _replace_env(configured_vault, text)
+    with pytest.raises(raised):
+        guard.vault_dirs()
+    assert not _cache_file(configured_vault.project).exists()
+
+
+@pytest.mark.parametrize("text", [None, "OTHER_KEY=1\n"], ids=["no-env-file", "no-key"])
+def test_an_absent_env_file_or_key_is_no_vault(configured_vault, text):
+    """Control for the raise above."""
+    env = configured_vault.project / ".env"
+    env.unlink()
+    if text is not None:
+        env.write_text(text, encoding="utf-8")
+    assert guard.vault_dirs() == []
+
+
+@pytest.mark.parametrize("text, decision", [(None, "deny"), ("OTHER_KEY=1\n", "allow")], ids=["unreadable", "no-key"])
+def test_both_hook_processes_deny_when_the_env_cannot_be_read(configured_vault, text, decision):
+    """vault_guard (a Read) and secret_dump_guard (`cat`) on an ordinary
+    file. Control: a readable .env without the key is allowed."""
+    _replace_env(configured_vault, text)
+    read = _run(_config_payload(CONFIG_ALLOW["read-src"], configured_vault))
+    cat = run_hook("secret_dump_guard.py", hook_payload("Bash", cwd=str(configured_vault.project), command="cat src/a.py"))
+    assert [(hook_output(r) or {}).get("permissionDecision", "allow") for r in (read, cat)] == [decision, decision]
+
+
+def test_a_value_whose_reference_resolves_is_used(configured_vault, monkeypatch):
+    """Control: a `${VAR}` that resolves gives the vault, which is protected,
+    and ordinary calls are allowed."""
+    monkeypatch.setenv("PROBE_VAULT_ROOT", configured_vault.outside.as_posix())
+    _replace_env(configured_vault, f"PRIVATE_VAULT_PATH=${{PROBE_VAULT_ROOT}}/{HOOK_VAULT_NAME}\n")
+    assert guard.evaluate(_config_payload(CONFIG_ALLOW["read-src"], configured_vault)) is None
+    assert guard.evaluate(_config_payload(CONFIG_DENY["read-relative"], configured_vault)) is not None
+
+
 # Installer lean-review finding 5 does not apply: Python's fnmatch drops only
 # the empty range, so a set holding a reversed range keeps its valid members.
 @pytest.mark.parametrize("pattern", ["[z-ap]rivate_vault/*", "pri[z-av]ate_vault/*"])
@@ -628,8 +689,8 @@ def _cache_file(project):
 
 def test_a_failed_env_read_is_not_cached(configured_vault, monkeypatch):
     """A lock or a permission error while reading the file is not "no key":
-    the call that hit it is answered without the configured vault, and the
-    next call reads the file again and finds it."""
+    the call that hit it raises (the entry point denies it), and the next
+    call reads the file again and finds the vault."""
     real = guard.env_file_value
     state = {"locked": True}
 
@@ -640,7 +701,8 @@ def test_a_failed_env_read_is_not_cached(configured_vault, monkeypatch):
 
     monkeypatch.setattr(guard, "env_file_value", flaky)
     payload = _config_payload(CONFIG_DENY["read-native"], configured_vault)
-    assert guard.evaluate(payload) is None
+    with pytest.raises(PermissionError):
+        guard.evaluate(payload)
     assert not _cache_file(configured_vault.project).exists()
     state["locked"] = False
     assert guard.evaluate(payload) is not None
@@ -677,6 +739,105 @@ def test_a_failed_cache_write_leaves_no_temp_file(configured_vault):
     guard._write_cache(str(cache), {"key": [1], "value": "x"})
     assert cache.is_file()
     assert list(cache.parent.glob("*.tmp")) == []
+
+
+# --- what a cache hit may serve ----------------------------------------------
+
+def _env_key(c) -> list:
+    """The pre-format-version key of the project's .env: mtime, size and the
+    references digest (what the cache held before the format version)."""
+    env = c.project / ".env"
+    stat = env.stat()
+    return [stat.st_mtime_ns, stat.st_size, guard.env_references(str(env))]
+
+
+def _write_entry(c, key, value) -> None:
+    _cache_file(c.project).write_text(json.dumps({"key": key, "value": value}), encoding="utf-8")
+
+
+def _count_parses(monkeypatch) -> list:
+    calls = []
+    real = guard.env_file_value
+    monkeypatch.setattr(guard, "env_file_value", lambda key, path, **kw: calls.append(key) or real(key, path, **kw))
+    return calls
+
+
+def test_an_entry_from_before_the_format_version_misses(configured_vault, monkeypatch):
+    """The lean-review repro: .env holds a residue value and an entry written
+    before the format version holds it under a key matching the unchanged
+    .env. It misses, and the strict read raises."""
+    _replace_env(configured_vault, "PRIVATE_VAULT_PATH=/v/${x\n")
+    _write_entry(configured_vault, _env_key(configured_vault), "/v/${x")
+    with pytest.raises(ValueError):
+        guard.vault_dirs()
+
+
+def test_an_old_format_entry_with_a_good_value_is_reparsed(configured_vault, monkeypatch):
+    """Control: the miss is the format version, not the value. The entry is
+    replaced by one in the current format."""
+    _write_entry(configured_vault, _env_key(configured_vault), str(configured_vault.vault))
+    calls = _count_parses(monkeypatch)
+    assert guard.vault_dirs()
+    assert len(calls) == 1
+    assert json.loads(_cache_file(configured_vault.project).read_text(encoding="utf-8"))["key"][0] == guard._CACHE_FORMAT
+
+
+@pytest.mark.parametrize("cached, served", [("/v/${x", False), (None, True)], ids=["residue", "good"])
+def test_a_cache_hit_checks_the_value_it_serves(configured_vault, monkeypatch, cached, served):
+    """A current-format hit with a residue value raises instead of serving it.
+    Control: a hit with a good value is served without a parse."""
+    value = cached or str(configured_vault.vault)
+    _write_entry(configured_vault, [guard._CACHE_FORMAT, *_env_key(configured_vault)], value)
+    calls = _count_parses(monkeypatch)
+    if served:
+        assert guard.vault_dirs()
+    else:
+        with pytest.raises(ValueError):
+            guard.vault_dirs()
+    assert calls == []
+
+
+def _first_env_open_fails(monkeypatch, env) -> None:
+    """The first open of `env` raises PermissionError (a transient lock);
+    every later open works."""
+    real_open = open
+    state = {"failed": False}
+
+    def flaky(file, *args, **kwargs):
+        if not state["failed"] and os.path.abspath(str(file)) == os.path.abspath(str(env)):
+            state["failed"] = True
+            raise PermissionError("locked")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", flaky)
+
+
+def _entry_for_the_other_vault(c):
+    """A current-format entry under the .env's real key (it has no
+    references, so its digest is empty) naming the sibling directory, so a
+    served entry is told apart from a fresh read. Returns that directory."""
+    other = c.outside / f"{HOOK_VAULT_NAME}_other"
+    _write_entry(c, [guard._CACHE_FORMAT, *_env_key(c)], str(other))
+    return other
+
+
+def test_a_failed_references_read_skips_the_cache(configured_vault, monkeypatch):
+    """env_references cannot read .env (the first open fails) but the strict
+    read after it can: the cache is neither consulted nor written, so an
+    entry under the empty digest is not served and the value comes from the
+    file."""
+    _entry_for_the_other_vault(configured_vault)
+    before = _cache_file(configured_vault.project).read_text(encoding="utf-8")
+    _first_env_open_fails(monkeypatch, configured_vault.project / ".env")
+    assert [v.path for v in guard.vault_dirs()] == [guard.project_path(str(configured_vault.vault))]
+    assert _cache_file(configured_vault.project).read_text(encoding="utf-8") == before
+
+
+def test_the_same_entry_is_served_when_the_read_works(configured_vault):
+    """Positive control: with every open working, the identical entry is a
+    hit and its directory is served."""
+    other = _entry_for_the_other_vault(configured_vault)
+    assert [v.path for v in guard.vault_dirs()] == [guard.project_path(str(other))]
 
 
 def test_the_linux_over_length_error_is_a_failure_to_look_not_an_absent_vault(monkeypatch):

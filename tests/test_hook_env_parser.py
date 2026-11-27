@@ -242,8 +242,8 @@ def test_a_later_good_line_replaces_an_unreadable_one(tmp_path, monkeypatch):
 
 
 def test_strict_read_raises_when_the_file_cannot_be_opened(tmp_path, monkeypatch):
-    """`strict` lets a caller that caches the answer tell a failed read from
-    an absent key. Control: the default still reads it as no key."""
+    """`strict` makes a file that exists but cannot be read raise, so the
+    vault guards deny. Control: the default still reads it as no key."""
     path = tmp_path / "probe.env"
     path.write_text(f"{KEY}=/data/vault\n", encoding="utf-8")
     real_open = open
@@ -303,6 +303,29 @@ def test_references_digest_hides_values_and_follows_them(tmp_path, monkeypatch):
     plain = tmp_path / "plain.env"
     plain.write_text("A=1\n", encoding="utf-8")
     assert hook_utils.env_references(str(plain)) == ""
+
+
+def test_references_of_a_file_that_cannot_be_read_are_unknown(tmp_path, monkeypatch):
+    """A file that exists but cannot be read (a directory, a lock) has no
+    digest: None, not the empty digest of a file without references.
+    Control: a missing file is the empty digest, and so is a readable file
+    without references (above)."""
+    directory = tmp_path / "dir.env"
+    directory.mkdir()
+    assert hook_utils.env_references(str(directory)) is None
+    locked = tmp_path / "locked.env"
+    locked.write_text("A=${PROBE_REF_ONE}\n", encoding="utf-8")
+    real_open = open
+
+    def fail(file, *args, **kwargs):
+        if str(file) == str(locked):
+            raise PermissionError("locked")
+        return real_open(file, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr("builtins.open", fail)
+        assert hook_utils.env_references(str(locked)) is None
+    assert hook_utils.env_references(str(tmp_path / "absent.env")) == ""
 
 
 def test_missing_file_is_none_on_both_paths(tmp_path, monkeypatch):

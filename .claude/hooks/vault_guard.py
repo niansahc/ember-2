@@ -24,9 +24,11 @@ get_private_vault_path() and post_commit_eval.py use: a relative value
 against the project root, never the cwd. The value is never printed, deny messages
 included. Parsing .env costs a python-dotenv import (~60 ms per hook
 process), so the value is cached in .claude/.env.vault_cache.json, keyed
-by the .env mtime and size plus a digest of the process values of the
-${VAR} names the file references (the digest, never the values). Only a
-successful read is cached. The cache file's .env.* name puts it under
+by a format version, the .env mtime and size, and a digest of the process
+values of the ${VAR} names the file references (the digest, never the
+values). Only a successful read is cached, a cached value is checked as a
+fresh one is, and when the references cannot be read the cache is skipped.
+The cache file's .env.* name puts it under
 env_guard.py, which denies agent reads and writes of it; it is
 gitignored. With no .env, or no key in it, only the in-repo rules apply
 and a note goes to stderr. An unreadable .env or an unresolved value
@@ -103,6 +105,7 @@ from hook_utils import (
     env_references,
     project_dir,
     project_path,
+    require_resolved,
     run_hook,
 )
 
@@ -110,6 +113,9 @@ _VAULT_DIR = "private_vault"
 _VAULT_KEY = "PRIVATE_VAULT_PATH"
 # `.env.*` basename: env_guard.py denies agent reads and writes of it.
 _CACHE_NAME = ".env.vault_cache.json"
+# First element of a cache key. An entry in another layout is a miss: those
+# written before 1 could hold a value with an unresolved `${`.
+_CACHE_FORMAT = 1
 _WILDCARDS = frozenset("*?[")
 
 
@@ -228,7 +234,10 @@ def _write_cache(cache: str, data: dict) -> None:
 
 
 def _configured_vault() -> str | None:
-    """The raw PRIVATE_VAULT_PATH value, or None. Never printed."""
+    """The raw PRIVATE_VAULT_PATH value, or None when there is no .env or no
+    key in it. Never printed. Raises when the .env exists but cannot be
+    read, or the value (fresh or cached) still holds `${`; the entry point
+    denies."""
     value = (os.environ.get(_VAULT_KEY) or "").strip()
     if value:
         return value
@@ -241,18 +250,25 @@ def _configured_vault() -> str | None:
         return None
     # A `${VAR}` in the file resolves from the process environment first, so
     # the process values of the variables it references are part of the key.
-    key = [stat.st_mtime_ns, stat.st_size, env_references(env_path)]
+    # References that cannot be read leave no key: the cache is skipped.
+    references = env_references(env_path)
+    key = None if references is None else [_CACHE_FORMAT, stat.st_mtime_ns, stat.st_size, references]
     cache = os.path.join(project, ".claude", _CACHE_NAME)
-    try:
-        with open(cache, encoding="utf-8") as handle:
-            cached = json.load(handle)
-        hit = cached["key"] == key and isinstance(cached["value"], (str, type(None)))
-        value = cached["value"] if hit else None
-    except (OSError, ValueError, KeyError, TypeError):
-        hit = False
-    if not hit:
+    hit = False
+    if key is not None:
+        try:
+            with open(cache, encoding="utf-8") as handle:
+                cached = json.load(handle)
+            hit = cached["key"] == key and isinstance(cached["value"], (str, type(None)))
+            value = cached["value"] if hit else None
+        except (OSError, ValueError, KeyError, TypeError):
+            hit = False
+    if hit:
+        require_resolved(value)
+    else:
         value = env_file_value(_VAULT_KEY, env_path, strict=True)
-        _write_cache(cache, {"key": key, "value": value})
+        if key is not None:
+            _write_cache(cache, {"key": key, "value": value})
     if not value:
         _note(f"{_VAULT_KEY} is not set in .env")
     return value

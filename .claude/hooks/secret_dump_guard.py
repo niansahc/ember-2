@@ -96,20 +96,17 @@ Comments. A `#` that starts a word, outside quotes, comments out the rest of
 its line, as in both shells; the lines after it are still read.
 """
 
-import json
 import os
 import re
 import shlex
-import sys
 
 # Same directory; Python puts it on sys.path when this file runs as a script.
 from hook_utils import (
     absolute_path,
     command_name,
-    deny,
-    deny_on_error,
     drop_inert_heredocs,
     extract_substitutions,
+    run_hook,
     shell_step,
 )
 
@@ -748,44 +745,41 @@ def _matches_dump_command(command: str, cwd: str | None = None) -> str | None:
     return None
 
 
-def main():
-    try:
-        data = json.load(sys.stdin)
-    except Exception:
-        return
-    # An unusable payload is allowed through, as an unparseable one is.
+def evaluate(data) -> str | None:
+    """The matched utility (or the nesting marker) for a shell call, else
+    None. An unusable payload is allowed through, as an unparseable one is."""
     tool_input = data.get("tool_input") if isinstance(data, dict) else None
     command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
     if not isinstance(command, str) or not command:
-        return
-
+        return None
     cwd = data.get("cwd")
-    try:
-        matched_utility = _matches_dump_command(command, cwd if isinstance(cwd, str) else None)
-    except Exception as exc:
-        # Fail closed: a crash exits non-zero and the harness runs the call.
-        deny_on_error("secret_dump_guard", exc)
-        return
+    return _matches_dump_command(command, cwd if isinstance(cwd, str) else None)
+
+
+def reason(matched_utility: str) -> str:
     if isinstance(matched_utility, _NestedTooDeep):
-        deny(
+        return (
             f"Vault Privacy Rule (#188): this command nests substitutions or "
             f"shells more than {_MAX_DEPTH} levels deep, which the vault "
             "check does not follow, so it is denied rather than allowed "
             "unchecked. Flatten the command. See "
             ".claude/hooks/secret_dump_guard.py."
         )
-    elif matched_utility:
-        deny(
-            f"Vault Privacy Rule (#188): '{matched_utility}' against a "
-            "vault path (private_vault/ or the configured "
-            "PRIVATE_VAULT_PATH, named or reached by a recursive "
-            "search or listing from an ancestor) would put vault "
-            "content or entry names (record IDs) into this "
-            "transcript. This is a known-form prevention check, "
-            "not a guarantee -- see .claude/hooks/secret_dump_guard.py. "
-            "Inspect vault data in a separate terminal; existence "
-            "checks (Test-Path, test -d) are allowed."
-        )
+    return (
+        f"Vault Privacy Rule (#188): '{matched_utility}' against a "
+        "vault path (private_vault/ or the configured "
+        "PRIVATE_VAULT_PATH, named or reached by a recursive "
+        "search or listing from an ancestor) would put vault "
+        "content or entry names (record IDs) into this "
+        "transcript. This is a known-form prevention check, "
+        "not a guarantee -- see .claude/hooks/secret_dump_guard.py. "
+        "Inspect vault data in a separate terminal; existence "
+        "checks (Test-Path, test -d) are allowed."
+    )
+
+
+def main():
+    run_hook("secret_dump_guard", evaluate, reason)
 
 
 if __name__ == "__main__":

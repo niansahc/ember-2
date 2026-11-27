@@ -55,27 +55,25 @@ dot-only pattern itself (a Python glob call on '.*'), or a recursive read that
 never names the file (grep -r KEY .).
 
 Input: hook JSON on stdin. Output: a deny decision on stdout, or nothing.
-Exit code is always 0. An unparseable payload is allowed through with a
-note on stderr: failing closed here would block every Read and Bash call
-and lock the session out of fixing the hook. A payload that parses but makes
-the check itself raise is denied (hook_utils.deny_on_error): a crashed hook
-exits non-zero, which the harness treats as non-blocking, and the call would
-run.
+The entry is hook_utils.run_hook: an unparseable payload is allowed, a shell
+command over MAX_COMMAND_CHARS is denied, a brace pattern past the caps is
+denied (BraceLimit), and an error inside the check is a deny.
 """
 
 import fnmatch
-import json
 import re
-import sys
 
 # Same directory; Python puts it on sys.path when this file runs as a script.
 from hook_utils import (
     GIT_OR_GH,
+    MAX_BRACE_WORDS,
+    MAX_LIVE_BRACES,
     PROSE_FLAG_NAMES,
+    SHELL_TOOLS,
+    InputLimit,
     command_name,
-    deny,
-    deny_on_error,
     drop_inert_heredocs,
+    run_hook,
     shell_step,
     shell_spans,
 )
@@ -101,12 +99,39 @@ def _canonical_names(path: str) -> set[str]:
     return {part.rstrip(". ") for part in (base, *base.split(":"))}
 
 
+class BraceLimit(InputLimit):
+    """A brace pattern past the caps (hook_utils.MAX_LIVE_BRACES,
+    MAX_BRACE_WORDS). run_hook denies it with this fixed reason."""
+
+    def __init__(self):
+        super().__init__(
+            f"Blocked by project hook: a brace pattern in this call expands "
+            f"past the limit ({MAX_BRACE_WORDS} alternatives, "
+            f"{MAX_LIVE_BRACES} braces), so it cannot be checked for .env "
+            f"names and is denied. Use a shorter pattern. "
+            f"See .claude/hooks/env_guard.py."
+        )
+
+
 def _expand_braces(pattern: str) -> list[str]:
-    brace = _BRACE.match(pattern)
-    if not brace:
-        return [pattern]
-    head, alts, tail = brace.groups()
-    return [p for alt in alts.split(",") for p in _expand_braces(f"{head}{alt}{tail}")]
+    """The alternatives of `pattern`'s brace sets, in no particular order.
+    Raises BraceLimit past the caps. Every pending string yields at least one
+    alternative, so a set is counted against the budget before its strings
+    are built: at most MAX_BRACE_WORDS strings exist at any time."""
+    if pattern.count("{") > MAX_LIVE_BRACES:
+        raise BraceLimit
+    todo, out = [pattern], []
+    while todo:
+        word = todo.pop()
+        brace = _BRACE.match(word)
+        if not brace:
+            out.append(word)
+            continue
+        head, alts, tail = brace.groups()
+        if len(out) + len(todo) + alts.count(",") + 1 > MAX_BRACE_WORDS:
+            raise BraceLimit
+        todo += [f"{head}{alt}{tail}" for alt in alts.split(",")]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +269,6 @@ PATH_FIELDS = {
     "Grep": {"path": names_env_file, "glob": grep_glob_reaches_env},
     "Glob": {"path": names_env_file, "pattern": names_env_file},
 }
-SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
 
 
 # ---------------------------------------------------------------------------
@@ -386,20 +410,7 @@ def reason(target: str) -> str:
 
 
 def main():
-    try:
-        payload = json.load(sys.stdin)
-    except Exception as exc:
-        print(f"[env_guard] unparseable hook payload, allowing: {exc}", file=sys.stderr)
-        return
-    try:
-        target = evaluate(payload)
-        message = reason(target) if target else None
-    except Exception as exc:
-        # Fail closed: a crash exits non-zero and the harness runs the call.
-        deny_on_error("env_guard", exc)
-        return
-    if message:
-        deny(message)
+    run_hook("env_guard", evaluate, reason)
 
 
 if __name__ == "__main__":

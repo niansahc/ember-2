@@ -1,9 +1,13 @@
 """
 tests/test_guard_fail_closed.py
 
-The vault guards (vault_guard.py, secret_dump_guard.py) must deny, never
-crash. A hook that exits non-zero is a non-blocking error to the harness,
-which then runs the tool call, so a crash is an allow.
+The guards (env_guard.py, vault_guard.py, secret_dump_guard.py) fail closed
+in two layers. In code, hook_utils.run_hook turns an error inside the check
+into a deny that names the guard and the exception type. In settings, each
+guard entry sets "onFailure": "block", so a hook that crashes, times out or
+cannot start blocks the call (by default the harness would run it). The
+in-code deny is what gives the user a named reason; these tests cover it for
+the two vault guards (env_guard's is in tests/test_env_guard.py).
 
 Two ways in:
   1. A foreign top-level `src` package earlier on sys.path. The guards used

@@ -29,11 +29,8 @@ ${VAR} names the file references (the digest, never the values). Only a
 successful read is cached. The cache file's .env.* name puts it under
 env_guard.py, which denies agent reads and writes of it; it is
 gitignored. With no .env, or no key in it, only the in-repo rules apply
-and a note goes to stderr. A .env that exists but cannot be read (no
-permission, a lock, a directory), or a value still holding `${` after
-interpolation, is not "no key": the check raises and the entry point
-denies, since the configured vault is unknown (parity with the
-ember-2-installer vault guard).
+and a note goes to stderr. An unreadable .env or an unresolved value
+raises (hook_utils.env_file_value, strict), and the entry point denies.
 
 Rules:
 
@@ -254,8 +251,6 @@ def _configured_vault() -> str | None:
     except (OSError, ValueError, KeyError, TypeError):
         hit = False
     if not hit:
-        # Raises when the file cannot be read or the value is unresolved;
-        # the cache is left as it was.
         value = env_file_value(_VAULT_KEY, env_path, strict=True)
         _write_cache(cache, {"key": key, "value": value})
     if not value:

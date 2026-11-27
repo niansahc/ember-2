@@ -608,59 +608,62 @@ def test_a_configured_vault_that_does_not_exist_is_just_absent(hermetic_hook_pro
 
 
 # --- a .env that cannot be read, or a value left unresolved, is a deny -----
-# See hook_utils.env_file_value (strict).
+# See hook_utils.env_file_value (strict). Each case raises in-process; the
+# entry points' turning of that raise into a deny is checked once per guard.
 
-def _both_guards(c) -> tuple:
-    """(vault_guard, secret_dump_guard) decisions for an ordinary call in
-    the project: a Read of src/a.py, and `cat src/a.py`."""
-    read = _run(_config_payload(CONFIG_ALLOW["read-src"], c))
-    cat = run_hook("secret_dump_guard.py", hook_payload("Bash", cwd=str(c.project), command="cat src/a.py"))
-    return tuple((hook_output(r) or {}).get("permissionDecision", "allow") for r in (read, cat))
-
-
-# (setup, the exception vault_dirs raises)
-BROKEN_ENV = {
-    # Exists but cannot be opened: open() refuses a directory on every platform.
-    "unreadable": (lambda c, env: env.mkdir(), OSError),
-    "unterminated": (lambda c, env: env.write_text(f"PRIVATE_VAULT_PATH={c.outside.as_posix()}/${{x\n"), ValueError),
-    "nested-default": (lambda c, env: env.write_text("PRIVATE_VAULT_PATH=${NOPE_UNSET_X:-${NOPE_UNSET_Y}}/v\n"), ValueError),
-}
-
-
-@pytest.mark.parametrize("case", BROKEN_ENV)
-def test_an_env_the_guards_cannot_resolve_is_a_deny(configured_vault, monkeypatch, case):
-    monkeypatch.delenv("NOPE_UNSET_X", raising=False)
-    monkeypatch.delenv("NOPE_UNSET_Y", raising=False)
-    setup, raised = BROKEN_ENV[case]
-    env = configured_vault.project / ".env"
+def _replace_env(c, text) -> None:
+    """The project's .env replaced by `text`, or by a directory (which open()
+    refuses on every platform) when None."""
+    env = c.project / ".env"
     env.unlink()
-    setup(configured_vault, env)
+    if text is None:
+        env.mkdir()
+    else:
+        env.write_text(text, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "text, raised",
+    [
+        pytest.param(None, OSError, id="unreadable"),
+        pytest.param("PRIVATE_VAULT_PATH=/v/${x\n", ValueError, id="unterminated"),
+        pytest.param("PRIVATE_VAULT_PATH=${EMBER_PROBE_UNSET_A:-${EMBER_PROBE_UNSET_B}}/v\n", ValueError, id="nested-default"),
+    ],
+)
+def test_an_env_the_guards_cannot_resolve_raises(configured_vault, text, raised):
+    _replace_env(configured_vault, text)
     with pytest.raises(raised):
         guard.vault_dirs()
-    assert _both_guards(configured_vault) == ("deny", "deny")
     assert not _cache_file(configured_vault.project).exists()
 
 
-@pytest.mark.parametrize("env_text", [None, "OTHER_KEY=1\n"], ids=["no-env-file", "no-key"])
-def test_an_absent_env_file_or_key_is_still_allowed(configured_vault, env_text):
-    """Control: no .env, or a readable one without the key, is no vault."""
+@pytest.mark.parametrize("text", [None, "OTHER_KEY=1\n"], ids=["no-env-file", "no-key"])
+def test_an_absent_env_file_or_key_is_no_vault(configured_vault, text):
+    """Control for the raise above."""
     env = configured_vault.project / ".env"
     env.unlink()
-    if env_text is not None:
-        env.write_text(env_text, encoding="utf-8")
+    if text is not None:
+        env.write_text(text, encoding="utf-8")
     assert guard.vault_dirs() == []
-    assert _both_guards(configured_vault) == ("allow", "allow")
+
+
+@pytest.mark.parametrize("text, decision", [(None, "deny"), ("OTHER_KEY=1\n", "allow")], ids=["unreadable", "no-key"])
+def test_both_hook_processes_deny_when_the_env_cannot_be_read(configured_vault, text, decision):
+    """vault_guard (a Read) and secret_dump_guard (`cat`) on an ordinary
+    file. Control: a readable .env without the key is allowed."""
+    _replace_env(configured_vault, text)
+    read = _run(_config_payload(CONFIG_ALLOW["read-src"], configured_vault))
+    cat = run_hook("secret_dump_guard.py", hook_payload("Bash", cwd=str(configured_vault.project), command="cat src/a.py"))
+    assert [(hook_output(r) or {}).get("permissionDecision", "allow") for r in (read, cat)] == [decision, decision]
 
 
 def test_a_value_whose_reference_resolves_is_used(configured_vault, monkeypatch):
     """Control: a `${VAR}` that resolves gives the vault, which is protected,
     and ordinary calls are allowed."""
     monkeypatch.setenv("PROBE_VAULT_ROOT", configured_vault.outside.as_posix())
-    (configured_vault.project / ".env").write_text(
-        f"PRIVATE_VAULT_PATH=${{PROBE_VAULT_ROOT}}/{HOOK_VAULT_NAME}\n", encoding="utf-8"
-    )
-    assert _both_guards(configured_vault) == ("allow", "allow")
-    assert hook_output(_run(_config_payload(CONFIG_DENY["read-relative"], configured_vault)))["permissionDecision"] == "deny"
+    _replace_env(configured_vault, f"PRIVATE_VAULT_PATH=${{PROBE_VAULT_ROOT}}/{HOOK_VAULT_NAME}\n")
+    assert guard.evaluate(_config_payload(CONFIG_ALLOW["read-src"], configured_vault)) is None
+    assert guard.evaluate(_config_payload(CONFIG_DENY["read-relative"], configured_vault)) is not None
 
 
 # Installer lean-review finding 5 does not apply: Python's fnmatch drops only

@@ -107,6 +107,7 @@ from hook_utils import (
     absolute_path,
     command_name,
     deny,
+    deny_if_over_cap,
     deny_on_error,
     drop_inert_heredocs,
     extract_substitutions,
@@ -757,6 +758,8 @@ def main():
     tool_input = data.get("tool_input") if isinstance(data, dict) else None
     command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
     if not isinstance(command, str) or not command:
+        return
+    if deny_if_over_cap("secret_dump_guard", data):
         return
 
     cwd = data.get("cwd")

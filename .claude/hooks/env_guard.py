@@ -71,9 +71,12 @@ import sys
 # Same directory; Python puts it on sys.path when this file runs as a script.
 from hook_utils import (
     GIT_OR_GH,
+    MAX_BRACE_WORDS,
+    MAX_LIVE_BRACES,
     PROSE_FLAG_NAMES,
     command_name,
     deny,
+    deny_if_over_cap,
     deny_on_error,
     drop_inert_heredocs,
     shell_step,
@@ -101,12 +104,35 @@ def _canonical_names(path: str) -> set[str]:
     return {part.rstrip(". ") for part in (base, *base.split(":"))}
 
 
+class BraceLimit(Exception):
+    """A brace pattern past MAX_LIVE_BRACES `{` or MAX_BRACE_WORDS
+    alternatives. It is not expanded: `{a,b}` x 20 is a million
+    alternatives, and a hook that runs out of time lets the call run unless
+    its entry blocks on failure. main() denies it with a reason naming the
+    limit."""
+
+
 def _expand_braces(pattern: str) -> list[str]:
+    """The alternatives of `pattern`'s brace sets. Raises BraceLimit past
+    the caps; the alternatives are counted as they are made, so the work is
+    bounded by MAX_BRACE_WORDS."""
+    if pattern.count("{") > MAX_LIVE_BRACES:
+        raise BraceLimit
+    out: list[str] = []
+    _expand_into(pattern, out)
+    return out
+
+
+def _expand_into(pattern: str, out: list[str]) -> None:
     brace = _BRACE.match(pattern)
     if not brace:
-        return [pattern]
+        if len(out) >= MAX_BRACE_WORDS:
+            raise BraceLimit
+        out.append(pattern)
+        return
     head, alts, tail = brace.groups()
-    return [p for alt in alts.split(",") for p in _expand_braces(f"{head}{alt}{tail}")]
+    for alt in alts.split(","):
+        _expand_into(f"{head}{alt}{tail}", out)
 
 
 # ---------------------------------------------------------------------------
@@ -391,9 +417,19 @@ def main():
     except Exception as exc:
         print(f"[env_guard] unparseable hook payload, allowing: {exc}", file=sys.stderr)
         return
+    if deny_if_over_cap("env_guard", payload):
+        return
     try:
         target = evaluate(payload)
         message = reason(target) if target else None
+    except BraceLimit:
+        message = (
+            f"Blocked by project hook: a brace pattern in this call expands "
+            f"past the limit ({MAX_BRACE_WORDS} alternatives, "
+            f"{MAX_LIVE_BRACES} braces), so it cannot be checked for .env "
+            f"names and is denied. Use a shorter pattern. "
+            f"See .claude/hooks/env_guard.py."
+        )
     except Exception as exc:
         # Fail closed: a crash exits non-zero and the harness runs the call.
         deny_on_error("env_guard", exc)

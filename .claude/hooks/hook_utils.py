@@ -24,6 +24,10 @@ definition:
     (env_guard.py, vault_guard.py, secret_dump_guard.py).
   - deny_on_error(): the fail-closed deny the guards emit when their own
     check raises.
+  - MAX_COMMAND_CHARS / deny_if_over_cap(): one length cap for shell
+    commands (env_guard.py, secret_dump_guard.py), and MAX_LIVE_BRACES /
+    MAX_BRACE_WORDS for env_guard.py's brace expansion. The values match
+    the ember-2-installer guards (.claude/hooks/hook-utils.cjs).
 
 Deliberately pathlib- and typing-free: PreToolUse guards start a fresh
 Python process on every tool call, and those imports cost ~11 ms each time.
@@ -461,6 +465,38 @@ def deny_on_error(guard: str, exc: BaseException) -> None:
         f"({type(exc).__name__}); denying rather than allowing an "
         f"unchecked call. See .claude/hooks/{guard}.py."
     )
+
+
+# Input caps. The guards' settings entries block on hook failure
+# ("onFailure": "block"), so a guard that runs past its 5 s timeout denies
+# the call; these caps deny the input that could take that long before it is
+# checked, with a reason naming the limit instead of a timeout.
+# A Bash or PowerShell command longer than this is denied before parsing.
+MAX_COMMAND_CHARS = 16384
+# Brace expansion (env_guard.py): `{` in one pattern, and alternatives one
+# pattern expands to. Expansion is exponential in the brace sets:
+# `.e{a,b}` x 21 took 5.5 s before the cap.
+MAX_LIVE_BRACES = 256
+MAX_BRACE_WORDS = 256
+_SHELL_TOOLS = ("Bash", "PowerShell")
+
+
+def deny_if_over_cap(guard: str, payload) -> bool:
+    """Deny, and return True, when `payload` is a Bash or PowerShell call
+    whose command is longer than MAX_COMMAND_CHARS."""
+    if not isinstance(payload, dict) or payload.get("tool_name") not in _SHELL_TOOLS:
+        return False
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(command, str) or len(command) <= MAX_COMMAND_CHARS:
+        return False
+    deny(
+        f"{guard}: this command is {len(command)} characters, over the "
+        f"{MAX_COMMAND_CHARS} limit, so it is denied rather than checked "
+        f"against a timeout. Split it into smaller commands or write the "
+        f"content to a file. See .claude/hooks/{guard}.py."
+    )
+    return True
 
 
 def deny(reason: str) -> None:

@@ -26,11 +26,14 @@ included. Parsing .env costs a python-dotenv import (~60 ms per hook
 process), so the value is cached in .claude/.env.vault_cache.json, keyed
 by the .env mtime and size plus a digest of the process values of the
 ${VAR} names the file references (the digest, never the values). Only a
-successful read is cached: a file that cannot be opened is not "no key".
-The cache file's .env.* name puts it under
+successful read is cached. The cache file's .env.* name puts it under
 env_guard.py, which denies agent reads and writes of it; it is
 gitignored. With no .env, or no key in it, only the in-repo rules apply
-and a note goes to stderr.
+and a note goes to stderr. A .env that exists but cannot be read (no
+permission, a lock, a directory), or a value still holding `${` after
+interpolation, is not "no key": the check raises and the entry point
+denies, since the configured vault is unknown (parity with the
+ember-2-installer vault guard).
 
 Rules:
 
@@ -236,7 +239,7 @@ def _configured_vault() -> str | None:
     env_path = os.path.join(project, ".env")
     try:
         stat = os.stat(env_path)
-    except OSError:
+    except (FileNotFoundError, NotADirectoryError):
         _note(".env not found")
         return None
     # A `${VAR}` in the file resolves from the process environment first, so
@@ -251,13 +254,9 @@ def _configured_vault() -> str | None:
     except (OSError, ValueError, KeyError, TypeError):
         hit = False
     if not hit:
-        try:
-            value = env_file_value(_VAULT_KEY, env_path, strict=True)
-        except OSError:
-            # A lock or a permission error is not "no key": answer for this
-            # call only, and leave the cache as it was.
-            _note(".env could not be read")
-            return None
+        # Raises when the file cannot be read or the value is unresolved;
+        # the cache is left as it was.
+        value = env_file_value(_VAULT_KEY, env_path, strict=True)
         _write_cache(cache, {"key": key, "value": value})
     if not value:
         _note(f"{_VAULT_KEY} is not set in .env")

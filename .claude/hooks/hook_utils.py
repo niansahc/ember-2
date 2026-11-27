@@ -115,16 +115,51 @@ def read_env_value(key: str, env_path) -> str | None:
 
 
 def env_file_value(key: str, env_path, strict: bool = False) -> str | None:
-    """Return `key` from the .env file at `env_path` only. With `strict`, a
-    file that cannot be opened raises OSError instead of reading as "no
-    key", so a caller that caches the answer can tell a failed read from an
-    absent key.
+    """Return `key` from the .env file at `env_path` only.
+
+    With `strict` (the vault guards), a file that exists but cannot be read
+    (no permission, a lock, a directory) raises OSError, and a value still
+    holding `${` after interpolation raises ValueError, instead of reading
+    as "no key" or as a path. The guards deny on either, as the
+    ember-2-installer vault guard does. A missing file is None either way.
+    The file is opened once and its text handed to the parser: python-dotenv
+    reads a directory as an empty file.
 
     The value comes from python-dotenv (the venv has it), with a minimal
     KEY=VALUE parser as a fallback so a hook never hard-depends on an
     import being present.
     """
+    text = None
+    if strict:
+        try:
+            with open(env_path, encoding="utf-8") as handle:
+                text = handle.read()
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+    value = _dotenv_value(key, env_path, text)
+    if value is _NO_DOTENV:
+        if text is None:
+            try:
+                with open(env_path, encoding="utf-8-sig") as handle:
+                    text = handle.read()
+            except OSError:
+                return None
+        value = _fallback_value(key, text.lstrip("\ufeff").splitlines())
+    if strict and value and "${" in value:
+        raise ValueError("unresolved reference in .env value")
+    return value
+
+
+# _dotenv_value's answer when python-dotenv is not importable or fails.
+_NO_DOTENV = object()
+
+
+def _dotenv_value(key: str, env_path, text):
+    """`key` as python-dotenv reads it, from `text` when given, else from
+    the file; _NO_DOTENV when python-dotenv cannot answer."""
     try:
+        import io
+
         from dotenv.main import DotEnv
 
         # override=False is how the app loads this file (src/core/config.py:
@@ -132,19 +167,13 @@ def env_file_value(key: str, env_path, strict: bool = False) -> str | None:
         # environment wins over the file's own keys. dotenv_values() uses
         # override=True, the reverse, and would point the guards at another
         # directory whenever the two define the same name.
-        values = DotEnv(env_path, encoding="utf-8", interpolate=True, override=False).dict()
-        return (values.get(key) or "").strip() or None
+        if text is None:
+            dotenv = DotEnv(env_path, encoding="utf-8", interpolate=True, override=False)
+        else:
+            dotenv = DotEnv(None, stream=io.StringIO(text), interpolate=True, override=False)
+        return (dotenv.dict().get(key) or "").strip() or None
     except Exception:
-        pass
-
-    try:
-        with open(env_path, encoding="utf-8-sig") as handle:
-            lines = handle.read().splitlines()
-    except OSError:
-        if strict:
-            raise
-        return None
-    return _fallback_value(key, lines)
+        return _NO_DOTENV
 
 
 # One `[export] KEY = value` line, and python-dotenv's `${NAME}` /

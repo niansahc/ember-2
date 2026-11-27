@@ -259,6 +259,42 @@ def test_strict_read_raises_when_the_file_cannot_be_opened(tmp_path, monkeypatch
     assert hook_utils.env_file_value(KEY, str(path), strict=True) == "/data/vault"
 
 
+def test_strict_read_raises_when_the_path_is_not_a_readable_file(tmp_path):
+    """A .env that exists but is a directory: python-dotenv reads it as an
+    empty file, so strict opens the file itself. Control: a missing file is
+    still no value, and the default reads the directory as no key."""
+    path = tmp_path / "probe.env"
+    path.mkdir()
+    with pytest.raises(OSError):
+        hook_utils.env_file_value(KEY, str(path), strict=True)
+    assert hook_utils.env_file_value(KEY, str(path)) is None
+    assert hook_utils.env_file_value(KEY, str(tmp_path / "absent.env"), strict=True) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [f"{KEY}=/data/${{UNTERMINATED\n", f"{KEY}=${{NOPE_UNSET_X:-${{NOPE_UNSET_Y}}}}/vault\n"],
+    ids=["unterminated", "nested-default"],
+)
+def test_strict_read_raises_on_a_reference_left_in_the_value(tmp_path, monkeypatch, text):
+    """python-dotenv leaves these `${` in the value; strict refuses to return
+    it. Control: the default returns the value as python-dotenv gives it."""
+    monkeypatch.delenv("NOPE_UNSET_Y", raising=False)
+    path = tmp_path / "probe.env"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError):
+        hook_utils.env_file_value(KEY, str(path), strict=True)
+    assert "${" in hook_utils.env_file_value(KEY, str(path))
+
+
+def test_strict_read_returns_a_resolved_reference(tmp_path, monkeypatch):
+    """Control for the raise above: a reference that resolves is no residue."""
+    monkeypatch.setenv("PROBE_HOME_DIR", "/home/probe")
+    path = tmp_path / "probe.env"
+    path.write_text(f"{KEY}=${{PROBE_HOME_DIR}}/vault\n", encoding="utf-8")
+    assert hook_utils.env_file_value(KEY, str(path), strict=True) == "/home/probe/vault"
+
+
 def test_references_digest_hides_values_and_follows_them(tmp_path, monkeypatch):
     path = tmp_path / "probe.env"
     path.write_text("A=${PROBE_REF_ONE}/x\nB=plain\n", encoding="utf-8")
